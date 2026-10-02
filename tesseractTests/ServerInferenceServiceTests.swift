@@ -136,7 +136,7 @@ struct ServerInferenceServiceTests {
         let handle = log.startRequest(
             completionID: "id", model: "m", stream: true, sessionAffinity: nil
         )
-        log.markLeaseAcquired(handle: handle)
+        log.markGateAcquired(handle: handle)
         let service = ServerInferenceService(
             completionStarter: completion,
             engine: engine,
@@ -522,8 +522,8 @@ struct ServerInferenceServiceTests {
         let engine = StubManagedInferenceEngine()
         let completion = StubServerCompletionStarter()
         let drive = AsyncFlag()
-        let driveFinished = LeaseAcquiredSignal()
-        let cancelledEarly = LeaseAcquiredSignal()
+        let driveFinished = GateAcquiredSignal()
+        let cancelledEarly = GateAcquiredSignal()
         completion.start = HTTPServerGenerationStart(
             stream: makeEventStream(textChunks: ["done"]),
             cachedTokenCount: 0,
@@ -545,7 +545,7 @@ struct ServerInferenceServiceTests {
             parametersProvider: { .default }
         )
         let stream = generate("System", [.user(content: "Hello")], nil, nil)
-        let ended = LeaseAcquiredSignal()
+        let ended = GateAcquiredSignal()
         let consumer = Task {
             let text = try await collectText(from: stream)
             ended.set()
@@ -567,7 +567,7 @@ struct ServerInferenceServiceTests {
         let engine = StubManagedInferenceEngine()
         let completion = StubServerCompletionStarter()
         let drive = AsyncFlag()
-        let cancelled = LeaseAcquiredSignal()
+        let cancelled = GateAcquiredSignal()
         let (failing, feed) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
         feed.yield(.text("par"))
         feed.finish(throwing: Failed())
@@ -587,7 +587,7 @@ struct ServerInferenceServiceTests {
             parametersProvider: { .default }
         )
         let stream = generate("System", [.user(content: "Hello")], nil, nil)
-        let ended = LeaseAcquiredSignal()
+        let ended = GateAcquiredSignal()
         let consumer = Task {
             defer { ended.set() }
             return try await collectText(from: stream)

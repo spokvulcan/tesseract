@@ -130,6 +130,34 @@ nonisolated struct ServerInferenceStart: Sendable {
     }
 }
 
+/// What a request's start says about its prompt, for callers that measure
+/// themselves (the Companion Trace): the cache's share, and the time the
+/// prompt took on the server's own clock.
+nonisolated struct ServerInferenceStartFacts: Sendable, Equatable {
+    let cachedTokenCount: Int
+    /// Cache lookup, restore, and the prefill of everything the cache
+    /// didn't hold.
+    let promptSeconds: Double
+    /// From asking for the request to its start: the prompt plus anything
+    /// in front of it.
+    let startSeconds: Double
+
+    init(cachedTokenCount: Int, promptSeconds: Double, startSeconds: Double) {
+        self.cachedTokenCount = cachedTokenCount
+        self.promptSeconds = promptSeconds
+        self.startSeconds = startSeconds
+    }
+
+    init(_ start: ServerInferenceStart, requestedAt: Date, now: Date = Date()) {
+        let diagnostics = start.diagnostics
+        self.init(
+            cachedTokenCount: start.cachedTokenCount,
+            promptSeconds: (diagnostics.lookupMs + diagnostics.restoreMs + diagnostics.prefillMs)
+                / 1000,
+            startSeconds: now.timeIntervalSince(requestedAt))
+    }
+}
+
 nonisolated struct ServerInferenceRequest: Sendable {
     nonisolated enum Route: Sendable {
         case standard

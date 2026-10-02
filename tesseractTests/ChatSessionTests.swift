@@ -514,7 +514,7 @@ struct ChatSessionTests {
     // MARK: - Pending Row
 
     /// `sendMessage` raises the Pending Row synchronously — the transcript
-    /// shows the user message while the run is still queued behind the lease —
+    /// shows the user message while the run is still queued behind the gate —
     /// and the event-spine commit of the same message lowers it.
     @Test func sendMessageRaisesPendingRowUntilTheUserCommit() async throws {
         var restored: [(String, Int)] = []
@@ -560,12 +560,12 @@ struct ChatSessionTests {
         #expect(session.items.isEmpty)
     }
 
-    /// Cancel while the run sits queued behind the lease — the queued-wait
+    /// Cancel while the run sits queued behind the gate — the queued-wait
     /// analogue of the load-failure path: same restore (text *and* images),
     /// no ghost message.
     @Test func pendingRowRestoresComposerDraftOnCancelWhileQueued() async throws {
         let arbiter = InMemoryInferenceArbiter()
-        arbiter.leaseDelay = .seconds(10)
+        arbiter.gateDelay = .seconds(10)
         var restored: [(String, [ImageAttachment])] = []
         let session = makeChatSession(
             arbiter: arbiter,
@@ -588,7 +588,7 @@ struct ChatSessionTests {
     /// later settle has nothing to restore.
     @Test func userCommitLowersPendingRowThroughTheFold() {
         let arbiter = InMemoryInferenceArbiter()
-        arbiter.leaseDelay = .seconds(10)
+        arbiter.gateDelay = .seconds(10)
         let session = makeChatSession(arbiter: arbiter)
 
         session.sendMessage("hello")
@@ -619,7 +619,7 @@ struct ChatSessionTests {
 
         #expect(session.showsWaitingRow == false)
 
-        // Queued behind the lease (cold start): isGenerating is up eagerly,
+        // Queued behind the gate (cold start): isGenerating is up eagerly,
         // no agent events yet.
         session.agentRun.markStarted()
         #expect(session.showsWaitingRow == true)
@@ -763,22 +763,22 @@ struct ChatSessionTests {
         #expect(store.currentConversation != nil)
     }
 
-    /// A switch while the run sits queued behind the lease settles the
+    /// A switch while the run sits queued behind the gate settles the
     /// Pending Row to the composer — restore, never silently drop.
     @Test func conversationSwitchRestoresAQueuedPendingRowToTheComposer() {
         let arbiter = InMemoryInferenceArbiter()
-        arbiter.leaseDelay = .seconds(10)
+        arbiter.gateDelay = .seconds(10)
         var restored: [String] = []
         let session = makeChatSession(
             arbiter: arbiter,
             restoreComposerDraft: { text, _ in restored.append(text) })
-        session.sendMessage("queued behind the lease")
+        session.sendMessage("queued behind the gate")
         #expect(session.pendingUserMessage != nil)
 
         session.newConversation()
 
         #expect(session.pendingUserMessage == nil)
-        #expect(restored == ["queued behind the lease"])
+        #expect(restored == ["queued behind the gate"])
         #expect(session.items.isEmpty)
     }
 

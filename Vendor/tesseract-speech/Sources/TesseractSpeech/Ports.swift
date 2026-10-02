@@ -77,8 +77,7 @@ public struct AudioFormat: Sendable, Equatable {
 public protocol SpeechSynthesizing: Sendable {
     /// Throws `SpeechEngineError.modelUnavailable` unless `spec`'s checkpoint
     /// is complete on local disk. Disk only (no GPU, no network), so the
-    /// engine runs it before taking the lease: a missing model fails fast
-    /// instead of holding the GPU.
+    /// engine runs it before any load: a missing model fails fast.
     func checkAvailable(_ spec: TTSModelSpec) async throws
     /// Load weights from the local checkpoint. Never downloads. Idempotent
     /// for the same spec.
@@ -100,12 +99,6 @@ public protocol SpeechSynthesizing: Sendable {
     /// One buffer-pool trim (utterance end / teardown). Never touches the
     /// process-global cache limit (ADR-0039).
     func trimCaches() async
-}
-
-// MARK: - GPU leasing port (production adapter wraps InferenceArbiter)
-
-public protocol GPULeasing: Sendable {
-    func withLease<T: Sendable>(_ body: @Sendable () async throws -> T) async throws -> T
 }
 
 // MARK: - Diagnostics tap (injected, default off — autopsy constraint 8)

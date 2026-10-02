@@ -40,4 +40,9 @@ struct AgentLoopConfig: Sendable {
 
     /// Optional: returns follow-up messages (queued for after the agent finishes).
     let getFollowUpMessages: (@Sendable () async -> [any AgentMessageProtocol])?
+
+    /// Optional: the model generating right now, read at each turn so a
+    /// long-lived agent labels its replies with the model the owner switched
+    /// to, not the one selected when the agent was built.
+    var currentModelID: (@Sendable () async -> String)?
 }

@@ -3,6 +3,7 @@
 //  tesseract
 //
 
+import Carbon.HIToolbox
 import SwiftUI
 
 /// The Hotkeys pane (#213): every global hotkey in one section, the Appshot
@@ -20,7 +21,7 @@ struct HotkeysSettingsPane: View {
                 HotkeyRecorderRow(label: "Talk to Tesseract", combo: $settings.agentHotkey)
                 HotkeyRecorderRow(
                     label: "Capture to Reminders", combo: $settings.captureHotkey,
-                    resetTo: .optionShiftSpace, resetLabel: "Reset to ⌥⇧Space")
+                    resetTo: .rightOption, resetLabel: "Reset to Right ⌥")
             }
 
             Section {
@@ -86,7 +87,7 @@ struct HotkeyRecorderRow: View {
             Spacer()
 
             if isRecording {
-                Text("Press a key…")
+                Text("Press a key, or a modifier on its own…")
                     .foregroundStyle(.secondary)
             } else {
                 Text(combo.displayString)
@@ -112,7 +113,16 @@ struct HotkeyRecorderRow: View {
             }
         }
 
-        if combo.modifierFlags.contains(.function) {
+        if combo.isSingleModifier {
+            Text(
+                combo.keyCode == UInt16(kVK_Function)
+                    ? "Tap to type, hold to speak. fn alone needs System Settings → Keyboard → “Press 🌐 key to” set to Do Nothing."
+                    : "One key: tap to type, hold to speak. Pressing another key with it types as usual."
+            )
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        } else if combo.modifierFlags.contains(.function) {
             Text(
                 "fn is not reliably delivered for global hotkeys on macOS. Consider adding ⌘, ⌥, ⌃, or ⇧."
             )
@@ -124,6 +134,9 @@ struct HotkeyRecorderRow: View {
 
     private func toggleRecording() {
         if isRecording {
+            // Ends the pending recording, so the next key press isn't taken
+            // and the other hotkeys work again at once.
+            container.hotkeyManager.cancelRecording()
             isRecording = false
             return
         }

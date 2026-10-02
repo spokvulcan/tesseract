@@ -2,12 +2,11 @@
 //  VoiceEndpointer.swift
 //  tesseract
 //
-//  The voice session's ears (#310 §3/§4/§6): a pure energy-based endpointer
-//  over the meter level. Two jobs, one machine — end-of-speech detection
-//  while the owner talks (trailing silence closes his turn), and barge-in
-//  detection while Jarvis talks (sustained speech energy over the
-//  echo-cancelled input stops the utterance; VPIO's AEC is what makes the
-//  same gate valid during playback, ADR-0025).
+//  The voice session's ears (#310 §3/§6): a pure energy-based endpointer
+//  over the meter level — a speech onset opens the owner's turn, trailing
+//  silence closes it. It only ever listens to the owner: the session is
+//  half-duplex (ADR-0082), so the mic is closed while Jarvis speaks and the
+//  endpointer never hears him.
 //
 //  Deliberately not ASR-based: a threshold plus debounce is robust, instant,
 //  and testable — WhisperKit's VAD is batch-only (#310 §6 engine ask).
@@ -34,12 +33,6 @@ nonisolated struct VoiceEndpointer {
                 speechLevel: speechLevel, startDebounce: 0.25,
                 trailingSilence: trailingSilence)
         }
-
-        /// Watching for barge-in during playback: a longer debounce — an
-        /// interruption is deliberate, residual echo blips are not.
-        static func bargeIn(speechLevel: Float = 0.25) -> Config {
-            Config(speechLevel: speechLevel, startDebounce: 0.45, trailingSilence: 1.8)
-        }
     }
 
     enum Event: Equatable {
@@ -50,44 +43,25 @@ nonisolated struct VoiceEndpointer {
     private(set) var config: Config
     private(set) var isInSpeech = false
 
-    /// Total time the level sat at or above `speechLevel` since the last
-    /// `reset` — the **Soft Barge** confirm window's voiced-energy input.
-    /// Accumulated from ingest-to-ingest deltas (clamped so a stalled ticker
-    /// can't bank phantom speech).
-    private(set) var voicedSeconds: TimeInterval = 0
-
     private var candidateSince: TimeInterval?
     private var lastLoudAt: TimeInterval?
-    private var gapCredit = TickerGapCredit()
 
     init(config: Config) {
         self.config = config
     }
 
-    /// Start a fresh utterance watch (new capture, new mode).
+    /// Start a fresh utterance watch (new capture).
     mutating func reset(config: Config? = nil) {
         if let config { self.config = config }
         isInSpeech = false
-        voicedSeconds = 0
         candidateSince = nil
         lastLoudAt = nil
-        gapCredit.reset()
     }
 
     /// Feed one level sample; returns an event on a state edge.
-    ///
-    /// `speechFloor` is the Echo Floor's effective threshold during playback
-    /// (ADR-0041): when present, speech requires the level to clear it as
-    /// well as the configured static level — residual from the agent's own
-    /// reply must never read as the owner. `nil` (every non-speaking mode)
-    /// keeps the static threshold alone.
-    mutating func ingest(
-        level: Float, at time: TimeInterval, speechFloor: Float? = nil
-    ) -> Event? {
-        let loud = level >= max(config.speechLevel, speechFloor ?? 0)
-        let gap = gapCredit.credit(at: time)
+    mutating func ingest(level: Float, at time: TimeInterval) -> Event? {
+        let loud = level >= config.speechLevel
         if loud {
-            voicedSeconds += gap
             lastLoudAt = time
             if !isInSpeech {
                 if let since = candidateSince {

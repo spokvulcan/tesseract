@@ -373,13 +373,6 @@ final class SettingsManager {
         }
     }
 
-    var companionVoiceBargeInLevel: Double {
-        didSet {
-            SettingsCatalogue.companionVoiceBargeInLevel.write(
-                companionVoiceBargeInLevel, to: store)
-        }
-    }
-
     // MARK: - Companion (the day)
 
     var companionAreasJSON: String {
@@ -779,8 +772,6 @@ final class SettingsManager {
             .load(from: store)
         self.companionVoiceSessionTimeout = SettingsCatalogue.companionVoiceSessionTimeout
             .load(from: store)
-        self.companionVoiceBargeInLevel = SettingsCatalogue.companionVoiceBargeInLevel.load(
-            from: store)
         self.companionAreasJSON = SettingsCatalogue.companionAreasJSON.load(from: store)
         self.companionDefaultCalendarID = SettingsCatalogue.companionDefaultCalendarID.load(
             from: store)
@@ -947,7 +938,6 @@ final class SettingsManager {
         companionVoiceAutoSend = SettingsCatalogue.companionVoiceAutoSend.default
         companionVoiceTrailingSilence = SettingsCatalogue.companionVoiceTrailingSilence.default
         companionVoiceSessionTimeout = SettingsCatalogue.companionVoiceSessionTimeout.default
-        companionVoiceBargeInLevel = SettingsCatalogue.companionVoiceBargeInLevel.default
         companionAreasJSON = SettingsCatalogue.companionAreasJSON.default
         companionDefaultCalendarID = SettingsCatalogue.companionDefaultCalendarID.default
         companionNudgeLeadMinutes = SettingsCatalogue.companionNudgeLeadMinutes.default

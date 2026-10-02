@@ -55,6 +55,18 @@ nonisolated struct CaptureEngineLifecycle: Sendable {
     /// retries the same way); the idle rebuild retries once after this beat
     /// before settling for raw capture.
     let armRetryDelay: Duration = .milliseconds(150)
+    /// How often the live-input check reads an open capture's heartbeat —
+    /// the empty-capture grace, applied while the capture is still open.
+    let liveInputInterval: Duration = .milliseconds(500)
+    /// A fresh input may take this long to deliver its first buffer before it
+    /// counts as silent: a Bluetooth headset switching to its microphone
+    /// profile takes about a second.
+    let firstBufferGrace: TimeInterval = 1.5
+    /// An engine built this recently is not rebuilt again for a silent input:
+    /// voice-processing engines created and destroyed back to back are what
+    /// wedge CoreAudio input (ADR-0082). The input is reported dead instead,
+    /// and its owner backs off.
+    let freshEngineAge: TimeInterval = 5
 
     // MARK: - Decisions
 
@@ -120,63 +132,36 @@ nonisolated struct CaptureEngineLifecycle: Sendable {
         engineExists && !armed
     }
 
-    // MARK: - Voice hold (Dual-Path Playback, ADR-0041)
+    // MARK: - Live-input check
 
-    /// What `beginVoiceHold` does about the wiring. Every wire-up happens on
-    /// a stopped engine — tap install/remove and the render-side connection
-    /// on a running VP engine are the 2026-07-17 crash class
-    /// (`CreateRecordingTap` → `SetOutputFormat` → `SetFormat`).
-    enum HoldBeginAction: Equatable {
-        /// Engine missing or dirty: rebuild (armed per the lifecycle), then wire.
-        case rebuildThenWire
-        /// Engine healthy and stopped: wire the hold now.
-        case wireNow
-        /// A capture is mid-take: mark the wiring pending — that capture's
-        /// `stopCapture` stops the engine and the wiring runs there. Until
-        /// then the hold is capture-only and playback falls back.
-        case deferToCaptureStop
+    /// What an open capture's input looks like at one check.
+    enum LiveInputVerdict: Equatable {
+        /// Buffers arrived since the last check.
+        case alive
+        /// No buffer yet, but still inside the first-buffer grace: keep
+        /// watching.
+        case waiting
+        /// Nothing has arrived since the capture started: rebuild the engine
+        /// and restart under the same open capture. Lossless — there is no
+        /// audio to lose yet — and only once per capture, never on an engine
+        /// built moments ago.
+        case rebuildAndRestart
+        /// The input went quiet mid-capture, or the restart didn't bring it
+        /// back: report it to the capture's owner.
+        case dead
     }
 
-    func holdBeginAction(
-        engineExists: Bool, needsRebuild: Bool, isCapturing: Bool, engineArmed: Bool
-    ) -> HoldBeginAction {
-        guard !isCapturing else { return .deferToCaptureStop }
-        // The hold wants VP armed for the whole session — a kept plain
-        // engine (the fallback lifecycle's idle) is rebuilt armed, never
-        // wired plain: a hold without the AEC is the bug the ADR exists to
-        // fix.
-        let usable = engineExists && !needsRebuild && engineArmed
-        return usable ? .wireNow : .rebuildThenWire
-    }
-
-    /// A capture stop keeps the engine running only under a fully wired hold
-    /// — every other stop lands on a stopped engine: the non-hold path, and
-    /// the pending-hold stop that must free the engine for wiring.
-    func captureStopKeepsEngineRunning(holdWired: Bool) -> Bool { holdWired }
-
-    /// The pending hold's wiring runs on the stopped engine right after the
-    /// in-progress capture's stop — never by installing anything on the
-    /// running engine.
-    func shouldWireHoldAfterCaptureStop(holdActive: Bool, holdWired: Bool) -> Bool {
-        holdActive && !holdWired
-    }
-
-    /// A rebuild (device change, wedge teardown) under an active hold
-    /// re-wires the hold on the fresh engine so the session's next reply can
-    /// attach — the reply that was playing was invalidated by the teardown.
-    func shouldRewireAfterRebuild(holdActive: Bool) -> Bool { holdActive }
-
-    /// Hosted playback requires the AEC — an engine that refused to arm (or
-    /// whose render side failed verification) hosting playback buys nothing
-    /// acoustically, so the reply falls back to the dedicated engine.
-    func hostsPlayback(armed: Bool, renderVerified: Bool) -> Bool {
-        armed && renderVerified
-    }
-
-    /// The fallback lifecycle's post-capture disarm grace never fires under a
-    /// hold: the held engine is running (disarm requires stopped), and the
-    /// session wants VP for the whole conversation anyway.
-    func shouldDisarmAfterCapture(holdActive: Bool) -> Bool {
-        disarmsAfterCapture && !holdActive
+    /// The verdict at one check, from the tap's buffer counts. A live input
+    /// delivers buffers through silence too — a whole interval without one
+    /// is a dead input, never a pause in speech.
+    func liveInputVerdict(
+        buffersSinceLastCheck: Int, buffersThisCapture: Int, rebuiltThisCapture: Bool,
+        secondsSinceStart: TimeInterval, engineAge: TimeInterval
+    ) -> LiveInputVerdict {
+        if buffersSinceLastCheck > 0 { return .alive }
+        guard buffersThisCapture == 0 else { return .dead }
+        if secondsSinceStart < firstBufferGrace { return .waiting }
+        if !rebuiltThisCapture, engineAge >= freshEngineAge { return .rebuildAndRestart }
+        return .dead
     }
 }

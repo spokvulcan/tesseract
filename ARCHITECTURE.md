@@ -109,7 +109,6 @@ tesseract/
 │   ├── Speech/                        # engine v2 lives in Vendor/tesseract-speech
 │   │   ├── SpeechCoordinator.swift    # @Observable orchestrator; drains engine events
 │   │   ├── SpeechEnginePresenter.swift# @Observable residency mirror of the pkg engine
-│   │   ├── ArbiterGPULease.swift      # GPULeasing adapter over InferenceArbiter
 │   │   ├── AudioPlayback.swift        # @MainActor playback port (seam)
 │   │   ├── AudioPlaybackManager.swift # AVFoundation adapter (real pause/resume)
 │   │   ├── WordHighlightSurface.swift # Spoken-word highlight port (ADR-0004)
@@ -126,7 +125,7 @@ tesseract/
 │   │   └── TranscriptionPostProcessor.swift
 │   ├── Agent/
 │   │   ├── ChatSession.swift          # @Observable spine; folds agent events into ChatItems (ADR-0024)
-│   │   ├── AgentRunController.swift   # Foreground run: lease + isGenerating + cancel
+│   │   ├── AgentRunController.swift   # Foreground run: LLM gate + isGenerating + cancel
 │   │   ├── LivePart.swift             # Throttled observable box for the one streaming part
 │   │   ├── AgentVoiceInputController.swift  # Composer push-to-talk (leaf)
 │   │   ├── ComposerDraftController.swift # Composer draft: text + image queue/drop/Quick Look (leaf)
@@ -134,8 +133,8 @@ tesseract/
 │   │   ├── AgentFactory.swift         # Bootstrap: packages, tools, prompt
 │   │   ├── LLMActor.swift             # MLX LLM inference actor
 │   │   ├── Speculation.swift          # Speculation: resident drafters + the per-request Speculation Plan (ADR-0079)
-│   │   ├── GPULeaseQueue.swift        # FIFO GPU mutual-exclusion lease
-│   │   ├── InferenceArbiter.swift     # Lease + model ownership facade
+│   │   ├── LLMGate.swift              # One LLM generation at a time, FIFO (ADR-0081)
+│   │   ├── InferenceArbiter.swift     # LLM gate + model identity + residency facade
 │   │   ├── Core/                      # Agent loop, state reducer, accumulator
 │   │   ├── Tools/                     # Built-in + extension tools
 │   │   ├── Commands/                  # Slash command registry + parser
@@ -159,7 +158,7 @@ tesseract/
 │   │   └── Voice/ VoiceOverlay/       # Voice session (the voice rung)
 │   ├── Server/                        # Local OpenAI-compatible HTTP server
 │   │   ├── HTTPServer.swift           # HTTP/1.1 server
-│   │   ├── CompletionHandler.swift    # HTTP framing edge: lease, validation, start
+│   │   ├── CompletionHandler.swift    # HTTP framing edge: LLM gate, validation, start
 │   │   ├── CompletionDelivery.swift   # One delivery script; Delivery Sink seam (JSON body, SSE)
 │   │   ├── ServerInferenceService.swift   # Dispatcher: Completion Route → two arms
 │   │   ├── CompletionRoute.swift      # Pure cache-aware vs standard decision
@@ -316,11 +315,11 @@ playback**):
   `Vendor/tesseract-speech` package (ADR-0038/0039), consumed through its
   session/utterance API. Its own ports live in the package: `SpeechSynthesizing`
   (model port; production adapter `Qwen3Synthesizer` over the package's own
-  `Qwen3TTS` target, first-party since ADR-0071)
-  and `GPULeasing` (app adapter `ArbiterGPULease` over `InferenceArbiter`).
+  `Qwen3TTS` target, first-party since ADR-0071). The engine takes no turn at
+  the LLM gate: speech runs beside the LLM (ADR-0081).
   `Qwen3Synthesizer` loads only the folder the app hands it (the Model Catalog's
   Voice Engine folder) and never downloads; the engine checks that folder before
-  taking the GPU lease and throws `modelUnavailable` when it's incomplete.
+  any load and throws `modelUnavailable` when it's incomplete.
   After warm-up it moves the codec's conv stack to the Neural Engine: a Core ML
   model the package builds from the checkpoint and keeps in the cache directory
   the app passes (under `StorageEnvironment.caches`). It stays on MLX where the
@@ -363,7 +362,7 @@ The in-memory playback adapter exposes a **non-wall-clock virtual clock**
 trap rides these seams: the app target builds with
 `NonisolatedNonsendingByDefault`, the package does not, so app-side witnesses
 of package protocols spell `@concurrent` explicitly on `async` closure
-parameters (`ArbiterGPULease`, test leases).
+parameters.
 
 ### Dependency Injection
 
@@ -456,20 +455,28 @@ conversation-wide Quick Look preview set, while the server-side cache keys image
 by **Image Digest** rather than UI attachment identity. Vocabulary: `CONTEXT.md`
 → Vision capability and mode, Image-aware prefix caching.
 
-### 5. GPU Lease Arbitration
+### 5. The LLM Gate
 
-GPU inference is serialized behind a lease. `GPULeaseQueue` is the pure FIFO
-mutual-exclusion mechanism (atomic handoff, cancellation-safe); `InferenceArbiter`
-composes it with model ownership (`.llm`/`.tts` slots, load/unload,
-reload-on-mismatch), so model identity cannot change under a running consumer.
-Lease-acquiring consumers depend on the single-member `InferenceArbitrating` seam;
-tests inject `InMemoryInferenceArbiter`. Vocabulary: CONTEXT.md → GPU lease
-arbitration.
+Models run side by side; memory, not the GPU, is what they share (ADR-0081).
+Only the language model is serialized: it is one container with one prefix
+cache, so chat turns, the Companion's moments, HTTP requests, `/compact`,
+reloads and offload take turns at the **LLM Gate**. `LLMGate` is the pure FIFO
+mechanism (atomic handoff, cancellation-safe); `InferenceArbiter` composes it with
+the LLM's identity (load, reload-on-mismatch) in `withLLM`, so the model cannot
+change under a running generation, and mirrors residency (`.llm`/`.tts`) for
+Offload Model. Speech, dictation, the proofreader and the embedder never take the
+gate: MLX's process-wide evaluation lock keeps concurrent use safe, so a voice
+reply interleaves with a generation instead of waiting for it. The proofreader
+still *skips* while the LLM generates (ADR-0034), so a dictation never waits.
+LLM consumers depend on the single-member `InferenceArbitrating` seam; tests
+inject `InMemoryInferenceArbiter`. The menu bar's Models section shows what is
+loaded and what each model is doing, with the app's memory. Vocabulary:
+CONTEXT.md → LLM gate.
 
 ### 6. HTTP Server and Prefix Cache
 
 `Features/Server/` hosts a local OpenAI-compatible HTTP server (`HTTPServer`,
-`CompletionHandler`) that drives the same `LLMActor` through the GPU lease. The
+`CompletionHandler`) that drives the same `LLMActor` through the LLM gate. The
 public surface is `/health`, `/v1/models`, `/v1/chat/completions`, plus
 integration endpoints under `/integrations/opencode/`. `/v1/models` lists
 downloaded agent models only; `/v1/chat/completions` honors `request.model` for
@@ -502,7 +509,7 @@ replay allocated multi-gigabyte synthetic arrays and blocked MainActor
 pressure response and SSD demotion remain active. Each keyed request holds one
 Cache Claim (`CacheClaim`, ADR-0069): its reserve lane, its Restore Pins and,
 after a Leaf Handoff, its Leaf Lease, concluded exactly once inside the
-request's GPU lease. Vocabulary: CONTEXT.md → Prefix cache snapshot
+request's LLM gate turn. Vocabulary: CONTEXT.md → Prefix cache snapshot
 lifecycle, SSD snapshot ledger, Prefill orchestration, Eviction tuning.
 Verification gates: docs/testing.md → Loaded-model verification.
 `Features/Server/Integrations/` configures external clients against the live
@@ -519,7 +526,9 @@ Jarvis thinks at moments; code keeps the promises (ADR-0080, `CONTEXT.md` →
 Companion: the day). **Today** is the main window's first page. Apple
 Reminders and Calendar are the single source of truth, behind one **Agenda**
 port (`EventKitAgendaStore`; `InMemoryAgendaStore` for the test host and every
-test) whose five tools ride every conversation.
+test) whose six tools ride every conversation. The capture hotkey is one key
+(Right ⌥ alone: tap to type, hold to speak), detected from modifier flags by
+`ModifierKeyDetector` beside the key-combo matcher.
 
 The **Day Engine** is a pure decider: `CompanionRuntime` gathers a
 `DaySnapshot` (agenda, presence, the app in front, power), feeds one
@@ -532,7 +541,10 @@ its JSON card is validated, retried once, or replaced by a deterministic card.
 Cards reach the owner through the **Delivery Ladder**: the glyph, the **Jarvis
 Panel** (`Platform/GlassPanel.swift`, a borderless non-activating panel over
 `NSGlassEffectView`), a banner, or voice. The system prompt carries no time;
-every user message carries a stored **Now Tag**.
+every user message carries a stored **Now Tag**. Other apps' banners are sorted
+by code on arrival (`NotificationSources`: a person, an app's news, or noise —
+the system's banners and games, recognised by `AppIdentityResolver`), so only
+people reach a model; moments take their turn at the LLM Gate like any chat.
 
 Tests never touch EventKit or a model: the engine is covered by decision
 tables, the tools run against the in-memory Agenda, and cards parse canned
@@ -577,11 +589,23 @@ The Overlay Panel is a dumb, fixed-frame host: created once at launch, permanent
 ### Audio Format Pipeline
 
 ```
-Microphone (48kHz stereo) → [Voice Processing: AEC+AGC+NS, optional toggle]
-  → AVAudioEngine tap (device rate, mono float32) → SampleBuffer (thread-safe)
+Microphone (48kHz stereo) → [Voice Processing: AEC+AGC+NS, armed for the app's lifetime]
+  → AVAudioEngine tap, one per take (device rate, mono float32) → SampleBuffer (thread-safe)
+  │   └─► heartbeat per buffer → live-input check (every 0.5 s while the take is open)
   → Resample to 16kHz (anti-aliased, AudioConverter) → WhisperKit
   └─► RawCapture (native rate, pre-resample) → Capture Dump (bounded WAV ring)
+
+TTS samples → SpeechCoordinator → AudioPlayback (AudioPlaybackManager, its own AVAudioEngine)
 ```
+
+Every capture — dictation, Voice Input, a voice-session take — installs its
+own tap on the kept engine at the device rate and removes it at the stop. A
+dead input is caught while the take is open: the **live-input check**
+restarts an input that never delivered a buffer (once per take), and marks
+one that went quiet dead for the capture's owner. Speech plays on its own
+engine and never overlaps a voice-session capture: the session is
+half-duplex, so the mic closes before a reply speaks and opens after it
+stops (ADR-0082).
 
 ---
 
@@ -593,7 +617,7 @@ Key architectural decisions (durable records live in `docs/adr/`):
 - **`@Observable` not `ObservableObject`**: Observation framework tracks property access precisely (no coarse object-wide invalidation). Better SwiftUI performance.
 - **No `@AppStorage` in `@Observable`**: Compiler incompatibility. All settings use manual `UserDefaults` with `didSet`.
 - **No `SettingsManager.shared` singleton**: Injected via `DependencyContainer`. AppKit consumers get it via constructor injection.
-- **Speech model ports below the engines/coordinator**: `SpeechRecognizer`, the TesseractSpeech package's `SpeechSynthesizing`/`GPULeasing`, and the `@MainActor` `AudioPlayback` sibling seam make the speech engines' and coordinator's orchestration testable without models, a mic, or `AVAudioEngine` — same facade-above / port-below shape as the Settings Store. See ADR-0003/0038 and `CONTEXT.md` → Speech model ports and playback.
+- **Speech model ports below the engines/coordinator**: `SpeechRecognizer`, the TesseractSpeech package's `SpeechSynthesizing`, and the `@MainActor` `AudioPlayback` sibling seam make the speech engines' and coordinator's orchestration testable without models, a mic, or `AVAudioEngine` — same facade-above / port-below shape as the Settings Store. See ADR-0003/0038 and `CONTEXT.md` → Speech model ports and playback.
 - **`Observations` async sequence for non-view code**: Replaces Combine `$property.sink` for observing `@Observable` types outside SwiftUI views.
 - **`AgentFactory` separate from container**: Container wires dependencies; factory orchestrates multi-step bootstrap.
 - **Overlay Panel is a dumb host; the Overlay Feed is the one signal surface**: The panel never animates its own frame or visibility — SwiftUI owns all motion, which removes the two-animation-system jank (map #283). Overlay Variants render from the shared `DictationFeed` (typed phases/errors, outcome beats, level + spectrum); the dictation pipeline never learns which variant is live.

@@ -1,4 +1,4 @@
-// Test adapters: a scripted Speech Synthesizer and a recording GPU lease.
+// Test adapters: a scripted Speech Synthesizer.
 
 import Foundation
 @testable import TesseractSpeech
@@ -109,26 +109,4 @@ actor ScriptedSynthesizer: SpeechSynthesizing {
             continuation.onTermination = { _ in task.cancel() }
         }
     }
-}
-
-/// Records lease usage; asserts non-nesting. `depth` observable for the
-/// "never held across a demand wait" check.
-actor RecordingLease: GPULeasing {
-    private(set) var acquisitions = 0
-    private(set) var depth = 0
-    private(set) var maxDepth = 0
-
-    func withLease<T: Sendable>(_ body: @Sendable () async throws -> T) async throws -> T {
-        enter()
-        defer { exit() }
-        return try await body()
-    }
-
-    private func enter() {
-        acquisitions += 1
-        depth += 1
-        maxDepth = max(maxDepth, depth)
-    }
-
-    private func exit() { depth -= 1 }
 }

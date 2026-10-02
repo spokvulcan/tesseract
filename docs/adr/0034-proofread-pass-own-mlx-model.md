@@ -2,6 +2,8 @@
 
 - Status: Accepted
 - Date: 2026-07-12
+- Amended by: ADR-0081 (2026-10-01: the GPU lease is gone; skip-when-busy now reads
+  whether the LLM gate is held, and the pass still never waits)
 - Relates to: map #283 (dictation overlay redesign), ticket #288; ADR-0025
   (always-armed capture — the "instant press-to-talk" bar the pass must not
   lower); GPU lease arbitration (CONTEXT.md)

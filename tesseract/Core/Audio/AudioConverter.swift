@@ -198,9 +198,8 @@ nonisolated enum AudioConverter: Sendable {
         return 20 * log10(rms)
     }
 
-    /// RMS → the app's 0–1 meter level over a −60 dBFS floor — the one
-    /// normalization the mic meter and the playback envelope share, so the
-    /// Echo Floor (ADR-0041) compares them on a single scale.
+    /// RMS → the app's 0–1 meter level over a −60 dBFS floor — the mic
+    /// meter's scale, the one the voice session's endpointer thresholds read.
     static func meterLevel(rms: Float) -> Float {
         let db = 20 * log10(max(rms, 0.001))
         return max(0, min(1, (db + 60) / 60))

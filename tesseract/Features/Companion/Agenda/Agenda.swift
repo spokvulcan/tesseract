@@ -37,6 +37,7 @@ nonisolated enum AgendaUndo: Sendable, Equatable {
     case restoreReminder(ReminderDraft)
     case deleteEvent(id: String)
     case changeEvent(id: String, EventChange)
+    case restoreEvent(EventDraft)
 }
 
 /// One change the owner can see and undo.
@@ -310,6 +311,40 @@ final class Agenda {
         return (after, change)
     }
 
+    /// Delete one occurrence of an event the owner keeps for themselves — a
+    /// block, a slot, an appointment. A meeting with other people invited is
+    /// refused: declining or cancelling it belongs in Calendar, where they
+    /// are told. The undo puts it back as it was.
+    @discardableResult
+    func deleteEvent(id: String, source: String) throws -> AgendaChange {
+        let window = store.events(
+            from: now().addingTimeInterval(-30 * 86_400), to: now().addingTimeInterval(365 * 86_400)
+        )
+        guard let before = window.first(where: { $0.id == id }) else {
+            throw AgendaError.notFound("event \(id)")
+        }
+        guard !before.hasOtherAttendees else {
+            throw AgendaError.invalid(
+                "“\(before.title)” has other people invited. Decline or cancel it in Calendar so they're told."
+            )
+        }
+        guard before.isEditable else { throw AgendaError.readOnly("“\(before.title)”") }
+        try store.deleteEvent(id: id)
+        let when =
+            before.isAllDay
+            ? AgendaTime.describe(before.start, hasTime: false, now: now(), calendar: calendar)
+            : "\(AgendaTime.describe(before.start, hasTime: true, now: now(), calendar: calendar))–\(AgendaTime.clock(before.end, calendar: calendar))"
+        let change = AgendaChange(
+            at: now(), line: "Deleted “\(before.title)” — \(when), \(before.calendarTitle).",
+            undo: .restoreEvent(
+                EventDraft(
+                    title: before.title, start: before.start, end: before.end,
+                    isAllDay: before.isAllDay, calendarID: before.calendarID,
+                    location: before.location, notes: before.notes)))
+        record(change, kind: "event.deleted", source: source, id: id)
+        return change
+    }
+
     /// Take a change back.
     func undo(_ change: AgendaChange) async throws {
         switch change.undo {
@@ -318,6 +353,7 @@ final class Agenda {
         case .restoreReminder(let draft): _ = try store.addReminder(draft)
         case .deleteEvent(let id): try store.deleteEvent(id: id)
         case .changeEvent(let id, let inverse): _ = try store.updateEvent(id: id, inverse)
+        case .restoreEvent(let draft): _ = try store.addEvent(draft)
         }
         if lastChange?.id == change.id { lastChange = nil }
         trace?.record(.agendaChanged, fields: ["kind": "undo", "line": .string(change.line)])

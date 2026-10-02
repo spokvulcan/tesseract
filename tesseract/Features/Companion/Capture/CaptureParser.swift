@@ -65,6 +65,14 @@ nonisolated enum CaptureParser {
         }
 
         if intent.due == nil,
+            let (date, hasTime, rest) = takeDayWord(from: text, now: now, calendar: calendar)
+        {
+            intent.due = date
+            intent.dueHasTime = hasTime
+            text = rest
+        }
+
+        if intent.due == nil,
             let (date, hasTime, rest) = takeDetectedDate(from: text, now: now, calendar: calendar)
         {
             intent.due = date
@@ -216,6 +224,51 @@ nonisolated enum CaptureParser {
             return (date, rest.trimmingCharacters(in: .whitespaces))
         }
         return nil
+    }
+
+    /// "today", "tomorrow", "the day after tomorrow", with an optional clock
+    /// ("tomorrow at 10"), counted from `now`. NSDataDetector resolves these
+    /// against the real clock and can't be given another, so the parser keeps
+    /// the common ones to itself.
+    private static func takeDayWord(
+        from text: String, now: Date, calendar: Calendar
+    ) -> (Date, Bool, String)? {
+        // "the Today page" names a thing, not a day: skip a day word that
+        // follows an article, as the detector's path does.
+        let pattern =
+            /(?i)\b((?:the )?day after tomorrow|tomorrow|today)\b(?:,?\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b)?/
+        guard
+            let match = text.matches(of: pattern).first(where: { match in
+                let before = text[..<match.range.lowerBound].lowercased()
+                let word = String(match.1).lowercased()
+                return word.hasPrefix("the ")
+                    || !["the ", "a ", "an "].contains { before.hasSuffix($0) }
+            })
+        else { return nil }
+        let word = String(match.1).lowercased()
+        let offset = word.hasSuffix("after tomorrow") ? 2 : word == "tomorrow" ? 1 : 0
+        guard
+            let day = calendar.date(
+                byAdding: .day, value: offset, to: calendar.startOfDay(for: now))
+        else { return nil }
+        var rest = text
+        rest.removeSubrange(match.range)
+        rest = rest.trimmingCharacters(in: .whitespaces)
+        guard let hourText = match.2, var hour = Int(hourText), hour < 24 else {
+            return (day, false, rest)
+        }
+        let minute = match.3.flatMap { Int($0) } ?? 0
+        guard minute < 60 else { return nil }
+        let meridiem = match.4?.lowercased()
+        if meridiem == "pm", hour < 12 { hour += 12 }
+        if meridiem == "am", hour == 12 { hour = 0 }
+        guard var date = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day)
+        else { return nil }
+        // "today at 9" said at 14:00 means tonight, as a bare clock does.
+        if offset == 0, date <= now, meridiem == nil, hour < 12 {
+            date = date.addingTimeInterval(12 * 3600)
+        }
+        return (date, true, rest)
     }
 
     private static func takeDetectedDate(

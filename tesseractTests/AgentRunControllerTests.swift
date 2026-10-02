@@ -4,11 +4,11 @@
 //
 //  Tests the **Agent Run** module at its own seam — no AgentCoordinator, no
 //  conversation store, no transcript. Covers the single-writer `isGenerating`
-//  with its eager "queued-behind-the-lease" semantics, and the lease contract
+//  with its eager "queued-behind-the-gate" semantics, and the gate contract
 //  through the **Inference Arbitrating** peer: the happy path (acquire → body →
-//  release) and the lease-throws path. Absorbs the former
-//  `AgentCoordinatorCompactLeaseTests`, whose `/compact` lease coverage now
-//  lives here via the shared `runUnderLease` entry.
+//  release) and the gate-throws path. Absorbs the former
+//  `AgentCoordinatorCompactLeaseTests`, whose `/compact` gate coverage now
+//  lives here via the shared `runUnderGate` entry.
 //
 
 import Foundation
@@ -43,7 +43,7 @@ struct AgentRunControllerTests {
         makeNoOpAgent(modelID: "agent-run-controller-test-model")
     }
 
-    /// A peer whose lease throws deterministically before the body runs — the
+    /// A peer whose gate throws deterministically before the body runs — the
     /// in-memory analogue of `ensureLoaded` failing with `modelNotDownloaded`.
     private func makeFailingArbiter() -> InMemoryInferenceArbiter {
         let peer = InMemoryInferenceArbiter()
@@ -69,11 +69,11 @@ struct AgentRunControllerTests {
 
     // MARK: - Eager flag
 
-    /// `isGenerating` flips to `true` *synchronously* in `runUnderLease`, before
-    /// the lease body runs — while the agent is still `.idle` (the run is queued
-    /// behind the lease). This is the "queued **or** active" semantics that only
+    /// `isGenerating` flips to `true` *synchronously* in `runUnderGate`, before
+    /// the gate body runs — while the agent is still `.idle` (the run is queued
+    /// behind the gate). This is the "queued **or** active" semantics that only
     /// the run module can know.
-    @Test func runUnderLeaseSetsIsGeneratingEagerlyWhileAgentStillIdle() async throws {
+    @Test func runUnderGateSetsIsGeneratingEagerlyWhileAgentStillIdle() async throws {
         let agent = makeAgent()
         let errors = ErrorRecorder()
         let run = AgentRunController(
@@ -82,23 +82,23 @@ struct AgentRunControllerTests {
             reportError: { errors.report($0) }
         )
 
-        run.runUnderLease { /* never reached — lease throws first */  }
+        run.runUnderGate { /* never reached — gate throws first */  }
 
         // Eager: flag is up while the run is still queued and the agent idle.
         #expect(run.isGenerating == true)
         #expect(agent.state.isBusy == false)
 
-        // The lease throws in ensureLoaded → the catch resets the flag.
+        // The gate throws in ensureLoaded → the catch resets the flag.
         try await waitUntilIdle(run)
         #expect(run.isGenerating == false)
     }
 
-    // MARK: - Lease path
+    // MARK: - Gate path
 
-    /// The happy lease path — previously unreachable in tests: `runUnderLease`
-    /// wraps its body in the `.llm` lease (the peer records the acquisition and
+    /// The happy gate path — previously unreachable in tests: `runUnderGate`
+    /// wraps its body in the `.llm` gate (the peer records the acquisition and
     /// runs the body), and `isGenerating` clears when the body completes.
-    @Test func runUnderLeaseRunsBodyInsideLLMLease() async throws {
+    @Test func runUnderGateRunsBodyAtTheLLMGate() async throws {
         let agent = makeAgent()
         let peer = InMemoryInferenceArbiter()
         let log = ErrorRecorder()
@@ -109,13 +109,13 @@ struct AgentRunControllerTests {
         )
 
         let bodyMark = ErrorRecorder()
-        run.runUnderLease { bodyMark.report("body") }
+        run.runUnderGate { bodyMark.report("body") }
 
         #expect(run.isGenerating == true)  // eager, while queued
         try await waitUntilIdle(run)
 
         #expect(bodyMark.messages == ["body"])
-        #expect(peer.leaseCalls == [.init(slot: .llm, llmModelIDOverride: nil)])
+        #expect(peer.gateCalls == [.init(modelIDOverride: nil)])
         #expect(log.messages.isEmpty)
         #expect(run.isGenerating == false)
     }
@@ -126,7 +126,7 @@ struct AgentRunControllerTests {
     /// path demands the vision container for any vision-capable model —
     /// `.visionIfCapable` — so attaching an image just works with no toggle and
     /// no re-prefill. Asserted at the **Inference Arbitrating** seam.
-    @Test func runUnderLeaseRequestsVisionIfCapableWhenSettingOn() async throws {
+    @Test func runUnderGateRequestsVisionIfCapableWhenSettingOn() async throws {
         let agent = makeAgent()
         let peer = InMemoryInferenceArbiter()
         let settings = SettingsManager(store: InMemorySettingsStore())
@@ -135,15 +135,15 @@ struct AgentRunControllerTests {
             agent: agent, arbiter: peer, settings: settings, reportError: { _ in }
         )
 
-        run.runUnderLease {}
+        run.runUnderGate {}
         try await waitUntilIdle(run)
 
-        #expect(peer.leaseCalls == [.init(slot: .llm, llmVision: .visionIfCapable)])
+        #expect(peer.gateCalls == [.init(vision: .visionIfCapable)])
     }
 
     /// With the vision opt-out off, the send path falls back to `.fromSettings`
     /// (→ the text-only container), so opting out truly forces text-only for chat.
-    @Test func runUnderLeaseFallsBackToFromSettingsWhenVisionOptedOut() async throws {
+    @Test func runUnderGateFallsBackToFromSettingsWhenVisionOptedOut() async throws {
         let agent = makeAgent()
         let peer = InMemoryInferenceArbiter()
         let settings = SettingsManager(store: InMemorySettingsStore())
@@ -152,17 +152,17 @@ struct AgentRunControllerTests {
             agent: agent, arbiter: peer, settings: settings, reportError: { _ in }
         )
 
-        run.runUnderLease {}
+        run.runUnderGate {}
         try await waitUntilIdle(run)
 
-        #expect(peer.leaseCalls == [.init(slot: .llm, llmVision: .fromSettings)])
+        #expect(peer.gateCalls == [.init(vision: .fromSettings)])
     }
 
-    /// With the arbiter present and its model load failing, the lease throws
+    /// With the arbiter present and its model load failing, the gate throws
     /// before the body — so a `/compact`-shaped body never reaches `summarize`,
     /// `isGenerating` resets, and the failure surfaces through `reportError`.
     /// (Absorbs `compactCommandRunsUnderArbiterLeaseAndSkipsSummarizeWhenModelUnavailable`.)
-    @Test func runUnderLeaseSkipsBodyAndReportsErrorWhenModelUnavailable() async throws {
+    @Test func runUnderGateSkipsBodyAndReportsErrorWhenModelUnavailable() async throws {
         let agent = makeAgent()
         agent.loadMessages([Self.oldUser, Self.oldAssistant, Self.recentUser, Self.recentAssistant])
 
@@ -180,7 +180,7 @@ struct AgentRunControllerTests {
             reportError: { errors.report($0) }
         )
 
-        run.runUnderLease { [agent] in
+        run.runUnderGate { [agent] in
             await agent.forceCompact(
                 contextManager: contextManager, contextWindow: 5_000, summarize: summarize)
         }
@@ -192,13 +192,13 @@ struct AgentRunControllerTests {
         #expect(errors.messages.isEmpty == false)
     }
 
-    // MARK: - /compact under the lease
+    // MARK: - /compact at the gate
 
-    /// A `/compact`-shaped body runs to completion under the lease — `summarize`
+    /// A `/compact`-shaped body runs to completion under the gate — `summarize`
     /// fires — and re-pins the standalone `/compact` busy-flag clearing to
     /// **body completion** (no event gate): once the awaited `forceCompact`
     /// finishes, `isGenerating` drops to `false`.
-    @Test func compactBodyRunsUnderLeaseAndClearsFlagOnCompletion() async throws {
+    @Test func compactBodyRunsAtTheGateAndClearsFlagOnCompletion() async throws {
         let agent = makeAgent()
         agent.loadMessages([Self.oldUser, Self.oldAssistant, Self.recentUser, Self.recentAssistant])
 
@@ -216,7 +216,7 @@ struct AgentRunControllerTests {
             reportError: { _ in }
         )
 
-        run.runUnderLease { [agent] in
+        run.runUnderGate { [agent] in
             await agent.forceCompact(
                 contextManager: contextManager, contextWindow: 5_000, summarize: summarize)
         }
@@ -225,15 +225,15 @@ struct AgentRunControllerTests {
         while await recorder.callCount == 0 {
             try await Task.sleep(for: .milliseconds(20))
             if ContinuousClock.now >= deadline {
-                Issue.record("Lease body did not invoke summarize within timeout")
+                Issue.record("Gated body did not invoke summarize within timeout")
                 break
             }
         }
         #expect(await recorder.callCount >= 1)
-        #expect(peer.leaseCalls == [.init(slot: .llm)])
+        #expect(peer.gateCalls == [.init()])
 
         // The completion-based clear: `/compact` owns its busy-flag lifecycle by
-        // finishing under the lease, not via a `phase == .idle` event gate.
+        // finishing under the gate, not via a `phase == .idle` event gate.
         try await waitUntilIdle(run)
         #expect(run.isGenerating == false)
     }

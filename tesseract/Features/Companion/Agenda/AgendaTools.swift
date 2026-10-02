@@ -18,7 +18,10 @@ nonisolated enum AgendaToolNames {
     static let updateReminder = "update_reminder"
     static let addEvent = "add_event"
     static let moveEvent = "move_event"
-    static let all: [String] = [agenda, addReminder, updateReminder, addEvent, moveEvent]
+    static let deleteEvent = "delete_event"
+    static let all: [String] = [
+        agenda, addReminder, updateReminder, addEvent, moveEvent, deleteEvent,
+    ]
 }
 
 @MainActor
@@ -31,6 +34,7 @@ func createAgendaTools(agenda: Agenda, now: @escaping @MainActor () -> Date = Da
         updateReminderTool(agenda: agenda, now: now),
         addEventTool(agenda: agenda, now: now),
         moveEventTool(agenda: agenda, now: now),
+        deleteEventTool(agenda: agenda),
     ]
 }
 
@@ -303,6 +307,37 @@ private func moveEventTool(agenda: Agenda, now: @escaping @MainActor () -> Date)
                 let (event, change) = try agenda.moveEvent(
                     id: id, start: start.date, end: end, source: "tool")
                 return .text("\(change.line) (id: \(event.id))")
+            }
+        })
+}
+
+// MARK: - delete_event
+
+@MainActor
+private func deleteEventTool(agenda: Agenda) -> AgentToolDefinition {
+    AgentToolDefinition(
+        name: AgendaToolNames.deleteEvent,
+        label: "delete_event",
+        description: """
+            Delete one calendar event (by id, from the agenda tool) when the owner asks: a block, \
+            a slot or an appointment they keep for themselves. Only this occurrence of a \
+            repeating event goes. A meeting with other people invited can't be deleted here; \
+            tell the owner to decline or cancel it in Calendar. The change can be undone.
+            """,
+        parameterSchema: JSONSchema(
+            type: "object",
+            properties: [
+                "id": PropertySchema(type: "string", description: "The event's id.")
+            ],
+            required: ["id"]),
+        execute: { _, args, _, _ in
+            guard let id = ToolArgExtractor.string(args, key: "id") else {
+                throw AgendaError.invalid("delete_event needs the event's id.")
+            }
+            await agenda.ensureAccess()
+            return try await MainActor.run {
+                let change = try agenda.deleteEvent(id: id, source: "tool")
+                return .text(change.line)
             }
         })
 }

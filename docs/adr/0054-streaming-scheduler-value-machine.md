@@ -2,6 +2,8 @@
 
 - Status: Accepted
 - Date: 2026-07-21
+- Amended by: ADR-0082 (2026-10-01: `VoiceSessionPlayback` is deleted — the
+  machine has one adapter and the in-memory peer; see the end)
 - Relates to: ADR-0050 (Hold Wiring Arbiter — the policy/performer template
   this is the fourth application of), ADR-0041 (Dual-Path Playback — the two
   adapters the fold lives under)
@@ -85,3 +87,13 @@ async, and they carry the epoch that lets a stale one prove itself).
   and per-stream sample-rate/duration reset the real folds carry.
 - The three sinks — two shipping adapters and the in-memory peer — drive one
   machine; a new field or gate is added once, and no adapter can fall behind.
+
+## Amendment (2026-10-01, ADR-0082): one adapter
+
+The half-duplex voice session plays its replies through `AudioPlaybackManager`
+like every other utterance, so `VoiceSessionPlayback` is deleted and the
+machine has one shipping adapter plus the in-memory peer. The
+`hasUndrainedAudio` read (only that adapter used it) and the
+`PlaybackEnvelope` the adapters kept beside the machine are gone too. The
+machine itself is unchanged; it still keeps the adapter and its test peer
+from drifting apart.

@@ -101,21 +101,21 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/LinearStreamingDetokenizerTests \
   -only-testing:tesseractTests/LinearStreamingDetokenizerRealTests
 
-# Voice session + barge detector (quit the app first — its capture engine
-# starves test hosts; VoiceBargeReplayTests replays real-hardware traces from
-# tools/voice-hold-lab, see its RUNBOOK for regenerating fixtures):
+# Voice session + capture engine (quit the app first — its capture engine
+# starves test hosts). VoiceSessionMachineTests pins the half-duplex loop
+# (ADR-0082): the mic closed under the reply, barge-in by key or click, the
+# dead-capture recovery; CaptureEngineLifecycleTests pins the live-input
+# check's verdicts:
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
   -skipPackagePluginValidation \
+  -only-testing:tesseractTests/VoiceSessionMachineTests \
   -only-testing:tesseractTests/VoiceEndpointerTests \
-  -only-testing:tesseractTests/EchoResidualFloorTests \
-  -only-testing:tesseractTests/VoiceBargeReplayTests \
-  -only-testing:tesseractTests/CompanionVoiceSoftBargeTests \
   -only-testing:tesseractTests/VoiceCaptureSessionTests \
   -only-testing:tesseractTests/VoiceProcessingDuckPolicyTests \
   -only-testing:tesseractTests/CaptureEngineLifecycleTests \
   -only-testing:tesseractTests/SpeechCoordinatorTests \
   -only-testing:tesseractTests/AudioPlaybackTests \
-  -only-testing:tesseractTests/PlaybackEnvelopeTests
+  -only-testing:tesseractTests/StreamingSchedulerTests
 
 # Speech page (ADR-0076/0077): the Reader over the real coordinator and
 # engine, the Read-Along clock and its word timing, text geometry, the
@@ -161,8 +161,11 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/Qwen3VLProcessorCapTests
 
 # The Companion (ADR-0080), with no model and no EventKit: the Day Engine's
-# decision tables (nudges, moments, Breakpoints, Triage, agents, the Night
-# Reflection, card actions), the Agenda tools over the in-memory store, capture,
+# decision tables (nudges, moments, the Morning Plan's code card and its
+# refinement, the plan made before the sit-down, Breakpoints, Triage — only
+# people, never during a game —, agents, the Night Reflection, card actions,
+# delivered nudges), banner sources and game detection, the Agenda tools over
+# the in-memory store (delete_event included), capture and the one-key hotkey,
 # the Timeline, cards and prompts, the Day Thread's store, the seen ledger, the
 # Delivery Ladder and governor, the Claude Code merge, the Profile and recall
 # (fixture conversation files), the trace, and the prefix-cache contract (a
@@ -172,6 +175,9 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/DayEngineNudgeTests \
   -only-testing:tesseractTests/DayEngineMomentTests \
   -only-testing:tesseractTests/DayEngineBreakpointTests \
+  -only-testing:tesseractTests/DayEngineMorningPlanTests \
+  -only-testing:tesseractTests/NotificationSourceTests \
+  -only-testing:tesseractTests/ModifierKeyDetectorTests \
   -only-testing:tesseractTests/CardItemActionTests \
   -only-testing:tesseractTests/NightReflectionTests \
   -only-testing:tesseractTests/DayStateStoreTests \
@@ -193,6 +199,16 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/NowTagTests \
   -only-testing:tesseractTests/SystemPromptAssemblerTests \
   -only-testing:tesseractTests/RetiredCompanionDataTests
+
+# The LLM Gate (ADR-0081) and the menu's Models section: one LLM generation at
+# a time (FIFO, handoff, cancellation), the runs and the proofreader that read
+# it, and what the Models section says:
+xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
+  -skipPackagePluginValidation \
+  -only-testing:tesseractTests/LLMGateTests \
+  -only-testing:tesseractTests/AgentRunControllerTests \
+  -only-testing:tesseractTests/ProofreadPassTests \
+  -only-testing:tesseractTests/MenuModelsSectionTests
 
 # Every main-window page opens with the app's own wiring, and test runs stay
 # off the owner's data (ADR-0073). A page missing an environment dependency
@@ -978,8 +994,8 @@ approval requirement in the capture baseline still applies to #480.
     segment becomes the take, later segments and utterances continue it,
     a pinned voice round-trips, a cancelled retake keeps the old take,
     schema-1 voices are rejected; `SegmenterTests` for the short lead
-    segment; `ModelAvailabilityTests`: a missing checkpoint fails before the
-    GPU lease; word starts shifted to the utterance's frames) and
+    segment; `ModelAvailabilityTests`: a missing checkpoint fails before any
+    load; word starts shifted to the utterance's frames) and
     `Qwen3CheckpointTests` (the Voice Engine completeness rule, and
     `Qwen3Synthesizer` refusing to fetch or delete anything). `WordTimerTests`
     (ADR-0077) runs the word timer on synthetic attention rows and levels:

@@ -74,8 +74,10 @@ final class CompanionRuntime {
         self.profile = profile
         self.now = now
         var loaded = stateStore.load() ?? DayState(day: DayKey(for: now()))
-        // A moment in flight when the app quit never finished.
+        // A moment in flight when the app quit never finished, and a card it
+        // was refining keeps the version code built.
         loaded.running = nil
+        for index in loaded.cards.indices { loaded.cards[index].isRefining = false }
         self.state = loaded
         agenda.addListener { [weak self] in self?.send(.agendaChanged) }
         thread.openingProvider = { [weak self] in self?.dayOpening() ?? "" }
@@ -101,10 +103,14 @@ final class CompanionRuntime {
         let watcher = NotificationCenterWatcher(
             isEnabled: { [settings] in settings.companionHeartbeatEnabled },
             onNotification: { [weak self] captured in
-                guard let notification = captured.admitted(selfDisplayNames: selfNames) else {
-                    return
-                }
-                self?.send(.notificationArrived(notification))
+                guard let self,
+                    let notification = captured.admitted(selfDisplayNames: selfNames)
+                else { return }
+                // Code decides who it's from (a person, an app, noise)
+                // before the engine or a model sees it.
+                let source = NotificationSources.classify(
+                    notification, app: self.frontmost.identity(named: notification.app))
+                self.send(.notificationArrived(notification.classified(source)))
             })
         watcher.start()
         self.watcher = watcher
@@ -142,6 +148,9 @@ final class CompanionRuntime {
     private func activate() async {
         guard !isActive else { return }
         isActive = true
+        notifier.onNudgeDelivered = { [weak self] _ in
+            Task { await self?.readDeliveredNudges() }
+        }
         await notifier.activate()
         await agenda.requestAccessIfNeeded()
         send(.companionEnabled)
@@ -151,9 +160,16 @@ final class CompanionRuntime {
                 guard !Task.isCancelled else { return }
                 await self?.agenda.refresh()
                 self?.send(.tick)
+                await self?.readDeliveredNudges()
             }
         }
         Log.companion.info("Companion on")
+    }
+
+    /// macOS shows the event nudges itself; read back which ones it
+    /// delivered, so the trace records each one once.
+    private func readDeliveredNudges() async {
+        send(.nudgesDelivered(await notifier.deliveredNudges()))
     }
 
     private func deactivate() async {
@@ -201,7 +217,7 @@ final class CompanionRuntime {
             now: now(), settings: daySettings, agenda: agenda.snapshot, areas: agenda.areas,
             inboxListID: agenda.inbox?.id, ownerPresent: idleMonitor.isOwnerPresent,
             chatBusy: thread.isChatBusy, frontmostAppName: frontmost.name,
-            frontmostBundleID: frontmost.bundleID,
+            frontmostBundleID: frontmost.bundleID, frontmostIsGame: frontmost.isGame,
             lastTerminalFrontAt: frontmost.lastTerminalFrontAt(now: now()), power: power.state,
             profile: profile?.facts.map(\.text) ?? [])
     }

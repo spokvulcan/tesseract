@@ -147,8 +147,6 @@ enum SettingsCatalogue {
         "companionVoiceTrailingSilence", default: 1.8)
     static let companionVoiceSessionTimeout = Setting.double(
         "companionVoiceSessionTimeout", default: 30)
-    static let companionVoiceBargeInLevel = Setting.double(
-        "companionVoiceBargeInLevel", default: 0.25)
 
     // MARK: - Companion (the day)
 
@@ -180,12 +178,13 @@ enum SettingsCatalogue {
     static let companionTriageRulesJSON = Setting.string("companionTriageRulesJSON", default: "[]")
     /// The Day Thread's compaction ceiling, in tokens.
     static let companionThreadCeilingTokens = Setting.int(
-        "companionThreadCeilingTokens", default: 80_000)
-    /// The capture hotkey: a thought into Reminders from any app.
+        "companionThreadCeilingTokens", default: 64_000)
+    /// The capture hotkey: a thought into Reminders from any app. One key —
+    /// Right Option alone: tap to type, hold to speak.
     static let captureHotkeyKeyCode = Setting.int(
-        "captureHotkeyKeyCode", default: Int(KeyCombo.optionShiftSpace.keyCode))
+        "captureHotkeyKeyCode", default: Int(KeyCombo.rightOption.keyCode))
     static let captureHotkeyModifiers = Setting.int(
-        "captureHotkeyModifiers", default: Int(KeyCombo.optionShiftSpace.modifiers))
+        "captureHotkeyModifiers", default: Int(KeyCombo.rightOption.modifiers))
 
     static let selectedAgentModelID = Setting.string(
         "selectedAgentModelID", default: ModelDefinition.defaultAgentModelID)

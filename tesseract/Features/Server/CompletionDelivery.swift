@@ -28,8 +28,8 @@ import MLXLMCommon
 /// - Every outcome waits for the drive before the script returns: a
 ///   completed one after the client's last byte, without cancelling it, and
 ///   the rest after cancelling it. The drive's tail still releases what the
-///   request holds in the prefix cache, and the caller's GPU lease must
-///   cover that.
+///   request holds in the prefix cache, and the caller's LLM gate turn
+///   must cover that.
 /// - `Log.server` lines and `ServerGenerationLog` transitions have one home.
 ///
 /// `nonisolated` so it composes with the handler's off-actor delivery with no
@@ -347,7 +347,7 @@ nonisolated enum CompletionDelivery {
             )
             await activityLog.complete(handle: logHandle, finishReason: finishReason.rawValue)
             // The drive lets go of what the request holds in the prefix cache
-            // after its stream ends. Waiting keeps that inside the GPU lease,
+            // after its stream ends. Waiting keeps that inside the LLM gate,
             // so the next request cannot overlap this one in the
             // Active-Inference Reserve. The client already has its last chunk.
             await generation.waitForCompletion()

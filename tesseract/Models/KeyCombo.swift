@@ -25,8 +25,15 @@ nonisolated struct KeyCombo: Codable, Equatable, Sendable {
     /// keyboard event, so the chord is detected on modifier flags alone.
     var isDoubleCommand: Bool { keyCode == Self.doubleCommandKeyCode }
 
+    /// A modifier key on its own — the one-key hotkey (Right Option, say).
+    /// Stored as the modifier's own key code with no modifiers: a key press
+    /// never carries a modifier's key code, so it can't collide with a key
+    /// combo, and it is detected on modifier flags (`ModifierKeyDetector`).
+    var isSingleModifier: Bool { modifiers == 0 && Self.singleModifierKeys[keyCode] != nil }
+
     var displayString: String {
         if isDoubleCommand { return "⌘⌘" }
+        if isSingleModifier, let key = Self.singleModifierKeys[keyCode] { return key.name }
 
         var parts: [String] = []
 
@@ -125,9 +132,23 @@ nonisolated struct KeyCombo: Codable, Equatable, Sendable {
         return String(utf16CodeUnits: chars, count: length)
     }
 
+    /// The modifiers that work as a hotkey on their own, with the flag bit
+    /// that says each is down: the right-hand modifiers (rarely used for
+    /// shortcuts) and fn. The left Command and Shift keys are left alone —
+    /// too much typing rides on them.
+    static let singleModifierKeys: [UInt16: (name: String, mask: UInt64)] = [
+        UInt16(kVK_RightOption): ("Right ⌥", 0x40),
+        UInt16(kVK_RightCommand): ("Right ⌘", 0x10),
+        UInt16(kVK_RightControl): ("Right ⌃", 0x2000),
+        UInt16(kVK_RightShift): ("Right ⇧", 0x04),
+        UInt16(kVK_Function): ("fn", 0x80_0000),
+    ]
+
     // Common presets
     static let doubleCommandKeyCode: UInt16 = .max
     static let doubleCommand = KeyCombo(keyCode: doubleCommandKeyCode, modifiers: .command)
+    /// One key, alone: the capture default.
+    static let rightOption = KeyCombo(keyCode: UInt16(kVK_RightOption))
     static let f5 = KeyCombo(keyCode: UInt16(kVK_F5))
     static let optionSpace = KeyCombo(keyCode: UInt16(kVK_Space), modifiers: .option)
     static let controlSpace = KeyCombo(keyCode: UInt16(kVK_Space), modifiers: .control)

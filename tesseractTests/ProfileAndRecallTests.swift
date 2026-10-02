@@ -210,8 +210,21 @@ struct NightReflectionTests {
         #expect(request?.text.contains("- Works on Tesseract in the evenings.") == true)
     }
 
-    @Test func onBatteryItWaitsForPower() {
-        let battery = PowerState(onACPower: false, batteryPercent: 80, thermal: .nominal)
+    @Test func onAHealthyBatteryItRuns() {
+        // 85% on battery at 23:00: the night of the 30th, which the old
+        // power-only rule skipped.
+        let battery = PowerState(onACPower: false, batteryPercent: 85, thermal: .nominal)
+        let decided = DayEngine.decide(
+            .tick, snapshot: Self.snapshot(at: Self.local(30, 23), power: battery),
+            state: Self.afterWrapUp())
+        #expect(
+            decided.effects.contains {
+                if case .runMoment(let r) = $0 { r.kind == .nightReflection } else { false }
+            })
+    }
+
+    @Test func onALowBatteryItWaitsForPower() {
+        let battery = PowerState(onACPower: false, batteryPercent: 30, thermal: .nominal)
         let held = DayEngine.decide(
             .tick, snapshot: Self.snapshot(at: Self.local(30, 22), power: battery),
             state: Self.afterWrapUp())

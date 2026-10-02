@@ -66,7 +66,7 @@ final class ChatSession {
 
     /// The **Pending Row**: the just-sent user message, rendered from send
     /// until the event spine commits the same message — so the transcript
-    /// shows it instantly even while the run sits queued behind the lease
+    /// shows it instantly even while the run sits queued behind the gate
     /// (cold-start model load). Ephemeral derived view-state like the Live
     /// Part, never agent state. If the run settles before the commit (cancel
     /// while queued, load failure), it vanishes and its content is restored
@@ -81,12 +81,12 @@ final class ChatSession {
     /// the banner's dismiss.
     var error: String?
 
-    /// "A foreground run is queued or active" — includes lease-queue time the
+    /// "A foreground run is queued or active" — includes gate-queue time the
     /// event fold can't see. The composer's send/cancel switch keys off this.
     var isGenerating: Bool { agentRun.isGenerating }
 
     /// Whether the **Waiting Row** shows: the run is waiting on the model with
-    /// nothing streaming — queued behind the lease (cold start) or in a turn
+    /// nothing streaming — queued behind the gate (cold start) or in a turn
     /// prefill (first turn and after every tool batch). Deliberately *not*
     /// shown between parts mid-stream (the live message already has content —
     /// a row there would flicker) or during tool execution (tool rows own
@@ -616,7 +616,7 @@ final class ChatSession {
 
         let user = UserMessage(content: trimmed, images: images)
         // Raise the Pending Row before the send: the run may sit queued behind
-        // the lease (cold-start model load) for seconds, and the transcript
+        // the gate (cold-start model load) for seconds, and the transcript
         // must show the message immediately. The event-spine commit of the
         // same message lowers it.
         pendingUserMessage = user
@@ -684,8 +684,8 @@ final class ChatSession {
         }
     }
 
-    /// `/compact` observes the same arbiter-lease contract as a regular turn by
-    /// reusing Agent Run's `runUnderLease`, so the lease/flag/cancel logic is
+    /// `/compact` observes the same arbiter-gate contract as a regular turn by
+    /// reusing Agent Run's `runUnderGate`, so the gate/flag/cancel logic is
     /// written once.
     private func triggerCompaction() {
         guard !agent.state.messages.isEmpty else {
@@ -698,7 +698,7 @@ final class ChatSession {
         }
 
         let contextWindow = self.contextWindow
-        agentRun.runUnderLease { [agent] in
+        agentRun.runUnderGate { [agent] in
             await agent.forceCompact(
                 contextManager: contextManager,
                 contextWindow: contextWindow,

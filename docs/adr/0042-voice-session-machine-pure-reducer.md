@@ -2,6 +2,8 @@
 
 - Status: Accepted
 - Date: 2026-07-18
+- Amended by: ADR-0082 (2026-10-01: the session is half-duplex — see the
+  amendment at the end)
 - Relates to: ADR-0041 (Echo Floor / Soft Barge / Dual-Path), ADR-0025 (the
   policy/performer split this copies), #310 (the voice session), #354 (the
   hardening list), map #301
@@ -69,3 +71,20 @@ Lifecycle** (ADR-0025):
   judgment; the 19 injected closures remain, but only as effect performers.
 - Retuning session behavior means editing one pure module and reading the
   diff of its decision tables.
+
+## Amendment (2026-10-01, ADR-0082): half-duplex
+
+The split stands; what the machine decides shrank. The session is
+half-duplex, so the mic closes before a reply speaks and opens only after
+speech stops. Gone: the Echo Floor sub-state, the Soft Barge and its confirm
+window, the false-barge escalation ladder, the post-resume deafness, the
+energy records, and the hold, pause, resume and fade effects — and with them
+`VoiceBargeReplayTests` and its lab fixtures. The click event is now
+`bargeIn(source:)`, sent by the overlay's click and by the Talk and Speak
+hotkeys; it acts only while speech plays and stops it for good. Ticks carry
+the capture engine's dead-input flag instead of the playback level: a dead
+input while listening closes the capture, records `voice.capture-dead`, and
+reopens on the backoff, and two in a row end the session. The tick's
+speech-activity reading now also holds the mic closed for speech the session
+didn't start, and a take still transcribing keeps the mic closed until its
+outcome. `VoiceSessionMachineTests` pins the new tables.

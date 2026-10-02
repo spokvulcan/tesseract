@@ -138,18 +138,11 @@ struct AgentSettingsPane: View {
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
-            HStack {
-                Text("Barge-In Sensitivity")
-                Slider(value: $settings.companionVoiceBargeInLevel, in: 0.1...0.5)
-                Text(String(format: "%.2f", settings.companionVoiceBargeInLevel))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
         } header: {
             Text("Companion Voice")
         } footer: {
             Text(
-                "Voice conversations ride the chat itself: the waveform button in the composer opens a session where the mic listens after each reply, silence sends your turn, and speaking over him stops him mid-word. The overlay concepts (ticket #328) are the session's face — pick one, preview with the scripted scenes. Auto-Send off stages your words in the composer instead of sending."
+                "Voice conversations ride the chat itself: the waveform button in the composer opens a session where the mic listens after each reply and silence sends your turn. While he speaks the mic is off — press the Talk to Tesseract or Speak Selected Text hotkey, or click his words, and he stops and listens. The overlay concepts (ticket #328) are the session's face — pick one, preview with the scripted scenes. Auto-Send off stages your words in the composer instead of sending."
             )
         }
     }

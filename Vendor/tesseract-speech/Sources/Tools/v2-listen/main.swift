@@ -68,12 +68,6 @@ func parseArgs() -> Args {
 
 // MARK: - Helpers
 
-struct ImmediateLease: GPULeasing {
-    func withLease<T: Sendable>(_ body: @Sendable () async throws -> T) async throws -> T {
-        try await body()
-    }
-}
-
 /// Prints engine burst events with a monotonic timestamp so per-segment burst
 /// wall and inter-segment gaps can be attributed (perf pass, spec §6).
 struct StderrTimingTap: SpeechDiagnosticsTap {
@@ -236,7 +230,6 @@ let synthesizer = Qwen3Synthesizer(
 let engine = SpeechEngine(
     model: modelSpec,
     synthesizer: synthesizer,
-    gpu: ImmediateLease(),
     diagnostics: args.timing ? StderrTimingTap() : nil
 )
 // Load and warm up, then wait for the Neural Engine codec (built in the

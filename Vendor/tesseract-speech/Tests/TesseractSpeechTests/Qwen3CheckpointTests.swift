@@ -136,7 +136,7 @@ private struct CheckpointFixture {
 
 /// The production adapter loads only from the directory it's given. Before,
 /// a missing or partial checkpoint sent it to the hub: it deleted the folder
-/// and downloaded a snapshot, inside the engine's GPU lease.
+/// and downloaded a snapshot while the engine waited.
 @Suite struct Qwen3SynthesizerOfflineTests {
 
     private let spec = TTSModelSpec.voiceDesign17B(.q6)

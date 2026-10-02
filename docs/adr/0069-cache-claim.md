@@ -3,6 +3,8 @@
 - Status: Accepted (as built through #554; the real-model gate's memory rule
   was not met as written, see its result below)
 - Date: 2026-09-22
+- Amended by: ADR-0081 (2026-10-01: the request's GPU lease is now its **LLM Gate**
+  turn; the claim still concludes inside it)
 - Relates to: ADR-0064 (the Leaf Lease becomes one part of a claim; its
   pin-table age-out exemption becomes moot), ADR-0019 (the Restore Pin's
   age-out backstop is retired), ADR-0016 (claim steps run inside the Model

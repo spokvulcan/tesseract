@@ -5,8 +5,8 @@
 // Reference Take comes back in the segment's stream (ADR-0072). The model
 // keeps state between generations (the instruct-prefix cache keyed by
 // description, the rewound KV caches) and runs one generation at a time: the
-// engine's GPU lease orders them, and a cancelled one still finishing its
-// frame holds off the next (ADR-0074).
+// engine actor orders them, and a cancelled one still finishing its frame
+// holds off the next (ADR-0074).
 
 import Foundation
 import MLX

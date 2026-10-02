@@ -38,16 +38,18 @@ nonisolated struct SeenLedger: Sendable, Equatable, Codable {
 
     private(set) var entries: [Entry] = []
 
-    /// Admit a banner. Returns false for a banner already in the ledger.
+    /// Admit a banner. Returns false for a banner already in the ledger. The
+    /// owner's rules come first; without one, its source decides (noise is
+    /// ignored, an app's news is held for the next Breakpoint).
     @discardableResult
     mutating func arrived(_ notification: ObservedNotification, present: Bool, rules: [TriageRule])
         -> Bool
     {
         guard !entries.contains(where: { $0.id == notification.id }) else { return false }
-        entries.append(
-            Entry(
-                notification: notification, arrivedPresent: present,
-                rule: TriageRules.verdict(for: notification, rules: rules)))
+        let rule =
+            TriageRules.verdict(for: notification, rules: rules)
+            ?? NotificationSources.defaultAction(for: notification.source)
+        entries.append(Entry(notification: notification, arrivedPresent: present, rule: rule))
         if entries.count > Self.capacity { entries.removeFirst(entries.count - Self.capacity) }
         return true
     }

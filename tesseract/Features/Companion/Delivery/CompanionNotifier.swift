@@ -23,7 +23,8 @@ final class CompanionNotifier {
 
     /// A banner or nudge was clicked: open Today.
     var onOpen: (() -> Void)?
-    /// A nudge was delivered while Tesseract was running.
+    /// A nudge was delivered with Tesseract in front (other deliveries are
+    /// read back with `deliveredNudges()`).
     var onNudgeDelivered: ((String) -> Void)?
 
     private let delegate = CompanionNotificationDelegate()
@@ -77,6 +78,18 @@ final class CompanionNotifier {
     func scheduledNudgeIDs() async -> Set<String> {
         let pending = await UNUserNotificationCenter.current().pendingNotificationRequests()
         return Set(pending.map(\.identifier).filter { $0.hasPrefix(NudgePlanner.idPrefix) })
+    }
+
+    /// The nudges macOS has delivered and still keeps in Notification Center,
+    /// whether or not Tesseract was in front when they fired.
+    func deliveredNudges() async -> [DeliveredNudge] {
+        let delivered = await UNUserNotificationCenter.current().deliveredNotifications()
+        return delivered.compactMap { notification in
+            let request = notification.request
+            guard request.identifier.hasPrefix(NudgePlanner.idPrefix) else { return nil }
+            return DeliveredNudge(
+                id: request.identifier, title: request.content.title, at: notification.date)
+        }
     }
 
     func schedule(_ nudge: Nudge) async {

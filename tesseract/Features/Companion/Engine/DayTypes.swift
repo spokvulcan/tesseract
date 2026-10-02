@@ -37,6 +37,16 @@ nonisolated enum DaySignal: Sendable, Equatable {
     case momentOutcome(MomentRequest, MomentOutcome)
     /// The owner acted on a card.
     case cardAction(CardAction)
+    /// The event nudges macOS has delivered so far (the OS shows them, with
+    /// Tesseract in front or not, so the loop reads them back on its tick).
+    case nudgesDelivered([DeliveredNudge])
+}
+
+/// An event nudge the OS delivered.
+nonisolated struct DeliveredNudge: Sendable, Equatable {
+    let id: String
+    let title: String
+    let at: Date
 }
 
 /// What the owner did on a card.
@@ -138,6 +148,8 @@ nonisolated struct DaySnapshot: Sendable, Equatable {
     /// The app in front.
     var frontmostAppName: String?
     var frontmostBundleID: String?
+    /// The app in front is a game: no Triage, no panel, nothing spoken.
+    var frontmostIsGame: Bool
     /// When a terminal (where coding agents live) was last in front; now
     /// when one is in front.
     var lastTerminalFrontAt: Date?
@@ -149,8 +161,8 @@ nonisolated struct DaySnapshot: Sendable, Equatable {
         now: Date, calendar: Calendar = .current, settings: DaySettings,
         agenda: AgendaSnapshot, areas: [Area] = [], inboxListID: String? = nil,
         ownerPresent: Bool = true, chatBusy: Bool = false, frontmostAppName: String? = nil,
-        frontmostBundleID: String? = nil, lastTerminalFrontAt: Date? = nil,
-        power: PowerState = .nominal, profile: [String] = []
+        frontmostBundleID: String? = nil, frontmostIsGame: Bool = false,
+        lastTerminalFrontAt: Date? = nil, power: PowerState = .nominal, profile: [String] = []
     ) {
         self.now = now
         self.calendar = calendar
@@ -162,6 +174,7 @@ nonisolated struct DaySnapshot: Sendable, Equatable {
         self.chatBusy = chatBusy
         self.frontmostAppName = frontmostAppName
         self.frontmostBundleID = frontmostBundleID
+        self.frontmostIsGame = frontmostIsGame
         self.lastTerminalFrontAt = lastTerminalFrontAt
         self.power = power
         self.profile = profile
@@ -242,6 +255,9 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     var whereYouWere: String?
     /// Moments the governor held back, to run when the Mac allows.
     var deferred: Set<MomentKind> = []
+    /// Event nudges already recorded as delivered (carried: a nudge stays in
+    /// Notification Center past midnight).
+    var firedNudgeIDs: Set<String> = []
 
     init(day: DayKey, syncedNudgeIDs: Set<String>? = nil) {
         self.day = day
@@ -251,7 +267,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     private enum CodingKeys: String, CodingKey {
         case day, syncedNudgeIDs, lastPresentAt, morningPlanAt, eveningWrapUpAt, nightReflectionAt
         case running, cards, mustDoID, plan, carryOver, carryOverForNextDay, ledger, agents
-        case agentSpokenAt, lastTickAt, lastTriageAt, whereYouWere, deferred
+        case agentSpokenAt, lastTickAt, lastTriageAt, whereYouWere, deferred, firedNudgeIDs
     }
 
     /// Every field but the day is optional on disk, so a state saved by an
@@ -277,6 +293,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         lastTriageAt = try c.decodeIfPresent(Date.self, forKey: .lastTriageAt)
         whereYouWere = try c.decodeIfPresent(String.self, forKey: .whereYouWere)
         deferred = (try? c.decodeIfPresent(Set<MomentKind>.self, forKey: .deferred)) ?? []
+        firedNudgeIDs = (try? c.decodeIfPresent(Set<String>.self, forKey: .firedNudgeIDs)) ?? []
     }
 
     /// The next day's state: what must survive the rollover survives.
@@ -289,6 +306,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         next.agentSpokenAt = agentSpokenAt
         next.lastTickAt = lastTickAt
         next.whereYouWere = whereYouWere
+        next.firedNudgeIDs = firedNudgeIDs
         return next
     }
 

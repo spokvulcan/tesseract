@@ -37,9 +37,6 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
     // Adapter-local — the machine has no notion of render time.
     private var pausedTime: TimeInterval?
 
-    // The scheduled-audio loudness timeline behind `playbackLevel()`.
-    private var envelope = PlaybackEnvelope()
-
     var onPlaybackFinished: (@MainActor @Sendable () -> Void)?
 
     // MARK: - Playback time tracking
@@ -60,19 +57,6 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
     func heardPlaybackTime() -> TimeInterval {
         if let pausedTime { return pausedTime }
         return heardTime(head: currentPlaybackTime(), node: playerNode, rate: playbackRate)
-    }
-
-    func playbackLevel() -> Float {
-        guard isPlaying, pausedTime == nil else { return 0 }
-        return envelope.level(at: currentPlaybackTime())
-    }
-
-    func setVolume(_ volume: Float) {
-        playerNode?.volume = volume
-    }
-
-    var volume: Float {
-        playerNode?.volume ?? 1.0
     }
 
     // MARK: - One-shot playback (existing API)
@@ -103,8 +87,6 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
 
         audioEngine = engine
         playerNode = player
-        envelope.begin(sampleRate: sampleRate)
-        envelope.append(samples: samples)
         isPlaying = true
 
         player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
@@ -149,11 +131,9 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
         audioEngine = engine
         playerNode = player
         timePitch = stretch
-        player.volume = 1.0
         streamingFormat = format
         scheduler.beginStream(sampleRate: sampleRate)
         pausedTime = nil
-        envelope.begin(sampleRate: sampleRate)
         isPlaying = true
 
         Log.speech.info("Started streaming at \(sampleRate)Hz (push-based AVAudioPlayerNode)")
@@ -171,7 +151,6 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
         }
 
         let outcome = scheduler.appendChunk(sampleCount: samples.count)
-        envelope.append(samples: samples)
         node.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
@@ -234,7 +213,6 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
     // MARK: - Stop
 
     func stop() {
-        playerNode?.volume = 1.0
         playerNode?.stop()
         audioEngine?.stop()
         playerNode = nil
@@ -243,7 +221,6 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
         streamingFormat = nil
         scheduler.stop()
         pausedTime = nil
-        envelope.reset()
         isPlaying = false
     }
 }

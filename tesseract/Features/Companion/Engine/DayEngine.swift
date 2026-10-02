@@ -48,6 +48,8 @@ nonisolated enum DayEngine {
                 effects += meetingEnded(snapshot: snapshot, state: &state)
                 effects += triageIfDue(snapshot: snapshot, state: &state)
                 effects += speakForWaitingAgents(snapshot: snapshot, state: &state)
+            } else {
+                effects += prepareMorningPlanIfDue(snapshot: snapshot, state: &state)
             }
             effects += nightReflectionIfDue(snapshot: snapshot, state: &state)
             effects += runDeferred(snapshot: snapshot, state: &state)
@@ -87,8 +89,7 @@ nonisolated enum DayEngine {
                 snapshot.minuteOfDay < snapshot.settings.eveningMinutes,
                 snapshot.minuteOfDay >= snapshot.settings.morningStartHour * 60
             {
-                effects += run(
-                    .morningPlan, trigger: .todayOpened, snapshot: snapshot, state: &state)
+                effects += morningPlan(trigger: .todayOpened, snapshot: snapshot, state: &state)
             }
 
         case .notificationArrived(let notification):
@@ -109,6 +110,9 @@ nonisolated enum DayEngine {
 
         case .cardAction(let action):
             effects += cardAction(action, snapshot: snapshot, state: &state)
+
+        case .nudgesDelivered(let delivered):
+            effects += nudgesDelivered(delivered, state: &state)
         }
 
         let waitingAfter = waitingCount(state, now: snapshot.now)
@@ -123,10 +127,16 @@ nonisolated enum DayEngine {
     ) -> [DayEffect] {
         let away = snapshot.now.timeIntervalSince(awayFrom)
         let hour = snapshot.minuteOfDay / 60
-        if state.morningPlanAt == nil, away >= DaySettings.overnightGap,
-            hour >= snapshot.settings.morningStartHour, hour < snapshot.settings.morningEndHour
+        if away >= DaySettings.overnightGap, hour >= snapshot.settings.morningStartHour,
+            hour < snapshot.settings.morningEndHour
         {
-            return run(.morningPlan, trigger: .firstPresence, snapshot: snapshot, state: &state)
+            if state.morningPlanAt == nil {
+                return morningPlan(trigger: .firstPresence, snapshot: snapshot, state: &state)
+            }
+            // Planned while they were away: it comes forward now.
+            let prepared = presentPreparedMorningPlan(
+                awayFrom: awayFrom, snapshot: snapshot, state: state)
+            if !prepared.isEmpty { return prepared }
         }
         let evening = eveningIfDue(snapshot: snapshot, state: &state)
         if !evening.isEmpty { return evening }
@@ -190,6 +200,24 @@ nonisolated enum DayEngine {
     }
 
     // MARK: - Nudges
+
+    /// Record each nudge macOS delivered, once. Notification Center keeps a
+    /// nudge until the owner clears it, so the record keeps only ids still
+    /// there.
+    static func nudgesDelivered(_ delivered: [DeliveredNudge], state: inout DayState)
+        -> [DayEffect]
+    {
+        let fresh = delivered.filter { !state.firedNudgeIDs.contains($0.id) }
+        state.firedNudgeIDs = Set(delivered.map(\.id))
+        return fresh.sorted { $0.at < $1.at }.map { nudge in
+            .trace(
+                .nudgeFired,
+                [
+                    "id": .string(nudge.id), "title": .string(nudge.title),
+                    "deliveredAt": .double(nudge.at.timeIntervalSince1970),
+                ])
+        }
+    }
 
     private static func syncNudgesIfChanged(snapshot: DaySnapshot, state: inout DayState)
         -> [DayEffect]

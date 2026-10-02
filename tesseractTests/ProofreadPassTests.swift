@@ -5,7 +5,7 @@
 //  The **Proofread Pass** policy (map #283, ADR-0034), driven hermetically
 //  through its injected closures — no MLX, no model files. Every skip path
 //  must return `nil` (fail-open: the caller commits the raw text), the pass
-//  must never touch the model while the GPU lease is held, and a budget
+//  must never touch the model while the LLM is generating, and a budget
 //  overrun must cut the pass off rather than stall the commit.
 //
 
@@ -53,7 +53,7 @@ struct ProofreadPassTests {
     ) -> ProofreadPass {
         ProofreadPass(
             isEnabled: { enabled },
-            isGPUBusy: { gpuBusy },
+            isLLMBusy: { gpuBusy },
             modelDirectory: { directory },
             loadModel: { _ in try await recorder.load() },
             runModel: { _, _ in try await recorder.run() },
@@ -81,9 +81,10 @@ struct ProofreadPassTests {
         #expect(recorder.loadCount == 0)
     }
 
-    /// Skip-when-busy is the owner's locked call: while the agent or server
-    /// holds the GPU lease, the pass must not load, not run, not queue.
-    @Test func gpuLeaseHeldSkipsWithoutTouchingTheModel() async {
+    /// Skip-when-busy is the owner's locked call: while the LLM is generating
+    /// (a chat, a moment, a server request), the pass must not load, not run,
+    /// not queue.
+    @Test func llmBusySkipsWithoutTouchingTheModel() async {
         let recorder = ModelRecorder()
         let pass = makePass(recorder: recorder, gpuBusy: true)
 
@@ -116,7 +117,7 @@ struct ProofreadPassTests {
         let recorder = ModelRecorder()
         let pass = ProofreadPass(
             isEnabled: { true },
-            isGPUBusy: { false },
+            isLLMBusy: { false },
             modelDirectory: { URL(fileURLWithPath: "/tmp/proofread-model") },
             loadModel: { _ in try await recorder.load() },
             runModel: { _, _ in

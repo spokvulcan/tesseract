@@ -118,9 +118,9 @@ final class ServerGenerationLog {
         return TraceHandle(id: trace.id)
     }
 
-    func markLeaseAcquired(handle: TraceHandle, at: Date = Date()) {
+    func markGateAcquired(handle: TraceHandle, at: Date = Date()) {
         update(handle) { trace in
-            trace.leaseAcquiredAt = at
+            trace.gateAcquiredAt = at
             if trace.phase == .queued {
                 trace.phase = .lookingUp
             }
@@ -547,7 +547,7 @@ struct RequestTrace: Identifiable, Equatable {
     /// inbound section. `.empty` when the request carried no messages.
     var inbound: InboundCapture = .empty
 
-    var leaseAcquiredAt: Date?
+    var gateAcquiredAt: Date?
     var firstTokenAt: Date?
     var completedAt: Date?
 
@@ -597,11 +597,11 @@ struct RequestTrace: Identifiable, Equatable {
     var finishReason: String?
     var errorMessage: String?
 
-    /// Time-to-first-token, measured from lease acquisition (which is
+    /// Time-to-first-token, measured from taking the LLM gate (which is
     /// the point we hold GPU rights). Nil until the first token arrives.
     var ttftMs: Double? {
-        guard let firstTokenAt, let leaseAcquiredAt else { return nil }
-        return firstTokenAt.timeIntervalSince(leaseAcquiredAt) * 1000
+        guard let firstTokenAt, let gateAcquiredAt else { return nil }
+        return firstTokenAt.timeIntervalSince(gateAcquiredAt) * 1000
     }
 
     var isActive: Bool { !phase.isTerminal }

@@ -205,7 +205,7 @@ else ends it, not even the claim's tripwire. The leased bytes stay counted even
 while the tree holds no body.
 _Avoid_: **Restore Pin** (the weak hold of a copy restore: it protects a path,
 it does not own a body); **Cache Claim** for the lease alone (the lease is one
-part of a claim); GPU lease (the inference arbiter's turn-taking, a different
+part of a claim); LLM gate (the inference arbiter's turn-taking, a different
 resource); lock, refcount (one owner needs neither).
 
 **Leaf Rewind**:
@@ -223,7 +223,7 @@ conversation's cache).
 One request's whole hold on the prefix cache: its lane in the **Active-Inference
 Reserve**, its **Restore Pins**, and, when it takes the leaf by **Leaf Handoff**, its
 **Leaf Lease**. **Snapshot Resolution** opens it, and it concludes exactly once,
-inside the request's GPU lease. The claim is where the request learns whether it
+inside the request's **LLM Gate** turn. The claim is where the request learns whether it
 takes the leaf or restores by copy, and why; a claim that took the leaf ends only
 by check-in or **Leaf Rewind**, and the leaf is back before the pins and the lane
 are let go. Every keyed request holds one, a miss included; a **Speculative
@@ -1075,11 +1075,12 @@ into sound — a collaborator seam, not a model port, and the distinction from
 _Avoid_: AudioPlaybackManager (one adapter), AVAudioEngine (used inside it), player.
 
 **Streaming Scheduler**:
-The pure push-scheduling decider (ADR-0054) both **Audio Playback** adapters and
-the in-memory peer drive: the buffer counters, the start gate, finish detection,
-and the stream epoch that makes a stale buffer completion ignorable after a
-stop/restart. Verdicts out, every AVAudioEngine effect stays in the adapters —
-the fourth policy/performer value machine after lifecycle, duck, and hold.
+The pure push-scheduling decider (ADR-0054) that the **Audio Playback** adapter
+and the in-memory peer both drive: the buffer counters, the start gate, finish
+detection, and the stream epoch that makes a stale buffer completion ignorable
+after a stop/restart. Verdicts out, every AVAudioEngine effect stays in the
+adapter — a policy/performer value machine like the capture engine's lifecycle
+and duck. Voice-session replies play through the same adapter (ADR-0082).
 _Avoid_: playback scheduler (AVAudioPlayerNode's own scheduling), stream pump
 (retired **Segment Playback** vocabulary), duplicating the fold per adapter (the
 pre-#395 shape).
@@ -1255,8 +1256,8 @@ status.
 
 **Pacing Policy**:
 The demand-based backpressure contract: `.eager` or `.lookahead(segments: n)` —
-at most n undelivered segments beyond the in-flight one, every engine wait
-happening outside the GPU lease. Pause is its consequence, not an API.
+at most n undelivered segments beyond the in-flight one; the engine parks until
+the consumer pulls. Pause is its consequence, not an API.
 _Avoid_: throttling, playhead clock (rejected design), lookahead buffer.
 
 ### Generation accumulation
@@ -1448,7 +1449,7 @@ the full content.
 The user message rendered from send until the event spine commits the same
 message — ephemeral derived view-state like the **Live Part**, never agent
 state, so the transcript shows the message instantly while the run is still
-queued behind the GPU lease or a model load. If the run dies before the commit
+queued at the **LLM Gate** or behind a model load. If the run dies before the commit
 (cancel while queued, load failure) it vanishes and its content is restored to
 the composer.
 _Avoid_: optimistic update / eager append (the rejected agent-state mutation);
@@ -1469,9 +1470,9 @@ placeholder (it never says "Thinking"); progress row.
 
 **Agent Run**:
 The lifecycle of one *foreground* LLM invocation — a `sendMessage` turn or a
-`/compact` — serialized behind the GPU lease, from queued through active to
+`/compact` — taking its turn at the **LLM Gate**, from queued through active to
 cancelled or done. Distinct from the Generation* family, which is the token stream
-*inside* a turn; an Agent Run is the outer lease + busy + cancel envelope, and its
+*inside* a turn; an Agent Run is the outer gate + busy + cancel envelope, and its
 `isGenerating` means "queued **or** active," not just running.
 _Avoid_: generation lifecycle (collides with the Generation* family), send
 coordinator, busy flag as standalone spine state.
@@ -1697,9 +1698,18 @@ places an Inbox item into the day's next free slot.
 
 **Capture**:
 Typed or spoken words turned into a reminder without a model: the capture
-hotkey's panel (tap to type, hold to speak) and Today's Capture box both go
-through one door and the deterministic capture parser ("call the dentist
-tomorrow at 10", "after the 1:1", "#health").
+hotkey's panel and Today's Capture box both go through one door and the
+deterministic capture parser ("call the dentist tomorrow at 10", "after the
+1:1", "#health"). The hotkey is one key — Right ⌥ alone by default: tap to type,
+hold to speak; another key pressed with it cancels, so ⌥-typing works as usual.
+
+**One-key hotkey**:
+A modifier pressed and released on its own (Right ⌥, Right ⌘, Right ⌃, Right ⇧
+or fn) used as a hotkey, stored as the modifier's own key code with no
+modifiers. Down when the key goes down with nothing else held, up when it is
+released, cancelled when any other key or modifier joins.
+_Avoid_: double-tap (the ⌘⌘ Appshot chord is both Command keys held together),
+modifier-only combo.
 
 **Must-do**:
 The day's one optional thing that matters most. It can sit anywhere in the day,
@@ -1733,13 +1743,18 @@ _Avoid_: turn (a chat word), beat, wake.
 The moment at the day's first sit-down (after an overnight gap of four hours or
 more, within the morning window), or when Today is first opened that day: small
 tasks into the free time before the first meeting, the Must-do placed where it
-fits. Skipping it costs nothing and nothing nags.
+fits. A card built by code goes up at once — the day's shape and where it
+starts — and Jarvis's version replaces it in place when he has thought it
+through; when the Mac is awake and on power before the owner sits down, the plan
+is made ahead and comes forward at the sit-down. Skipping it costs nothing and
+nothing nags.
 
 **Breakpoint**:
 Coming back after the away threshold (ten minutes by default), or a meeting
 ending while the owner is present. A code-built **Breakpoint Card** goes up at
 once; the model refines it in place only when there are notifications to judge.
-Nothing waiting means no card at all.
+Nothing waiting means no card at all, and a card with nothing that needs the
+owner stays in Today — it never pops up over their work.
 _Avoid_: summons (retired), welcome-back notification.
 
 **Breakpoint Card**:
@@ -1754,9 +1769,18 @@ Jarvis" field between + (capture) and a mic. It never steals typing: it turns
 key only when its field is clicked. Replies go to the Day Thread.
 
 **Triage**:
-The moment that judges new unresolved notifications while the owner works — at
-most every ten minutes, in a batch, never one by one — and raises only what
-can't wait for the next Breakpoint.
+The moment that judges new unresolved notifications from people while the
+owner works — at most every ten minutes, in a batch, never one by one, never
+while a game is in front — and raises only what can't wait for the next
+Breakpoint.
+
+**Notification Source**:
+Who a banner is from, decided by code on arrival: a person (a chat, a mail, a
+call — messaging apps, or a messaging site in a browser), an app's own news (an
+image is ready, a download finished), or noise (the system's own banners such
+as Game Mode, and games). Only people reach Triage; an app's news waits for the
+next Breakpoint; noise is never shown. Owner rules apply first.
+_Avoid_: priority, category (the App Store's).
 
 **Evening Wrap-up**:
 The moment at the evening time (or the next presence before 03:00): what got
@@ -1764,9 +1788,9 @@ done, and each leftover rolled to tomorrow or another day, kept for later, or
 let go. Nothing is ever labelled missed or failed.
 
 **Night Reflection**:
-Once a night, after the Evening Wrap-up, on power and with a nominal thermal
-state: tomorrow's carry-over note, a first draft of tomorrow, and zero to three
-Fact Proposals.
+Once a night, after the Evening Wrap-up — on power, or on a battery at least
+half full with a cool Mac: tomorrow's carry-over note, a first draft of
+tomorrow, and zero to three Fact Proposals.
 
 **Day Thread**:
 One append-only conversation per day, on its own agent with the same system
@@ -1802,8 +1826,8 @@ Nothing unanswered is re-summoned; it stays in Today.
 
 **Governor**:
 No daily budget, usefulness first — but Triage and the Night Reflection wait
-while the Mac is hot or low on battery, and the Night Reflection runs only on
-power with a nominal thermal state.
+while the Mac is hot or low on battery; the Night Reflection runs on power, or
+on a battery at least half full with a nominal thermal state.
 
 **Profile**:
 The small set of facts about the owner that they approved — readable, editable
@@ -1862,8 +1886,9 @@ _Avoid_: coordinator (it is composed by the coordinators, not one), capture engi
 The optional LLM polish stage between transcription and commit (ADR-0034): a second,
 small co-resident MLX model — its own, never the agent's — that fixes punctuation,
 capitalization, and misheard words, or rejects an unintelligible take outright.
-Strictly fail-open: disabled, model not downloaded, GPU lease held (skip-when-busy —
-it *reads* the lease, never queues on it), budget overrun, or any error all commit
+Strictly fail-open: disabled, model not downloaded, the LLM generating
+(skip-when-busy — it *reads* whether the **LLM Gate** is held, never waits on it),
+budget overrun, or any error all commit
 the raw text unchanged. Runs inside the **Voice Capture Session**, so dictation and
 **Voice Input** both gain it; its word-level edits ride the commit for overlay
 narration, and a rejected take's raw text stays available for "insert raw anyway".
@@ -1887,82 +1912,46 @@ fine-tune corpus (the export's *consumer*, out of scope — see the map).
 
 **Voice Session**:
 Voice as a mode of the one conversation, never a separate surface: an
-auto-listen loop — listen, capture, transcribe, send; the reply spoken with the
-microphone open underneath — whose spoken and typed turns share one persisted
-message stream. Entered from the overlay or the chat toggle; left by dismissal,
-staging to the composer, or mutual silence.
+auto-listen loop — listen, capture, transcribe, send, speak the reply — whose
+spoken and typed turns share one persisted message stream. Half-duplex: the
+microphone is never open while speech plays — the reply, or anything else
+read aloud — and it opens again once it stops (ADR-0082). Entered from the
+overlay or the chat toggle; left by dismissal, staging to the composer,
+mutual silence, or a microphone that dies twice in a row.
 _Avoid_: voice mode (UI shorthand), speech session (the TTS reading concept),
-voice chat.
+voice chat, full duplex (the retired open-mic design).
 
 **Voice Session Machine**:
 The pure reducer owning every judgment of the **Voice Session**'s auto-listen
-loop — phases, **Barge-In** staging, the **Echo Floor** consultation, the
-false-barge escalation ladder, deaf windows, the speaking watchdog, and the
-capture retry backoff. It folds events (ticks, the click, the reply,
+loop — phases, the half-duplex turn order, **Barge-In**, the dead-capture
+recovery, the deaf window after speech, the speaking watchdog, and the
+capture retry backoff. It folds events (ticks, the barge-in, the reply,
 transcription outcomes) into ordered effect values the controller performs;
-time and meter levels are inputs, and capture start results return as events,
-so even the retry backoff is machine judgment. The endpointer and Echo Floor
-are its sub-state, which is what lets the calibration lock replay hardware
-traces through the exact shipped path (ADR-0042).
+time, the mic level and the capture engine's dead-input flag are inputs, and
+capture start results return as events, so even the retry backoff is machine
+judgment. The endpointer is its sub-state (ADR-0042, ADR-0082).
 _Avoid_: controller (the performer above it), state machine (unqualified),
 tick handler, **Voice Session** (the product concept, not this module).
 
 **Barge-In**:
-The owner interrupting a speaking reply — by voice energy (a **Soft Barge**
-first) or a click (immediate pause; a click is deliberate). A hard barge
-*pauses* playback while the take resolves: a take that transcribed to
-anything stops the reply for good and becomes the turn; an empty take — a
-false barge — resumes it where it paused. Purely acoustic: no word gates.
-_Avoid_: interruption (unqualified), stop-on-barge (the discarded kill-first
-semantics), Substance Gate / Session Directive (the removed word gates).
-
-**Soft Barge**:
-The energy barge's first stage: an onset ducks the reply instantly and opens
-a short confirm window — only sustained voicing inside it commits the hard
-pause; without it the volume fades back. A false fire costs a ~1 s murmur,
-never a dead pause.
-_Avoid_: two-phase commit, barge preview, duck-on-barge (the duck is the
-acknowledgment, not the barge).
-
-**Echo Floor**:
-The tracked level of the reply's own residual at the open microphone: while
-playback is audibly emitting, the energy barge threshold rides floor + margin,
-never the static level alone. The floor chases the mic fast but may never
-believe more than the playback envelope minus the calibrated echo-path loss —
-residual can't out-shout the reply; the owner can. Calibrated by the
-voice-hold lab's traces; pinned by the replay tests' zero-false-onset lock.
-_Avoid_: noise gate (room noise is not the subject), VAD, adaptive threshold
-(unqualified).
+The owner interrupting speech during a **Voice Session** — the reply, or other
+speech holding the mic closed — by a key press (the Talk to Tesseract or
+Speak Selected Text hotkey while a session is active) or a click on the
+speaking line, never by voice: the mic is closed while anything speaks. The
+speech stops at once and for good, then the mic opens for the owner's turn
+behind the short deaf grace that follows all speech.
+_Avoid_: interruption (unqualified), voice barge-in / Soft Barge / pause-on-barge
+(the retired open-mic stages), Substance Gate / Session Directive (the removed
+word gates).
 
 **Self-Echo**:
-The voice session's signature failure: the assistant's own TTS re-captured by
-the microphone and treated as the owner's speech — a false barge-in, or worse,
-a committed turn feeding the conversation its own words back. The session's
-acoustic and gating defenses exist to make this unreachable.
+The assistant's own TTS re-captured by the microphone and treated as the
+owner's speech — a committed turn feeding the conversation its own words back.
+The open-mic design's signature failure; half-duplex makes it unreachable: the
+mic is closed while speech plays, and a 0.3 s deaf grace covers the room tail
+after it stops.
 _Avoid_: feedback loop (the mechanism, not the name), echo (the raw acoustic
 signal cancellation removes).
-
-**Dual-Path Playback**:
-Where TTS renders: a **Voice Session**'s replies play through the capture
-engine under its voice hold — the reply escapes the recording duck and the
-engine stays running between turns, so echo cancellation and gain control
-stay converged; every other TTS surface keeps its dedicated playback path and
-unprocessed fidelity. The hosted reply renders at a fixed master gain: the VP
-unit's residual-echo suppressor clamps the owner's microphone harder the
-louder its own voice stream plays (field 2026-07-18), so reply loudness is
-traded for double-talk headroom. On macOS the canceller's reference is the
-output *device* signal, so both paths are echo-cancelled.
-_Avoid_: single playback engine, VPIO routing (the implementation).
-
-**Voice Hold**:
-The capture engine's state for a **Voice Session**'s lifetime: the engine
-keeps running between captures — capture start/stop degrade to a capture-gate
-flip, never tap install/remove or render rewiring on a running engine (the
-2026-07-17 crash class) — and hosts the session's persistent TTS player node
-upstream of its mixer. Wired asynchronously at session enter (~2.3 s of
-stopped-engine work: tap once, render side verified, node attached, start);
-a reply that beats the wiring falls back to the dedicated playback path.
-_Avoid_: warm engine (the prewarm concept), engine reuse, always-on mic.
 
 ### Text injection
 
@@ -2016,23 +2005,22 @@ never silences).
 **Capture Engine Lifecycle**:
 The pure policy deciding the capture engine's lifecycle moves — rebuild-vs-reuse
 on press, prewarm arming, external-config-change detection, the empty-capture
-verdict, disarm-after-grace, idle rebuild and arm retry — with the AVFoundation
-engine as the performer. The ADR-0025 policy/performer split, applied to the
-engine itself; the arm mode (always-armed vs disarm-after-grace) is one input.
+verdict, the live-input check, disarm-after-grace, idle rebuild and arm retry —
+with the AVFoundation engine as the performer. The ADR-0025 policy/performer
+split, applied to the engine itself; the arm mode (always-armed vs
+disarm-after-grace) is one input. Every capture is a per-take tap at the device
+rate. The *live-input check* watches an open capture (not the settings meter)
+every 0.5 s through a heartbeat the tap bumps per buffer — a live input delivers
+buffers through silence too: an input that never delivered gets 1.5 s, then is
+rebuilt and restarted once under the same open capture (nothing recorded,
+nothing lost) — unless its engine is under 5 s old, when it is marked dead
+rather than rebuilt back to back; one that went quiet, or that the restart
+didn't revive, is marked dead — the
+meter drops to zero and the capture stays open for its owner, whose stop
+discards the engine and keeps what arrived before the input died (ADR-0082).
 _Avoid_: engine defaults (capture mechanics stay on the engine); VPIO lifecycle
 (the arm mode is an input, not the policy); duck policy (the sibling policy for
-system audio).
-
-**Hold Wiring Arbiter**:
-The voice hold's async arbitration as a pure value machine: is the hold active,
-does a detached wiring own the engine, which generation is current, what request
-folded in behind it — one transition per driver (begin, end, schedule, landing),
-each returning a verdict the capture engine performs. The discipline that kills
-the tap-rewire crash class: two wirings never touch one engine at once, and a
-stale wiring's work is discarded on the stopped engine, never raced.
-_Avoid_: `holdGeneration`/`holdWireQueued` (the retired inline fields), wiring
-lock (nothing blocks — requests fold), hold state machine (the **Voice Session
-Machine** decides *when* to hold; this arbitrates *who owns the engine*).
+system audio); voice hold (the retired session-long engine, ADR-0082).
 
 **Capture Dump**:
 The on-disk ring buffer of recent dictation capture audio — what the microphone tap
@@ -2041,37 +2029,49 @@ capture conditions and kept for diagnosing bad transcriptions; bounded by count/
 oldest evicted first.
 _Avoid_: recording archive (it is bounded and diagnostic, not an archive), audio log.
 
-### GPU lease arbitration
+### LLM gate
 
-**GPU Lease Queue**:
-The pure mutual-exclusion lease for the GPU: a single scoped operation grants one
-caller exclusive use at a time, FIFO. Slot-agnostic — it knows nothing of models,
-engines, or slots; the policy and ownership layer above it is the **Inference
-Arbiter**.
-_Avoid_: arbiter (composes this), GPU mutex/semaphore, scheduler (no policy beyond
-FIFO).
+**LLM Gate**:
+One language-model generation at a time: a single scoped operation grants one
+caller the loaded LLM, FIFO, with an atomic handoff and cancellation while queued.
+Only LLM work takes it — chat turns, the Companion's moments, HTTP requests,
+`/compact`, reloads, offload — because the model is one container with one prefix
+cache. Speech, dictation, the proofreader and the embedder never take it: they run
+beside the LLM, and MLX's own lock keeps concurrent evaluation safe (ADR-0081). It
+was the **GPU Lease Queue**, which also made speech wait out whole generations.
+_Avoid_: GPU lease (retired: the GPU is not serialized), GPU mutex/semaphore,
+scheduler (no policy beyond FIFO).
 
 **Inference Arbiter**:
-The model-affine layer that composes a **GPU Lease Queue** with model ownership,
-holding the lease across both load and body so the loaded model cannot change under
-a running consumer. Distinct from the lease queue below it (no model awareness) and
-from `ModelDownloadManager` (acquisition, not arbitration).
-_Avoid_: lease queue (the layer below), model manager (collides with
+The model-affine layer that composes the **LLM Gate** with the LLM's identity,
+holding the gate across both load and body so the loaded model cannot change under
+a running consumer, and the residency mirror Offload Model reads (LLM and voice).
+Distinct from the gate below it (no model awareness) and from
+`ModelDownloadManager` (acquisition, not arbitration).
+_Avoid_: gate (the layer below), model manager (collides with
 `ModelDownloadManager`), GPU manager.
 
 **Inference Arbitrating**:
-The narrow single-member seam that lease-acquiring consumers depend on, satisfied by
+The narrow single-member seam LLM consumers depend on (`withLLM`), satisfied by
 the production **Inference Arbiter** and an in-memory test peer. A consumer needing
 reload or model-state access reaches for the concrete arbiter instead, so the seam
 stays minimal rather than widened speculatively.
 _Avoid_: arbiter protocol / arbitering, lease provider; widening it before a
-peer-consuming caller needs the member. ("Lease" unqualified = GPU lease, not the
-prefix-cache snapshot pin.)
+peer-consuming caller needs the member.
+
+**Models section**:
+The menu bar's always-visible list of every model Tesseract can hold — language
+model, its speed-up draft, voice, dictation, proofreader, memory search — each
+with whether it is loaded and what it is doing right now ("Jarvis · Triage",
+"Speaking", "Listening"), its size, and the app's memory footprint with the
+system's swap. Memory, not the GPU, is what the models share; this is where the
+owner sees it.
+_Avoid_: model manager (the Models page in Settings), activity monitor.
 
 **Foreground Gate**:
 The phone's one switch between "GPU work may start" and "the app is leaving the
 foreground". It is owned by the **Inference Arbiter**, because iOS refuses GPU
-work from a backgrounded app. While it is closed, no lease is granted, and every
+work from a backgrounded app. While it is closed, no LLM turn starts, and every
 GPU consumer stops at its next safe point: a reply pauses after its current token
 (it is never cancelled), speech redoes its in-flight segment, and consolidation
 yields.
@@ -2284,7 +2284,7 @@ pinned into the **Budget Floor** at resolve and released when the claim conclude
 so no drain may evict the body a running generation depends on. Weak by reference:
 a pin protects, it does not own. Nothing ages a pin out while its request runs.
 _Avoid_: node lock, refcount; lease unqualified (the **Leaf Lease** is the strong
-hold of a **Leaf Handoff**, which owns the body for the turn, and the GPU lease is
+hold of a **Leaf Handoff**, which owns the body for the turn, and the **LLM Gate** is
 arbitration; a pin is neither); **Cache Claim** for the pin alone (a pin is one part
 of a claim); leaf pinning (pins hold restore *paths*, not the newest leaf; that
 floor member is recency-defined).

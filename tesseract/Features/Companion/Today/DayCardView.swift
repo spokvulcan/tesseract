@@ -18,7 +18,10 @@ struct DayCardView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 Text(card.kind.title).fontWeight(.semibold)
-                if card.isFallback {
+                if card.isRefining {
+                    Text("· Jarvis is still thinking it through.")
+                        .foregroundStyle(.secondary)
+                } else if card.isFallback {
                     Text("· Jarvis couldn't think this one through; here are the facts.")
                         .foregroundStyle(.secondary)
                 }

@@ -3,16 +3,16 @@
 //  tesseract
 //
 //  The **Streaming Scheduler** (ADR-0054): the push-based playback fold as a
-//  pure value machine under both `AudioPlayback` adapters and the in-memory
+//  pure value machine under the `AudioPlayback` adapter and the in-memory
 //  test peer. The counters (`pendingBufferCount`, `totalScheduledSamples`,
 //  `streamingSampleRate`), the start gate, the finish detection, and the
 //  stream epoch that makes a stale buffer completion ignorable all live
 //  here; each driver calls one transition and performs its verdict. The
-//  adapters keep only their `AVAudioPlayerNode`/engine calls (and the clock
-//  position they hold while paused). This is the fourth application of the
-//  policy/performer template — after the capture engine's lifecycle, duck,
-//  and hold-wiring (ADR-0050) — and the seam that makes the three copies'
-//  drift (a race guard shipped in one, absent in another) unrepresentable.
+//  adapter keeps only its `AVAudioPlayerNode`/engine calls (and the clock
+//  position it holds while paused). One policy/performer value machine
+//  among the capture engine's lifecycle and duck — and the seam that keeps
+//  the adapter and the peer from drifting apart (a race guard shipped in
+//  one copy, absent in another, is how it began).
 //
 
 import Foundation
@@ -21,9 +21,9 @@ import Foundation
 /// buffers are still draining, whether the producer has signalled its last
 /// chunk, whether the player node has been told to start, whether the head
 /// is paused, and the stream epoch. Holds no engine state — the
-/// `AVAudioPlayerNode`, the audio format, the loudness `PlaybackEnvelope`,
-/// and every AVFoundation call stay on the adapter; the adapter's drivers
-/// call one transition each and perform its verdict.
+/// `AVAudioPlayerNode`, the audio format, and every AVFoundation call stay
+/// on the adapter; the adapter's drivers call one transition each and
+/// perform its verdict.
 nonisolated struct StreamingScheduler: Sendable, Equatable {
 
     /// Scheduled buffers that have not yet reported completion. The finish
@@ -67,13 +67,6 @@ nonisolated struct StreamingScheduler: Sendable, Equatable {
     var totalScheduledDuration: TimeInterval {
         guard streamingSampleRate > 0 else { return 0 }
         return Double(totalScheduledSamples) / Double(streamingSampleRate)
-    }
-
-    /// A stream is live and still has audio to render — the
-    /// `VoiceSessionPlayback.hostedPlaying` gate. False while idle (no
-    /// stream) and false once a finished stream has fully drained.
-    var hasUndrainedAudio: Bool {
-        streamingSampleRate > 0 && !(streamFinished && pendingBufferCount <= 0)
     }
 
     // MARK: - Verdicts

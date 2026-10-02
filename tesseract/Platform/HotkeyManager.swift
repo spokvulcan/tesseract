@@ -13,6 +13,8 @@ struct HotkeyRegistration {
     let combo: KeyCombo
     let onDown: () -> Void
     let onUp: (() -> Void)?
+    /// A one-key hotkey was spoiled: another key joined while it was held.
+    var onCancel: (() -> Void)?
 }
 
 @MainActor
@@ -34,8 +36,21 @@ final class HotkeyManager: ObservableObject {
     }
 
     private var registrations: [String: HotkeyRegistration] = [:] {
-        didSet { bindingsSnapshot = registrations.mapValues(\.combo) }
+        didSet {
+            bindingsSnapshot = registrations.filter { !$0.value.combo.isSingleModifier }
+                .mapValues(\.combo)
+            singleModifierDetectors = registrations.compactMapValues {
+                ModifierKeyDetector(combo: $0.combo)
+            }
+        }
     }
+
+    /// One detector per one-key registration (`combo.isSingleModifier`), fed
+    /// from both delivery paths.
+    private var singleModifierDetectors: [String: ModifierKeyDetector] = [:]
+
+    /// The pending recording's way out, for the recorder's Cancel button.
+    private var cancelPendingRecording: (() -> Void)?
 
     /// Prebuilt `id → combo` view of `registrations`, rebuilt on every
     /// (un)register/update so the per-keystroke hot path hands the matcher an
@@ -71,9 +86,11 @@ final class HotkeyManager: ObservableObject {
     // MARK: - Multi-Hotkey Registration
 
     func registerHotkey(
-        id: String, combo: KeyCombo, onDown: @escaping () -> Void, onUp: (() -> Void)? = nil
+        id: String, combo: KeyCombo, onDown: @escaping () -> Void, onUp: (() -> Void)? = nil,
+        onCancel: (() -> Void)? = nil
     ) {
-        registrations[id] = HotkeyRegistration(id: id, combo: combo, onDown: onDown, onUp: onUp)
+        registrations[id] = HotkeyRegistration(
+            id: id, combo: combo, onDown: onDown, onUp: onUp, onCancel: onCancel)
     }
 
     func unregisterHotkey(id: String) {
@@ -83,7 +100,8 @@ final class HotkeyManager: ObservableObject {
 
     func updateRegisteredHotkey(id: String, combo: KeyCombo) {
         guard var reg = registrations[id] else { return }
-        reg = HotkeyRegistration(id: id, combo: combo, onDown: reg.onDown, onUp: reg.onUp)
+        reg = HotkeyRegistration(
+            id: id, combo: combo, onDown: reg.onDown, onUp: reg.onUp, onCancel: reg.onCancel)
         registrations[id] = reg
         matcher.forget(id: id)
     }
@@ -110,6 +128,7 @@ final class HotkeyManager: ObservableObject {
 
         isListening = false
         matcher.reset()
+        for id in singleModifierDetectors.keys { singleModifierDetectors[id]?.reset() }
         isUsingEventTap = false
     }
 
@@ -156,10 +175,12 @@ final class HotkeyManager: ObservableObject {
                 switch type {
                 case .flagsChanged:
                     manager.handleDoubleCommandFlags(rawFlags: flags.rawValue)
+                    manager.handleSingleModifierFlags(keyCode: keyCode, rawFlags: flags.rawValue)
                     kind = .flagsChanged
                 case .keyUp:
                     kind = .keyUp
                 default:
+                    manager.handleSingleModifierKeyDown()
                     kind = .keyDown
                 }
 
@@ -256,10 +277,13 @@ final class HotkeyManager: ObservableObject {
         switch event.type {
         case .flagsChanged:
             handleDoubleCommandFlags(rawFlags: UInt64(event.modifierFlags.rawValue))
+            handleSingleModifierFlags(
+                keyCode: event.keyCode, rawFlags: UInt64(event.modifierFlags.rawValue))
             kind = .flagsChanged
         case .keyUp:
             kind = .keyUp
         default:
+            handleSingleModifierKeyDown()
             kind = .keyDown
         }
 
@@ -309,6 +333,40 @@ final class HotkeyManager: ObservableObject {
         }
     }
 
+    // MARK: - One-Key Hotkeys
+
+    /// Shared by both event paths: feed one `flagsChanged` event to every
+    /// one-key detector and deliver what they report on the next main-queue
+    /// turn, like every other fire.
+    private func handleSingleModifierFlags(keyCode: UInt16, rawFlags: UInt64) {
+        for id in singleModifierDetectors.keys.sorted() {
+            guard
+                let event = singleModifierDetectors[id]?.flagsChanged(
+                    keyCode: keyCode, rawFlags: rawFlags)
+            else { continue }
+            deliverSingleModifier(event, id: id)
+        }
+    }
+
+    /// Any key typed while a one-key hotkey is held spoils it.
+    private func handleSingleModifierKeyDown() {
+        for id in singleModifierDetectors.keys.sorted() {
+            guard let event = singleModifierDetectors[id]?.keyDown() else { continue }
+            deliverSingleModifier(event, id: id)
+        }
+    }
+
+    private func deliverSingleModifier(_ event: ModifierKeyDetector.Event, id: String) {
+        DispatchQueue.main.async { [weak self] in
+            guard let reg = self?.registrations[id] else { return }
+            switch event {
+            case .down: reg.onDown()
+            case .up: reg.onUp?()
+            case .cancel: reg.onCancel?()
+            }
+        }
+    }
+
     // MARK: - Permission Handling
 
     func refreshForAccessibilityPermission() {
@@ -322,19 +380,29 @@ final class HotkeyManager: ObservableObject {
 
     // MARK: - Hotkey Recording
 
+    /// Record the next hotkey: a key with its modifiers, or a modifier
+    /// pressed and released on its own (a one-key hotkey such as Right ⌥).
+    /// Escape, the recorder's Cancel (`cancelRecording()`) and a 10-second
+    /// timeout end it with nil.
     func recordHotkey() async -> KeyCombo? {
         return await withCheckedContinuation { continuation in
             var hasResumed = false
             var monitor: Any?
             let shouldResumeListening = isListening
+            // A one-key candidate: a lone modifier went down and nothing
+            // else has been pressed since.
+            var loneModifier: ModifierKeyDetector?
 
             if shouldResumeListening {
                 stopListening()
             }
 
+            // Every path here runs on the main thread: the local monitor, the
+            // timeout task, and the recorder's Cancel.
             func finish(_ result: KeyCombo?) {
                 guard !hasResumed else { return }
                 hasResumed = true
+                MainActor.assumeIsolated { self.cancelPendingRecording = nil }
                 if let monitor {
                     NSEvent.removeMonitor(monitor)
                 }
@@ -345,9 +413,29 @@ final class HotkeyManager: ObservableObject {
                 }
                 continuation.resume(returning: result)
             }
+            MainActor.assumeIsolated { self.cancelPendingRecording = { finish(nil) } }
 
-            monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) {
+                event in
                 let keyCode = event.keyCode
+                if event.type == .flagsChanged {
+                    let rawFlags = UInt64(event.modifierFlags.rawValue)
+                    if loneModifier == nil,
+                        let detector = ModifierKeyDetector(combo: KeyCombo(keyCode: keyCode))
+                    {
+                        loneModifier = detector
+                    }
+                    switch loneModifier?.flagsChanged(keyCode: keyCode, rawFlags: rawFlags) {
+                    case .up:
+                        finish(KeyCombo(keyCode: keyCode))
+                    case .cancel:
+                        loneModifier = nil
+                    case .down, nil:
+                        break
+                    }
+                    return event
+                }
+                loneModifier = nil
                 let modifiers = event.modifierFlags.intersection([
                     .command, .option, .control, .shift, .function,
                 ])
@@ -368,6 +456,12 @@ final class HotkeyManager: ObservableObject {
                 finish(nil)
             }
         }
+    }
+
+    /// End a recording in progress with no new hotkey (the recorder's
+    /// Cancel): listening resumes at once instead of after the timeout.
+    func cancelRecording() {
+        cancelPendingRecording?()
     }
 
 }

@@ -30,15 +30,15 @@ struct ServerGenerationLogTests {
         #expect(log.selectedTraceID == handle.id)
     }
 
-    @Test func leaseAcquisitionTransitionsQueuedToLookingUp() {
+    @Test func gateAcquisitionTransitionsQueuedToLookingUp() {
         let log = ServerGenerationLog()
         let handle = log.startRequest(
             completionID: "id", model: "m", stream: true, sessionAffinity: nil
         )
-        log.markLeaseAcquired(handle: handle)
+        log.markGateAcquired(handle: handle)
 
         #expect(log.traces[0].phase == .lookingUp)
-        #expect(log.traces[0].leaseAcquiredAt != nil)
+        #expect(log.traces[0].gateAcquiredAt != nil)
     }
 
     @Test func cacheLookupRecordsMetadataWithoutMovingToPrefilling() {
@@ -46,7 +46,7 @@ struct ServerGenerationLogTests {
         let handle = log.startRequest(
             completionID: "id", model: "m", stream: true, sessionAffinity: nil
         )
-        log.markLeaseAcquired(handle: handle)
+        log.markGateAcquired(handle: handle)
         log.markCacheLookupFinished(
             handle: handle,
             reason: "hit(directLeaf at 1024/2048)",
@@ -75,7 +75,7 @@ struct ServerGenerationLogTests {
         let handle = log.startRequest(
             completionID: "id", model: "m", stream: true, sessionAffinity: nil
         )
-        log.markLeaseAcquired(handle: handle)
+        log.markGateAcquired(handle: handle)
         log.markCacheLookupFinished(
             handle: handle,
             reason: "missNoEntries",
@@ -105,7 +105,7 @@ struct ServerGenerationLogTests {
         let handle = log.startRequest(
             completionID: "id", model: "m", stream: true, sessionAffinity: nil
         )
-        log.markLeaseAcquired(handle: handle)
+        log.markGateAcquired(handle: handle)
         log.markPrefillStarted(
             handle: handle,
             promptTokens: 2048,
@@ -124,7 +124,7 @@ struct ServerGenerationLogTests {
         let handle = log.startRequest(
             completionID: "id", model: "m", stream: true, sessionAffinity: nil
         )
-        log.markLeaseAcquired(handle: handle)
+        log.markGateAcquired(handle: handle)
         #expect(log.traces[0].phase == .lookingUp)
 
         log.markCacheLookupStarted(handle: handle)
@@ -160,7 +160,7 @@ struct ServerGenerationLogTests {
         let handle = log.startRequest(
             completionID: "id", model: "m", stream: true, sessionAffinity: nil
         )
-        log.markLeaseAcquired(handle: handle)
+        log.markGateAcquired(handle: handle)
         #expect(log.traces[0].firstTokenAt == nil)
 
         log.ingest(handle: handle, event: .text("Hello"))
@@ -223,7 +223,7 @@ struct ServerGenerationLogTests {
         let handle = log.startRequest(
             completionID: "id", model: "m", stream: true, sessionAffinity: nil
         )
-        log.markLeaseAcquired(handle: handle)
+        log.markGateAcquired(handle: handle)
 
         log.ingest(handle: handle, event: .malformedToolCall("{not json"))
 
@@ -296,12 +296,12 @@ struct ServerGenerationLogTests {
 
     @Test func ttftReportsFirstTokenFromLeaseAcquisition() {
         let log = ServerGenerationLog()
-        let fixedLease = Date()
-        let fixedFirstToken = fixedLease.addingTimeInterval(0.150)
+        let fixedGate = Date()
+        let fixedFirstToken = fixedGate.addingTimeInterval(0.150)
         let handle = log.startRequest(
             completionID: "id", model: "m", stream: true, sessionAffinity: nil
         )
-        log.markLeaseAcquired(handle: handle, at: fixedLease)
+        log.markGateAcquired(handle: handle, at: fixedGate)
         log.ingest(handle: handle, event: .text("x"))
         log.flushPending(handle: handle)
 
@@ -421,7 +421,7 @@ struct ServerGenerationLogTests {
         let log = ServerGenerationLog()
         let bogus = TraceHandle(id: UUID())
         // Should not crash, and should not create a trace.
-        log.markLeaseAcquired(handle: bogus)
+        log.markGateAcquired(handle: bogus)
         log.ingest(handle: bogus, event: .text("x"))
         log.complete(handle: bogus, finishReason: "stop")
         #expect(log.traces.isEmpty)
@@ -448,7 +448,7 @@ struct ServerGenerationLogTests {
         let h = log.startRequest(completionID: "a", model: "m", stream: true, sessionAffinity: nil)
 
         var previous = log.traces[0]
-        log.markLeaseAcquired(handle: h)
+        log.markGateAcquired(handle: h)
         #expect(log.traces[0] != previous)
 
         previous = log.traces[0]

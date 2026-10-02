@@ -28,6 +28,11 @@ final class AgentVoiceInputController {
     /// composer feeds the emitted text into Agent Run's `send` when the user submits.
     @ObservationIgnored var onVoiceTranscription: ((String) -> Void)?
 
+    /// Called when a take ends without text (too short, no speech, a failed
+    /// transcription), with the error line — so a surface waiting on the
+    /// words can stop waiting.
+    @ObservationIgnored var onVoiceFailure: ((String) -> Void)?
+
     // MARK: - Dependencies
 
     /// The shared capture lifecycle. `nil` when capture/transcription dependencies
@@ -162,6 +167,7 @@ final class AgentVoiceInputController {
     private func setVoiceError(_ message: String) {
         voiceState = .error(message)
         Log.agent.warning("Voice error: \(message)")
+        onVoiceFailure?(message)
 
         voiceErrorResetTask?.cancel()
         voiceErrorResetTask = Task {

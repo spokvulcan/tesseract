@@ -41,7 +41,7 @@ final class ProofreadPass {
     private(set) var isModelLoaded = false
 
     private let isEnabled: @MainActor () -> Bool
-    private let isGPUBusy: @MainActor () -> Bool
+    private let isLLMBusy: @MainActor () -> Bool
     private let modelDirectory: @MainActor () -> URL?
     private let loadModel: @Sendable (URL) async throws -> Void
     private let runModel: @Sendable (String, String) async throws -> String
@@ -50,7 +50,7 @@ final class ProofreadPass {
 
     init(
         isEnabled: @escaping @MainActor () -> Bool,
-        isGPUBusy: @escaping @MainActor () -> Bool,
+        isLLMBusy: @escaping @MainActor () -> Bool,
         modelDirectory: @escaping @MainActor () -> URL?,
         loadModel: @escaping @Sendable (URL) async throws -> Void,
         runModel: @escaping @Sendable (String, String) async throws -> String,
@@ -58,7 +58,7 @@ final class ProofreadPass {
         budget: Duration = ProofreadPass.budget
     ) {
         self.isEnabled = isEnabled
-        self.isGPUBusy = isGPUBusy
+        self.isLLMBusy = isLLMBusy
         self.modelDirectory = modelDirectory
         self.loadModel = loadModel
         self.runModel = runModel
@@ -67,17 +67,17 @@ final class ProofreadPass {
     }
 
     /// Proofreads one transcription. `nil` means the pass was skipped —
-    /// disabled, model not downloaded, GPU lease held (skip-when-busy),
+    /// disabled, model not downloaded, the LLM generating (skip-when-busy),
     /// load failure, budget overrun, or a model error. Every `nil` is
     /// fail-open: the caller commits the raw text.
     func proofread(_ text: String) async -> ProofreadVerdict? {
         guard isEnabled() else { return nil }
         guard let directory = modelDirectory() else { return nil }
-        // Skip-when-busy: the agent (or server) holds the GPU lease — inject
-        // the regex-cleaned raw immediately rather than queue behind a turn
-        // that can run for minutes.
-        guard !isGPUBusy() else {
-            Log.transcription.info("Proofread skipped: GPU lease held")
+        // Skip-when-busy: the LLM is generating (a chat turn, a moment, a
+        // server request) — inject the regex-cleaned raw at once rather than
+        // share the GPU with it and make the owner wait for their words.
+        guard !isLLMBusy() else {
+            Log.transcription.info("Proofread skipped: the LLM is generating")
             return nil
         }
 

@@ -98,14 +98,10 @@ nonisolated enum CompanionTraceEvent: String, Sendable, Equatable, CaseIterable 
     case voiceOwnerTurn = "voice.owner-turn"
     /// The speech watchdog ended a stuck utterance.
     case voiceWatchdogExit = "voice.watchdog-exit"
-    /// The soft-barge stage ducked the reply.
-    case voiceBargeSoftOnset = "voice.barge-soft-onset"
-    /// A soft barge released without a hard barge.
-    case voiceBargeFalseResume = "voice.barge-false-resume"
-    /// An energy sample around a barge decision.
-    case voiceEnergySample = "voice.energy-sample"
-    /// A barge was suppressed by the echo floor.
-    case voiceBargeSuppressed = "voice.barge-suppressed"
-    /// The owner interrupted a spoken reply.
+    /// The owner interrupted a spoken reply (a key or a click). Carries the
+    /// source and how far into the reply it landed.
     case voiceBargeIn = "voice.barge-in"
+    /// The capture engine found the open capture's input dead; the session
+    /// closed it and reopens on the backoff.
+    case voiceCaptureDead = "voice.capture-dead"
 }

@@ -199,6 +199,9 @@ final class EventKitAgendaStore: AgendaStore {
     func deleteEvent(id: String) throws {
         guard access.canUseCalendar else { throw AgendaError.noAccess("Calendar") }
         let event = try occurrence(id)
+        guard event.calendar?.allowsContentModifications == true else {
+            throw AgendaError.readOnly("“\(event.title ?? "This event")”")
+        }
         do { try store.remove(event, span: .thisEvent, commit: true) } catch {
             throw AgendaError.failed(error.localizedDescription)
         }

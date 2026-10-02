@@ -4,9 +4,10 @@
 //
 //  The status-bar surface (map #211, ticket #248): a state-reflecting
 //  animated glyph plus a menu rebuilt fresh on every open, aligned with the
-//  app's feature set — Dictation (with the language switch), Agent (talk,
-//  Appshot, the Translate skill's target), Speech, and the Server (start/stop
-//  plus model & cache management).
+//  app's feature set — Models (what is loaded and what each is doing, live),
+//  Dictation (with the language switch), Agent (talk, Appshot, the Translate
+//  skill's target), Speech, and the Server (start/stop plus model & cache
+//  management).
 //
 //  Two update paths, deliberately different:
 //  - The **icon** is pushed: App Bindings feeds dictation and speech state in
@@ -15,12 +16,15 @@
 //    and Reduce Motion is honored by the framework.
 //  - The **menu** is pulled: `menuNeedsUpdate` rebuilds every item at open
 //    time from injected closures, so titles, checkmarks, sizes, and enabled
-//    states are always current with zero standing subscriptions.
+//    states are always current with zero standing subscriptions. The Models
+//    section alone keeps pulling while the menu is open, twice a second, so
+//    a generation starting or speech ending shows as it happens.
 //
 
 import AppKit
 import Foundation
 import Observation
+import SwiftUI
 
 @MainActor
 final class MenuBarManager: NSObject {
@@ -62,12 +66,18 @@ final class MenuBarManager: NSObject {
     var isModelLoaded: (() -> Bool)?
     var residentCacheBytes: (() -> Int?)?
     var diskCacheBytes: (() -> Int)?
+    /// Every model, loaded or not, and what each is doing right now.
+    var modelActivity: (() -> ModelActivity)?
 
     // MARK: - State
 
     private var statusItem: NSStatusItem?
     private var iconView: NSImageView?
     private var settingsObservationTask: Task<Void, Never>?
+    /// The Models section's live state, and the clock that refreshes it while
+    /// the menu is open.
+    private let modelsModel = MenuModelsModel()
+    private var modelsRefresh: Timer?
 
     private var dictationActivity: Activity = .idle
     private var speechActivity: Activity = .idle
@@ -307,6 +317,7 @@ extension MenuBarManager: NSMenuDelegate {
     /// and nothing can go stale between opens.
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        addModelsSection(to: menu)
         addDictationSection(to: menu)
         addAgentSection(to: menu)
         addSpeechSection(to: menu)
@@ -314,7 +325,40 @@ extension MenuBarManager: NSMenuDelegate {
         addAppSection(to: menu)
     }
 
+    /// While the menu is open the Models section keeps reading its state —
+    /// in the run loop's common modes, so it runs during menu tracking.
+    func menuWillOpen(_ menu: NSMenu) {
+        modelsRefresh?.invalidate()
+        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshModels() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        modelsRefresh = timer
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        modelsRefresh?.invalidate()
+        modelsRefresh = nil
+    }
+
+    private func refreshModels() {
+        guard let activity = modelActivity?(), activity != modelsModel.activity else { return }
+        modelsModel.activity = activity
+    }
+
     // MARK: Sections
+
+    /// What is loaded and what it is doing — always visible, no submenu.
+    private func addModelsSection(to menu: NSMenu) {
+        guard modelActivity != nil else { return }
+        menu.addItem(.sectionHeader(title: "Models"))
+        refreshModels()
+        let hosting = NSHostingView(rootView: MenuModelsView(model: modelsModel))
+        hosting.frame = NSRect(origin: .zero, size: hosting.fittingSize)
+        let item = NSMenuItem()
+        item.view = hosting
+        menu.addItem(item)
+    }
 
     private func addDictationSection(to menu: NSMenu) {
         menu.addItem(.sectionHeader(title: "Dictation"))

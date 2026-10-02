@@ -2,16 +2,17 @@ import Foundation
 import MLXLMCommon
 import os
 
-/// Handles `POST /v1/chat/completions` requests by acquiring an inference lease
-/// from the `InferenceArbiter`, running generation through
+/// Handles `POST /v1/chat/completions` requests by taking a turn at the
+/// `InferenceArbiter`'s **LLM Gate**, running generation through
 /// `ServerInferenceService`, and writing the response.
 ///
-/// All generation runs inside `arbiter.withExclusiveGPU(.llm)` to prevent
-/// overlap with the internal Agent chat or other HTTP requests.
+/// All generation runs inside `arbiter.withLLM` so it never overlaps the
+/// internal chats, the Companion's moments or another HTTP request (one model,
+/// one prefix cache). Speech and dictation don't take the gate (ADR-0081).
 struct CompletionHandler: Sendable {
 
-    /// Maximum seconds to wait for the inference lease before returning 503.
-    static let leaseTimeoutSeconds: UInt64 = 60
+    /// Maximum seconds to wait for the LLM gate before returning 503.
+    static let gateTimeoutSeconds: UInt64 = 60
     private static let sessionReplayStore = HTTPPrefixCacheSessionReplayStore()
 
     private let arbiter: InferenceArbiter
@@ -37,7 +38,7 @@ struct CompletionHandler: Sendable {
     /// Routing decision for the request's `model` field.
     ///
     /// Consumed by `handle()` to short-circuit unknown/undownloaded requests
-    /// with a 404 before queueing for the inference lease.
+    /// with a 404 before queueing at the LLM gate.
     ///
     /// Marked `nonisolated` so tests (and any other call site) can construct
     /// and compare values from outside the MainActor; Swift 6.2 would
@@ -47,7 +48,7 @@ struct CompletionHandler: Sendable {
         /// whatever Settings has selected (existing behavior).
         case useSettings
         /// Exact-match agent ID, downloaded and routable. Passed into the
-        /// lease API as `llmModelIDOverride`.
+        /// gate API as `modelIDOverride`.
         case override(String)
         /// Not in `ModelDefinition.all` filtered to `.agent`. Returns 404
         /// `model_not_found` with an "unknown" message.
@@ -123,11 +124,11 @@ struct CompletionHandler: Sendable {
             return
         }
 
-        // Vocabulary check before the lease (ADR-0060): an unknown
+        // Vocabulary check before the gate (ADR-0060): an unknown
         // `reasoning_effort` is a client error regardless of which model is
         // loaded — on *either* channel, even the one precedence would ignore.
         // Whether the loaded model honors the value is decided later,
-        // post-lease, from its template.
+        // after the gate, from its template.
         if let raw = Self.requestedReasoningEffortRawValues(completionRequest)
             .first(where: { OpenAI.nativeReasoningEffort(fromWire: $0) == nil })
         {
@@ -140,10 +141,10 @@ struct CompletionHandler: Sendable {
             return
         }
 
-        // Pre-lease validation of `request.model`. If the client asked for a
+        // Validation of `request.model` before the gate. If the client asked for a
         // model we can't serve, return 404 `model_not_found` immediately
         // without touching the arbiter queue. Downloaded + in-catalog models
-        // produce an `llmModelIDOverride` that flows into the lease API so
+        // produce an `llmModelIDOverride` that flows into the gate API so
         // `ensureLoaded` targets it instead of `settingsManager.selectedAgentModelID`.
         let selection: ModelSelection = await MainActor.run {
             let agentIDs = ModelDefinition.ids(in: .agent)
@@ -195,16 +196,15 @@ struct CompletionHandler: Sendable {
 
         do {
             try await withAcquisitionTimeout { signal in
-                try await arbiter.withExclusiveGPU(
-                    .llm,
-                    llmModelIDOverride: llmModelIDOverride,
+                try await arbiter.withLLM(
+                    modelIDOverride: llmModelIDOverride,
                     // ADR-0008: HTTP requests load the vision variant whenever
                     // the target model is capable — the chat toggle never
                     // gates what a configured client was promised.
-                    llmVision: .visionIfCapable
+                    vision: .visionIfCapable
                 ) {
                     signal.set()
-                    await self.activityLog.markLeaseAcquired(handle: logHandle)
+                    await self.activityLog.markGateAcquired(handle: logHandle)
                     await self.runCompletion(
                         completionRequest,
                         sessionAffinity: sessionAffinity,
@@ -217,7 +217,7 @@ struct CompletionHandler: Sendable {
         } catch is CancellationError {
             activityLog.cancel(handle: logHandle)
             try await writer.send(.serviceUnavailable("Request cancelled"))
-        } catch is LeaseTimeoutError {
+        } catch is GateTimeoutError {
             activityLog.fail(handle: logHandle, error: "Model is busy")
             let base = HTTPResponse.serviceUnavailable("Model is busy, try again later")
             try await writer.send(
@@ -229,9 +229,9 @@ struct CompletionHandler: Sendable {
                 ))
         } catch AgentEngineError.modelNotDownloaded(let id) {
             activityLog.fail(handle: logHandle, error: "Model not downloaded")
-            // Post-lease race: validated pre-lease, then the model was
+            // Post-gate race: validated before its turn, then the model was
             // deleted from Settings → Models while we were queued. Surface
-            // the same 404 `model_not_found` shape as the pre-lease path so
+            // the same 404 `model_not_found` shape as the pre-gate path so
             // clients see one consistent error contract regardless of
             // whether the check failed before or after queueing.
             try await writer.send(.modelNotFound(modelID: id, reason: .notDownloaded))
@@ -556,18 +556,18 @@ struct CompletionHandler: Sendable {
         }
     }
 
-    /// Timeout that covers only lease acquisition + model loading, not generation.
+    /// Timeout that covers only the gate wait + model loading, not generation.
     ///
     /// The timer task sleeps for the timeout duration, then checks whether the
-    /// lease was acquired. If not, it throws `LeaseTimeoutError` which cancels
-    /// the body (still waiting in the arbiter queue). If the lease WAS acquired,
-    /// the timer suspends indefinitely — only the body's completion or failure
-    /// will finish the group.
+    /// gate was taken. If not, it throws `GateTimeoutError` which cancels the
+    /// body (still waiting at the gate). If the gate WAS taken, the timer
+    /// suspends indefinitely — only the body's completion or failure will
+    /// finish the group.
     private func withAcquisitionTimeout(
-        body: @escaping @Sendable (LeaseAcquiredSignal) async throws -> Void
+        body: @escaping @Sendable (GateAcquiredSignal) async throws -> Void
     ) async throws {
         try await Self.withAcquisitionTimeout(
-            timeoutNanoseconds: Self.leaseTimeoutSeconds * 1_000_000_000,
+            timeoutNanoseconds: Self.gateTimeoutSeconds * 1_000_000_000,
             body: body
         )
     }
@@ -575,9 +575,9 @@ struct CompletionHandler: Sendable {
     /// Testable core: acquisition timeout with configurable duration.
     static func withAcquisitionTimeout(
         timeoutNanoseconds: UInt64,
-        body: @escaping @Sendable (LeaseAcquiredSignal) async throws -> Void
+        body: @escaping @Sendable (GateAcquiredSignal) async throws -> Void
     ) async throws {
-        let signal = LeaseAcquiredSignal()
+        let signal = GateAcquiredSignal()
 
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask {
@@ -587,13 +587,13 @@ struct CompletionHandler: Sendable {
             group.addTask {
                 try await Task.sleep(nanoseconds: timeoutNanoseconds)
                 if signal.isSet {
-                    // Lease acquired — park until cancelled by group cleanup
+                    // Gate taken — park until cancelled by group cleanup
                     while !Task.isCancelled {
                         try await Task.sleep(nanoseconds: 60 * 1_000_000_000)
                     }
                     return
                 }
-                throw LeaseTimeoutError()
+                throw GateTimeoutError()
             }
 
             // First to finish/throw wins — cancel the other
@@ -603,11 +603,11 @@ struct CompletionHandler: Sendable {
     }
 }
 
-/// Thread-safe flag signaling that the inference lease has been acquired.
-final class LeaseAcquiredSignal: Sendable {
+/// Thread-safe flag signaling that the LLM gate has been taken.
+final class GateAcquiredSignal: Sendable {
     private let storage = OSAllocatedUnfairLock(initialState: false)
     nonisolated var isSet: Bool { storage.withLock { $0 } }
     nonisolated func set() { storage.withLock { $0 = true } }
 }
 
-struct LeaseTimeoutError: Error {}
+struct GateTimeoutError: Error {}

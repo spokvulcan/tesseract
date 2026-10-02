@@ -3,7 +3,7 @@
 - Status: **Locked** (under overnight delegation 2026-07-13; owner review pending — two listen-gated contingencies in §9)
 - Map: [#334](https://github.com/spokvulcan/tesseract/issues/334) · Decisions: ADR-0036 (substrate), ADR-0037 (model), ADR-0038 (boundary), ADR-0039 (residency)
 - Evidence: #335 (field survey), #336 (model family), #337 (re-port spike), #338 (budgets), #342 (v1 autopsy), #339 (benchmarks + ear verdicts)
-- Later decisions: ADR-0071 made the Qwen3-TTS code first-party (the re-vendored tree is gone) and ADR-0072 replaced the voice anchor with a pinned Reference Take, with two temperatures and shorter segments. Where this spec says anchor, read Reference Take.
+- Later decisions: ADR-0071 made the Qwen3-TTS code first-party (the re-vendored tree is gone) and ADR-0072 replaced the voice anchor with a pinned Reference Take, with two temperatures and shorter segments. Where this spec says anchor, read Reference Take. ADR-0081 removed the GPU lease: the engine takes no turn and never waits for the LLM, so the spec's lease rules (the `GPULeasing` port, lease per burst, waits outside the lease) are history.
 
 This document is the single implementation handoff for engine v2. Everything here is decided; nothing below requires a new decision before or during implementation. Where a runtime measurement picks between two pre-decided outcomes, the gate and both outcomes are stated.
 

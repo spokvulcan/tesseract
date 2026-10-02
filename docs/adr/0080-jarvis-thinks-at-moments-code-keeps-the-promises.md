@@ -152,3 +152,40 @@ a Profile fact or a card — and code and the OS keep it without the model.
 - `Features/Companion/Trace/` — the Companion Trace.
 - `Features/Companion/Migration/` — the one-time clean start.
 - `Platform/GlassPanel.swift` — the floating glass panel both panels use.
+
+## Amendments (2026-10-01, after the first full day)
+
+The first day's Companion Trace showed one Morning Plan ready 2 min 42 s after
+the sit-down, three cards (all dismissed, none acted on), nine Triages that
+raised nothing — two of them about Game Mode and a game — and a Night Reflection
+skipped because the Mac was on battery (at 85%). What changed:
+
+- **Only people reach Triage.** Code sorts other apps' banners on arrival
+  (`NotificationSources`): a person (messaging apps, or a messaging site in a
+  browser), an app's own news, or noise — the system's banners such as Game Mode,
+  and games, known by category, Game Mode support, store folder or publisher.
+  Noise is never shown; an app's news waits for the next Breakpoint; owner rules
+  still come first. Triage never runs while a game is in front, a game in front
+  gets no panel and no voice (like a call), and Triage's output cap is 1,024
+  tokens.
+- **The Morning Plan never makes the owner wait.** A card built by code goes up
+  at once and Jarvis's version replaces it in place; if he fails, the code card
+  stands. When the Mac is awake and on power in the morning window before the
+  first sit-down, the plan is made ahead and comes forward at the sit-down.
+- **The Night Reflection runs on a battery at least half full** with a nominal
+  thermal state, as well as on power (fair thermal state allowed).
+- **"Nothing needs you" stays in Today**: a Breakpoint with nothing for the owner
+  never takes the panel. The lock screen is never "where you were".
+- **The capture hotkey is one key**: Right ⌥ alone — tap to type, hold to speak;
+  another key pressed with it cancels (`ModifierKeyDetector`).
+- **The Day Thread compacts past 64k tokens** (was 80k): about 4 GB of KV at the
+  ceiling on the 27B checkpoints instead of 5.
+- **`delete_event`**: Jarvis deletes a block or slot the owner keeps for
+  themselves when asked (never a meeting with other people), with undo. The
+  agenda tools are six.
+- **The trace measures what happened.** A moment's `prefillSeconds` is the
+  server's whole prompt time (lookup, restore and prefill; it used to be only the
+  last residual chunk), `waitSeconds` is the wait for the model, and every nudge
+  macOS delivered is recorded once, read back from Notification Center on the
+  tick. A reply's model label is the model selected at that turn.
+- Moments take their turn at the LLM Gate (ADR-0081) and compact inside it.

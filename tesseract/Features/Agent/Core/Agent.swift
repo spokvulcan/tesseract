@@ -306,7 +306,7 @@ final class Agent {
 
     /// Build a loop config that wires the steering/follow-up queues to the base config.
     private func makeLoopConfig() -> AgentLoopConfig {
-        AgentLoopConfig(
+        var config = AgentLoopConfig(
             model: baseConfig.model,
             convertToLlm: baseConfig.convertToLlm,
             contextTransform: baseConfig.contextTransform,
@@ -325,6 +325,8 @@ final class Agent {
                 }
             }
         )
+        config.currentModelID = baseConfig.currentModelID
+        return config
     }
 
     /// Build a `@Sendable` emit closure that buffers events and kicks MainActor drain.

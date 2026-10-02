@@ -2,6 +2,7 @@
 
 - Status: Accepted (under overnight delegation, 2026-07-13 — owner review pending; idle-warm number to be validated by measurement)
 - Date: 2026-07-13
+- Amended by: ADR-0081 (2026-10-01: load, warm-up and priming no longer run under a GPU lease, and compute is no longer serialized with the LLM; the shared MLX buffer pool is capped at 512 MB by the LLM stack)
 - Relates to: map #334, ticket #344; ADR-0037 (one checkpoint — tier switching vanished), ADR-0038 (boundary: `prepare(Readiness)`, deterministic `unload`, `MemoryPolicy` seam); #338 (budgets), #339 (benchmarks, envelope-definition flag), autopsy M1–M6/D2/F1/F2/F4
 
 ## Context

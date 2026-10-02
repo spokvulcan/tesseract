@@ -43,13 +43,7 @@ final class InMemoryAudioPlayback: AudioPlayback {
     private(set) var resumeCount = 0
     private(set) var stopCount = 0
     private(set) var isPaused = false
-    private(set) var setVolumeCalls: [Float] = []
     private(set) var playbackRates: [Float] = []
-    private(set) var volume: Float = 1.0
-
-    /// Scripted envelope reading — tests set this to simulate the reply's
-    /// loudness at the playback head.
-    var scriptedPlaybackLevel: Float = 0
 
     /// The same push-scheduling value machine the production adapters drive —
     /// the peer no longer re-derives the duration formula (ADR-0054).
@@ -68,7 +62,6 @@ final class InMemoryAudioPlayback: AudioPlayback {
         startStreamingCount += 1
         startedSampleRates.append(sampleRate)
         scheduler.beginStream(sampleRate: sampleRate)
-        volume = 1.0
         onStartStreaming?()
     }
 
@@ -95,14 +88,6 @@ final class InMemoryAudioPlayback: AudioPlayback {
     func stop() {
         stopCount += 1
         scheduler.stop()
-        volume = 1.0
-    }
-
-    func playbackLevel() -> Float { scriptedPlaybackLevel }
-
-    func setVolume(_ volume: Float) {
-        setVolumeCalls.append(volume)
-        self.volume = volume
     }
 
     func setPlaybackRate(_ rate: Float) {

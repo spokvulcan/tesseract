@@ -5,20 +5,21 @@
 //  The voice session (#310): voice as a mode of the one conversation, never a
 //  separate surface. A session binds the #328 overlay concept, the speech
 //  engine, and an auto-listen loop to the interactive chat — spoken and typed
-//  turns are the same persisted message stream.
+//  turns are the same persisted message stream. Half-duplex (ADR-0082): the
+//  mic is closed while anything speaks; a key press or a click interrupts.
 //
 //  This controller is the **performer** half of the ADR-0042 split: every
-//  judgment of the loop — phases, the two-stage Soft Barge, the Echo Floor
-//  gate, escalation, deaf windows, the watchdog, capture backoff — lives in
-//  the pure **Voice Session Machine**; this class pumps events in (the 20 Hz
-//  ticker, the overlay's click, ChatSession's reply hook, transcription
+//  judgment of the loop — phases, barge-in, dead-capture recovery, the deaf
+//  window, the watchdog, capture backoff — lives in the pure **Voice Session
+//  Machine**; this class pumps events in (the 20 Hz ticker, the interrupt
+//  key and the overlay's click, ChatSession's reply hook, transcription
 //  outcomes) and executes the effects that come back, in order. Capture
 //  start results feed back into the machine as events, so even the retry
 //  backoff is machine judgment.
 //
 //  Every tunable the taste ledger named is a Setting: trailing silence,
-//  session timeout, barge-in sensitivity, auto-send (the escape hatch stages
-//  to the composer instead).
+//  session timeout, auto-send (the escape hatch stages to the composer
+//  instead).
 //
 
 import Foundation
@@ -39,28 +40,18 @@ final class CompanionVoiceSessionController {
     private let capture: VoiceCaptureSession
     private let meterLevel: @MainActor () -> Float
     private let meterSpectrum: @MainActor () -> [Float]
-    /// The reply's loudness at the playback head (the coordinator's active
-    /// sink) — the Echo Floor's far-end signal.
-    private let playbackLevel: @MainActor () -> Float
-    /// Ramps the reply's volume (target, duration) — the Soft Barge duck.
-    private let fadeSpeech: @MainActor (Float, TimeInterval) -> Void
+    /// The capture engine's live-input check gave up on the open capture.
+    private let inputDead: @MainActor () -> Bool
     private let sendMessage: @MainActor (String) -> Void
     private let stageToComposer: @MainActor (String) -> Void
     private let speak: @MainActor (String, @escaping @MainActor @Sendable () -> Void) -> Void
     private let stopSpeaking: @MainActor () -> Void
-    private let pauseSpeaking: @MainActor () -> Void
-    private let resumeSpeaking: @MainActor () -> Void
     private let speechState: @MainActor () -> SpeechState
     private let currentConversationID: @MainActor () -> UUID?
     private let overlay: CompanionVoicePrototype
     private let recorder: CompanionTrace
     private let settings: SettingsManager
     private let proofreadPass: ProofreadPass?
-    /// The ADR-0041 voice hold: the capture engine is held (and hosts the
-    /// reply's playback) for the session's lifetime. Injected so tests keep
-    /// their fakes; the composition root binds `AudioCaptureEngine`.
-    private let beginVoiceHold: @MainActor () -> Void
-    private let endVoiceHold: @MainActor () -> Void
 
     /// Fired once on the session's active→idle edge — the dialogue ledger's
     /// "the dialogue ended" trigger (ADR-0046 #372). Settable post-
@@ -82,42 +73,32 @@ final class CompanionVoiceSessionController {
         capture: VoiceCaptureSession,
         meterLevel: @escaping @MainActor () -> Float,
         meterSpectrum: @escaping @MainActor () -> [Float],
+        inputDead: @escaping @MainActor () -> Bool,
         sendMessage: @escaping @MainActor (String) -> Void,
         stageToComposer: @escaping @MainActor (String) -> Void,
         speak: @escaping @MainActor (String, @escaping @MainActor @Sendable () -> Void) -> Void,
         stopSpeaking: @escaping @MainActor () -> Void,
-        pauseSpeaking: @escaping @MainActor () -> Void,
-        resumeSpeaking: @escaping @MainActor () -> Void,
         speechState: @escaping @MainActor () -> SpeechState,
         currentConversationID: @escaping @MainActor () -> UUID?,
         overlay: CompanionVoicePrototype,
         recorder: CompanionTrace,
         settings: SettingsManager,
-        proofreadPass: ProofreadPass?,
-        playbackLevel: @escaping @MainActor () -> Float = { 0 },
-        fadeSpeech: @escaping @MainActor (Float, TimeInterval) -> Void = { _, _ in },
-        beginVoiceHold: @escaping @MainActor () -> Void = {},
-        endVoiceHold: @escaping @MainActor () -> Void = {}
+        proofreadPass: ProofreadPass?
     ) {
         self.capture = capture
         self.meterLevel = meterLevel
         self.meterSpectrum = meterSpectrum
-        self.playbackLevel = playbackLevel
-        self.fadeSpeech = fadeSpeech
+        self.inputDead = inputDead
         self.sendMessage = sendMessage
         self.stageToComposer = stageToComposer
         self.speak = speak
         self.stopSpeaking = stopSpeaking
-        self.pauseSpeaking = pauseSpeaking
-        self.resumeSpeaking = resumeSpeaking
         self.speechState = speechState
         self.currentConversationID = currentConversationID
         self.overlay = overlay
         self.recorder = recorder
         self.settings = settings
         self.proofreadPass = proofreadPass
-        self.beginVoiceHold = beginVoiceHold
-        self.endVoiceHold = endVoiceHold
     }
 
     // MARK: - Entry / exit
@@ -150,11 +131,12 @@ final class CompanionVoiceSessionController {
 
     // MARK: - Barge-in
 
-    /// The hard (immediate-pause) barge — the overlay's click, which is
-    /// deliberate and has zero false positives in the field data. A click
-    /// while a Soft Barge is verifying commits it instead.
+    /// The owner interrupts — `source` is "key" (the Talk to Tesseract or
+    /// Speak Selected Text hotkey) or "click" (the overlay's speaking line).
+    /// The speech stops at once and the mic opens. When nothing is speaking
+    /// this does nothing.
     func bargeIn(source: String) {
-        dispatch(.clickBarge(source: source))
+        dispatch(.bargeIn(source: source))
     }
 
     // MARK: - The ticker
@@ -178,7 +160,7 @@ final class CompanionVoiceSessionController {
             .tick(
                 VoiceSessionMachine.Tick(
                     level: level,
-                    playbackLevel: playbackLevel(),
+                    inputDead: inputDead(),
                     speechActive: engineState.isActive,
                     speechDescription: String(describing: engineState)),
                 tunables: currentTunables))
@@ -219,10 +201,6 @@ final class CompanionVoiceSessionController {
 
     private func perform(_ effect: VoiceSessionMachine.Effect) -> VoiceSessionMachine.Event? {
         switch effect {
-        case .beginVoiceHold:
-            beginVoiceHold()
-        case .endVoiceHold:
-            endVoiceHold()
         case .overlayBeginSession:
             overlay.beginLiveSession(
                 actions: CompanionVoiceActions(
@@ -255,12 +233,6 @@ final class CompanionVoiceSessionController {
             speak(text) { [weak self] in self?.dispatch(.speechDone) }
         case .stopSpeaking:
             stopSpeaking()
-        case .pauseSpeaking:
-            pauseSpeaking()
-        case .resumeSpeaking:
-            resumeSpeaking()
-        case .fadeSpeech(let target, let duration):
-            fadeSpeech(target, duration)
         case .send(let text):
             sendMessage(text)
         case .stageToComposer(let text):
@@ -332,7 +304,6 @@ final class CompanionVoiceSessionController {
         VoiceSessionMachine.Tunables(
             trailingSilence: settings.companionVoiceTrailingSilence,
             sessionTimeout: settings.companionVoiceSessionTimeout,
-            bargeInLevel: Float(settings.companionVoiceBargeInLevel),
             autoSend: settings.companionVoiceAutoSend)
     }
 }

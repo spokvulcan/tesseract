@@ -64,8 +64,13 @@ nonisolated extension DayEngine {
         let now = snapshot.now
         let unresolved = state.ledger.unresolved(now: now)
         let raised = unresolved.filter { $0.rule == .raise }
-        let waiting = unresolved.filter { $0.rule != .raise && $0.triagedAt != nil }
-        let judge = unresolved.filter { $0.rule != .raise && $0.triagedAt == nil }
+        // Held banners (an app's own news, or an owner's "hold" rule) wait
+        // without a model, like the ones a Triage already judged; only the
+        // rest — people — are judged.
+        let waiting = unresolved.filter {
+            $0.rule == .hold || ($0.rule == nil && $0.triagedAt != nil)
+        }
+        let judge = unresolved.filter { $0.rule == nil && $0.triagedAt == nil }
         let dueWhileAway = snapshot.agenda.open.filter {
             guard $0.dueHasTime, let due = $0.due else { return false }
             return due >= awayFrom && due <= now
@@ -119,7 +124,11 @@ nonisolated extension DayEngine {
     // MARK: - Triage
 
     static func triageIfDue(snapshot: DaySnapshot, state: inout DayState) -> [DayEffect] {
-        guard state.running == nil, !snapshot.chatBusy else { return [] }
+        // Never while the owner plays: what arrived waits for the next
+        // Breakpoint, and the GPU stays the game's.
+        guard state.running == nil, !snapshot.chatBusy, !snapshot.frontmostIsGame else {
+            return []
+        }
         if let last = state.lastTriageAt,
             snapshot.now.timeIntervalSince(last) < DaySettings.triageInterval
         {
@@ -175,6 +184,7 @@ nonisolated extension DayEngine {
                 [
                     "id": .string(notification.id), "app": .string(notification.app),
                     "rule": .string(rule?.rawValue ?? "none"),
+                    "source": .string(notification.source?.rawValue ?? "unknown"),
                 ])
         ]
         // An owner rule that raises: straight to the owner, no model.

@@ -121,4 +121,15 @@ struct AudioConverterResampleTests {
 
         #expect(output.isEmpty)
     }
+
+    // MARK: - Meter level
+
+    @Test func meterLevelSpansTheSixtyDecibelFloorToFullScale() {
+        // The mic meter's scale, which the voice session's thresholds read.
+        #expect(AudioConverter.meterLevel(rms: 1.0) == 1.0)
+        #expect(AudioConverter.meterLevel(rms: 0.001) == 0)
+        // RMS 0.5 → −6 dB → (−6+60)/60 ≈ 0.9.
+        let half = AudioConverter.meterLevel(rms: 0.5)
+        #expect(half > 0.88 && half < 0.92)
+    }
 }

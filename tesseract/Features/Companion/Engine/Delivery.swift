@@ -13,8 +13,8 @@
 //  Nothing unanswered is ever re-summoned; it stays in Today.
 //
 //  The governor: no fixed budget, usefulness first — but non-urgent model
-//  work waits while the Mac is hot or low on battery, and the Night
-//  Reflection runs only on power with a nominal thermal state.
+//  work waits while the Mac is hot or low on battery. The Night Reflection
+//  runs on power, or on a battery at least half full with a cool Mac.
 //
 
 import Foundation
@@ -42,7 +42,9 @@ nonisolated enum DeliveryLadder {
             // wait in Today.
             return importance == .urgent ? [.banner] : [.today]
         }
-        if interruptionFreeApps.contains(snapshot.frontmostBundleID ?? "") {
+        if snapshot.frontmostIsGame
+            || interruptionFreeApps.contains(snapshot.frontmostBundleID ?? "")
+        {
             return importance == .urgent ? [.banner] : [.today]
         }
         switch importance {
@@ -81,13 +83,19 @@ nonisolated struct PowerState: Sendable, Equatable {
 
 nonisolated enum Governor {
 
+    /// The Night Reflection runs on a battery at least this full.
+    static let nightReflectionMinimumBattery = 50
+
     /// Why a moment must wait, or nil when it may run now.
     static func deferral(for kind: MomentKind, power: PowerState) -> String? {
         switch kind {
         case .nightReflection:
-            if !power.onACPower { return "on battery" }
-            if power.thermal > .nominal { return "thermal \(power.thermal)" }
-            return nil
+            if power.onACPower {
+                return power.thermal > .fair ? "thermal \(power.thermal)" : nil
+            }
+            guard let battery = power.batteryPercent, battery >= nightReflectionMinimumBattery
+            else { return "battery \(power.batteryPercent.map { "\($0)%" } ?? "unknown")" }
+            return power.thermal > .nominal ? "thermal \(power.thermal)" : nil
         case .triage:
             if power.thermal >= .serious { return "thermal \(power.thermal)" }
             if !power.onACPower, let battery = power.batteryPercent, battery < 20 {
