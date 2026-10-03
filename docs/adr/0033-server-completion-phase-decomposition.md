@@ -2,6 +2,9 @@
 
 - Status: Accepted
 - Date: 2026-07-11
+- Amended by: ADR-0078 (2026-09-29: the leaf store decides which leaf, a
+  Leaf Admission stores it); ADR-0087 (2026-10-03, proposed: the Prefill Plan
+  takes back its decisions; see the amendment at the end)
 - Relates to: ADR-0015 (actor-confined module), ADR-0016 (Model Session
   seam), ADR-0006 (app-owned prefill), PRD #282 (architecture deepening
   program)
@@ -96,3 +99,19 @@ reviews should not re-propose this extraction unless the shape changes
 - Cross-phase values (`Keyed`, `PrefillPlan`, `LeafStorePhase.Result`)
   are the phase contracts; adding a fact for a later phase means
   extending a value, not threading another parameter through the drive.
+
+## Amendment (2026-10-03): the Prefill Plan takes back its decisions (ADR-0087, proposed)
+
+This takes effect when ADR-0087 is accepted. The premise above, that the real
+derivation of plan application lives in `PrefillPlanner.plan`, stopped
+holding as the speculation route, the preserve-thinking capture gate, the
+maximum advance and the failed-restore re-plan landed inline. ADR-0087 moves
+every decision a keyed request makes before the Cache Claim check-out into
+the Prefill Plan and keeps this ADR's decision: plan application still
+carries the plan out inline, inside the completion module, with no
+extraction and no session verb. Once it is built, phase 2 yields every
+pre-check-out decision and phase 3 only executes them. Already true today:
+there are five shapes, not four, and plan-time predicates choose them; only
+their bodies touch MLX. The reopen trigger above still governs plan
+application itself, and ADR-0087 does not meet it: plan application keeps one
+caller and the same MLX glue.

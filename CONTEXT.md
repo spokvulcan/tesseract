@@ -584,13 +584,96 @@ _Avoid_: orphaned model, legacy download (both suggest the user chose it).
 
 ### Prefill orchestration
 
+_The Prefill Plan entry and the terms after it name the design ADR-0087
+proposes. Until it is built, plan application still derives the shape, the
+Capture Schedule, the split and the Maximum Advance inline._
+
 **Prefill Plan**:
-The pre-prefill decision value for one HTTP prefix-cache generation — the restore
-decision (cold vs suffix-prefill), the suffix-filtered checkpoint offsets, the
-transient boundary offsets, and the stable-prefix offset. It carries offsets only,
-never snapshots or the token array.
+Everything one keyed request's prefill does that is decidable before the
+**Cache Claim** check-out, decided by the Prefill Planner as one value: its
+**Cache Opening**, the **Image Span** and **Text Tail** it forwards, where the
+**Position Anchor** is seeded, its **Capture Schedule**, its **Decode
+Handover** and its **Maximum Advance** (ADR-0087). It carries offsets, ranges
+and enums only, never snapshots, token arrays or the Speculation Plan's
+drafters; plan application carries it out inline and re-derives none of it.
 _Avoid_: prefill config; generation params (a separate notion); checkpoint plan
-(one field inside the Prefill Plan, not the whole value).
+(an input the plan filters, not the plan); the stable-prefix offset as one of
+its fields (it reaches the plan only through the checkpoint plan); restore
+point (a **Chain-Prefix Restore** term).
+
+**Cache Opening**:
+How a keyed request's cache opens before its prefill: cold, from a fresh
+cache; restore, where the **Cache Claim** is asked for the resolved snapshot
+and a restore that yields no cache falls back to the planner's cold prefill
+(ADR-0069 amendment); or whole prompt, where the Speculation Plan's iterator
+prefills the whole prompt into a fresh cache.
+_Avoid_: restore mode (what the restore turned out to be, an execution
+report); opening, unqualified (the Companion's **Day Opening**); restore
+shape (the five shapes are products of the opening and the forward).
+
+**Minimum Warm Offset**:
+The end of a request's last image run in its **Cache Key Space**, or zero for
+a text-only request. Below it a prefill must forward an **Image Span**; at or
+past it the remainder is text, and no checkpoint below it is captured.
+_Avoid_: image prefix end (true only of a cold span); warm offset clamp; warm
+as in **Warm Body** (here it means the first offset a restore can continue
+from as text, not a compressed tier).
+
+**Image Span**:
+The key-space range an image-bearing prefill forwards through the anchored
+vision continuation: from the restore offset, or zero, to the **Minimum Warm
+Offset**. It carries only the images whose runs fall inside it and skips the
+pixel rows of the images already cached.
+_Avoid_: image prefix (only the cold span); vision prefix; restore point (a
+**Chain-Prefix Restore** term).
+
+**Text Tail**:
+The text a prefill forwards after any **Image Span**: from the restore offset
+(zero when cold), or from the **Minimum Warm Offset** after a span, to the end
+of the prompt. The app's chunked prefill runs all of it, or only up to the
+split under a speculative **Decode Handover**. Its start is the one offset
+checkpoints are based at, the split counts from and salvage measures its
+progress from.
+_Avoid_: execution base offset (plan application's local, which ADR-0087
+replaces); prefill base offset (the cached-token count, which differs after a
+span); suffix, unqualified; the tail (in ADR-0059 and ADR-0079, the
+speculative iterator's own prefill from the split).
+
+**Capture Schedule**:
+The checkpoints one prefill captures: the planned checkpoints past what is
+cached and at or past the **Minimum Warm Offset**, plus the prefill's
+**Transient Boundaries**, a planned type winning at a shared offset. The
+chunked prefill also cuts its chunks at these offsets.
+_Avoid_: checkpoint plan (the resolution-side input it filters); capture map
+(its executor form).
+
+**Transient Boundary**:
+A **Prefix-View Checkpoint** captured at the end of the last message or the
+last user message, to synthesize this turn's leaf or seed a **Speculative
+Canonical Prefill**. Of the two boundary offsets, a prefill captures the ones
+past what is cached, at or past the **Minimum Warm Offset**, inside the
+prompt and off every planned checkpoint; a text-only request under a
+**Preserve-Thinking Render** captures none.
+_Avoid_: boundary checkpoint (a telemetry field); boundary helper, helper
+checkpoint (the older name in ADR-0019, ADR-0064 and ADR-0068, and today's
+local); planned checkpoint.
+
+**Decode Handover**:
+Where a prefill hands the prompt to the decode iterator: autoregressive, where
+the app prefills the whole **Text Tail** and the standard iterator decodes from
+its last token; or speculative at a split, where the app's capturing prefill
+runs to the split and the **Speculation Plan**'s iterator prefills the rest.
+Any generation path can name its own.
+_Avoid_: decode route, speculation route (route belongs to the **Prefill
+Strategy** and the **Completion Route**); decode handoff (handoff is the
+**Leaf Handoff**'s word for moving a leaf between owners).
+
+**Maximum Advance**:
+How far one turn may grow its cache past what it restored: its new prompt
+tokens, plus the output ceiling, plus the speculative allowance; unbounded
+without a ceiling. The **Cache Claim** judges check-out eligibility against
+it, and the **Active-Inference Reserve** prices the turn's growth at it.
+_Avoid_: max tokens (output only); LeafCheckout.maximumAdvance (retired).
 
 **Prefill Strategy**:
 The chunked-vs-single-shot route for one raw-generation prompt (the agent chat
@@ -773,8 +856,10 @@ generation pipeline.
 **Completion Phase Map**:
 The six named phases of one cache-aware **Server Completion** (ADR-0033):
 **Request Keying** (conversation → the identities later phases key on, or the
-**Unkeyed Completion** degrade), resolution + plan (the Prefill Planner),
-plan application (inline by decision — the deletion test fails), the stream
+**Unkeyed Completion** degrade), resolution + plan (the Prefill Planner;
+under ADR-0087, proposed, it decides the whole **Prefill Plan**), plan
+application (inline by decision; under ADR-0087 it only carries the plan
+out), the stream
 drive (the Managed Generation Driver, shared with the agent), the leaf store,
 and trace accumulation. Phases are implementation structure inside the
 module's seam — the dispatcher's interface is unchanged — and each phase
@@ -782,7 +867,8 @@ returns values; the completion module owns effects, except a leaf's: the leaf
 store decides which leaf, and its **Leaf Admission** stores it (ADR-0078).
 _Avoid_: pipeline stages (the Generation* family owns "stream" vocabulary);
 new entry points (ADR-0015's seam is untouched); extracting plan application
-(recorded shallow — see ADR-0033).
+(recorded shallow — see ADR-0033); shape logic in plan application (the
+inline derivation ADR-0087 removes).
 
 **Keyed Request**:
 What **Request Keying** yields for a request it can key: its identities (the
@@ -2291,9 +2377,12 @@ background prefill).
 What one request runs speculatively, decided once from the request's facts (text-only
 input, KV quantization and **KV Scheme**, temperature, prompt length, whether a prefix is restored,
 which leaf the turn stores): the arm, the advance allowance its rounds add to the
-turn's maximum advance, and where the app's prefill hands over to the iterator. The
+turn's **Maximum Advance**, and where the app's prefill hands over to the iterator. The
 **Server Completion** and the **Raw Generation Start** read the same plan; no plan
-means ordinary decoding.
+means ordinary decoding. Under ADR-0087 (proposed) the Prefill Planner asks for it
+once on the keyed path and the **Prefill Plan** carries its answer, the arm and split
+in the **Decode Handover** and the allowance in the **Maximum Advance**; plan
+application reads neither.
 _Avoid_: engagement policy or predicate (the retired per-arm rules); speculative arm
 (the plan's arm, not the plan).
 
@@ -2337,7 +2426,7 @@ while the most recent leaf store — on the partition the next lane runs on — 
 capture by copy (the `leafStore` source `live` or `boundary`; a `handoff` moved the
 objects, a `copy` restore's source body is already counted in the tree), plus a
 growth allowance — that leaf's
-bytes per token times the turn's maximum advance, the quantity **Leaf Handoff**'s
+bytes per token times the turn's **Maximum Advance**, the quantity **Leaf Handoff**'s
 check-out eligibility judges `isTrimmable(after:)` against (ADR-0064). The bootstrap constant stands until the first
 observation and stands in for the growth of an unbounded turn. A pure value the
 leaf admission feeds; the `budgetMeasure` event reports its inputs and per-lane
