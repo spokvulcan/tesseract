@@ -263,8 +263,10 @@ text aloud (ADR-0084), so the target takes only the read-aloud code:
   time in minutes and afterwards in seconds, and the **Speed Check** times a
   render. The engine's synthesizer is a `VoiceHandover`: the neural voice for
   each segment while it is ready, keeps up and the **Thermal Policy** allows
-  it, the **System Voice** otherwise; the speed menu offers the rates the
-  Speed Check allows.
+  it, the **System Voice** otherwise. A segment the neural voice fails before
+  any of its audio is read by the System Voice, which reads on until the app
+  is next in front and the voice prepares again. The speed menu offers the
+  rates the Speed Check allows.
 - **The share extension** (`tesseract-share`, embedded in the app) builds the
   `Intake` folder and nothing else of the app. In Safari its script hands over
   the page's HTML, so the app never fetches a page. It never runs the voice:

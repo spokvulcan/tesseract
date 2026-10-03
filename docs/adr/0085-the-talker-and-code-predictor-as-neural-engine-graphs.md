@@ -147,7 +147,7 @@ Engine's.
   Core ML models, for the prompt and the preparation check. Slice 4 releases
   them once a voice is prepared: the phone's stack, run on the M3 Max, then
   holds 0.4 GB, and a 37-second reading peaks at 1.67 GB resident instead of
-  2.43 GB.
+  2.43 GB. A voice that fails is prepared again from its checkpoint.
 - A prompt and its frames must fit 512 positions, about 80 text tokens at
   the six-frames-per-token cap. The phone's segments stay under that.
 - ADR-0075's estimates are superseded: the talker runs at 6.0 ms against 10 to

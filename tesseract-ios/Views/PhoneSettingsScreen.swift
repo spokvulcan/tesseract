@@ -25,12 +25,17 @@ struct PhoneSettingsScreen: View {
             segments: meter?.segments ?? [])
     }
 
-    /// Which voice reads, and how fast the neural one measured.
+    /// Which voice reads: how fast the neural one measured, or why the
+    /// System Voice reads instead.
     private var voiceName: String {
-        guard case .ready(let check) = voice.state else { return "System Voice" }
-        return String(
-            format: "Neural voice (Speed Check RTF %.2f, first audio %.0f ms)",
-            check.realTimeFactor, check.firstAudio * 1000)
+        switch voice.state {
+        case .ready(let check):
+            String(
+                format: "Neural voice (Speed Check RTF %.2f, first audio %.0f ms)",
+                check.realTimeFactor, check.firstAudio * 1000)
+        case .unavailable(let reason): "System Voice (\(reason))"
+        default: "System Voice"
+        }
     }
 
     /// The model identifier, such as iPhone17,2.

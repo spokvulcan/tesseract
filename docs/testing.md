@@ -354,7 +354,9 @@ phone entry. The package's
 adapter with a scripted renderer: resampling to 24 kHz, whole frames, and word
 marks turned into word starts that never run ahead of their audio, and its
 `VoiceHandoverTests` the switch between the neural voice and the System Voice,
-which lands on a segment boundary with the frames gapless across it. The
+which lands on a segment boundary with the frames gapless across it, and a
+segment the neural voice fails: read by the System Voice when it failed before
+its audio, ending the utterance when it failed partway. The
 phone's own adapters (the background download, `PhoneVoice`) are checked on
 the device; on this Mac, `v2-listen --mode phone` runs the phone's speech stack
 (MLX on the CPU, the voice on the Neural Engine, its Voice Preparation twice and

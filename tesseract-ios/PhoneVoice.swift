@@ -40,6 +40,9 @@ final class PhoneVoice {
     @ObservationIgnored private var preparation: Task<Void, Never>?
     @ObservationIgnored private var progressTicker: Task<Void, Never>?
     @ObservationIgnored private var started = false
+    /// The voice failed while reading: it prepares again when the app is
+    /// next in front.
+    @ObservationIgnored private var stopped = false
 
     private let model = ModelDefinition.phoneVoice
     @ObservationIgnored private var record: Record
@@ -152,11 +155,18 @@ final class PhoneVoice {
 
     // MARK: - Lifecycle
 
-    /// At the first time the app is in front: a voice on disk is prepared
-    /// (in seconds after the first time), and a download the owner started
-    /// goes on.
+    /// Each time the app is in front. The first time, a voice on disk is
+    /// prepared (in seconds after the first time), and a download the owner
+    /// started goes on; after the voice failed, it prepares again.
     func start() {
-        guard !started, Self.hasNeuralEngine else { return }
+        guard Self.hasNeuralEngine else { return }
+        guard !started else {
+            if stopped, isDownloaded {
+                stopped = false
+                prepare(reloading: true)
+            }
+            return
+        }
         started = true
         statusWatch = downloads.$statuses.sink { [weak self] _ in
             Task { @MainActor in self?.statusChanged() }
@@ -179,6 +189,17 @@ final class PhoneVoice {
         downloads.cancelDownload(modelID: model.id)
     }
 
+    /// The neural voice failed on a segment before any of its audio, and the
+    /// System Voice read the segment (`VoiceHandover`). The System Voice
+    /// reads on until the app is next in front.
+    func failed(_ error: Error) {
+        guard case .ready = state else { return }
+        stopped = true
+        state = .unavailable(
+            "The neural voice stopped, so the system voice reads until you next open Tesseract. "
+                + error.localizedDescription)
+    }
+
     private func setRequested(_ requested: Bool) {
         record.requested = requested
         record.save(to: Self.recordURL)
@@ -188,6 +209,7 @@ final class PhoneVoice {
     func delete() async {
         preparation?.cancel()
         await synthesizer.unload()
+        stopped = false
         setRequested(false)
         downloads.deleteModel(modelID: model.id)
         for item
@@ -243,13 +265,16 @@ final class PhoneVoice {
 
     // MARK: - Voice Preparation
 
-    private func prepare() {
+    /// `reloading`: from the checkpoint again, as after a failure (a
+    /// prepared voice keeps only its Neural Engine copy).
+    private func prepare(reloading: Bool = false) {
         guard preparation == nil else { return }
         state = .preparing(.loading)
         preparation = Task { [weak self] in
             guard let self else { return }
             defer { preparation = nil }
             do {
+                if reloading { await synthesizer.unload() }
                 _ = try await synthesizer.prepareNeuralVoice(.customVoice06B) { [weak self] phase in
                     Task { @MainActor in
                         guard let self, case .preparing = self.state else { return }
@@ -267,6 +292,9 @@ final class PhoneVoice {
                 }
             } catch is CancellationError {
             } catch {
+                // A recovery tries again the next time; a first preparation
+                // that fails would only fail again.
+                if reloading { stopped = true }
                 state = .unavailable(
                     "The neural voice couldn't be prepared, so the system voice reads. "
                         + error.localizedDescription)

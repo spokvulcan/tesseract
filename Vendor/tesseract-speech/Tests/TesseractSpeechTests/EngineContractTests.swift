@@ -2,6 +2,7 @@
 // exercised through the public interface against scripted adapters.
 
 import Foundation
+import Synchronization
 import Testing
 @testable import TesseractSpeech
 
@@ -690,6 +691,74 @@ private let shortText = "Hello there, this is a short utterance."
         #expect(await neural.loadCount == 0)
         #expect(await neural.unloadCount == 0)
     }
+
+    /// A segment the neural voice fails before any of its audio is read by
+    /// the fallback, and the app hears why: the reading goes on.
+    @Test func aSegmentThePrimaryFailsBeforeItsAudioIsReadByTheFallback() async throws {
+        let neural = ScriptedSynthesizer()
+        await neural.configure(.init(failOnSegmentIndex: 0))
+        let system = ScriptedSynthesizer()
+        let failures = Mutex(0)
+        let engine = SpeechEngine(
+            model: .customVoice06B,
+            synthesizer: VoiceHandover(
+                primary: neural, fallback: system, speakers: ["ryan"], choose: { .primary },
+                onPrimaryFailure: { _ in failures.withLock { $0 += 1 } }))
+        let session = try await engine.session(
+            .readAloud, voice: .preset(speaker: "ryan", language: "English"))
+        let utterance = try await session.speak(shortText)
+        var frames = 0
+        for try await event in utterance.events {
+            if case .audio(let chunk) = event { frames = chunk.frames.upperBound }
+        }
+        #expect(utterance.segmentCount == 1)
+        #expect(frames == 6, "the fallback's three chunks of two frames")
+        #expect(await system.requests.first?.text == neural.requests.first?.text)
+        #expect(failures.withLock { $0 } == 1)
+    }
+
+    /// A segment the neural voice fails partway can't be read again without
+    /// repeating words: its error ends the utterance.
+    @Test func aSegmentThePrimaryFailsPartwayEndsTheUtterance() async throws {
+        let neural = FailingAfterAudio()
+        let system = ScriptedSynthesizer()
+        let failures = Mutex(0)
+        let engine = SpeechEngine(
+            model: .customVoice06B,
+            synthesizer: VoiceHandover(
+                primary: neural, fallback: system, speakers: ["ryan"], choose: { .primary },
+                onPrimaryFailure: { _ in failures.withLock { $0 += 1 } }))
+        let session = try await engine.session(
+            .readAloud, voice: .preset(speaker: "ryan", language: "English"))
+        let utterance = try await session.speak(shortText)
+        await #expect(throws: (any Error).self) {
+            for try await _ in utterance.events {}
+        }
+        #expect(await system.requests.isEmpty)
+        #expect(failures.withLock { $0 } == 0)
+    }
+}
+
+/// A neural voice that fails after its first chunk of audio.
+private actor FailingAfterAudio: SpeechSynthesizing {
+    func checkAvailable(_ spec: TTSModelSpec) async throws {}
+    func load(_ spec: TTSModelSpec, onPhase: (@Sendable (EnginePhase) -> Void)?) async throws {}
+    func warmUp() async throws {}
+    func primeVoice(description: String?, language: String?) async throws {}
+    func unload() async {}
+    func audioFormat() async -> AudioFormat? {
+        AudioFormat(sampleRate: 24_000, samplesPerFrame: 1920)
+    }
+    func trimCaches() async {}
+
+    func synthesizeSegment(_ request: SegmentRequest) async
+        -> AsyncThrowingStream<SynthesisEvent, Error>
+    {
+        AsyncThrowingStream { continuation in
+            continuation.yield(.chunk([Float](repeating: 0.1, count: 1920 * 2)))
+            continuation.finish(throwing: SpeechEngineError.generationFailed("partway"))
+        }
+    }
 }
 
 /// Choices handed out in order, the last one repeating.
@@ -704,3 +773,4 @@ private actor ChoiceScript {
         choices.count > 1 ? choices.removeFirst() : choices[0]
     }
 }
+

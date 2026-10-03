@@ -7,7 +7,8 @@
 //  Read-Along, the Reader); what differs is the voice behind the engine and
 //  the adapters around it: the neural voice on the Neural Engine once it is
 //  downloaded and prepared, and the System Voice until then, wherever it
-//  can't keep up, and when the phone is too warm (#515).
+//  can't keep up, when the phone is too warm, and for any segment it fails
+//  (#515).
 //
 
 import Foundation
@@ -33,7 +34,8 @@ final class PhoneContainer {
             synthesizer: VoiceHandover(
                 primary: voice.synthesizer, fallback: SystemVoiceSynthesizer(),
                 speakers: PresetVoice.all.map(\.id),
-                choose: { [voice] in await voice.choice }),
+                choose: { [voice] in await voice.choice },
+                onPrimaryFailure: { [voice] error in Task { await voice.failed(error) } }),
             diagnostics: meter))
 
     lazy var coordinator = SpeechCoordinator(
