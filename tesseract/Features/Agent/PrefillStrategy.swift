@@ -95,6 +95,16 @@ nonisolated enum PrefillStrategy: Equatable, Sendable {
                 parameters: parameters
             )
         case .singleShot:
+            // A KV Scheme converts inside the vendor iterator after its
+            // prefill, so the iterator is built from parameters and the app
+            // processor rides a component.
+            if parameters.kvScheme != nil {
+                let (stripped, components) = GenerationLogitProcessor.components(
+                    for: parameters)
+                return try TokenIterator(
+                    input: input, model: model, cache: cache, parameters: stripped,
+                    components: components)
+            }
             // The single-shot arm has no up-front quantization point, so it
             // resolves the processor through the ``GenerationLogitProcessor``
             // seam with `pathQuantizesKVUpFront: false`: an app processor when

@@ -63,4 +63,26 @@ nonisolated enum GenerationLogitProcessor {
         }
         return AgentLogitProcessors.processor(for: parameters)
     }
+
+    /// For an iterator built from parameters, which keeps the vendor's
+    /// in-iterator KV plan: the parameters without the penalties, and the
+    /// app processor that applies them as a generation component (the
+    /// vendor's parameter-built penalties would seed from the prompt and
+    /// double the app's).
+    static func components(
+        for parameters: GenerateParameters
+    ) -> (parameters: GenerateParameters, components: GenerationComponents) {
+        var stripped = parameters
+        stripped.repetitionPenalty = nil
+        stripped.presencePenalty = nil
+        stripped.frequencyPenalty = nil
+        guard let processor = AgentLogitProcessors.processor(for: parameters) else {
+            return (stripped, GenerationComponents())
+        }
+        // One iterator = one generation, so a single resolved instance keeps
+        // the fresh-state contract; the box routes the non-Sendable processor
+        // into the @Sendable factory.
+        let box = UnsafeSendableBox(processor)
+        return (stripped, GenerationComponents().appendingLogitProcessor { box.value })
+    }
 }

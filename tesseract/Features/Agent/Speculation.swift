@@ -223,20 +223,8 @@ nonisolated struct SpeculationPlan: Sendable {
         prefilledPrefixTokens: Int,
         parameters: GenerateParameters
     ) throws -> SpeculativeDecodeIterator {
-        var iteratorParameters = parameters
-        iteratorParameters.repetitionPenalty = nil
-        iteratorParameters.presencePenalty = nil
-        iteratorParameters.frequencyPenalty = nil
-        var components = GenerationComponents()
-        if let processor = GenerationLogitProcessor.resolve(
-            for: parameters, pathQuantizesKVUpFront: true)
-        {
-            // One iterator = one generation, so handing the factory a single
-            // resolved instance preserves the fresh-state contract; the box
-            // routes the non-Sendable processor into the @Sendable factory.
-            let box = UnsafeSendableBox(processor)
-            components = components.appendingLogitProcessor { box.value }
-        }
+        let (iteratorParameters, components) = GenerationLogitProcessor.components(
+            for: parameters)
         switch drafter {
         case .mtp(let drafter):
             precondition(

@@ -25,6 +25,16 @@ nonisolated enum KVScheme: String, Sendable, Equatable, CaseIterable, Codable {
 
     var valueBits: Int { 4 }
 
+    /// Full-precision attention bytes over this scheme's, at Qwen3.8-27B's
+    /// shape: what a turn's live cache weighs while its prompt still
+    /// prefills at full precision, relative to the leaf it stores.
+    var fullPrecisionRatio: Double {
+        switch self {
+        case .turbo8v4: 65_536.0 / 25_856.0
+        case .turbo0v4: 65_536.0 / 41_216.0
+        }
+    }
+
     /// An empty cache of this scheme, for a layer `capture` stores in it.
     func makeCache() -> TurboQuantKVCache {
         TurboQuantKVCache(
@@ -34,7 +44,7 @@ nonisolated enum KVScheme: String, Sendable, Equatable, CaseIterable, Codable {
     /// The models the schemes were measured on (#603), Qwen3.8-27B and its
     /// PARO pack. Elsewhere a request keeps full precision.
     static func supports(modelID: String) -> Bool {
-        modelID.hasPrefix("qwen3.8-27b")
+        modelID.hasPrefix("qwen3.8-27b") && !modelID.hasSuffix("-draft")
     }
 }
 

@@ -1741,19 +1741,26 @@ nonisolated final class ServerCompletion {
             // patches actually fed THIS forward: all images when cold; only
             // the newly-added images on a warm restore, since earlier images
             // are already in the restored cache and not re-fed.
-            let begin = try await Self.beginPrefill(
-                session: session,
-                restoredCache: cacheToUse,
-                parameters: genParams,
-                promptTokens: fullTokenCount,
-                cachedTokens: skippedTokens,
-                pricedImage: imagePrefixInput?.image,
-                visionAttentionScratchProfile: visionAttentionScratchProfile,
-                guardLabel: "keyed",
-                diagnosticsContext: diagnosticsContext,
-                progressHandler: progressHandler
-            )
-            var liveCache = begin.cache
+            // Scoped so no second reference keeps the full-precision layers
+            // alive once a KV Scheme conversion replaces them in `liveCache`.
+            var liveCache: [any KVCache]
+            let prefillStartedAt: TimeInterval
+            do {
+                let begin = try await Self.beginPrefill(
+                    session: session,
+                    restoredCache: cacheToUse,
+                    parameters: genParams,
+                    promptTokens: fullTokenCount,
+                    cachedTokens: skippedTokens,
+                    pricedImage: imagePrefixInput?.image,
+                    visionAttentionScratchProfile: visionAttentionScratchProfile,
+                    guardLabel: "keyed",
+                    diagnosticsContext: diagnosticsContext,
+                    progressHandler: progressHandler
+                )
+                liveCache = begin.cache
+                prefillStartedAt = begin.startedAt
+            }
             memory.mark(.prefilling, facts: RequestMemoryTelemetry.cacheFacts(liveCache))
             let prefillResult: (iterator: KeyedDecodeIterator, snapshots: [HybridCacheSnapshot])
             do {
@@ -1939,7 +1946,7 @@ nonisolated final class ServerCompletion {
             // that the iterator actually advances, after that replacement.
             handoff?.cache.adopt(liveCache)
             let finalCacheOwner = handoff?.cache ?? FinalGenerationCache(liveCache)
-            let prefillMs = Date.timeIntervalSinceReferenceDate - begin.startedAt
+            let prefillMs = Date.timeIntervalSinceReferenceDate - prefillStartedAt
             let boundarySnapshots = prefillResult.snapshots.filter {
                 transientOffsets.contains($0.tokenOffset)
             }

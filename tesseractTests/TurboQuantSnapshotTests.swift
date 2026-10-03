@@ -130,6 +130,19 @@ struct TurboQuantSnapshotTests {
             ],
             checkpointType: .leaf, memoryBytes: 0, createdAt: .now)
         #expect(throws: HybridCacheSnapshot.RestoreError.self) { _ = try badMeta.restore() }
+        for (state, meta): ([MLXArray], [String]) in [
+            ([], live.metaState),  // no rows at a nonzero offset
+            (state, Array(live.metaState.prefix(5)) + ["48"]),  // no such group size
+            (state, Array(live.metaState.prefix(3)) + ["5"] + live.metaState.suffix(2)),
+        ] {
+            let corrupt = HybridCacheSnapshot(
+                tokenOffset: 32,
+                layers: [
+                    .init(className: "TurboQuantKVCache", state: state, metaState: meta, offset: 32)
+                ],
+                checkpointType: .leaf, memoryBytes: 0, createdAt: .now)
+            #expect(throws: HybridCacheSnapshot.RestoreError.self) { _ = try corrupt.restore() }
+        }
     }
 
     static func plainLayer(rows: Int, seed: UInt64 = 11) -> KVCacheSimple {

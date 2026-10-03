@@ -628,7 +628,7 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
                 case "TurboQuantKVCache":
                     try Self.makeTurboQuantCache(
                         state: layerState.state, metaState: layerState.metaState,
-                        layerIndex: layerIndex)
+                        offset: layerState.offset, layerIndex: layerIndex)
 
                 default:
                     throw RestoreError(
@@ -734,7 +734,17 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
             guard backing.className == view.className else {
                 throw ViewRestoreError.invalidBackingLeaf
             }
-            return view.replacingState(backing.state.map { $0[.ellipsis, 0..<tokenOffset, 0...] })
+            let rows = backing.state.map { $0[.ellipsis, 0..<tokenOffset, 0...] }
+            if view.className == "TurboQuantKVCache", backing.metaState.count >= 5 {
+                // The leaf's metadata holds what its compression resolved
+                // (the key group size); only the offset is the view's.
+                var metaState = backing.metaState
+                metaState[0] = String(tokenOffset)
+                return LayerState(
+                    className: view.className, state: rows, metaState: metaState,
+                    offset: tokenOffset)
+            }
+            return view.replacingState(rows)
         }
     }
 
@@ -894,8 +904,9 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
             // a malformed array, so check what the restore reads.
             return (5...6).contains(metaState.count)
                 && metaState[0...3].allSatisfy { Int($0) != nil }
+                && (2...4).contains(Int(metaState[3]) ?? 0)
                 && UInt64(metaState[4]) != nil
-                && (metaState.count < 6 || Int(metaState[5]) != nil)
+                && (metaState.count < 6 || [32, 64, 128].contains(Int(metaState[5]) ?? 0))
         default:
             return false
         }
@@ -906,7 +917,7 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
     /// other count, so a state the setter would drop is a ``RestoreError``,
     /// not an empty layer claiming the snapshot's offset.
     private static func makeTurboQuantCache(
-        state: [MLXArray], metaState: [String], layerIndex: Int
+        state: [MLXArray], metaState: [String], offset: Int, layerIndex: Int
     ) throws -> TurboQuantKVCache {
         let keyBits = Int(metaState[2])!
         let compressedCount: Int? =
@@ -915,7 +926,8 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
             case 0: 3
             default: nil
             }
-        guard let compressedCount, state.isEmpty || [2, compressedCount].contains(state.count)
+        guard let compressedCount,
+            state.isEmpty ? offset == 0 : [2, compressedCount].contains(state.count)
         else {
             throw RestoreError(
                 layerIndex: layerIndex, className: "TurboQuantKVCache", metaState: metaState)

@@ -34,8 +34,8 @@ pins; it rejoins this table's carry list only if that experiment is revived.
 
 ## TurboQuant under DFlash2 and the prefix cache (2026-10-03, ADR-0083)
 
-The gitlink advances from `01ccea2` to `13695bd` on
-`feat/turboquant-dflash2-verify`, two commits on the 2026-10-03 pin
+The gitlink advances from `01ccea2` to `56ccc88` on
+`feat/turboquant-dflash2-verify`, four commits on the 2026-10-03 pin
 (fast-forward; `pin-upstream-mlx-swift` unchanged):
 
 - `56fa499` `feat(turboquant): verify DFlash2 rounds over a TurboQuant
@@ -53,10 +53,26 @@ The gitlink advances from `01ccea2` to `13695bd` on
   (older states load) and the key group size in `metaState`.
 - `13695bd` `feat(turboquant): compress a raw-phase cache on demand`
   (`compress()`), for a snapshot stored at rest.
+- `86a5267` `perf(turboquant): dequantize once for a long query block over a
+  compressed cache`. A causal block longer than eight rows (a warm prefill
+  chunk) expands the visible rows once (keys as stored, values in the
+  rotated basis) and runs mlx's attention, then rotates the output rows:
+  1.01–1.20x of bf16 SDPA for 16- to 1,024-row chunks at 8K and 32K rows,
+  where the 8-row MMA kernel took 1.4–2.7x. The 8-row verify keeps the MMA
+  kernel (26.7 vs 71.6 ms per 16 layers at 32K).
+- `56ccc88` `fix(turboquant): convert without a copy, grow like
+  KVCacheSimple, refuse a late scheme`. Conversion hands the rows over
+  through the state setter (no second full-precision copy); compressed
+  buffers honor `reserveCapacity` and grow in doubling increments up to
+  4,096 rows; `compress()` leaves the buffer pool alone; the DFlash2
+  iterator refuses a nonzero compression start and validates its plan.
 
-Validation: `TurboQuantVerifyTests` (9) and
-`testDFlash2IteratorOverTurboQuantCache` (2 cases); serialized `MLXLMTests`
-green at `13695bd` (XCTest 701, 7 skipped; Swift Testing 941). One earlier
+Validation: `TurboQuantVerifyTests` (9, raw and affine keys, 4- and 3-bit
+values, the MMA kernel asserted to serve the verify shapes),
+`TurboQuantIntegrationTests`, `TurboQuantGQAFlashTests` and
+`testDFlash2IteratorOverTurboQuantCache` (2 cases, with drafts replayed from
+the full-precision stream) at `56ccc88`; serialized `MLXLMTests` green at
+`13695bd` (XCTest 701, 7 skipped; Swift Testing 941). One earlier
 whole-package run failed
 `ChatSessionTests.testActiveSpeculativeDecodingReusesAlignedStorageAcrossTurns`
 (draft and main cache offsets 10 and 11); it passes alone, in its suite and
