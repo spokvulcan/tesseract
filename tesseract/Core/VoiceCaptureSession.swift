@@ -24,11 +24,6 @@ import Foundation
 
 @MainActor
 final class VoiceCaptureSession {
-    /// The shared error-lingering delay. The auto-reset itself stays caller-owned
-    /// (each caller's error lives in a different surface — overlay vs `voiceState`),
-    /// but the *duration* lives here so the two callers cannot drift on it.
-    static let errorAutoResetDelay: Duration = .seconds(3)
-
     /// A capture below this is rejected by ``stop()`` before any transcription runs
     /// — an accidental tap must not show a spurious "processing" flash.
     private static let minimumRecordingDuration: TimeInterval = 0.5

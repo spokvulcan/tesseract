@@ -13,6 +13,7 @@
 
 included:
   - tesseract
+  - tesseract-ios
   - tesseractTests
   - tesseractUITests
 

@@ -39,7 +39,7 @@ final class SpeechCoordinator {
     /// the Models page download instead of starting its own.
     private let voiceEngineStatus: @MainActor () -> ModelStatus
     private let playback: any AudioPlayback
-    private let settings: SettingsManager
+    private let settings: any SpeechSettings
     private let notchOverlay: (any WordHighlightSurface)?
     /// Each designed voice's Reference Take, kept across relaunches so the
     /// voice stays the same person (ADR-0072).
@@ -69,7 +69,7 @@ final class SpeechCoordinator {
         engine: SpeechEnginePresenter,
         voiceEngineStatus: @escaping @MainActor () -> ModelStatus,
         playback: any AudioPlayback = AudioPlaybackManager(),
-        settings: SettingsManager,
+        settings: any SpeechSettings,
         notchOverlay: (any WordHighlightSurface)? = nil,
         pinnedVoices: PinnedVoiceStore = PinnedVoiceStore()
     ) {
@@ -234,11 +234,11 @@ final class SpeechCoordinator {
     }
 
     /// The shared transient-error presentation: show the error, linger, then
-    /// auto-reset to idle unless cancelled. Reads the same linger constant
-    /// the dictation side single-sources, so the two families cannot drift.
+    /// auto-reset to idle unless cancelled. Lingers as long as dictation's
+    /// errors do (`ErrorAutoReset`).
     private func presentTransientError(_ message: String) async {
         state = .error(message)
-        try? await Task.sleep(for: VoiceCaptureSession.errorAutoResetDelay)
+        try? await Task.sleep(for: ErrorAutoReset.delay)
         if !Task.isCancelled { state = .idle }
     }
 

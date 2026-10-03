@@ -196,7 +196,37 @@ tesseract/
     ├── NavigationItem.swift     # Sidebar routing enum
     ├── KeyCombo.swift
     └── ...
+
+tesseract-ios/                   # The iPhone app's own files (ADR-0066, ADR-0084)
+└── TesseractPhoneApp.swift      # Entry; a placeholder until the Reader lands (#515)
 ```
+
+### The iPhone app
+
+`tesseract-ios` is a second app target in the same project. Release 1 reads
+text aloud (ADR-0084), so the target takes only the read-aloud code:
+
+- **Its own files** live in `tesseract-ios/`: views, adapters, the composition
+  root, and later its Info.plist and entitlements.
+- **Shared files** come from five folders of `tesseract/`, added to the target
+  as their own synchronized groups (the project's "Shared with tesseract-ios"
+  group): `Core`, `Features/Models`, `Features/Settings`, `Features/Speech` and
+  `Models`. A new file in one of them builds in both apps. A Mac-only file
+  there is excluded from `tesseract-ios` by name, in that group's exceptions
+  (File Inspector → Target Membership). Xcode can't exclude a whole folder, so
+  Mac-only code belongs in the Mac-only folders when it can.
+- **Everything else** in `tesseract/` (the app shell, `Platform/`, the agent,
+  server, companion and dictation) is Mac-only and never reaches the phone.
+- **No `#if os`.** Where shared code needs something only the Mac has, the
+  dependency moves behind a port the Mac adapts: the speech code reads its
+  settings through `SpeechSettings`, which the Mac's `SettingsManager`
+  conforms to, and the Settings Catalogue keeps its Mac-only entries in
+  `SettingsCatalogue+Mac.swift`.
+- **The speech package** (`Vendor/tesseract-speech`) already builds for iOS.
+
+CI's `build-ios` job builds the target for any iOS device, unsigned; the
+release pipeline waits for it. The shared code's tests run in the Mac test
+target.
 
 ---
 

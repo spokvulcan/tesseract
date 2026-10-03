@@ -327,6 +327,20 @@ The eagerness suite also holds the Model Session at a toy forward to verify
 cancellation and replacement before enqueue preserve the view's SSD intent;
 a busy Storage Activity Gate must not delay a pressure-triggered write-through.
 
+## The iPhone app
+
+`tesseract-ios` has no test target: the code it shares with the Mac is tested
+in `tesseractTests`, and no test runs on a device. CI's `build-ios` job only
+builds it. Build it the same way before pushing a change to a shared folder
+(ARCHITECTURE.md → The iPhone app), so a Mac-only file that slipped into one
+fails here rather than in CI:
+
+```bash
+xcodebuild build -project tesseract.xcodeproj -scheme tesseract-ios \
+  -configuration Debug -destination 'generic/platform=iOS' \
+  -derivedDataPath DerivedData -skipPackagePluginValidation CODE_SIGNING_ALLOWED=NO
+```
+
 ## Live detokenization and stream parity
 
 `LiveStreamingDetokenizerTests` loads a tiny real BPE tokenizer through

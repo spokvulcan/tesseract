@@ -8,11 +8,6 @@ import AppKit
 import os
 
 @MainActor
-protocol TextExtracting: AnyObject {
-    func extractSelectedText() async throws -> String
-}
-
-@MainActor
 final class TextExtractor: TextExtracting {
     private enum Defaults {
         static let clipboardSettleDelay: Duration = .milliseconds(100)

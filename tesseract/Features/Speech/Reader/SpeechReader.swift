@@ -51,7 +51,7 @@ final class SpeechReader {
 
     @ObservationIgnored private let coordinator: SpeechCoordinator
     @ObservationIgnored private let readAlong: SpeechReadAlong
-    @ObservationIgnored private let settings: SettingsManager
+    @ObservationIgnored private let settings: any SpeechSettings
     @ObservationIgnored private let store: ReaderDocumentStore
     @ObservationIgnored private var session: ReadingSession?
     @ObservationIgnored private var saveTask: Task<Void, Never>?
@@ -59,7 +59,7 @@ final class SpeechReader {
     @ObservationIgnored private var lastSavedBookmark: Int
 
     init(
-        coordinator: SpeechCoordinator, readAlong: SpeechReadAlong, settings: SettingsManager,
+        coordinator: SpeechCoordinator, readAlong: SpeechReadAlong, settings: any SpeechSettings,
         store: ReaderDocumentStore = ReaderDocumentStore()
     ) {
         self.coordinator = coordinator

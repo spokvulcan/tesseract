@@ -30,7 +30,7 @@ nonisolated enum StorageEnvironment {
     static let home: URL =
         ProcessEnvironment.isRunningTests
         ? scratchRoot.appendingPathComponent("Home", isDirectory: true)
-        : FileManager.default.homeDirectoryForCurrentUser
+        : URL.homeDirectory
 
     /// The scratch directory that holds a test process's storage roots.
     static let scratchRoot: URL = FileManager.default.temporaryDirectory

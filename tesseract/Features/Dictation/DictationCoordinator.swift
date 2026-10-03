@@ -508,7 +508,7 @@ final class DictationCoordinator {
         // Auto-reset after a delay (shared duration so dictation and agent voice
         // input don't drift on how long an error lingers).
         Task {
-            try? await Task.sleep(for: VoiceCaptureSession.errorAutoResetDelay)
+            try? await Task.sleep(for: ErrorAutoReset.delay)
             if case .error = state {
                 feed.setPhase(.idle)
             }

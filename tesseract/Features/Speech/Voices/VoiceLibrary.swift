@@ -48,7 +48,7 @@ nonisolated struct VoiceOption: Identifiable, Hashable, Sendable {
 
 @Observable @MainActor
 final class VoiceLibrary {
-    private let settings: SettingsManager
+    private let settings: any SpeechSettings
     private let pinnedVoices: PinnedVoiceStore
     let source: TTSVoiceSource
 
@@ -56,7 +56,7 @@ final class VoiceLibrary {
     private(set) var unnamed: [VoiceOption] = []
 
     init(
-        settings: SettingsManager, pinnedVoices: PinnedVoiceStore,
+        settings: any SpeechSettings, pinnedVoices: PinnedVoiceStore,
         source: TTSVoiceSource = ModelDefinition.textToSpeechVoiceSource
     ) {
         self.settings = settings

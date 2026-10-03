@@ -98,7 +98,7 @@ final class DependencyContainer: ObservableObject {
     lazy var hotkeyManager = HotkeyManager()
 
     // Model Downloads
-    lazy var modelDownloadManager = ModelDownloadManager()
+    lazy var modelDownloadManager = ModelDownloadManager(fetching: HuggingFaceModelFetching())
 
     // Agent (LLM). The inference actor is created here and injected into the
     // agent engine; the server dispatcher reaches the same actor for the
