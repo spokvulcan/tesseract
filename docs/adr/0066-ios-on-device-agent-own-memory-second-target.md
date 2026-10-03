@@ -1,8 +1,14 @@
 ---
-status: accepted
+status: decisions 1 and 2 and the 2026-09-24 amendment superseded by ADR-0084 (2026-10-03; the phone ships read-aloud first); decision 3 accepted
 ---
 
 # iOS: the phone runs the agent on-device, with its own memory, from a second target
+
+> **Superseded in part by ADR-0084 (2026-10-03).** The phone now ships in four
+> releases: read-aloud with Qwen3-TTS on the Neural Engine, a plain chat,
+> dictation, and the Companion as research. Decisions 1 and 2 and the
+> amendment's details for the agent no longer describe the first release.
+> Decision 3, the second target, stands.
 
 Design for [#515](https://github.com/spokvulcan/tesseract/issues/515), the
 iOS v1 PRD. Grilled with the owner on 2026-09-17. Relates to ADR-0035 (living memory),
