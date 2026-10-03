@@ -103,6 +103,24 @@ Verified after re-resolution: both DerivedData checkouts are clean at
 `1bb678a` / `3c6990d9` and their diff from `b6a5f3b6` is the benched patch;
 the clean-build rerun of `TurboQuantRowWriteTests` passed.
 
+### Carried since 2026-10-03: cheaper quantized and custom kernel dispatch
+
+mlx `3c6990d9` -> `e90cd38a`, mlx-swift `1bb678a` -> `db60fb7` (gitlink
+only). PARO decode is host-bound (`benchmarks/turboquant/2026-10-03/README.md`,
+loop 2), and a host profile of its decode step found two per-dispatch costs
+that do no work: a quantized matmul formatted its kernel's template
+definition string on every dispatch even when the pipeline was cached
+(now memoized by kernel name, which is already the library's cache key),
+and every custom kernel dispatch compared its whole generated source
+against the library cache's copy (now a pointer compare on a source token
+shared by the call site's memo; a kernel built without one falls back to
+the full compare). Together about 3% of the host's sampled decode time;
+an A/B of the loaded PARO model measured 2.6 ms less encode per step on
+average (noisy: 29.5 and 31.4 ms against 34.3 and 31.9). Verified after
+re-resolution: both checkouts clean at `db60fb7` / `e90cd38a`, diff from
+`3c6990d9` equal to the benched patch; vendor suites pass; a PARO smoke
+leg of both arms matched its reference streams.
+
 ## Why mlx-core is still on v0.31.1 (attempted 2026-07-27)
 
 mlx-core sits at v0.31.1 while upstream has moved 248 commits on (v0.32.0
