@@ -2,7 +2,7 @@
 //  LensController.swift
 //  tesseract
 //
-//  The **Lens** (PRD #612, ADR-0084): ⌃⌥Space reopens the last take in a
+//  The **Lens** (PRD #612, ADR-0085): ⌃⌥Space reopens the last take in a
 //  glass card at the bottom of the screen, the owner types the word they
 //  meant, and ↩ puts the fixed take back in the app while the pasted text
 //  is still the last thing typed there. Every fix teaches a Learned Word

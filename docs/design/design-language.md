@@ -63,7 +63,7 @@ same PR:
   the field exists from the first layout (the macOS 27.0 focus freeze).
 - Capture panel (`CapturePanelController` over `GlassPanel`): the capture
   hotkey's bar near the top of the screen, same construction.
-- Lens (`LensController` over `GlassPanel`, ADR-0084): the dictation card at
+- Lens (`LensController` over `GlassPanel`, ADR-0085): the dictation card at
   the bottom center of the screen where a take is fixed by typing the word you
   meant. Same construction as the Jarvis panel; it turns key only while a take
   is being fixed, every button is non-focusable and the field exists from the

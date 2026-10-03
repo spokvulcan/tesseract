@@ -1,4 +1,4 @@
-# ADR-0084: Learned Words replace the Proofread Pass as the corrector, and the Lens takes the keyboard
+# ADR-0085: Learned Words replace the Proofread Pass as the corrector, and the Lens takes the keyboard
 
 - Status: Accepted
 - Date: 2026-10-03

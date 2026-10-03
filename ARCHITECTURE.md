@@ -90,7 +90,7 @@ tesseract/
 │   ├── ObjCExceptions.swift           # NSException → thrown error seam (wraps AVFAudio graph steps)
 │   ├── ObjCExceptionCatcher.h/.m      # The one Objective-C file: the @try behind ObjCExceptions
 │   ├── TextInjector.swift             # Clipboard-based paste injection
-│   ├── InAppReplacer.swift            # Puts a Lens fix back in the app (ADR-0084)
+│   ├── InAppReplacer.swift            # Puts a Lens fix back in the app (ADR-0085)
 │   ├── TextExtractor.swift            # Selected text extraction
 │   ├── MenuBarManager.swift           # Status bar menu (NSStatusItem)
 │   ├── OverlayPanel.swift             # Dumb fixed-frame overlay host (NSPanel)
@@ -106,8 +106,8 @@ tesseract/
 │   │   ├── OverlayVariants.swift      # Overlay Variant registry (exploration scaffolding)
 │   │   ├── Proofread/                 # Proofread Pass (ADR-0034): policy, verdicts, MLX adapter
 │   │   ├── Corrections/               # Correction Pair flywheel (#289): value + bounded store
-│   │   ├── LearnedWords/              # Learned Words (ADR-0084): store, matcher, sounds-alike key
-│   │   ├── Lens/                      # Lens (ADR-0084): the fix card and the type-the-word fix
+│   │   ├── LearnedWords/              # Learned Words (ADR-0085): store, matcher, sounds-alike key
+│   │   ├── Lens/                      # Lens (ADR-0085): the fix card and the type-the-word fix
 │   │   └── Views/                     # Recording UI components + overlay variants
 │   ├── Speech/                        # engine v2 lives in Vendor/tesseract-speech
 │   │   ├── SpeechCoordinator.swift    # @Observable orchestrator; drains engine events
@@ -592,7 +592,7 @@ The Overlay Panel is a dumb, fixed-frame host: created once at launch, permanent
            ├─► Copy to clipboard
            └─► Simulate Cmd+V
 
-4. Fixing a word after the paste (Control+Option+Space, ADR-0084)
+4. Fixing a word after the paste (Control+Option+Space, ADR-0085)
    └─► Lens opens on the last take; the owner types the word meant
        ├─► LensFix picks the words it replaces and decides what the fix teaches
        ├─► LearnedWordStore learns it (or leaves a word alone in that app)

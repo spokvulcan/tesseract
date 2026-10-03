@@ -1900,7 +1900,7 @@ _Avoid_: coordinator (it is composed by the coordinators, not one), capture engi
 The optional LLM polish stage between transcription and commit (ADR-0034): a second,
 small co-resident MLX model — its own, never the agent's — that fixes punctuation,
 capitalization, and misheard words, or rejects an unintelligible take outright.
-Off by default and opt-in (ADR-0084): **Learned Words** are the corrector, and when
+Off by default and opt-in (ADR-0085): **Learned Words** are the corrector, and when
 on, the pass reads the text after them. Strictly fail-open: disabled, model not
 downloaded, the LLM generating (skip-when-busy — it *reads* whether the **LLM Gate**
 is held, never waits on it), budget overrun, or any error all commit the raw text
@@ -1935,7 +1935,7 @@ it is left alone in. Learned on the first fix, unless the fix touches only ordin
 words, only changes a word's ending, or does not sound like what was heard (a
 rewrite): those fix that take only. Fixing it back in an app leaves it alone there.
 Forget keeps the word, so Forget can be undone, and only a new fix learns it again
-(ADR-0084).
+(ADR-0085).
 _Avoid_: dictionary entry, custom vocabulary (a list the recognizer is biased
 toward, which is out of scope), replacement rule (unqualified), autocorrect,
 snippet.
@@ -1954,7 +1954,7 @@ word they meant; the Lens picks the words that sound like it (← → or a click
 hand). A fix makes the take's **Correction Pair** gold, teaches a **Learned Word**
 when it is a mishearing, and goes back into the app while the pasted text is still
 the last thing typed there. It takes the keyboard only while a take is being fixed and gives focus
-back when done (ADR-0084). For now the recording overlay is still the **Overlay
+back when done (ADR-0085). For now the recording overlay is still the **Overlay
 Variant**; the Lens becomes the one dictation overlay when it streams (PRD #612).
 _Avoid_: overlay (unqualified: the **Overlay Panel** hosts the recording overlay),
 editor, fix window, popup, history editor (the full-text editor in the history

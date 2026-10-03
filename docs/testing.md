@@ -117,7 +117,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/AudioPlaybackTests \
   -only-testing:tesseractTests/StreamingSchedulerTests
 
-# Dictation and Learned Words (ADR-0084; quit the app first, its capture engine
+# Dictation and Learned Words (ADR-0085; quit the app first, its capture engine
 # starves test hosts): the Voice Capture Session (Learned Words after the regex
 # cleanup, the silent-capture skip, every caller), the regex cleanup, the
 # Correction Pair store and the gold mark a fix gives, the sounds-alike key, take

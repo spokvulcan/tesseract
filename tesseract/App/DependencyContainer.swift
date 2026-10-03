@@ -675,7 +675,7 @@ final class DependencyContainer: ObservableObject {
         return coordinator
     }()
 
-    /// The **Lens** (PRD #612, ADR-0084): ⌃⌥Space reopens the last take to fix
+    /// The **Lens** (PRD #612, ADR-0085): ⌃⌥Space reopens the last take to fix
     /// a word by typing the one meant.
     lazy var dictationLens: LensController = makeDictationLens()
 
