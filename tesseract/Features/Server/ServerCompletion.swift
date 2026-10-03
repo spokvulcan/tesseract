@@ -1395,7 +1395,7 @@ nonisolated final class ServerCompletion {
             // carries the SSD-hydrated-hit special case — it aligns against
             // nothing, matching the pre-carve ordering against the unhydrated
             // `.ssdHit`.
-            let checkpointPlan = await MainActor.run {
+            var checkpointPlan = await MainActor.run {
                 prefixCache.planCheckpoints(
                     tokens: keySpace.keyPath,
                     stablePrefixOffset: boundaries.stablePrefixOffset,
@@ -1546,6 +1546,7 @@ nonisolated final class ServerCompletion {
                 outputCeiling: parameters.maxTokens,
                 speculativeAllowance: speculation?.advanceAllowance ?? 0)
             var restoredCache: [any KVCache]?
+            var restoreFailure: (any Error)?
             var restoreMs: TimeInterval = 0
             var restoreFellBack = false
             if prefillPlan.restore.restoresPrefix {
@@ -1561,9 +1562,11 @@ nonisolated final class ServerCompletion {
                 case .copy(let copy):
                     restoreCopy = copy
                     restoreWaitSeconds = copy.waitSeconds
-                    restoredCache = Self.restoreCache(lookupResult, session: session)
+                    (restoredCache, restoreFailure) = Self.restoreCache(
+                        lookupResult, session: session)
                 case .cold:
-                    restoredCache = Self.restoreCache(lookupResult, session: session)
+                    (restoredCache, restoreFailure) = Self.restoreCache(
+                        lookupResult, session: session)
                 }
                 restoreMs = Date.timeIntervalSinceReferenceDate - restoreStarted
                 restoreMode =
@@ -1582,6 +1585,40 @@ nonisolated final class ServerCompletion {
                 // checkpoints this turn has to rebuild.
                 if restoredCache == nil {
                     restoreFellBack = true
+                    if let restoreFailure, let failed = lookupResult.snapshot {
+                        // Drop the snapshot that threw, so no later request
+                        // pays the same failed restore, then plan checkpoints
+                        // again against the settled tree: one the drop took
+                        // is captured anew on this turn (ADR-0069 amendment).
+                        let corruptLayers = restoreFailure is HybridCacheSnapshot.RestoreError
+                        let (drop, replanned) = await MainActor.run {
+                            let drop = prefixCache.dropUnrestorableSnapshot(
+                                failed, tokens: keySpace.keyPath, partitionKey: partitionKey,
+                                corruptLayers: corruptLayers)
+                            let dropped = drop == .body || drop == .bodyAndSSDCopy
+                            let replanned =
+                                dropped
+                                ? prefixCache.planCheckpoints(
+                                    tokens: keySpace.keyPath,
+                                    stablePrefixOffset: boundaries.stablePrefixOffset,
+                                    partitionKey: partitionKey,
+                                    alignTo: resolved.alignmentLookup)
+                                : nil
+                            return (drop, replanned)
+                        }
+                        if let replanned { checkpointPlan = replanned }
+                        diagnosticsContext.logSkip(
+                            stage: "restore",
+                            reason: "unrestorable-snapshot",
+                            level: .warning,
+                            extraFields: [
+                                ("offset", "\(failed.tokenOffset)"),
+                                ("checkpointType", failed.checkpointType.wireString),
+                                ("drop", drop.rawValue),
+                                ("error", String(describing: restoreFailure)),
+                            ]
+                        )
+                    }
                     prefillPlan = PrefillPlanner.coldPlan(
                         boundaries: boundaries,
                         checkpointPlan: checkpointPlan,
@@ -2208,20 +2245,22 @@ nonisolated final class ServerCompletion {
 
     /// The restore verb with `LookupResult.restoreCache`'s degrade-to-miss
     /// contract: a snapshot whose persisted layers fail restoration is a
-    /// cache miss (`nil`), never a crashed request — routed through the
+    /// cache miss (no cache), never a crashed request — routed through the
     /// **Model Session** so the sequencing suite observes restore ordering.
+    /// `failure` is what the restore threw, so the caller can drop the
+    /// snapshot; `nil` when it restored or there was nothing to restore.
     private static func restoreCache(
         _ lookup: PrefixCacheManager.LookupResult,
         session: any ModelSession
-    ) -> [any KVCache]? {
-        guard let snapshot = lookup.snapshot, lookup.partitionKey != nil else { return nil }
+    ) -> (cache: [any KVCache]?, failure: (any Error)?) {
+        guard let snapshot = lookup.snapshot, lookup.partitionKey != nil else { return (nil, nil) }
         do {
-            return try session.restore(snapshot, backingLeaf: lookup.backingLeaf)
+            return (try session.restore(snapshot, backingLeaf: lookup.backingLeaf), nil)
         } catch {
             Log.server.error(
                 "snapshot restore failed — treating as cache miss: \(error)"
             )
-            return nil
+            return (nil, error)
         }
     }
 

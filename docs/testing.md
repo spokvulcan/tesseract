@@ -1198,7 +1198,9 @@ harness expects the loaded leaf to be handed off with no restore call.
 
 `ServerCompletionRestoreFallbackTests` covers a planned restore that yields no
 cache (ADR-0069's 2026-10-03 amendment). An armed `ToyRestoreFault` makes the
-toy session's next `restore` throw. A text-only turn restored by copy and a restore planned below a new image must
+toy session's next `restore` throw, `Injected` by default or a given error
+such as `HybridCacheSnapshot.RestoreError`, and records the body it failed on.
+A text-only turn restored by copy and a restore planned below a new image must
 then both run cold: the whole prompt fed from position zero into a new cache,
 each captured checkpoint labelled with the offset its cache held
 (`ModelVerbRecorder.captures` records both), and every body left in the cache
@@ -1206,7 +1208,10 @@ reading back the path it is stored under
 (`PrefixCacheAdmin.residentSnapshotsForTesting`; the toy writes each fed id
 into its K/V row). A resident MTP drafter that traps if engaged
 (`Speculation.inactiveMTP`) checks that the fallback keeps its Speculation
-Plan.
+Plan. The failed snapshot is dropped: a system checkpoint that failed is gone
+after the turn, recaptured on the same turn, and restored by the next request;
+over an SSD tier a `RestoreError` also removes its old copy from the manifest,
+and any other error keeps it.
 
 `CacheClaimMemoryEvidenceTests` measures the MLX peak around one step at a time
 on synthetic caches: check-in before extraction, a refused check-in, the

@@ -1961,6 +1961,64 @@ final class PrefixCacheManager {
         }
     }
 
+    /// What `dropUnrestorableSnapshot` did, as the request's skip line
+    /// reports it.
+    enum UnrestorableSnapshotDrop: String, Sendable {
+        /// The RAM body went; an SSD copy, if any, stays for the next hit to
+        /// hydrate.
+        case body
+        /// The RAM body went, and the SSD copy or chain-prefix point it was
+        /// rebuilt from went with it: the layers themselves were corrupt.
+        case bodyAndSSDCopy
+        /// No node holds that body any more, or it never had one (a
+        /// request-local view): nothing to drop.
+        case notFound
+        /// A Leaf Lease holds the body: it stays where it is.
+        case leased
+    }
+
+    /// Drop a snapshot whose restore threw (ADR-0069 amendment), so no later
+    /// request resolves to it, pays the same failed restore and runs cold,
+    /// and so checkpoint planning stops counting it as stored. The RAM body
+    /// always goes. With `corruptLayers` (`HybridCacheSnapshot.RestoreError`:
+    /// a layer's class or metaState cannot be rebuilt) the SSD copy holds the
+    /// same bytes, so it goes too: its backing is deleted before its ref is
+    /// discarded, and a chain-prefix point the body was composed through is
+    /// cleared. Any other failure, such as a view whose Backing Leaf no
+    /// longer fits it, keeps the SSD copy. Acts only while the node at the
+    /// snapshot's path still holds that very body.
+    @discardableResult
+    func dropUnrestorableSnapshot(
+        _ snapshot: HybridCacheSnapshot,
+        tokens: [Int],
+        partitionKey: CachePartitionKey,
+        corruptLayers: Bool
+    ) -> UnrestorableSnapshotDrop {
+        guard snapshot.tokenOffset <= tokens.count,
+            let tree = store.tree(for: partitionKey),
+            let node = tree.exactNode(tokens: Array(tokens.prefix(snapshot.tokenOffset))),
+            node.state.body?.bodyID == snapshot.bodyID
+        else { return .notFound }
+        guard node.leafLease == nil else { return .leased }
+        var drop = UnrestorableSnapshotDrop.body
+        if corruptLayers {
+            if let ref = node.state.ref {
+                store.deleteSnapshot(snapshotID: ref.snapshotID)
+                tree.discardSnapshotRefAfterExplicitDelete(node: node)
+                drop = .bodyAndSSDCopy
+            }
+            if node.chainPrefixRestorePoint != nil {
+                tree.clearChainPrefixRestorePoint(node: node)
+                drop = .bodyAndSSDCopy
+            }
+        }
+        // Discarding a ref can retire a view, and with it the body.
+        if node.state.body?.bodyID == snapshot.bodyID {
+            tree.dropBody(node: node)
+        }
+        return drop
+    }
+
     /// Attach a freshly composed chain-prefix body (ADR-0012) to the
     /// pointed node. The chain-side sibling of `promote`: the node holds
     /// no own ref (its backing is borrowed from the owner chain's leading

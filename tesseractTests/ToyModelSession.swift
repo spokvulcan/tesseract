@@ -533,18 +533,25 @@ nonisolated final class ToyRestoreFault: @unchecked Sendable {
     struct Injected: Error {}
 
     private let lock = NSLock()
-    private var armed = false
+    private var armed: (any Error)?
+    private var _failedBodyIDs: [UUID] = []
 
-    func arm() {
-        lock.withLock { armed = true }
+    /// The bodies a fired fault failed to restore, in order.
+    var failedBodyIDs: [UUID] { lock.withLock { _failedBodyIDs } }
+
+    /// Fail the next restore with `error`: `Injected` by default, or the
+    /// `HybridCacheSnapshot.RestoreError` a corrupt persisted layer raises.
+    func arm(throwing error: any Error = Injected()) {
+        lock.withLock { armed = error }
     }
 
-    func fireIfArmed() throws {
-        let fire = lock.withLock {
-            defer { armed = false }
+    func fireIfArmed(restoring snapshot: HybridCacheSnapshot) throws {
+        let error: (any Error)? = lock.withLock {
+            defer { armed = nil }
+            if armed != nil { _failedBodyIDs.append(snapshot.bodyID) }
             return armed
         }
-        if fire { throw Injected() }
+        if let error { throw error }
     }
 }
 
@@ -601,7 +608,7 @@ nonisolated struct RecordingModelSession: ModelSession {
 
     func restore(_ snapshot: HybridCacheSnapshot) throws -> [any KVCache] {
         recorder.record(.restore)
-        try restoreFault?.fireIfArmed()
+        try restoreFault?.fireIfArmed(restoring: snapshot)
         return try base.restore(snapshot)
     }
 
@@ -609,7 +616,7 @@ nonisolated struct RecordingModelSession: ModelSession {
         _ snapshot: HybridCacheSnapshot, backingLeaf: HybridCacheSnapshot?
     ) throws -> [any KVCache] {
         recorder.record(.restore)
-        try restoreFault?.fireIfArmed()
+        try restoreFault?.fireIfArmed(restoring: snapshot)
         return try base.restore(snapshot, backingLeaf: backingLeaf)
     }
 

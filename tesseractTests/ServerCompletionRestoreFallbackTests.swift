@@ -182,21 +182,125 @@ struct ServerCompletionRestoreFallbackTests {
         #expect(!verbs.contains(.makeSpeculativeDecodeIterator), "\(verbs)")
     }
 
+    // MARK: - Dropping the snapshot that failed
+
+    /// The snapshot whose restore threw is dropped, so no later request pays
+    /// the same failed restore. The fallback turn then plans its checkpoints
+    /// again against the settled tree: the system checkpoint it lost is
+    /// captured anew on the same turn, and the next request restores it.
+    @Test func theSnapshotWhoseRestoreThrewIsDroppedAndRecaptured() async throws {
+        let fault = ToyRestoreFault()
+        let session = Replay.Session(restoreFault: fault)
+        let first = try await session.turn(Self.firstRequest)
+        let stable = try session.stablePrefix(of: first)
+
+        let (turn, _, captures) = try await Self.failedRestoreTurn(
+            session, fault, Replay.conversation([Replay.user("other")]), text: "again")
+
+        #expect(turn.text == "again")
+        let lookup = try #require(turn.event("lookup"))
+        #expect(lookup.intField("snapshotOffset") == stable, turn.account)
+        #expect(lookup.field("checkpointType") == "system", turn.account)
+        #expect(lookup.field("restoreFallback") == "cold", turn.account)
+        #expect(Self.dropEvent(turn)?.field("drop") == "body", turn.account)
+        let failed = try #require(fault.failedBodyIDs.last)
+        let resident = session.fixture.cacheAdmin.residentSnapshotsForTesting()
+        #expect(!resident.contains { $0.snapshot.bodyID == failed })
+        #expect(captures.contains(.init(label: stable, cacheOffset: stable)), "\(captures)")
+        #expect(
+            resident.contains { $0.snapshot.checkpointType == .system && $0.path.count == stable })
+        try Self.expectResidentBodiesHoldTheirPaths(session)
+
+        let next = try await session.turn(
+            Replay.conversation([Replay.user("third")]), text: "done")
+        #expect(next.text == "done")
+        #expect(next.cached == stable, next.account)
+        #expect(next.event("lookup")?.field("restoreFallback") == nil, next.account)
+        #expect(next.fedPrompt == Array(next.render[stable...]), next.account)
+    }
+
+    /// A `RestoreError` says the layers themselves are corrupt, and the SSD
+    /// copy holds the same bytes, so it goes with the RAM body; the fallback
+    /// turn's fresh capture replaces it. Any other failure keeps the SSD
+    /// copy, which the next hit hydrates. The system checkpoint is on disk
+    /// only after the restart, so the failing turn is the one that hydrated
+    /// it: the realistic way to meet a corrupt layer.
+    @Test(arguments: [true, false])
+    func corruptLayersDropTheSSDCopyToo(corrupt: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("restore-fallback-ssd-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let ssdConfig = SSDPrefixCacheConfig(
+            enabled: true, rootURL: root, budgetBytes: 1 << 30, maxPendingBytes: 1 << 30)
+        let fault = ToyRestoreFault()
+        let session = Replay.Session(ssdConfig: ssdConfig, restoreFault: fault)
+        let first = try await session.turn(Self.firstRequest)
+        let stable = try session.stablePrefix(of: first)
+        await session.fixture.drain()
+        await session.fixture.flush()
+        let stored = try Self.manifestIDs(root, checkpointType: "system")
+        #expect(stored.count == 1)
+        session.restart(index: session.index, ssdConfig: ssdConfig)
+
+        let error: any Error =
+            corrupt
+            ? HybridCacheSnapshot.RestoreError(layerIndex: 0, className: "KVCache", metaState: [])
+            : ToyRestoreFault.Injected()
+        let (turn, _, _) = try await Self.failedRestoreTurn(
+            session, fault, Replay.conversation([Replay.user("other")]), text: "again",
+            error: error)
+
+        #expect(turn.text == "again")
+        let lookup = try #require(turn.event("lookup"))
+        #expect(lookup.field("hydratedFromSSD") == "true", turn.account)
+        #expect(lookup.intField("snapshotOffset") == stable, turn.account)
+        #expect(lookup.field("restoreFallback") == "cold", turn.account)
+        #expect(
+            Self.dropEvent(turn)?.field("drop") == (corrupt ? "bodyAndSSDCopy" : "body"),
+            turn.account)
+        await session.fixture.drain()
+        await session.fixture.flush()
+        let after = try Self.manifestIDs(root, checkpointType: "system")
+        if corrupt {
+            #expect(after.isDisjoint(with: stored), "\(after)")
+            #expect(after.count == 1, "\(after)")
+        } else {
+            #expect(after == stored, "\(after)")
+        }
+    }
+
     // MARK: - Helpers
+
+    /// The skip a fallback turn logs for the snapshot it dropped.
+    private static func dropEvent(_ turn: Replay.Turn) -> PromptCacheTelemetryEvent? {
+        turn.events.first {
+            $0.eventName == "skip" && $0.field("stage") == "restore"
+                && $0.field("reason") == "unrestorable-snapshot"
+        }
+    }
+
+    /// The manifest's snapshot IDs of one checkpoint type.
+    private static func manifestIDs(_ root: URL, checkpointType: String) throws -> Set<String> {
+        let manifest = try JSONDecoder().decode(
+            SnapshotManifest.self,
+            from: Data(contentsOf: root.appendingPathComponent("manifest.json")))
+        return Set(manifest.snapshots.filter { $0.value.checkpointType == checkpointType }.keys)
+    }
 
     /// Drive `request` with the restore fault armed; return the turn with
     /// the verbs and captures the toy session recorded during it.
     private static func failedRestoreTurn(
         _ session: Replay.Session, _ fault: ToyRestoreFault,
         _ request: HTTPPrefixCacheConversation, text: String,
-        context: TemplateRenderContext = Replay.preserving
+        context: TemplateRenderContext = Replay.preserving,
+        error: any Error = ToyRestoreFault.Injected()
     ) async throws -> (Replay.Turn, [ModelVerb], [ModelVerbRecorder.Capture]) {
         // A Speculative Canonical Prefill restores too; none may take the fault.
         await session.fixture.module.preemptSpeculativePrefill(on: session.fixture.actor)
         let recorder = session.provider.recorder
         let verbsBefore = recorder.verbs.count
         let capturesBefore = recorder.captures.count
-        fault.arm()
+        fault.arm(throwing: error)
         let turn = try await session.turn(request, text: text, context: context)
         return (
             turn, Array(recorder.verbs[verbsBefore...]),
