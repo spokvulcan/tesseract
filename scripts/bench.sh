@@ -20,7 +20,7 @@ LOG_FILE="$BENCH_DIR/latest.log"
 # orphans a still-running benchmark process (map #230 trap 1).
 for arg in "$@"; do
     case "$arg" in
-        --paro-parity-bench|--snapshot-bench|--prefix-detect-bench|--tokenize-cache-bench|--agent-cpu-bench|--prefix-cache-e2e|--rotated-checkpoint-parity)
+        --paro-parity-bench|--snapshot-bench|--prefix-detect-bench|--tokenize-cache-bench|--agent-cpu-bench|--prefix-cache-e2e|--rotated-checkpoint-parity|--turboquant-bench)
             LOG_FILE="$BENCH_DIR/${arg#--}/latest.log"
             break ;;
     esac

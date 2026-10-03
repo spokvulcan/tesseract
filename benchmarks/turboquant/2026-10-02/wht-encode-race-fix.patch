@@ -1,0 +1,31 @@
+diff --git a/Libraries/MLXLMCommon/TurboQuantKernels.swift b/Libraries/MLXLMCommon/TurboQuantKernels.swift
+index d455f47..75000e2 100644
+--- a/Libraries/MLXLMCommon/TurboQuantKernels.swift
++++ b/Libraries/MLXLMCommon/TurboQuantKernels.swift
+@@ -278,20 +278,12 @@ enum TurboQuantMetalKernels {
+ 
+             for (uint s = simd_stages; s < log_dim_u; s++) {
+                 uint half_block = 1u << s;
+-                uint block_size = half_block << 1;
+-                uint block_id = d / block_size;
+-                uint pos_in_block = d % block_size;
+-
+-                float a, b;
+-                if (pos_in_block < half_block) {
+-                    a = shared_buf[block_id * block_size + pos_in_block];
+-                    b = shared_buf[block_id * block_size + pos_in_block + half_block];
+-                    shared_buf[d] = a + b;
+-                } else {
+-                    a = shared_buf[block_id * block_size + pos_in_block - half_block];
+-                    b = shared_buf[block_id * block_size + pos_in_block];
+-                    shared_buf[d] = a - b;
+-                }
++                // Partners sit in different SIMD groups from stage 5 on: every
++                // thread reads both slots before any thread overwrites its own.
++                float mine = shared_buf[d];
++                float other = shared_buf[d ^ half_block];
++                threadgroup_barrier(mem_flags::mem_threadgroup);
++                shared_buf[d] = (d & half_block) ? (other - mine) : (mine + other);
+                 threadgroup_barrier(mem_flags::mem_threadgroup);
+             }
+             wht_val = shared_buf[d];

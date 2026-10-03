@@ -58,7 +58,7 @@ struct TesseractApp: App {
         "--prefix-cache-e2e", "--benchmark", "--hybrid-cache-correctness",
         "--prefill-step-benchmark", "--paroquant-vlm-smoke",
         "--prepared-checkpoint-parity", "--trace-replay",
-        "--rotated-checkpoint-parity",
+        "--rotated-checkpoint-parity", "--turboquant-bench",
     ]
     static var isHarnessLaunch: Bool {
         CommandLine.arguments.contains { harnessFlags.contains($0) }
@@ -79,6 +79,10 @@ struct TesseractApp: App {
         if args.contains("--paro-parity-bench") {
             Self.runHarness("PARO parity bench") {
                 try await ParoParityBenchRunner(runner: BenchmarkRunner()).run()
+            }
+        } else if args.contains("--turboquant-bench") {
+            Self.runHarness("TurboQuant bench") {
+                try await TurboQuantBenchRunner(runner: BenchmarkRunner()).run()
             }
         } else if args.contains("--ssd-read-bench") {
             Self.runHarness("SSD read bench") {

@@ -719,6 +719,9 @@ final class DependencyContainer: ObservableObject {
         guard !ProcessEnvironment.isRunningTests else { return }
         // The SSD read experiment owns its single target model and scratch tier.
         guard !CommandLine.arguments.contains("--ssd-read-bench") else { return }
+        // The TurboQuant bench reads the process-wide MLX memory counters; the
+        // Companion and the prewarms must not load a model beside it.
+        guard !CommandLine.arguments.contains("--turboquant-bench") else { return }
         // Prevent duplicate setup from multiple window instances
         guard !hasSetup else { return }
         hasSetup = true
