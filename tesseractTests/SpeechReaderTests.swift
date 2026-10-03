@@ -215,6 +215,39 @@ struct SpeechReaderTests {
         harness.tearDown()
     }
 
+    @Test func aTapAtRestMovesTheBookmarkToItsSentence() async {
+        let harness = await ReaderHarness(text: Self.threeSentences)
+        let boat = harness.text.range(of: "boat").location
+        harness.reader.jump(to: boat)
+        #expect(!harness.reader.isReading)
+        #expect(harness.reader.bookmark == harness.text.range(of: "A small").location)
+    }
+
+    @Test func aTapWhileReadingJumpsTheReadingThere() async {
+        let harness = await ReaderHarness(text: Self.threeSentences)
+        harness.reader.play()
+        #expect(await waitUntil { harness.reader.highlight != nil })
+
+        harness.reader.jump(to: harness.text.range(of: "climbed").location)
+        #expect(
+            await waitUntil {
+                await harness.synthesizer.requests.last?.text == "The keeper climbed the steps."
+            })
+        #expect(harness.reader.isReading)
+        harness.tearDown()
+    }
+
+    /// A text whose language the Library knows reads in it, whatever the
+    /// setting says.
+    @Test func aReadingSpeaksInTheTextsLanguage() async {
+        let harness = await ReaderHarness(text: Self.threeSentences)
+        harness.reader.language = TTSLanguage.german.rawValue
+        harness.reader.play()
+        #expect(await waitUntil { await !harness.synthesizer.requests.isEmpty })
+        #expect(await harness.synthesizer.requests.first?.language == "German")
+        harness.tearDown()
+    }
+
     @Test func editsBeforeTheBookmarkCarryItAlong() async {
         let text = Self.threeSentences
         let length = (text as NSString).length

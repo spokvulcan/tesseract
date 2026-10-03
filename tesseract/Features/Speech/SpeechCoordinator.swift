@@ -112,10 +112,13 @@ final class SpeechCoordinator {
     /// `userInitiated`: the user asked for this speech (a Speak button), so a
     /// missing Voice Engine sends them to the Models page. `retake`: speak
     /// only the opening as a new Reference Take (see `tryAnotherTake`).
+    /// `language`: the text's own (a `TTSLanguage` raw value), when the caller
+    /// knows it; otherwise the setting's.
     func speakText(
         _ text: String, showsOverlay: Bool = true,
         userInitiated: Bool = false,
         retake: Bool = false,
+        language: String? = nil,
         onSuccess: (@MainActor @Sendable () -> Void)? = nil
     ) {
         guard !text.isEmpty else { return }
@@ -132,7 +135,7 @@ final class SpeechCoordinator {
             guard await voiceEngineReady(userInitiated: userInitiated) else { return }
             await generateAndPlay(
                 text: text, showsOverlay: showsOverlay, userInitiated: userInitiated,
-                retake: retake)
+                retake: retake, language: language)
         }
     }
 
@@ -225,11 +228,11 @@ final class SpeechCoordinator {
 
     /// The per-request voice context derived from settings — the one home for
     /// the "empty voice description means no voice, never an empty prompt"
-    /// rule every generate path shares.
-    private var ttsVoiceContext: (voice: String?, language: String) {
+    /// rule every generate path shares. `language` overrides the setting's.
+    private func ttsVoiceContext(language: String? = nil) -> (voice: String?, language: String) {
         (
             settings.ttsVoiceDescription.isEmpty ? nil : settings.ttsVoiceDescription,
-            settings.ttsLanguage
+            language ?? settings.ttsLanguage
         )
     }
 
@@ -296,8 +299,8 @@ final class SpeechCoordinator {
     /// when the voice changes (the instruct prefix re-primes off the hot path).
     /// A voice with a stored Reference Take opens pinned to it; otherwise the
     /// session's first segment becomes its take.
-    private func openOrReuseSession() async throws -> SpeechSession {
-        let (voiceDescription, language) = ttsVoiceContext
+    private func openOrReuseSession(language: String? = nil) async throws -> SpeechSession {
+        let (voiceDescription, language) = ttsVoiceContext(language: language)
         let key = "\(voiceDescription ?? "")|\(language)"
         if let session, sessionVoiceKey == key { return session }
 
@@ -328,7 +331,8 @@ final class SpeechCoordinator {
     }
 
     private func generateAndPlay(
-        text: String, showsOverlay: Bool = true, userInitiated: Bool, retake: Bool = false
+        text: String, showsOverlay: Bool = true, userInitiated: Bool, retake: Bool = false,
+        language: String? = nil
     ) async {
         // One resolution for the whole utterance: nil means audio-only, and
         // every overlay touch below no-ops.
@@ -338,7 +342,7 @@ final class SpeechCoordinator {
             // stop(), and either can spend seconds loading the voice model, so
             // check after each. The opened session stays for the next request;
             // the dropped utterance stops its generation.
-            let session = try await openOrReuseSession()
+            let session = try await openOrReuseSession(language: language)
             try Task.checkCancellation()
             state = .generating(progress: "")
 

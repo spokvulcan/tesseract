@@ -65,4 +65,10 @@ enum SettingsCatalogue {
         "speechReaderTypeface", default: ReaderTypeface.serif.rawValue)
     static let readerHighlightRaw = Setting.string(
         "speechReaderHighlight", default: ReadAlongHighlight.both.rawValue)
+
+    // MARK: - Phone
+
+    /// The phone's Preset Voice: one of the checkpoint's speakers (#515).
+    /// The owner picks the default by ear before TestFlight.
+    static let phoneVoice = Setting.string("phoneVoice", default: "ryan")
 }

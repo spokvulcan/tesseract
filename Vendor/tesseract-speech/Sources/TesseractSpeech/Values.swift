@@ -38,6 +38,12 @@ public struct TTSModelSpec: Sendable, Equatable, Codable {
             precision: precision, alignmentHead: .qwen3TTS17B)
     }
 
+    /// The iPhone's checkpoint (ADR-0084): 0.6B CustomVoice, whose nine
+    /// speakers are the Preset Voices, at the 8 bits it is published in.
+    public static let customVoice06B = TTSModelSpec(
+        repo: "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit", precision: .q8,
+        alignmentHead: .qwen3TTS06B)
+
     /// Fingerprint component for PinnedVoice compatibility checks: a take
     /// only conditions the checkpoint and precision that rendered it.
     public var fingerprint: String { "\(repo)#\(precision.rawValue)" }

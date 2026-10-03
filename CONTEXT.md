@@ -2472,6 +2472,20 @@ _Avoid_: dismissal, close animation.
 
 ### Phone (ADR-0066, ADR-0084)
 
+**Library**:
+Every text the owner has added on the phone, newest first, each with its own
+**Bookmark** and the language it is read in. The Mac's **Reader** holds one
+text; the phone's Reader opens one text of the Library at a time, and keeps
+reading it while the owner browses the others.
+_Avoid_: documents, reading list, queue (nothing plays one text after another).
+
+**System Voice**:
+The phone's own speech synthesizer, reading where the neural voice can't:
+while that voice downloads or is prepared, on a phone too slow for it, and
+while the phone cools down. It reads in the text's language and is never a
+voice identity: the chosen **Preset Voice** stays chosen while it reads.
+_Avoid_: fallback voice, backup voice, Apple voice.
+
 **Device Tier**:
 The phone's sizing class, read once at launch from physical memory. It is the
 one answer to every "how much fits on this phone" question: context window,

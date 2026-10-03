@@ -330,7 +330,14 @@ a busy Storage Activity Gate must not delay a pressure-triggered write-through.
 ## The iPhone app
 
 `tesseract-ios` has no test target: the code it shares with the Mac is tested
-in `tesseractTests`, and no test runs on a device. CI's `build-ios` job only
+in `tesseractTests`, and no test runs on a device. The phone's shared rules have
+their own suites: `ReaderLibraryTests` (the **Library**: add, order, delete,
+each text's Bookmark and language, a relaunch), `PhoneSettingsTests` (the phone's
+Settings Facade over the shared Catalogue keys), `TTSLanguageTests` (a text's
+language among the voice's ten), and `SpeechReaderTests`' tap and language
+cases. The package's `SystemVoiceSynthesizerTests` drive the **System Voice**
+adapter with a scripted renderer: resampling to 24 kHz, whole frames, and word
+marks turned into word starts that never run ahead of their audio. CI's `build-ios` job only
 builds it. Build it the same way before pushing a change to a shared folder
 (ARCHITECTURE.md → The iPhone app), so a Mac-only file that slipped into one
 fails here rather than in CI:

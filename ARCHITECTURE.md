@@ -198,7 +198,11 @@ tesseract/
     └── ...
 
 tesseract-ios/                   # The iPhone app's own files (ADR-0066, ADR-0084)
-└── TesseractPhoneApp.swift      # Entry; a placeholder until the Reader lands (#515)
+├── TesseractPhoneApp.swift      # Entry: the Library in a NavigationStack
+├── PhoneContainer.swift         # Composition root (pure wiring)
+├── PhoneReading.swift           # The Library's open texts: a Reader per text
+├── PhoneAudioSession.swift      # Spoken-audio session around the Mac's playback adapter
+└── Views/                       # Library, Reader (UITextView on TextKit 2), transport, voices, settings
 ```
 
 ### The iPhone app
@@ -222,7 +226,15 @@ text aloud (ADR-0084), so the target takes only the read-aloud code:
   settings through `SpeechSettings`, which the Mac's `SettingsManager`
   conforms to, and the Settings Catalogue keeps its Mac-only entries in
   `SettingsCatalogue+Mac.swift`.
-- **The speech package** (`Vendor/tesseract-speech`) already builds for iOS.
+- **The speech package** (`Vendor/tesseract-speech`) builds for iOS. Its
+  second production synthesizer, `SystemVoiceSynthesizer`, puts the
+  **System Voice** (`AVSpeechSynthesizer`) behind the same port as the neural
+  voice, at its 24 kHz frames, so the coordinator, the Read-Along and the
+  Reader can't tell them apart.
+- **Shared logic for the phone lives in the shared folders**, so the Mac test
+  target covers it: the **Library** (`ReaderLibrary`), the phone's Settings
+  Facade (`PhoneSettings`), the **Preset Voices**, a text's language
+  (`TTSLanguage.detected`).
 
 CI's `build-ios` job builds the target for any iOS device, unsigned; the
 release pipeline waits for it. The shared code's tests run in the Mac test
