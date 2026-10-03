@@ -22,6 +22,7 @@ struct TesseractPhoneApp: App {
                 .environment(container.intake)
                 .environment(container.coordinator)
                 .environment(container.engine)
+                .environment(\.readingMeter, container.meter)
                 .onOpenURL { container.intake.open(file: $0) }
         }
         .onChange(of: scenePhase, initial: true) { _, phase in

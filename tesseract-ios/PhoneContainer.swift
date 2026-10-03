@@ -20,8 +20,12 @@ final class PhoneContainer {
     let readAlong = SpeechReadAlong()
     let audioSession = PhoneAudioSession()
 
+    /// The last reading's speed and warmth, for a TestFlight report.
+    let meter = ReadingMeter()
+
     lazy var engine = SpeechEnginePresenter(
-        engine: SpeechEngine(model: .customVoice06B, synthesizer: SystemVoiceSynthesizer()))
+        engine: SpeechEngine(
+            model: .customVoice06B, synthesizer: SystemVoiceSynthesizer(), diagnostics: meter))
 
     lazy var coordinator = SpeechCoordinator(
         textExtractor: PasteboardTextExtractor(),

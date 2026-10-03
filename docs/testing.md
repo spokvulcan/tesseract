@@ -341,7 +341,9 @@ its marks; Safari's script results, plain text and a PDF from the share sheet;
 the **Library Inbox** handing texts to the Library), `PocketControlsTests` (a
 call stops the reading and it goes on from the heard sentence; lost headphones
 stop it; the lock screen's buttons play, pause and skip by sentence; a pause
-becomes a stop when the app leaves the screen) and `ThermalPolicyTests`. The
+becomes a stop when the app leaves the screen), `ThermalPolicyTests` and
+`ReadingMeterTests` (each segment's real-time factor from the engine's
+diagnostics marks, and the report a TestFlight tester copies). The
 package's
 `SystemVoiceSynthesizerTests` drive the **System Voice**
 adapter with a scripted renderer: resampling to 24 kHz, whole frames, and word

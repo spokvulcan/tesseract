@@ -164,6 +164,45 @@ create-dmg \
 
 ---
 
+## The iPhone App (TestFlight, #515 slice 8)
+
+`tesseract-ios` ships through TestFlight first; the App Store comes after the
+battery and heat budgets hold in daily use (ADR-0084).
+
+In the repo already:
+
+- Bundle id `app.tesseract.agent` (the Mac's), so later releases update the same
+  app; the share extension is `app.tesseract.agent.share`.
+- `tesseract-ios/PrivacyInfo.xcprivacy`: no tracking, no collected data, and the
+  required-reason APIs (UserDefaults CA92.1, file timestamps C617.1, disk space
+  E174.1).
+- `ITSAppUsesNonExemptEncryption = NO` in `tesseract-ios/Info.plist`: the app's only
+  network use is the voice download over HTTPS.
+- The icon (`tesseract-ios/Assets.xcassets/AppIcon`), made from the Mac's.
+- Diagnostics a tester copies from Settings: device, iOS version, the last
+  reading's real-time factor and thermal state, and which voice read.
+
+The owner's steps, which need the developer account:
+
+1. In Certificates, Identifiers & Profiles, register the app group
+   `group.app.tesseract.agent` and enable it for `app.tesseract.agent` and
+   `app.tesseract.agent.share` (automatic signing can do this from Xcode).
+2. Ask Apple for the Background Inference entitlement
+   (`com.apple.developer.background-tasks.continued-processing.inference`) for
+   `app.tesseract.agent`, which reading with the screen locked needs once the
+   neural voice runs on the Neural Engine (ADR-0084 decision 6).
+3. In App Store Connect, add an iOS platform to the existing app record (or
+   create the record), with the privacy answers "no data collected".
+4. Archive and upload:
+   ```bash
+   xcodebuild archive -project tesseract.xcodeproj -scheme tesseract-ios \
+     -configuration Release -destination 'generic/platform=iOS' \
+     -archivePath build/Tesseract-iOS.xcarchive -allowProvisioningUpdates
+   ```
+   then Xcode → Organizer → Distribute App → TestFlight & App Store.
+5. Add testers in TestFlight; the first build needs Beta App Review for external
+   testers.
+
 ## Version Checklist (Before Each Release)
 
 - [ ] Update `MARKETING_VERSION` in Xcode (e.g., 1.0 → 1.1)
