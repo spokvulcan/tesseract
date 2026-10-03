@@ -115,7 +115,7 @@ struct CacheOverviewView: View {
             CacheStatTile(
                 label: "hot bodies",
                 value: PromptCacheFormatting.bytes(snapshot?.hotSnapshotBytes ?? 0),
-                detail: "full precision in RAM"
+                detail: "restorable as is"
             )
             CacheStatTile(
                 label: "warm bodies",
