@@ -76,6 +76,10 @@ use it:
   their first 27 characters.
 - Changing the setting moves requests to another partition; the old one ages
   out through stale-partition GC.
+- A prefill chunk longer than eight rows over a compressed cache (a warm
+  turn's suffix) dequantizes the visible rows once and runs mlx's attention:
+  1.01–1.20x of bf16 SDPA at 8K and 32K rows. The 8-row verify keeps the MMA
+  kernel, which is faster there.
 - The affine-key verify kernel costs about 5 ms more per DFlash2 round than
   bf16 SDPA at 32K (the raw-key one is at parity); that is the first item for
   the optimization loop.
@@ -106,4 +110,6 @@ prefix-cache-e2e --bench-model-id qwen3.8-27b` both pass every check (35),
 DFlash2 resident and engaging on the text turns (27–62% acceptance): stable
 prefix and leaf hits, Leaf Handoff, branch-point views and their survival
 under a budget cut, the SSD restart, demotion and hydration, and the image
-scenarios. No plain full-attention layer remained after prefill.
+scenarios. No plain full-attention layer remained after prefill; the
+`turbo8v4` run passed again after the review fixes. Two DFlash2 passes over
+`turbo8v4` in one process give the same 256-token stream.

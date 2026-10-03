@@ -1479,7 +1479,8 @@ rows past the offset, growth that keeps them, causal chunks over a compressed
 cache, the state round trip and `copy()`, and Qwen 3.5's verify over
 TurboQuant against the plain cache. The opt-in
 `TurboQuantDecodeMicrobench/testVerifyAttention` times one verify pass's
-attention against bf16 SDPA.
+attention against bf16 SDPA, and `testWarmChunk` a prefill chunk over a
+compressed cache (`TEST_RUNNER_TURBOQUANT_DECODE_BENCH_CHUNKS=64,512,1024`).
 
 App side: `TurboQuantSnapshotTests` (capture, restore, move, prefix views,
 the Stored Form, the SSD round trip), `SpeculationPlanTests` (a scheme keeps
