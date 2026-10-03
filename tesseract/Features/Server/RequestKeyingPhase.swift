@@ -292,6 +292,7 @@ nonisolated enum RequestKeyingPhase {
             modelID: modelID,
             kvBits: parameters.kvBits,
             kvGroupSize: parameters.kvGroupSize,
+            kvScheme: parameters.kvScheme.flatMap(KVScheme.init(rawValue:)),
             modelFingerprint: modelFingerprint,
             templateContextDigest: conversation.templateContextDigest
         )

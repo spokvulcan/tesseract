@@ -581,7 +581,8 @@ nonisolated struct RecordingModelSession: ModelSession {
         prefillStepSize: Int,
         consumeAll: Bool,
         initialState: LMOutput.State?,
-        evalPolicy: PrefillExecutor.EvalPolicy
+        evalPolicy: PrefillExecutor.EvalPolicy,
+        storedForm: KVScheme?
     ) throws -> PrefillExecutor.Output {
         recorder.record(.prefill)
         try prefillFault?.fireIfArmed()
@@ -593,7 +594,8 @@ nonisolated struct RecordingModelSession: ModelSession {
             prefillStepSize: prefillStepSize,
             consumeAll: consumeAll,
             initialState: initialState,
-            evalPolicy: evalPolicy
+            evalPolicy: evalPolicy,
+            storedForm: storedForm
         )
         recorder.recordPrefillCapacity(cache)
         return output
@@ -656,10 +658,12 @@ nonisolated struct RecordingModelSession: ModelSession {
     func captureSnapshot(
         cache: [any KVCache],
         offset: Int,
-        type: HybridCacheSnapshot.CheckpointType
+        type: HybridCacheSnapshot.CheckpointType,
+        storedForm: KVScheme?
     ) -> HybridCacheSnapshot? {
         recorder.record(.captureSnapshot)
-        return base.captureSnapshot(cache: cache, offset: offset, type: type)
+        return base.captureSnapshot(
+            cache: cache, offset: offset, type: type, storedForm: storedForm)
     }
 }
 

@@ -1455,3 +1455,38 @@ xcodebuild test -scheme mlx-swift-lm-Package -destination 'platform=macOS' \
   -only-testing:MLXLMTests/TurboQuantGQAFlashTests \
   -only-testing:MLXLMTests/TurboQuantIntegrationTests
 ```
+
+### KV Scheme in production (ADR-0083)
+
+The **KV Scheme** (`turbo8v4`, `turbo0v4`) is a request fact, part of the
+cache partition key and the partition's Stored Form. Run the vendor verify
+tests after any change to positioned rows, the multi-query verify kernel or
+the DFlash2 cache protocol, serially (Swift Testing otherwise runs the
+parameterized iterator test's cases at once, and two threads tracing MLX
+compiles deadlock):
+
+```bash
+cd Vendor/mlx-swift-lm
+xcodebuild test -scheme mlx-swift-lm-Package -destination 'platform=macOS' \
+  -skipPackagePluginValidation -parallel-testing-enabled NO \
+  -only-testing:MLXLMTests/TurboQuantVerifyTests \
+  -only-testing:"MLXLMTests/testDFlash2IteratorOverTurboQuantCache(keyBits:)"
+```
+
+`TurboQuantVerifyTests` checks the kernel against dequantize + SDPA (raw and
+affine keys, lengths up to 4,100, ragged blocks, a lazy position), scratch
+rows past the offset, growth that keeps them, causal chunks over a compressed
+cache, the state round trip and `copy()`, and Qwen 3.5's verify over
+TurboQuant against the plain cache. The opt-in
+`TurboQuantDecodeMicrobench/testVerifyAttention` times one verify pass's
+attention against bf16 SDPA.
+
+App side: `TurboQuantSnapshotTests` (capture, restore, move, prefix views,
+the Stored Form, the SSD round trip), `SpeculationPlanTests` (a scheme keeps
+DFlash2 and refuses MTP), `RequestFactsTests` and `SnapshotManifestTests`
+(the scheme in the partition key, digest and meta).
+
+Loaded-model checks: `scripts/dflash2-bench.sh --bench-kv-scheme turbo8v4`
+runs both arms in the scheme (prompts from `--bench-prompt-file`), and
+`TESSERACT_E2E_KV_SCHEME=turbo8v4 scripts/dev.sh prefix-cache-e2e
+--bench-model-id qwen3.8-27b` runs the e2e's requests in it.

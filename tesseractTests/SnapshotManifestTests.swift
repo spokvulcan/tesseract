@@ -556,6 +556,44 @@ struct SnapshotManifestTests {
         #expect(key.partitionDigest == "ecfce886")
     }
 
+    /// A KV Scheme appends its own tagged field: full precision keeps the
+    /// pinned directory name, the two schemes and a render-flagged
+    /// partition never collide, and the meta sidecar carries the scheme so
+    /// warm start rebuilds the exact key.
+    @Test
+    func kvSchemeExtendsTheDigestAndRoundTripsThroughTheMeta() throws {
+        let plain = CachePartitionKey(modelID: "m", kvBits: nil, kvGroupSize: 64)
+        let explicitNil = CachePartitionKey(
+            modelID: "m", kvBits: nil, kvGroupSize: 64, kvScheme: nil)
+        #expect(plain.partitionDigest == explicitNil.partitionDigest)
+        let digests = Set(
+            [
+                plain,
+                CachePartitionKey(modelID: "m", kvBits: nil, kvGroupSize: 64, kvScheme: .turbo8v4),
+                CachePartitionKey(modelID: "m", kvBits: nil, kvGroupSize: 64, kvScheme: .turbo0v4),
+                CachePartitionKey(
+                    modelID: "m", kvBits: nil, kvGroupSize: 64, kvScheme: .turbo8v4,
+                    templateContextDigest: "t"),
+                CachePartitionKey(
+                    modelID: "m", kvBits: nil, kvGroupSize: 64, templateContextDigest: "t"),
+            ].map(\.partitionDigest))
+        #expect(digests.count == 5)
+
+        let meta = PartitionMeta(
+            modelID: "m", modelFingerprint: "f", kvBits: nil, kvGroupSize: 64, createdAt: 1,
+            schemaVersion: SnapshotManifestSchema.currentVersion, kvScheme: "turbo0v4")
+        let decoded = try JSONDecoder().decode(
+            PartitionMeta.self, from: try JSONEncoder().encode(meta))
+        #expect(decoded.kvScheme == "turbo0v4")
+        #expect(decoded.sameIdentity(as: meta))
+        let legacy = PartitionMeta(
+            modelID: "m", modelFingerprint: "f", kvBits: nil, kvGroupSize: 64, createdAt: 1,
+            schemaVersion: SnapshotManifestSchema.currentVersion)
+        #expect(!legacy.sameIdentity(as: meta))
+        let legacyJSON = try JSONEncoder().encode(legacy)
+        #expect(!String(decoding: legacyJSON, as: UTF8.self).contains("kvScheme"))
+    }
+
     @Test
     func partitionDigestDistinguishesEveryField() {
         // Every key field must feed into the digest — if any field
@@ -592,6 +630,13 @@ struct SnapshotManifestTests {
                 CachePartitionKey(
                     modelID: "m", kvBits: 8, kvGroupSize: 64,
                     modelFingerprint: "f2"
+                )
+            ),
+            (
+                "kvScheme",
+                CachePartitionKey(
+                    modelID: "m", kvBits: 8, kvGroupSize: 64, kvScheme: .turbo8v4,
+                    modelFingerprint: "f"
                 )
             ),
         ]

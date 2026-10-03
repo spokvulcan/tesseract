@@ -46,6 +46,30 @@ struct RequestFactsTests {
         #expect(facts.leafStoreMode(emittedToolCalls: false) == .canonicalUserLeaf)
     }
 
+    /// A KV Scheme is partition identity and rides the decode parameters to
+    /// the iterator that converts after prefill (DFlash2's own prefill).
+    @Test func aKVSchemeKeysThePartitionAndReachesTheIterator() async throws {
+        let provider = ToyModelSessionProvider(
+            model: ToyLanguageModel(script: [0]), tokenizer: FakeChatMLTokenizer())
+        let conversation = HTTPPrefixCacheConversation(
+            systemPrompt: "sys", messages: [HTTPPrefixCacheMessage(role: .user, content: "hi")])
+        let request = try await provider.withSession { session in
+            var parameters = GenerateParameters(temperature: 0)
+            parameters.kvScheme = KVScheme.turbo8v4.rawValue
+            guard
+                case .keyed(let request, _) = try await RequestKeyingPhase.run(
+                    session: session, conversation: conversation,
+                    canonicalTools: [], renderContext: .canonical,
+                    parameters: parameters, modelID: "toy/model", modelFingerprint: nil,
+                    imageKeying: nil, ssdEnabled: true)
+            else { throw ToyRequestKeying.NotKeyedAsExpected() }
+            return request
+        }
+        #expect(request.facts.partitionKey.kvScheme == .turbo8v4)
+        #expect(request.facts.partitionKey.kvBits == nil)
+        #expect(request.facts.decodeParameters.kvScheme == "turbo8v4")
+    }
+
     /// Text-only means no image reached the model: a text-class instance
     /// drops the request's images, so its request is text-only however many
     /// it carried, and keys into an identity key space.

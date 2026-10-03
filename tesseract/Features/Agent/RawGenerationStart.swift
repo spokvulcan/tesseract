@@ -88,6 +88,7 @@ nonisolated enum RawGenerationStart {
                 isTextOnly: prepared.image == nil && prepared.video == nil
                     && prepared.audio == nil,
                 kvBits: parameters.kvBits,
+                kvScheme: parameters.kvScheme.flatMap(KVScheme.init(rawValue:)),
                 temperature: parameters.temperature,
                 promptTokens: promptTokenCount,
                 restoresPrefix: false,

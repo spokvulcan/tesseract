@@ -155,9 +155,13 @@ nonisolated struct LeafAdmission: Sendable {
         switch cache {
         case .finishedTurn(let live, _, let textOnly, let arm):
             let moves = textOnly && partitionKey.kvBits == nil && arm != .mtp
+            if moves, let scheme = partitionKey.kvScheme { live.storeInForm(scheme) }
             moving = moves ? live : nil
             copied = moves ? [] : live.cache
-        case .owned(let owned):
+        case .owned(var owned):
+            if let scheme = partitionKey.kvScheme {
+                HybridCacheSnapshot.storeInForm(&owned, scheme: scheme)
+            }
             let moves = HybridCacheSnapshot.canCaptureMoving(cache: owned)
             moving = moves ? FinalGenerationCache(owned) : nil
             copied = moves ? [] : owned
@@ -170,7 +174,9 @@ nonisolated struct LeafAdmission: Sendable {
         guard
             let leaf = moving != nil
                 ? moving?.moveSnapshot(offset: storedTokens.count)
-                : session.captureSnapshot(cache: copied, offset: storedTokens.count, type: .leaf)
+                : session.captureSnapshot(
+                    cache: copied, offset: storedTokens.count, type: .leaf,
+                    storedForm: partitionKey.kvScheme)
         else {
             diagnostics.logSkip(stage: labels.capture, reason: "unsupported-cache-type")
             return .notCaptured(reason: "unsupported-cache-type")

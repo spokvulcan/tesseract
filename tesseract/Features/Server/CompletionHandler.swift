@@ -373,11 +373,12 @@ struct CompletionHandler: Sendable {
         let toolSpecs = MessageConverter.convertToolDefinitions(request.tools)
         let prefixCacheEligibility = normalized.prefixCacheEligibility
         let prefixCacheConversation = prefixCacheEligibility.conversation
-        let params = Self.makeGenerateParameters(
+        var params = Self.makeGenerateParameters(
             from: request,
             modelState: modelState,
             userPreset: settings.samplingPreset
         )
+        params.kvScheme = settings.kvCacheCompression.scheme(forModelID: modelState.modelID)
 
         Log.server.info(
             "HTTP completion reasoning sources — sessionAffinityPresent=\(sessionAffinity != nil) "

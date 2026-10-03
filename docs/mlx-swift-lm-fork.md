@@ -32,6 +32,38 @@ the parked Gemma 4 12B multimodal stack (audio encoder + encoder-free
 `gemma4_unified` processor + suppress_tokens) that tesseract draft PR #359
 pins; it rejoins this table's carry list only if that experiment is revived.
 
+## TurboQuant under DFlash2 and the prefix cache (2026-10-03, ADR-0083)
+
+The gitlink advances from `01ccea2` to `13695bd` on
+`feat/turboquant-dflash2-verify`, two commits on the 2026-10-03 pin
+(fast-forward; `pin-upstream-mlx-swift` unchanged):
+
+- `56fa499` `feat(turboquant): verify DFlash2 rounds over a TurboQuant
+  cache`. Positioned rows (`verifyAttention`, `commitRows`) for raw and 8-bit
+  affine keys, written at a lazy position into the compressed buffers with
+  growth keeping every row; a multi-query MMA kernel shaped like mlx's
+  GQA-packed verify kernel (`turboVerifyAttention`: K/V dequantized once per
+  32-key block into threadgroup memory, device-side position mask, the GQA
+  decode's pass 2 to merge and undo the value rotation), which also serves a
+  causal chunk over a compressed cache; the `DFlash2AttentionCache` protocol
+  that Qwen 3.5's verify and the iterator's commit drive; the iterator applies
+  a KV scheme from its parameters when the prompt prefill ends and exposes
+  its cache; plus `copy()`, `innerState()`, the compressed flag on an empty
+  cache's first encode, per-row norms with a trailing unit axis in `state`
+  (older states load) and the key group size in `metaState`.
+- `13695bd` `feat(turboquant): compress a raw-phase cache on demand`
+  (`compress()`), for a snapshot stored at rest.
+
+Validation: `TurboQuantVerifyTests` (9) and
+`testDFlash2IteratorOverTurboQuantCache` (2 cases); serialized `MLXLMTests`
+green at `13695bd` (XCTest 701, 7 skipped; Swift Testing 941). One earlier
+whole-package run failed
+`ChatSessionTests.testActiveSpeculativeDecodingReusesAlignedStorageAcrossTurns`
+(draft and main cache offsets 10 and 11); it passes alone, in its suite and
+on the rerun, and its random models are unseeded, so it is recorded as a
+flake, not this carry. Upstream: not filed; the verify half depends on #607
+(DFlash2).
+
 ## Current pin (2026-10-03)
 
 Base: upstream `main` @ `9afc3b5` (seven commits past tag 3.32.3), 14

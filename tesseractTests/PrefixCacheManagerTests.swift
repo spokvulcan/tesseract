@@ -15,7 +15,8 @@ struct WarmBodyDrainTests {
         let body = try await sessions.withSession { session in
             let cache = KVCacheSimple()
             cache.state = [MLXArray.ones([1, 1, 8, 64]), MLXArray.ones([1, 1, 8, 64])]
-            return try #require(session.captureSnapshot(cache: [cache], offset: 8, type: .leaf))
+            return try #require(
+                session.captureSnapshot(cache: [cache], offset: 8, type: .leaf, storedForm: nil))
         }
         let key = CachePartitionKey(modelID: "toy", kvBits: nil, kvGroupSize: 64)
         let manager = PrefixCacheManager(
@@ -129,7 +130,8 @@ struct WarmBodyDrainTests {
         let body = try await sessions.withSession { session in
             let cache = KVCacheSimple()
             cache.state = [MLXArray.ones([1, 1, 8, 64]), MLXArray.ones([1, 1, 8, 64])]
-            return try #require(session.captureSnapshot(cache: [cache], offset: 8, type: .leaf))
+            return try #require(
+                session.captureSnapshot(cache: [cache], offset: 8, type: .leaf, storedForm: nil))
         }
         #expect(body.memoryBytes == 4096)
         let key = CachePartitionKey(modelID: "toy", kvBits: nil, kvGroupSize: 64)
@@ -164,9 +166,10 @@ struct WarmBodyDrainTests {
             _ = try session.prefill(
                 text: .init(tokens: MLXArray(Array(1...8).map(Int32.init))), cache: live,
                 checkpoints: [:], checkpointBaseOffset: 0, prefillStepSize: 8,
-                consumeAll: true, initialState: nil, evalPolicy: .pipelined)
+                consumeAll: true, initialState: nil, evalPolicy: .pipelined, storedForm: nil)
             return try [HybridCacheSnapshot.CheckpointType.system, .leaf, .leaf].map {
-                try #require(session.captureSnapshot(cache: live, offset: 8, type: $0))
+                try #require(
+                    session.captureSnapshot(cache: live, offset: 8, type: $0, storedForm: nil))
             }
         }
         let tier = TieredSnapshotStore(ssdConfig: nil)
@@ -206,7 +209,8 @@ struct WarmBodyDrainTests {
         let body = try await sessions.withSession { session in
             let cache = KVCacheSimple()
             cache.state = [MLXArray.ones([1, 1, 8, 64]), MLXArray.ones([1, 1, 8, 64])]
-            return try #require(session.captureSnapshot(cache: [cache], offset: 8, type: .leaf))
+            return try #require(
+                session.captureSnapshot(cache: [cache], offset: 8, type: .leaf, storedForm: nil))
         }
         let tier = TieredSnapshotStore(ssdConfig: nil)
         let key = CachePartitionKey(modelID: "toy", kvBits: nil, kvGroupSize: 64)
@@ -286,7 +290,8 @@ struct WarmBodyDrainTests {
                 MLXArray.ones([1, 1, 8, 64], dtype: .float16),
                 MLXArray.ones([1, 1, 8, 64], dtype: .float16),
             ]
-            return try #require(session.captureSnapshot(cache: [cache], offset: 8, type: .leaf))
+            return try #require(
+                session.captureSnapshot(cache: [cache], offset: 8, type: .leaf, storedForm: nil))
         }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(
             "warm-demotion-\(UUID())")
@@ -341,7 +346,8 @@ struct WarmBodyDrainTests {
         let (warm, full) = try await sessions.withSession { session in
             let cache = KVCacheSimple()
             cache.state = [MLXArray.ones([1, 1, 8, 64]), MLXArray.ones([1, 1, 8, 64])]
-            let full = try #require(session.captureSnapshot(cache: [cache], offset: 8, type: .leaf))
+            let full = try #require(
+                session.captureSnapshot(cache: [cache], offset: 8, type: .leaf, storedForm: nil))
             // The public snapshot/restore seam already represents unsupported
             // whole-state classes as a recoverable restore error.
             let invalid = HybridCacheSnapshot(

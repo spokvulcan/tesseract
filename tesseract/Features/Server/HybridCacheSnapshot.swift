@@ -88,7 +88,7 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         /// Rotating, chunked and recurrent classes never do, whatever their
         /// shapes.
         private static let sliceableAttentionClassNames: Set<String> = [
-            "KVCache", "KVCacheSimple", "QuantizedKVCache",
+            "KVCache", "KVCacheSimple", "QuantizedKVCache", "TurboQuantKVCache",
         ]
 
         /// The shape guard: a sliceable class is sliceable attention only
@@ -157,10 +157,11 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
     }
 
     var canCompress: Bool {
-        !isPrefixView && !isWarm && !layers.contains { $0.className == "QuantizedKVCache" }
-            && layers.contains {
-                $0.kind == .sliceableAttention && $0.className != "QuantizedKVCache"
+        !isPrefixView && !isWarm
+            && !layers.contains {
+                $0.className == "QuantizedKVCache" || $0.className == "TurboQuantKVCache"
             }
+            && layers.contains { $0.kind == .sliceableAttention }
     }
 
     /// Group size of every Warm Body; affine mode is the vendor default.
@@ -398,7 +399,8 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         offset: Int,
         type: CheckpointType,
         copyStrategy: CopyStrategy = .device,
-        prefixView: Bool = false
+        prefixView: Bool = false,
+        storedForm: KVScheme? = nil
     ) -> HybridCacheSnapshot? {
         guard !cache.isEmpty else { return nil }
         let prefixView = prefixView && type != .system
@@ -412,9 +414,14 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
             guard let className = classNameForCache(layer) else {
                 return nil
             }
-            let source = LayerState(
-                className: className, state: layer.state, metaState: layer.metaState,
-                offset: layer.offset, snapshotOffset: offset)
+            let source =
+                storedForm.flatMap {
+                    storedFormLayer(
+                        layer, scheme: $0, snapshotOffset: offset, prefixView: prefixView)
+                }
+                ?? LayerState(
+                    className: className, state: layer.state, metaState: layer.metaState,
+                    offset: layer.offset, snapshotOffset: offset)
             let retained = prefixView && source.kind == .sliceableAttention ? [] : source.state
             let state = retained.map { array -> MLXArray in
                 let copy = deepCopyState(array, strategy: copyStrategy)
@@ -437,6 +444,53 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
             memoryBytes: totalBytes,
             createdAt: .now
         )
+    }
+
+    /// Convert a cache a **KV Scheme** partition is about to keep by move:
+    /// full-precision attention to the scheme, and every TurboQuant layer
+    /// compressed, so its leaves never mix forms (an SSD chain joins only
+    /// matching layers, and a prefix view restores under its leaf's class).
+    static func storeInForm(_ cache: inout [any KVCache], scheme: KVScheme) {
+        maybeQuantizeKVCache(cache: &cache, kvBits: nil, kvScheme: scheme.rawValue)
+        for case let turbo as TurboQuantKVCache in cache { turbo.compress() }
+    }
+
+    /// A layer as a **KV Scheme** partition stores it (its **Stored Form**):
+    /// full-precision attention compresses to the scheme's TurboQuant form,
+    /// and a TurboQuant layer still in its raw prefill phase compresses. A
+    /// prefix view keeps no attention arrays, so it only records the class
+    /// and metadata its TurboQuant Backing Leaf's rows restore under. `nil`
+    /// keeps the layer as it is: recurrent, already compressed, or not
+    /// covering the snapshot's rows.
+    private static func storedFormLayer(
+        _ layer: any KVCache, scheme: KVScheme, snapshotOffset: Int, prefixView: Bool
+    ) -> LayerState? {
+        let raw: [MLXArray]
+        if let turbo = layer as? TurboQuantKVCache {
+            guard !turbo.isCompressed, turbo.keyBits == scheme.keyBits else { return nil }
+            raw = turbo.state
+        } else if type(of: layer) == KVCacheSimple.self {
+            raw = layer.state
+        } else {
+            return nil
+        }
+        guard layer.offset == snapshotOffset, raw.count == 2,
+            raw.allSatisfy({ $0.ndim == 4 && $0.dim(2) == snapshotOffset })
+        else { return nil }
+        let stored = scheme.makeCache()
+        if prefixView {
+            // The view's kind derives from the full-precision rows' shapes;
+            // `capture` then drops them.
+            stored.offset = snapshotOffset
+            return LayerState(
+                className: "TurboQuantKVCache", state: raw, metaState: stored.metaState,
+                offset: snapshotOffset, snapshotOffset: snapshotOffset)
+        }
+        _ = stored.update(keys: raw[0], values: raw[1])
+        stored.compress()
+        return LayerState(
+            className: "TurboQuantKVCache", state: stored.state, metaState: stored.metaState,
+            offset: snapshotOffset, snapshotOffset: snapshotOffset)
     }
 
     /// A layer whose persisted data cannot be restored through the upstream
@@ -571,6 +625,11 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
                 case "ChunkedKVCache":
                     ChunkedKVCache()
 
+                case "TurboQuantKVCache":
+                    try Self.makeTurboQuantCache(
+                        state: layerState.state, metaState: layerState.metaState,
+                        layerIndex: layerIndex)
+
                 default:
                     throw RestoreError(
                         layerIndex: layerIndex,
@@ -695,6 +754,7 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         checkpointBaseOffset: Int,
         initialOffset: Int = 0,
         cache: [KVCache],
+        storedForm: KVScheme? = nil,
         processChunk: (_ chunkSize: Int) throws -> Void
     ) rethrows -> (consumed: Int, snapshots: [HybridCacheSnapshot]) {
         let relativeCheckpoints = checkpoints.keys
@@ -717,7 +777,7 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
             // the system and final leaf retain their owned full bodies.
             if let snap = capture(
                 cache: cache, offset: absoluteOffset, type: type,
-                prefixView: type == .branchPoint)
+                prefixView: type == .branchPoint, storedForm: storedForm)
             {
                 snapshots.append(snap)
             }
@@ -782,6 +842,8 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
             return "MambaCache"
         case is ArraysCache:
             return "ArraysCache"
+        case is TurboQuantKVCache:
+            return "TurboQuantKVCache"
         case is CacheList:
             return nil
         default:
@@ -826,9 +888,42 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         case "ChunkedKVCache":
             // [chunkSize | "None", startPosition]; the setter tolerates the values.
             return metaState.count == 2
+        case "TurboQuantKVCache":
+            // [offset, bits, keyBits, valueBits, seed] plus the key group
+            // size (6th, since the TurboQuant DFlash2 pin). The setter skips
+            // a malformed array, so check what the restore reads.
+            return (5...6).contains(metaState.count)
+                && metaState[0...3].allSatisfy { Int($0) != nil }
+                && UInt64(metaState[4]) != nil
+                && (metaState.count < 6 || Int(metaState[5]) != nil)
         default:
             return false
         }
+    }
+
+    /// A TurboQuant layer from a metaState `metaStateIsRestorable` accepted.
+    /// Its state setter picks the phase from the array count and ignores any
+    /// other count, so a state the setter would drop is a ``RestoreError``,
+    /// not an empty layer claiming the snapshot's offset.
+    private static func makeTurboQuantCache(
+        state: [MLXArray], metaState: [String], layerIndex: Int
+    ) throws -> TurboQuantKVCache {
+        let keyBits = Int(metaState[2])!
+        let compressedCount: Int? =
+            switch keyBits {
+            case 8: 5
+            case 0: 3
+            default: nil
+            }
+        guard let compressedCount, state.isEmpty || [2, compressedCount].contains(state.count)
+        else {
+            throw RestoreError(
+                layerIndex: layerIndex, className: "TurboQuantKVCache", metaState: metaState)
+        }
+        return TurboQuantKVCache(
+            bits: Int(metaState[1])!, keyBits: keyBits, valueBits: Int(metaState[3])!,
+            seed: UInt64(metaState[4])!,
+            keyGroupSize: metaState.count > 5 ? Int(metaState[5])! : 64)
     }
 
     /// Construct from a metaState already validated by `metaStateIsRestorable`.

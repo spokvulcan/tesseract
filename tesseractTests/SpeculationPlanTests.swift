@@ -30,14 +30,16 @@ struct SpeculationPlanTests {
     private static func request(
         isTextOnly: Bool = true,
         kvBits: Int? = nil,
+        kvScheme: KVScheme? = nil,
         temperature: Float = 0,
         promptTokens: Int = 2048,
         restoresPrefix: Bool = false,
         storedLeaf: HTTPLeafStoreMode? = .directLeaf
     ) -> SpeculationRequest {
         SpeculationRequest(
-            isTextOnly: isTextOnly, kvBits: kvBits, temperature: temperature,
-            promptTokens: promptTokens, restoresPrefix: restoresPrefix, storedLeaf: storedLeaf)
+            isTextOnly: isTextOnly, kvBits: kvBits, kvScheme: kvScheme,
+            temperature: temperature, promptTokens: promptTokens, restoresPrefix: restoresPrefix,
+            storedLeaf: storedLeaf)
     }
 
     @Test func nothingResidentPlansNothing() {
@@ -57,6 +59,19 @@ struct SpeculationPlanTests {
     @Test(arguments: [dflash2Only, mtpOnly, both], [.directLeaf, nil] as [HTTPLeafStoreMode?])
     func quantizedKVNeverSpeculates(_ speculation: Speculation, storedLeaf: HTTPLeafStoreMode?) {
         #expect(speculation.plan(for: Self.request(kvBits: 8, storedLeaf: storedLeaf)) == nil)
+    }
+
+    /// A TurboQuant KV Scheme keeps DFlash2: its verify writes and reads the
+    /// compressed rows. MTP's head does not take one, so a scheme plans
+    /// nothing where MTP is the only drafter.
+    @Test(arguments: KVScheme.allCases)
+    func aKVSchemeKeepsDFlash2AndRefusesMTP(_ scheme: KVScheme) throws {
+        for speculation in [Self.dflash2Only, Self.both] {
+            let plan = try #require(speculation.plan(for: Self.request(kvScheme: scheme)))
+            #expect(plan.arm == .dflash2)
+        }
+        #expect(Self.mtpOnly.plan(for: Self.request(kvScheme: scheme)) == nil)
+        #expect(Self.mtpOnly.plan(for: Self.request()) != nil)
     }
 
     // MARK: - DFlash2

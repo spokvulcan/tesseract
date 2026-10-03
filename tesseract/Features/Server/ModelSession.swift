@@ -106,7 +106,8 @@ nonisolated protocol ModelSession {
         prefillStepSize: Int,
         consumeAll: Bool,
         initialState: LMOutput.State?,
-        evalPolicy: PrefillExecutor.EvalPolicy
+        evalPolicy: PrefillExecutor.EvalPolicy,
+        storedForm: KVScheme?
     ) throws -> PrefillExecutor.Output
 
     /// Construct the post-prefill decode iterator: the cache already covers
@@ -145,16 +146,18 @@ nonisolated protocol ModelSession {
     ) throws -> SpeculativeDecodeIterator
 
     /// Quantize the cache in place per the parameters' `kvBits`/`kvGroupSize`
-    /// (no-op when unset) — once, before the iterator, so the array the
-    /// module retains stays the live final cache.
+    /// or KV Scheme (no-op when unset) — once, before the iterator, so the
+    /// array the module retains stays the live final cache.
     func quantizeKVCache(_ cache: inout [any KVCache], parameters: GenerateParameters)
 
-    /// Capture a `HybridCacheSnapshot` of `cache` at `offset`. Returns `nil`
-    /// on unsupported layer classes.
+    /// Capture a `HybridCacheSnapshot` of `cache` at `offset`, in the
+    /// partition's **Stored Form** (`storedForm`: its KV Scheme, `nil` for
+    /// full precision). Returns `nil` on unsupported layer classes.
     func captureSnapshot(
         cache: [any KVCache],
         offset: Int,
-        type: HybridCacheSnapshot.CheckpointType
+        type: HybridCacheSnapshot.CheckpointType,
+        storedForm: KVScheme?
     ) -> HybridCacheSnapshot?
 }
 
@@ -338,7 +341,8 @@ nonisolated struct ContextBackedModelSession: ModelSession {
         prefillStepSize: Int,
         consumeAll: Bool,
         initialState: LMOutput.State?,
-        evalPolicy: PrefillExecutor.EvalPolicy
+        evalPolicy: PrefillExecutor.EvalPolicy,
+        storedForm: KVScheme?
     ) throws -> PrefillExecutor.Output {
         try PrefillExecutor.run(
             model: context.model,
@@ -349,7 +353,8 @@ nonisolated struct ContextBackedModelSession: ModelSession {
             prefillStepSize: prefillStepSize,
             consumeAll: consumeAll,
             initialState: initialState,
-            evalPolicy: evalPolicy
+            evalPolicy: evalPolicy,
+            storedForm: storedForm
         )
     }
 
@@ -406,17 +411,20 @@ nonisolated struct ContextBackedModelSession: ModelSession {
             cache: &cache,
             kvBits: parameters.kvBits,
             kvGroupSize: parameters.kvGroupSize,
-            quantizedKVStart: parameters.quantizedKVStart
+            quantizedKVStart: parameters.quantizedKVStart,
+            kvScheme: parameters.kvScheme
         )
     }
 
     func captureSnapshot(
         cache: [any KVCache],
         offset: Int,
-        type: HybridCacheSnapshot.CheckpointType
+        type: HybridCacheSnapshot.CheckpointType,
+        storedForm: KVScheme?
     ) -> HybridCacheSnapshot? {
         HybridCacheSnapshot.capture(
-            cache: cache, offset: offset, type: type, prefixView: type == .branchPoint)
+            cache: cache, offset: offset, type: type, prefixView: type == .branchPoint,
+            storedForm: storedForm)
     }
 }
 

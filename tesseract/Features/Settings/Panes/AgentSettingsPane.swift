@@ -191,6 +191,18 @@ struct AgentSettingsPane: View {
             }
 
             Section {
+                Picker("KV Cache Compression", selection: $settings.kvCacheCompression) {
+                    ForEach(KVCacheCompression.allCases) { compression in
+                        Text(compression.displayName).tag(compression)
+                    }
+                }
+            } footer: {
+                Text(
+                    "Stores the attention cache with TurboQuant once the prompt is read: 4-bit values with 8-bit or full-precision keys, 2.5× or 1.6× smaller than full precision at the same decode speed, so long chats and the prefix cache keep more context in memory. Qwen3.8-27B only; DFlash2 speculates over it, MTP does not. Takes effect on the next message."
+                )
+            }
+
+            Section {
                 Toggle("Show Skill Button", isOn: $settings.showSkillPills)
                 Picker("Translate To", selection: $settings.translateTargetLanguage) {
                     ForEach(translateLanguageOptions, id: \.self) { language in

@@ -149,6 +149,19 @@ nonisolated final class FinalGenerationCache: @unchecked Sendable {
         self.cache = cache
     }
 
+    /// Take the array the iterator advances, after a KV Scheme conversion
+    /// replaced attention entries of the one this owner was given.
+    func adopt(_ cache: [any KVCache]) {
+        precondition(cache.count == self.cache.count, "a conversion keeps one entry per layer")
+        self.cache = cache
+    }
+
+    /// Put the finished turn's cache in a KV Scheme partition's Stored
+    /// Form before it moves into a leaf.
+    func storeInForm(_ scheme: KVScheme) {
+        HybridCacheSnapshot.storeInForm(&cache, scheme: scheme)
+    }
+
     func moveSnapshot(offset: Int) -> HybridCacheSnapshot? {
         HybridCacheSnapshot.captureMoving(cache: &cache, offset: offset)
     }
@@ -1496,6 +1509,7 @@ nonisolated final class ServerCompletion {
                 for: SpeculationRequest(
                     isTextOnly: facts.isTextOnly,
                     kvBits: parameters.kvBits,
+                    kvScheme: facts.partitionKey.kvScheme,
                     temperature: parameters.temperature,
                     promptTokens: fullTokenCount,
                     restoresPrefix: prefillPlan.restore.restoresPrefix,
@@ -1800,7 +1814,8 @@ nonisolated final class ServerCompletion {
                             if let type = allCheckpoints[executionBaseOffset] {
                                 try MLXCheckedEvaluation.eval(liveCache)
                                 if let snap = session.captureSnapshot(
-                                    cache: liveCache, offset: executionBaseOffset, type: type
+                                    cache: liveCache, offset: executionBaseOffset, type: type,
+                                    storedForm: facts.partitionKey.kvScheme
                                 ) {
                                     prefixSnapshots.append(snap)
                                 }
@@ -1835,7 +1850,8 @@ nonisolated final class ServerCompletion {
                                             prefillStepSize: facts.prefillStepSize,
                                             consumeAll: false,
                                             initialState: initialState,
-                                            evalPolicy: .pipelined
+                                            evalPolicy: .pipelined,
+                                            storedForm: facts.partitionKey.kvScheme
                                         )
                                     }
                                 snapshots += warmed.snapshots
@@ -1851,6 +1867,9 @@ nonisolated final class ServerCompletion {
                                 plan: speculation,
                                 parameters: facts.decodeParameters
                             )
+                            // A KV Scheme converted the attention entries at
+                            // the end of the iterator's prefill.
+                            if let converted = iterator.cache { liveCache = converted }
                             try error.check()
                             return (iterator: .speculative(iterator), snapshots: snapshots)
                         }
@@ -1869,7 +1888,8 @@ nonisolated final class ServerCompletion {
                                 consumeAll: false,
                                 initialState: initialState,
                                 evalPolicy: imagePrefixInput == nil
-                                    ? .pipelined : .checkedSynchronous
+                                    ? .pipelined : .checkedSynchronous,
+                                storedForm: facts.partitionKey.kvScheme
                             )
                         }
                         try error.check()
@@ -1917,6 +1937,7 @@ nonisolated final class ServerCompletion {
             }
             // Quantization can replace attention objects. Retain the array
             // that the iterator actually advances, after that replacement.
+            handoff?.cache.adopt(liveCache)
             let finalCacheOwner = handoff?.cache ?? FinalGenerationCache(liveCache)
             let prefillMs = Date.timeIntervalSinceReferenceDate - begin.startedAt
             let boundarySnapshots = prefillResult.snapshots.filter {
@@ -2189,7 +2210,7 @@ nonisolated final class ServerCompletion {
     /// allocation (ADR-0007 phase 2). The image-free (or non-conforming)
     /// fallback runs the vendor single-shot `prepare`. Either way decode runs on
     /// the state-threaded iterator so a `.logits` prefill keeps its returned
-    /// state. `kvBits` quantization is skipped on this path — there is no
+    /// state. `kvBits` quantization (and a KV Scheme) is skipped on this path — there is no
     /// capture to protect, and the degraded corner is not worth a per-step
     /// quantization loop.
     ///

@@ -40,6 +40,11 @@ final class PrefixCacheE2ERunner {
 
     /// `TESSERACT_E2E_SPECULATION=off|mtp|dflash2|automatic` pins the drafter
     /// policy for a memory or speculation bisect; unset = Automatic.
+    private static var kvScheme: KVScheme? {
+        ProcessInfo.processInfo.environment["TESSERACT_E2E_KV_SCHEME"]
+            .flatMap(KVScheme.init(rawValue:))
+    }
+
     private static var speculation: SpeculationMode? {
         ProcessInfo.processInfo.environment["TESSERACT_E2E_SPECULATION"]
             .flatMap(SpeculationMode.init(rawValue:))
@@ -93,13 +98,19 @@ final class PrefixCacheE2ERunner {
 
         // Greedy parameters for deterministic decoding. minP/topK constrain
         // to argmax so the output reflects the logit winner at each step.
-        let params = AgentGenerateParameters(
+        var params = AgentGenerateParameters(
             maxTokens: 32,
             temperature: 0.0,
             topP: 1.0,
             topK: 1,
             minP: 0.0
         )
+        // `TESSERACT_E2E_KV_SCHEME=turbo8v4|turbo0v4` runs every request in
+        // that KV Scheme, as the KV Cache Compression setting would.
+        params.kvScheme = Self.kvScheme
+        if let scheme = params.kvScheme {
+            log("KV Scheme: \(scheme.rawValue)")
+        }
 
         log("\n── Step 1: Managed path equivalence (direct vs service route=.standard) ──")
         let managedEquivalence = try await runManagedPathEquivalenceCheck(

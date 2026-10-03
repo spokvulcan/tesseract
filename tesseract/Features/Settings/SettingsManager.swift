@@ -559,6 +559,18 @@ final class SettingsManager {
         set { speculationModeRaw = newValue.rawValue }
     }
 
+    /// The **KV Cache Compression** setting. Read per request, so a change
+    /// takes effect on the next turn (in a new cache partition). Stored raw
+    /// so an unrecognized value degrades to `.off`.
+    var kvCacheCompressionRaw: String {
+        didSet { SettingsCatalogue.kvCacheCompressionRaw.write(kvCacheCompressionRaw, to: store) }
+    }
+
+    var kvCacheCompression: KVCacheCompression {
+        get { KVCacheCompression(rawValue: kvCacheCompressionRaw) ?? .off }
+        set { kvCacheCompressionRaw = newValue.rawValue }
+    }
+
     // MARK: - Reasoning Effort (ADR-0060)
 
     /// Raw picker value for the agent's **Reasoning Effort** —
@@ -811,6 +823,7 @@ final class SettingsManager {
             SettingsCatalogue.speculationModeRaw.write(SpeculationMode.off.rawValue, to: store)
         }
         self.speculationModeRaw = SettingsCatalogue.speculationModeRaw.load(from: store)
+        self.kvCacheCompressionRaw = SettingsCatalogue.kvCacheCompressionRaw.load(from: store)
         self.showSkillPills = SettingsCatalogue.showSkillPills.load(from: store)
         self.agentReasoningEffortRaw = SettingsCatalogue.agentReasoningEffortRaw.load(from: store)
         self.translateTargetLanguage = SettingsCatalogue.translateTargetLanguage.load(from: store)
@@ -858,6 +871,7 @@ final class SettingsManager {
         var parameters = AgentGenerateParameters.forModel(selectedAgentModelID)
         parameters = samplingPreset.apply(to: parameters)
         parameters.reasoningEffort = agentReasoningEffort
+        parameters.kvScheme = kvCacheCompression.scheme(forModelID: selectedAgentModelID)
         return parameters
     }
 
@@ -958,6 +972,7 @@ final class SettingsManager {
         agentUseMarkdown = SettingsCatalogue.agentUseMarkdown.default
         useVisionWhenAvailable = SettingsCatalogue.useVisionWhenAvailable.default
         speculationModeRaw = SettingsCatalogue.speculationModeRaw.default
+        kvCacheCompressionRaw = SettingsCatalogue.kvCacheCompressionRaw.default
         showSkillPills = SettingsCatalogue.showSkillPills.default
         translateTargetLanguage = SettingsCatalogue.translateTargetLanguage.default
         overlayVariantRaw = SettingsCatalogue.overlayVariantRaw.default
