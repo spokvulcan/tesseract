@@ -254,31 +254,47 @@ nonisolated enum PrefillPlanner {
         keySpace: CacheKeySpace
     ) -> PrefillPlan {
         let minimumWarmOffset = keySpace.minimumWarmOffset
-        let restore: PrefillPlan.Restore
-        let checkpointsToCapture: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)]
-        if let snapshot = lookupResult.snapshot,
+        guard let snapshot = lookupResult.snapshot,
             snapshot.tokenOffset > 0,
             snapshot.tokenOffset < promptTokenCount,
             let anchorDelta = keySpace.positionAnchorDelta(upTo: snapshot.tokenOffset)
-        {
-            let cacheOffset = snapshot.tokenOffset
-            restore = .restore(cacheOffset: cacheOffset, anchorDelta: anchorDelta)
+        else {
+            return coldPlan(
+                boundaries: boundaries, checkpointPlan: checkpointPlan,
+                promptTokenCount: promptTokenCount, keySpace: keySpace)
+        }
+        let cacheOffset = snapshot.tokenOffset
+        return PrefillPlan(
+            restore: .restore(cacheOffset: cacheOffset, anchorDelta: anchorDelta),
             // Capture in the suffix the snapshot doesn't cover, minus the
             // continued image span: `> cacheOffset` (past the restore) and
             // `>= minimumWarmOffset` (past the atomically-forwarded image).
             // For a text-only or image-already-cached restore the second clause
             // is implied, so this matches the old `> cacheOffset` behavior.
-            checkpointsToCapture = checkpointPlan.filter {
+            checkpointsToCapture: checkpointPlan.filter {
                 $0.offset > cacheOffset && $0.offset >= minimumWarmOffset
-            }
-        } else {
-            restore = .cold
-            checkpointsToCapture = checkpointPlan.filter { $0.offset >= minimumWarmOffset }
-        }
+            },
+            transientBoundaries: (boundaries.lastMessageOffset, boundaries.lastUserOffset),
+            promptTokenCount: promptTokenCount,
+            minimumWarmOffset: minimumWarmOffset
+        )
+    }
 
+    /// The cold **Prefill Plan**: the whole prompt prefills from zero, and
+    /// every planned checkpoint past the request's image prefix captures
+    /// (nothing inside `[0, minimumWarmOffset)` is capturable). What `plan`
+    /// answers when there is nothing to restore, and what a turn re-plans to
+    /// when its planned restore produced no cache (ADR-0069 amendment).
+    static func coldPlan(
+        boundaries: PrefillBoundaries,
+        checkpointPlan: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)],
+        promptTokenCount: Int,
+        keySpace: CacheKeySpace
+    ) -> PrefillPlan {
+        let minimumWarmOffset = keySpace.minimumWarmOffset
         return PrefillPlan(
-            restore: restore,
-            checkpointsToCapture: checkpointsToCapture,
+            restore: .cold,
+            checkpointsToCapture: checkpointPlan.filter { $0.offset >= minimumWarmOffset },
             transientBoundaries: (boundaries.lastMessageOffset, boundaries.lastUserOffset),
             promptTokenCount: promptTokenCount,
             minimumWarmOffset: minimumWarmOffset

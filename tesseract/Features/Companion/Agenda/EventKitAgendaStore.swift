@@ -110,12 +110,22 @@ final class EventKitAgendaStore: AgendaStore {
 
     private func fetch(_ predicate: NSPredicate) async -> [AgendaReminder] {
         await withCheckedContinuation { continuation in
-            store.fetchReminders(matching: predicate) { reminders in
-                // Converted here, on EventKit's queue: only values cross over.
-                let values = (reminders ?? []).map(Self.value(of:))
-                continuation.resume(returning: values)
-            }
+            store.fetchReminders(
+                matching: predicate,
+                completion: Self.remindersCompletion { continuation.resume(returning: $0) })
         }
+    }
+
+    /// The completion `fetch` hands EventKit, which calls it on its own queue.
+    /// It is built here, nonisolated: a closure written inside this class
+    /// inherits its MainActor isolation, Swift 6 checks that isolation where
+    /// an Objective-C API calls it, and EventKit's queue then trapped every
+    /// launch that fetched Reminders. The reminders are converted on
+    /// EventKit's queue: only values cross over.
+    nonisolated static func remindersCompletion(
+        _ deliver: @escaping @Sendable ([AgendaReminder]) -> Void
+    ) -> @Sendable ([EKReminder]?) -> Void {
+        { reminders in deliver((reminders ?? []).map(value(of:))) }
     }
 
     // MARK: Writing

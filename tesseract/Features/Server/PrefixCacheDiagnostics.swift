@@ -101,6 +101,11 @@ nonisolated enum PrefixCacheDiagnostics {
         let divergence: PrefixDivergenceProbe?
 
         let restoreMode: String?
+        /// The turn planned a restore, got no cache from it and ran cold
+        /// (ADR-0069 amendment). Rendered as `restoreFallback=cold` beside
+        /// `restoreMode` only on such a turn, so every other lookup line
+        /// stays byte-stable.
+        let restoreFellBack: Bool
         let copyReason: LeafStorePhase.Report.CopyReason?
         /// The precise rung that refused the leaf (`CacheClaim.CopyRefusal`),
         /// rendered beside `copyReason` only on a copy restore, so every
@@ -127,7 +132,8 @@ nonisolated enum PrefixCacheDiagnostics {
             hydratedFromSSD: Bool = false,
             chainPrefixRestore: Bool = false,
             divergence: PrefixDivergenceProbe? = nil,
-            restoreMode: String? = nil, copyReason: LeafStorePhase.Report.CopyReason? = nil,
+            restoreMode: String? = nil, restoreFellBack: Bool = false,
+            copyReason: LeafStorePhase.Report.CopyReason? = nil,
             copyRefusal: CacheClaim.CopyRefusal? = nil,
             copyWaitSeconds: TimeInterval = 0,
             backingLeafOffset: Int? = nil,
@@ -168,6 +174,7 @@ nonisolated enum PrefixCacheDiagnostics {
             self.chainPrefixRestore = chainPrefixRestore
             self.divergence = divergence
             self.restoreMode = restoreMode
+            self.restoreFellBack = restoreFellBack
             self.copyReason = copyReason
             self.copyRefusal = copyRefusal
             self.copyWaitSeconds = copyWaitSeconds
@@ -195,6 +202,7 @@ nonisolated enum PrefixCacheDiagnostics {
             ]
             if warmBody { fields.append(("source", "warm")) }
             if let restoreMode { fields.append(("restoreMode", restoreMode)) }
+            if restoreFellBack { fields.append(("restoreFallback", "cold")) }
             if let backingLeafOffset {
                 fields.append(("source", "view"))
                 fields.append(("backingLeafOffset", "\(backingLeafOffset)"))

@@ -69,6 +69,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/LeafLeaseTests \
   -only-testing:tesseractTests/CacheClaimTests \
   -only-testing:tesseractTests/ServerCompletionExitMatrixTests \
+  -only-testing:tesseractTests/ServerCompletionRestoreFallbackTests \
   -only-testing:tesseractTests/TokenRadixTreeTests \
   -only-testing:tesseractTests/StablePrefixDetectorTests \
   -only-testing:tesseractTests/PrefixCacheManagerTests \
@@ -223,7 +224,9 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # refinement, the plan made before the sit-down, Breakpoints, Triage — only
 # people, never during a game —, agents, the Night Reflection, card actions,
 # delivered nudges), banner sources and game detection, the Agenda tools over
-# the in-memory store (delete_event included), capture and the one-key hotkey,
+# the in-memory store (delete_event included), the completion the EventKit
+# store hands its Reminders fetch (nonisolated, delivered off the main thread;
+# no store is touched), capture and the one-key hotkey,
 # the Timeline, cards and prompts, the Day Thread's store, the seen ledger, the
 # Delivery Ladder and governor, the Claude Code merge, the Profile and recall
 # (fixture conversation files), the trace, the voice overlay's placements, and
@@ -241,6 +244,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/NightReflectionTests \
   -only-testing:tesseractTests/DayStateStoreTests \
   -only-testing:tesseractTests/AgendaToolsTests \
+  -only-testing:tesseractTests/EventKitAgendaStoreTests \
   -only-testing:tesseractTests/AgendaTimeTests \
   -only-testing:tesseractTests/CaptureParserTests \
   -only-testing:tesseractTests/NudgePlannerTests \
@@ -758,7 +762,7 @@ component facts. A periodic sample during a stall preserves its phase.
 | `activeMlxBytes`, `cachedMlxBytes` | Live MLX allocations versus reusable allocator buffers. |
 | `processFootprintBytes`, `processResidentBytes`, `processCompressedBytes`, `systemSwapUsedBytes` | Process footprint versus residency/compression and system-wide swap. Failed OS queries omit the affected fields. |
 | `processLifetimePeakMlxBytes`, `sampledRequestPeakActiveMlxBytes`, `sampledRequestPeakFootprintBytes` | The allocator's historical high-water mark versus maxima actually observed during this request. No process-global peak reset is performed. |
-| `restoring` → `restored` | Snapshot size, current restore mode (`cold`, `copy`, `failedCopy`), and the resulting cache's attention/recurrent array sizes. |
+| `restoring` → `restored` | Snapshot size, current restore mode (`cold`, `copy`, `failedCopy`), and the resulting cache's attention/recurrent array sizes. `restoreFallback=cold` marks a planned restore that yielded no cache, after which the turn ran cold. |
 | `prefilling` → `dflashPreparing` → `prefilled` | Ordinary suffix prefill versus DFlash2's iterator preparation; loaded draft weight bytes, engagement, prompt length, and checkpoint array bytes. |
 | `capturingLeaf` → `preparingPayload` → `admittingLeaf` | Capture copy versus handoff, request cache count after capture, actual SSD payload mode/bytes, and admission overhead. |
 | `recordingRequest` → `finishingStream` → `releasingRequest` → `finished` | Post-generation bookkeeping, stream delivery boundary, and registry/pin release. `outcome` includes successful, cancelled, failed, and failed/cancelled-start exits. |
@@ -1218,6 +1222,23 @@ the request was released exactly once. `CompletionDeliveryTests` and
 for its drive on the HTTP and agent-chat paths. The compaction retune's toy
 decodes are in `ServerCompletionKeyedSequencingTests`, and the SSD restore
 harness expects the loaded leaf to be handed off with no restore call.
+
+`ServerCompletionRestoreFallbackTests` covers a planned restore that yields no
+cache (ADR-0069's 2026-10-03 amendment). An armed `ToyRestoreFault` makes the
+toy session's next `restore` throw, `Injected` by default or a given error
+such as `HybridCacheSnapshot.RestoreError`, and records the body it failed on.
+A text-only turn restored by copy and a restore planned below a new image must
+then both run cold: the whole prompt fed from position zero into a new cache,
+each captured checkpoint labelled with the offset its cache held
+(`ModelVerbRecorder.captures` records both), and every body left in the cache
+reading back the path it is stored under
+(`PrefixCacheAdmin.residentSnapshotsForTesting`; the toy writes each fed id
+into its K/V row). A resident MTP drafter that traps if engaged
+(`Speculation.inactiveMTP`) checks that the fallback keeps its Speculation
+Plan. The failed snapshot is dropped: a system checkpoint that failed is gone
+after the turn, recaptured on the same turn, and restored by the next request;
+over an SSD tier a `RestoreError` also removes its old copy from the manifest,
+and any other error keeps it.
 
 `CacheClaimMemoryEvidenceTests` measures the MLX peak around one step at a time
 on synthetic caches: check-in before extraction, a refused check-in, the

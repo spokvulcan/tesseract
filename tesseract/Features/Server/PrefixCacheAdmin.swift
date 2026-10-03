@@ -57,6 +57,16 @@ final class PrefixCacheAdmin {
         current?.admit(admission)
     }
 
+    /// Every RAM-resident snapshot body in the live cache, with the path it
+    /// is stored under and its Backing Leaf's body, so a hermetic suite can
+    /// check what a turn admitted against where it was admitted. Empty when
+    /// no cache is live.
+    func residentSnapshotsForTesting() -> [(
+        path: [Int], snapshot: HybridCacheSnapshot, backingLeaf: HybridCacheSnapshot?
+    )] {
+        current?.residentSnapshots() ?? []
+    }
+
     /// The live cache's **Eviction Configuration**, or `nil`. Lets tests
     /// assert the cache construction folded the model's `flopProfile` in.
     var evictionConfig: EvictionConfiguration? {
