@@ -2250,6 +2250,21 @@ final class PrefixCacheManager {
         return result
     }
 
+    /// Every RAM-resident snapshot body with the path it is stored under and
+    /// its Backing Leaf's body (where a Prefix-View Checkpoint's rows live),
+    /// for `PrefixCacheAdmin.residentSnapshotsForTesting`.
+    func residentSnapshots() -> [(
+        path: [Int], snapshot: HybridCacheSnapshot, backingLeaf: HybridCacheSnapshot?
+    )] {
+        store.orderedPartitions().flatMap { _, tree in
+            tree.allSnapshotNodes().compactMap { node in
+                node.state.body.map {
+                    (tree.pathToNode(node), $0, node.backingLeaf?.state.body)
+                }
+            }
+        }
+    }
+
     // MARK: - Pressure-Reactive Budget
 
     /// Fold one OS memory-pressure event into the budget band and act

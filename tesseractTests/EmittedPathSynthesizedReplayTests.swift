@@ -938,6 +938,7 @@ struct EmittedPathSynthesizedReplayTests {
             ssdConfig: SSDPrefixCacheConfig? = nil,
             speculation: Speculation = .none,
             prefillFault: ToyPrefillFault? = nil,
+            restoreFault: ToyRestoreFault? = nil,
             recurrentElements: Int = 0,
             onForward: (@Sendable (Int) -> Void)? = nil
         ) {
@@ -958,7 +959,8 @@ struct EmittedPathSynthesizedReplayTests {
                 reportsFlatTextTokens: vision == nil,
                 anchorsVision: vision != nil,
                 speculation: speculation,
-                prefillFault: prefillFault)
+                prefillFault: prefillFault,
+                restoreFault: restoreFault)
             self.tokenizer = tokenizer
             self.queue = queue
             self.provider = provider
@@ -1201,7 +1203,7 @@ struct EmittedPathSynthesizedReplayTests {
     }
 
     /// A real 1×1 PNG: the keyed path proves attachments `CIImage`-decodable.
-    private static func tinyPNG() throws -> Data {
+    static func tinyPNG() throws -> Data {
         let context = try #require(
             CGContext(
                 data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,

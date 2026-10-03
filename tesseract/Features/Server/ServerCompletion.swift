@@ -1413,17 +1413,19 @@ nonisolated final class ServerCompletion {
             // of the last image run is continued warm through that image
             // (ADR-0007 phase 2), not degraded to cold, while cold checkpoints
             // inside the image prefix are still dropped (uncapturable there).
-            let prefillPlan = PrefillPlanner.plan(
+            // A planned restore that yields no cache re-plans cold, below.
+            var prefillPlan = PrefillPlanner.plan(
                 boundaries: boundaries,
                 lookupResult: lookupResult,
                 checkpointPlan: checkpointPlan,
                 promptTokenCount: fullTokenCount,
                 keySpace: keySpace
             )
-            if !keySpace.isIdentity,
-                case .cold = prefillPlan.restore,
-                checkpointPlan.count > prefillPlan.checkpointsToCapture.count
-            {
+            func logDroppedImagePrefixCheckpoints() {
+                guard !keySpace.isIdentity,
+                    case .cold = prefillPlan.restore,
+                    checkpointPlan.count > prefillPlan.checkpointsToCapture.count
+                else { return }
                 diagnosticsContext.logSkip(
                     stage: "checkpointPlan",
                     reason: "inside-image-prefix",
@@ -1436,6 +1438,7 @@ nonisolated final class ServerCompletion {
                     ]
                 )
             }
+            logDroppedImagePrefixCheckpoints()
 
             // Execute the restore decision (Metal): on a hit, slice the suffix
             // and restore the KV cache; otherwise run cold. Four shapes:
@@ -1454,7 +1457,6 @@ nonisolated final class ServerCompletion {
             //   cold chain (ADR-0007).
             let inputForGeneration: LMInput
             let cacheToUse: [any KVCache]?
-            let restoreMs: TimeInterval
             /// Offset already covered when the (text-tail) executor starts: the
             /// restore offset on an image-free warm restore, the end of the
             /// vendor-continued image span (`minimumWarmOffset`) on an
@@ -1504,7 +1506,8 @@ nonisolated final class ServerCompletion {
             // preserved, warm restores speculate too) and splits the
             // prefill with its iterator; MTP takes the whole prompt from
             // zero in the cold case. Tool emission is unknowable here, so
-            // defined tools predict a tool leaf.
+            // defined tools predict a tool leaf. A turn whose planned restore
+            // fails keeps this plan (see the fallback below).
             let speculation = session.speculation.plan(
                 for: SpeculationRequest(
                     isTextOnly: facts.isTextOnly,
@@ -1538,20 +1541,15 @@ nonisolated final class ServerCompletion {
             var restoreWaitSeconds: TimeInterval = 0
             // The turn's maximum advance: judged at check-out, priced by
             // the Active-Inference Reserve at the leaf store (#522).
-            let restoredOffset: Int
-            if case .restore(let cacheOffset, _) = prefillPlan.restore {
-                restoredOffset = cacheOffset
-            } else {
-                restoredOffset = 0
-            }
-            let maximumAdvance = CacheClaim.maximumAdvance(
-                newPromptTokens: fullTokenCount - restoredOffset,
+            var maximumAdvance = CacheClaim.maximumAdvance(
+                newPromptTokens: fullTokenCount - prefillPlan.prefillBaseOffset,
                 outputCeiling: parameters.maxTokens,
                 speculativeAllowance: speculation?.advanceAllowance ?? 0)
-            switch prefillPlan.restore {
-            case .restore(let cacheOffset, let anchorDelta):
+            var restoredCache: [any KVCache]?
+            var restoreMs: TimeInterval = 0
+            var restoreFellBack = false
+            if prefillPlan.restore.restoresPrefix {
                 let restoreStarted = Date.timeIntervalSinceReferenceDate
-                let restoredCache: [any KVCache]?
                 switch await claim.checkOut(
                     resolved, tokens: keySpace.keyPath, maximumAdvance: maximumAdvance,
                     identityKeySpace: facts.isTextOnly, in: session)
@@ -1567,14 +1565,37 @@ nonisolated final class ServerCompletion {
                 case .cold:
                     restoredCache = Self.restoreCache(lookupResult, session: session)
                 }
-                cacheToUse = restoredCache
                 restoreMs = Date.timeIntervalSinceReferenceDate - restoreStarted
                 restoreMode =
                     handoff != nil
                     ? "handoff" : restoredCache == nil ? "failedCopy" : "copy"
-                memory.mark(
-                    .restored,
-                    facts: RequestMemoryTelemetry.cacheFacts(restoredCache ?? []).merging([
+                // A planned restore that yields no cache (its snapshot's
+                // layers failed to restore, which the restore verb treats as
+                // a miss) is a miss for the whole turn: re-plan it cold, so
+                // the whole prompt prefills from zero, checkpoints capture
+                // at their true offsets, and an image-bearing key space takes
+                // the cold image route (ADR-0069 amendment). Its maximum
+                // advance is re-priced from zero too. The Speculation Plan
+                // above is kept, not re-asked: it was decided with a restored
+                // prefix, so it is DFlash2 or nothing, and re-asking could
+                // engage MTP, whose whole-prompt prefill captures none of the
+                // checkpoints this turn has to rebuild.
+                if restoredCache == nil {
+                    restoreFellBack = true
+                    prefillPlan = PrefillPlanner.coldPlan(
+                        boundaries: boundaries,
+                        checkpointPlan: checkpointPlan,
+                        promptTokenCount: fullTokenCount,
+                        keySpace: keySpace
+                    )
+                    logDroppedImagePrefixCheckpoints()
+                    maximumAdvance = CacheClaim.maximumAdvance(
+                        newPromptTokens: fullTokenCount,
+                        outputCeiling: parameters.maxTokens,
+                        speculativeAllowance: speculation?.advanceAllowance ?? 0)
+                }
+                var restoredFacts = RequestMemoryTelemetry.cacheFacts(restoredCache ?? [])
+                    .merging([
                         "restoreMode": restoreMode,
                         "restoreCopyReason": restoreCopy?.reason.rawValue ?? "none",
                         "restoreCopyRefusal": restoreCopy?.refusal.rawValue ?? "none",
@@ -1583,7 +1604,13 @@ nonisolated final class ServerCompletion {
                         "recurrentRewindStateBytes": "\(handoff?.rewindStateBytes ?? 0)",
                         "leafLeaseActive": "\(handoff != nil)",
                         "leafLeaseID": handoff?.leaseID.uuidString ?? "none",
-                    ]) { _, new in new })
+                    ]) { _, new in new }
+                if restoreFellBack { restoredFacts["restoreFallback"] = "cold" }
+                memory.mark(.restored, facts: restoredFacts)
+            }
+            switch prefillPlan.restore {
+            case .restore(let cacheOffset, let anchorDelta):
+                cacheToUse = restoredCache
                 if !keySpace.isIdentity,
                     cacheOffset < keySpace.minimumWarmOffset,
                     let span = imageSpan(from: cacheOffset)
@@ -1632,7 +1659,6 @@ nonisolated final class ServerCompletion {
                     text: LMInput.Text(
                         tokens: fullInput.text.tokens[0..., prefixEnd...], mask: nil))
                 cacheToUse = nil
-                restoreMs = 0
                 executionBaseOffset = prefixEnd
             case .cold:
                 // A plan whose iterator prefills the whole prompt (MTP) takes
@@ -1657,7 +1683,6 @@ nonisolated final class ServerCompletion {
                 }
                 inputForGeneration = fullInput
                 cacheToUse = nil
-                restoreMs = 0
                 executionBaseOffset = 0
             }
             let skippedTokens = prefillPlan.prefillBaseOffset
@@ -1687,8 +1712,8 @@ nonisolated final class ServerCompletion {
                     hydratedFromSSD: resolved.hydratedFromSSD,
                     chainPrefixRestore: resolved.wasChainPrefixRestore,
                     divergence: lookupResult.divergence,
-                    restoreMode: restoreMode, copyReason: restoreCopy?.reason,
-                    copyRefusal: restoreCopy?.refusal,
+                    restoreMode: restoreMode, restoreFellBack: restoreFellBack,
+                    copyReason: restoreCopy?.reason, copyRefusal: restoreCopy?.refusal,
                     copyWaitSeconds: restoreWaitSeconds,
                     backingLeafOffset: lookupResult.backingLeaf?.tokenOffset,
                     warmBody: lookupResult.snapshot?.isWarm == true,
