@@ -105,6 +105,21 @@ machine: two identical turbo0v4 runs measured 11.25 and 13.25 s of DFlash2
 GPU time for the same rounds, with an animated wallpaper decoding video on
 the GPU, so the DFlash2 column does not separate the arms.
 
+**Affine key staging in the verify kernel** (`109c6a8`,
+`testVerifyKernelPartitions`, 16 partitions, kernel alone, both variants
+in one build behind a temporary switch, four alternating runs each,
+median ms per 16 layers):
+
+| rows | bf16 SDPA | turbo8v4, old staging | turbo8v4, new staging | turbo0v4 |
+|---|---|---|---|---|
+| 8K | 6.9 | 7.10 | 6.63 | 6.7 |
+| 32K | 21.9 | 23.51 | 20.90 | 21.5 |
+| 64K | 42.6 | 45.36 | 40.69 | 41.0 |
+
+At 32K and 64K every new-staging run beat every old one; SDPA and
+`turbo0v4` (which this path does not touch) stayed flat across the eight
+runs, so the GPU clock did not move.
+
 ## Measured, not shipped
 
 **Recurrent state at 16 bits.** Each prefix-cache snapshot carries 154 MB
