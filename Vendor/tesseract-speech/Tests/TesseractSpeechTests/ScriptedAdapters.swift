@@ -14,6 +14,8 @@ actor ScriptedSynthesizer: SpeechSynthesizing {
         /// Word starts each segment reports after its audio, frames counted
         /// from the segment's first (ADR-0077).
         var wordStarts: [WordStart] = []
+        /// The checkpoint's Preset Voices.
+        var speakers: [String] = []
     }
 
     var script = Script()
@@ -51,6 +53,8 @@ actor ScriptedSynthesizer: SpeechSynthesizing {
     func primeVoice(description: String?, language: String?) async throws {
         primedVoices.append(description)
     }
+
+    func presetSpeakers() async -> [String] { script.speakers }
 
     func unload() async { unloadCount += 1 }
 

@@ -29,6 +29,10 @@ enum Qwen3TTSKernels {
         set { (sampler, normRoPE, addNorm) = (newValue, newValue, newValue) }
     }
 
+    /// The kernels are Metal: on MLX's CPU device (the Neural Engine path's
+    /// glue and checks) the MLX ops run instead.
+    static var onGPU: Bool { Device.defaultDevice().deviceType == .gpu }
+
     enum Kernel: CaseIterable {
         case normRoPE, addNorm, sampler
     }
@@ -49,7 +53,7 @@ enum Qwen3TTSKernels {
         _ qkv: MLXArray, qWeight: MLXArray, kWeight: MLXArray, heads: Int, kvHeads: Int,
         headDim: Int, eps: Float, base: Float, offset: Int
     ) -> (q: MLXArray, k: MLXArray)? {
-        guard normRoPE,
+        guard normRoPE, onGPU,
             let fused = attentionNormRope(
                 rows: qkv, queryOffset: 0, queryHeadStride: headDim, queryHeads: heads,
                 keyOffset: heads * headDim, keyHeadStride: headDim, keyHeads: kvHeads,
@@ -77,7 +81,7 @@ enum Qwen3TTSKernels {
     /// Whether `runQwen3TTSLayers` fuses the residual adds for `x`: switched
     /// on, and one position.
     static func canAddNorm(_ x: MLXArray) -> Bool {
-        addNorm && x.ndim == 3 && x.dim(0) == 1 && x.dim(1) == 1
+        addNorm && x.ndim == 3 && x.dim(0) == 1 && x.dim(1) == 1 && onGPU
     }
 
     /// `sum = x + y`, and `sum` RMS-normalized with `weight`: one kernel,
@@ -142,7 +146,7 @@ enum Qwen3TTSKernels {
     static func canSample(_ logits: MLXArray, temperature: Float, topK: Int, topP: Float) -> Bool {
         sampler && temperature > 0 && topK > 0 && topK < logits.dim(-1)
             && (topP <= 0 || topP >= 1) && logits.ndim == 2 && logits.dim(0) == 1
-            && [.bfloat16, .float16, .float32].contains(logits.dtype)
+            && [.bfloat16, .float16, .float32].contains(logits.dtype) && onGPU
     }
 
     private static let topKKernel = MLXFast.metalKernel(

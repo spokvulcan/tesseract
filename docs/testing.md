@@ -1024,7 +1024,9 @@ approval requirement in the capture baseline still applies to #480.
     follows, the ADR-0072 Reference Take rules: the lead
     segment becomes the take, later segments and utterances continue it,
     a pinned voice round-trips, a cancelled retake keeps the old take,
-    schema-1 voices are rejected; `SegmenterTests` for the short lead
+    schema-1 voices are rejected; a Preset Voice takes no Reference Take and
+    an unknown one is refused when its session opens (ADR-0084);
+    `SegmenterTests` for the short lead
     segment; `ModelAvailabilityTests`: a missing checkpoint fails before any
     load; word starts shifted to the utterance's frames) and
     `Qwen3CheckpointTests` (the Voice Engine completeness rule, and
@@ -1057,6 +1059,17 @@ approval requirement in the capture baseline still applies to #480.
       overlapping generations render as if alone.
     - The Core ML conv stack (ADR-0075) matches MLX's. It is compiled for
       the CPU, so no Neural Engine is needed.
+    - The Neural Engine voice (ADR-0085, `Qwen3TTSNeuralTests`, also
+      compiled for the CPU): the talker's step gives MLX's logits, hidden
+      state and Alignment Head scores position by position, with its cache
+      in Core ML state and another session's steps in between changing
+      nothing; it refuses a position past its cache. The code predictor's
+      frame gives MLX's greedy codes and embedding sum, draws the best of the
+      top k plus the same Gumbel noise, never draws from outside the top k,
+      and a layer whose MLP product outgrows fp16 is found by measuring and
+      still matches. The host sampler keeps the talker's rules (no control
+      codes, EOS held back, the penalty, ties at the cut, the nucleus), and a
+      prepared voice renders, the same again for the same seed.
 
     MLX needs Metal, so run both suites through xcodebuild, from
     `Vendor/tesseract-speech`:
@@ -1096,6 +1109,19 @@ approval requirement in the capture baseline still applies to #480.
     the MLX ops on real data. A kernel change must still show identical codes
     and 0 mismatching calls.
   - `--mode neural`: builds and times the Neural Engine codec.
+  - `--mode neural-voice` (the 0.6B CustomVoice checkpoint, `--voice` a
+    speaker): prepares the talker and the code predictor on the Neural
+    Engine (placement, the precision MLX measured, the check against MLX),
+    then teacher-forced parity on `--golden` frames, the stages before the
+    first audio, time per call, and `--repeat` renders at consecutive seeds,
+    with `--mlx-renders` the same renders on MLX first. The 2026-10-03
+    numbers are in ADR-0085.
+- Neural Engine op placement (`ane-lab`, no weights): builds tiny ML
+  programs with the package's `MLProgramBuilder` and prints where Core ML's
+  compute plan puts each op on this machine, or with `--time` the latency of
+  weight-heavy stacks in each weight format. Build the `ane-lab` scheme with
+  xcodebuild, as for `v2-listen`; `ane-lab conv` runs the probes whose name
+  contains `conv`. ADR-0085's format choices come from it.
 - Vendor DFlash2 tests (`swift test --filter DFlash2` in `Vendor/mlx-swift-lm`):
   run with `--no-parallel`. Two of the parity tests load the 27B target each;
   in parallel they contend the single GPU until a Metal command buffer hits

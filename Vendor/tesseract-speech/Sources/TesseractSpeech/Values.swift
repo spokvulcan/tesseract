@@ -78,10 +78,16 @@ public enum Voice: Sendable, Equatable {
     /// A designed voice with its Reference Take: survives sessions and
     /// relaunches.
     case pinned(PinnedVoice)
+    /// A Preset Voice: one of a CustomVoice checkpoint's own speakers, by the
+    /// checkpoint's name for it. Never designed, and it needs no Reference
+    /// Take: every segment renders from the speaker alone (ADR-0084). A
+    /// speaker the checkpoint doesn't have is refused when the session
+    /// opens.
+    case preset(speaker: String, language: String?)
 
     var description: String? {
         switch self {
-        case .standard: return nil
+        case .standard, .preset: return nil
         case .designed(let d, _): return d.isEmpty ? nil : d
         case .pinned(let p): return p.voiceDescription
         }
@@ -89,9 +95,15 @@ public enum Voice: Sendable, Equatable {
 
     var language: String? {
         switch self {
-        case .standard(let l), .designed(_, let l): return l
+        case .standard(let l), .designed(_, let l), .preset(_, let l): return l
         case .pinned(let p): return p.language
         }
+    }
+
+    /// A Preset Voice's speaker.
+    var speaker: String? {
+        if case .preset(let speaker, _) = self { return speaker }
+        return nil
     }
 }
 
@@ -370,6 +382,8 @@ public enum SpeechEngineError: Error, Sendable, Equatable {
     case generationFailed(String)
     case sessionClosed
     case engineUnloaded
+    /// A Preset Voice the checkpoint has no speaker for.
+    case unknownVoice(String)
 }
 
 extension SpeechEngineError: LocalizedError {
@@ -385,6 +399,8 @@ extension SpeechEngineError: LocalizedError {
             return "The speech session is closed."
         case .engineUnloaded:
             return "The speech engine is unloaded."
+        case .unknownVoice(let speaker):
+            return "The voice model has no speaker named \(speaker)."
         }
     }
 }

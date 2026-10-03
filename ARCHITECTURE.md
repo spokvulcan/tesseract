@@ -384,7 +384,16 @@ playback**):
   After warm-up it moves the codec's conv stack to the Neural Engine: a Core ML
   model the package builds from the checkpoint and keeps in the cache directory
   the app passes (under `StorageEnvironment.caches`). It stays on MLX where the
-  Neural Engine can't run it all (ADR-0074/0075). Each segment's words are
+  Neural Engine can't run it all (ADR-0074/0075). For the iPhone, the model
+  can move the talker and the code predictor there too
+  (`Qwen3TTSModel.prepareNeuralVoice`, ADR-0084/0085): two more Core ML
+  graphs the package writes (the talker one position per call with its KV
+  cache in Core ML state, the code predictor a whole frame per call with its
+  sampling inside), after which generation runs MLX only on the CPU, for the
+  prompt's embeddings and the codec's front end. A **Preset Voice**
+  (`Voice.preset`) is a CustomVoice checkpoint's own speaker: the engine
+  refuses one the checkpoint doesn't have and never takes a Reference Take
+  for it. Each segment's words are
   timed by the talker's own attention (ADR-0077): the model streams its
   Alignment Head's row for every frame, and the adapter's `WordTimer` turns the
   rows and the frames' loudness into word starts, which the stream carries as

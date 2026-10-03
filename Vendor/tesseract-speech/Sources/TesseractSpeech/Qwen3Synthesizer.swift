@@ -125,6 +125,10 @@ public actor Qwen3Synthesizer: SpeechSynthesizing {
         try model?.primeVoice(description)
     }
 
+    public func presetSpeakers() async -> [String] {
+        model?.presetSpeakers ?? []
+    }
+
     public func unload() async {
         neuralEngineTask?.cancel()
         await neuralEngineTask?.value
@@ -163,9 +167,11 @@ public actor Qwen3Synthesizer: SpeechSynthesizing {
                     }
                     let alignment = self.alignmentHead
 
+                    // A CustomVoice checkpoint reads a speaker where
+                    // VoiceDesign reads a description.
                     let modelStream = model.generateStream(
                         text: request.text,
-                        voice: request.voiceDescription,
+                        voice: request.speaker ?? request.voiceDescription,
                         language: request.language,
                         reference: request.reference.map {
                             Qwen3TTSReference(codeFrames: $0.codeFrames, text: $0.text)

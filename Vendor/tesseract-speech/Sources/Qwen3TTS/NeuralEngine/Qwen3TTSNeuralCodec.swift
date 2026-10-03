@@ -1,5 +1,4 @@
 import CoreML
-import CryptoKit
 import Foundation
 @preconcurrency import MLX
 
@@ -143,93 +142,29 @@ package final class Qwen3TTSNeuralCodec: @unchecked Sendable {
 
     // MARK: - Loading
 
-    /// What the compute plan said about the compiled model.
-    package struct Placement: Sendable, CustomStringConvertible {
-        package var neuralEngine = 0
-        package var gpu = 0
-        package var cpu = 0
-        package var offEngine: [String] = []
-
-        package var description: String {
-            "\(neuralEngine) ops on the Neural Engine, \(gpu) GPU, \(cpu) CPU"
-                + (offEngine.isEmpty ? "" : " (off: \(offEngine.prefix(8).joined(separator: ", ")))")
-        }
-    }
-
     /// The codec for `decoder`'s weights: loaded from `cacheDirectory` when
     /// built before, else built, compiled and cached there. Throws when the
     /// compute plan would put any op off the Neural Engine.
     package static func load(
         decoder: Qwen3TTSCodecDecoder, frames: Int, cacheDirectory: URL, sourceKey: String,
         computeUnits: MLComputeUnits = .cpuAndNeuralEngine, requireNeuralEngine: Bool = true
-    ) async throws -> (codec: Qwen3TTSNeuralCodec, placement: Placement) {
+    ) async throws -> (codec: Qwen3TTSNeuralCodec, placement: NeuralPlacement) {
         let config = decoder.config
-        let key = cacheKey(config: config, frames: frames, sourceKey: sourceKey)
-        let compiled = cacheDirectory.appendingPathComponent("\(key).mlmodelc", isDirectory: true)
-        let fm = FileManager.default
         let states = stateSpecs(config: config)
-        if !fm.fileExists(atPath: compiled.path) {
-            try fm.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
-            let package = fm.temporaryDirectory.appendingPathComponent(
-                "qwen3tts-codec-\(UUID().uuidString).mlpackage", isDirectory: true)
-            defer { try? fm.removeItem(at: package) }
-            let blobs = try MILBlobWriter(url: MLProgramPackage.weightsURL(in: package))
-            let builder = MILFunctionBuilder(blobs: blobs)
-            try buildGraph(builder, decoder: decoder, frames: frames, states: states)
-            try blobs.finish()
-            try MLProgramPackage.write(
-                specification: MLProgramPackage.specification(
-                    builder,
-                    metadata: [
-                        "com.tesseract.qwen3tts.codec": "conv stack, \(frames) frames",
-                        "com.tesseract.qwen3tts.graphVersion": "\(graphVersion)",
-                    ]),
-                to: package)
-            let temporary = try await MLModel.compileModel(at: package)
-            try? fm.removeItem(at: compiled)
-            try fm.moveItem(at: temporary, to: compiled)
-        }
-
-        let configuration = MLModelConfiguration()
-        configuration.computeUnits = computeUnits
-        var placement = Placement()
-        if requireNeuralEngine {
-            placement = try await plan(compiled, configuration: configuration)
-            guard placement.gpu == 0, placement.cpu == 0, placement.neuralEngine > 0 else {
-                throw AudioGenerationError.modelNotInitialized(
-                    "The codec would not run on the Neural Engine: \(placement).")
-            }
-        }
-        let model = try await MLModel.load(contentsOf: compiled, configuration: configuration)
+        let compiled = try await NeuralModelStore.compiled(
+            key: cacheKey(config: config, frames: frames, sourceKey: sourceKey), in: cacheDirectory,
+            metadata: [
+                "com.tesseract.qwen3tts.codec": "conv stack, \(frames) frames",
+                "com.tesseract.qwen3tts.graphVersion": "\(graphVersion)",
+            ]
+        ) { try buildGraph($0, decoder: decoder, frames: frames, states: states) }
+        let (model, placement) = try await NeuralModelStore.load(
+            compiled, computeUnits: computeUnits, requireNeuralEngine: requireNeuralEngine,
+            what: "The codec")
         let codec = Qwen3TTSNeuralCodec(
             frames: frames, samplesPerFrame: decoder.samplesPerFrame, latentDim: config.latentDim,
             model: model, states: states)
         return (codec, placement)
-    }
-
-    private static func plan(_ url: URL, configuration: MLModelConfiguration) async throws
-        -> Placement
-    {
-        let plan = try await MLComputePlan.load(contentsOf: url, configuration: configuration)
-        var placement = Placement()
-        guard case .program(let program) = plan.modelStructure,
-            let main = program.functions["main"]
-        else { return placement }
-        for operation in main.block.operations where operation.operatorName != "const" {
-            guard let usage = plan.deviceUsage(for: operation) else { continue }
-            switch usage.preferred {
-            case .neuralEngine: placement.neuralEngine += 1
-            case .gpu:
-                placement.gpu += 1
-                placement.offEngine.append("\(operation.operatorName)→GPU")
-            case .cpu:
-                placement.cpu += 1
-                placement.offEngine.append("\(operation.operatorName)→CPU")
-            @unknown default:
-                placement.cpu += 1
-            }
-        }
-        return placement
     }
 
     /// The graph version, the chunk size, the decoder's configuration and
@@ -237,11 +172,10 @@ package final class Qwen3TTSNeuralCodec: @unchecked Sendable {
     static func cacheKey(
         config: Qwen3TTSTokenizerDecoderConfig, frames: Int, sourceKey: String
     ) -> String {
-        let text =
+        NeuralModelStore.key(
+            "qwen3tts-codec",
             "v\(graphVersion) f\(frames) \(config.latentDim) \(config.decoderDim) "
-            + "\(config.upsampleRates) \(config.upsamplingRatios) \(sourceKey)"
-        let digest = SHA256.hash(data: Data(text.utf8))
-        return "qwen3tts-codec-" + digest.prefix(12).map { String(format: "%02x", $0) }.joined()
+                + "\(config.upsampleRates) \(config.upsamplingRatios) \(sourceKey)")
     }
 
     // MARK: - The graph

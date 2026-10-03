@@ -363,6 +363,46 @@ private let shortText = "Hello there, this is a short utterance."
         #expect(await session.exportPinnedVoice() == nil)
     }
 
+    /// A Preset Voice is the checkpoint's own speaker (ADR-0084): no
+    /// Reference Take is taken or continued, every segment names the
+    /// speaker and no description, and the utterance streams as any other.
+    @Test func aPresetVoiceNeedsNoReferenceTake() async throws {
+        let (engine, synth) = await makeEngine(script: .init(speakers: ["ryan", "serena"]))
+        let session = try await engine.session(
+            .readAloud, voice: .preset(speaker: "serena", language: "English"))
+        let utterance = try await session.speak(longText)
+        var frames = 0
+        for try await event in utterance.events {
+            if case .audio(let chunk) = event {
+                #expect(chunk.frames.lowerBound == frames, "gapless")
+                frames = chunk.frames.upperBound
+            }
+        }
+
+        let requests = await synth.requests
+        #expect(requests.count == utterance.segmentCount)
+        #expect(Segmenter.segment(longText, leadTokens: nil).count == utterance.segmentCount,
+            "no short lead segment for a take")
+        for request in requests {
+            #expect(request.speaker == "serena")
+            #expect(request.voiceDescription == nil)
+            #expect(request.language == "English")
+            #expect(request.reference == nil && !request.capturesReference)
+        }
+        #expect(await session.exportPinnedVoice() == nil)
+        #expect(await synth.primedVoices == [nil])
+    }
+
+    /// A speaker the checkpoint doesn't have is refused when the session
+    /// opens, not rendered in some other voice.
+    @Test func anUnknownPresetVoiceIsRefused() async throws {
+        let (engine, synth) = await makeEngine(script: .init(speakers: ["ryan"]))
+        await #expect(throws: SpeechEngineError.unknownVoice("nobody")) {
+            _ = try await engine.session(.readAloud, voice: .preset(speaker: "nobody", language: nil))
+        }
+        #expect(await synth.requests.isEmpty)
+    }
+
     @Test func mismatchedFingerprintIsRejected() async throws {
         let (engine, _) = await makeEngine()  // q8 engine
         let foreign = PinnedVoice(
