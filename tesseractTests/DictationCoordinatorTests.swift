@@ -149,16 +149,29 @@ struct DictationCoordinatorTests {
         return engine
     }
 
-    // MARK: - Live Partial pump (ticket #291)
+    // MARK: - Live Preview (PRD #612)
 
+    private func makeLearned() -> LearnedWordStore {
+        LearnedWordStore(
+            directory: FileManager.default.temporaryDirectory
+                .appendingPathComponent("coordinator-preview-\(UUID().uuidString)"))
+    }
+
+    /// The preview streams into the feed with the regex cleanup and the
+    /// Learned Words applied, and clears the moment the key comes up; what
+    /// pastes is the full pass.
     @Test
-    func livePartialsFlowIntoTheFeedWhileRecordingAndClearAtStop() async throws {
+    func thePreviewFlowsIntoTheFeedWithLearnedWordsAndClearsAtRelease() async throws {
         let bundle = try makeFakeModelBundle()
         defer { try? FileManager.default.removeItem(at: bundle) }
         let recognizer = InMemorySpeechRecognizer(
             result: TranscriptionResult(
-                text: "hello partial", segments: [], language: "en", processingTime: 0))
+                text: "ask cloud",
+                segments: [TranscriptionSegment(text: " ask cloud", startTime: 0, endTime: 0.9)],
+                language: "en", processingTime: 0))
         let engine = try await makeEngine(recognizer: recognizer, bundle: bundle)
+        let words = makeLearned()
+        words.learn(heard: "cloud", meant: "Claude")
 
         let audio = AudioData(samples: [0.1, 0.2], sampleRate: 16_000, duration: 2.0)
         let capture = FakeAudioCapture(cannedAudio: audio)
@@ -166,61 +179,151 @@ struct DictationCoordinatorTests {
         capture.cannedSnapshot = AudioData(
             samples: [Float](repeating: 0.1, count: 16_000), sampleRate: 16_000, duration: 1.0)
         let injector = FakeTextInjector()
-        let store = FakeTranscriptionStore()
-        let settings = SettingsManager(store: InMemorySettingsStore())
         let feed = DictationFeed()
-
         let coordinator = DictationCoordinator(
-            audioCapture: capture,
-            transcriptionEngine: engine,
-            textInjector: injector,
-            history: store,
-            settings: settings,
-            feed: feed
-        )
-        coordinator.isLivePartialsEnabled = { true }
+            audioCapture: capture, transcriptionEngine: engine, textInjector: injector,
+            history: FakeTranscriptionStore(),
+            settings: SettingsManager(store: InMemorySettingsStore()), feed: feed,
+            learnedWords: words, frontmostApp: { nil })
 
         coordinator.onHotkeyDown()
-        try await waitUntil { feed.partial == "hello partial" }
+        try await waitUntil { feed.preview != nil }
+        #expect(feed.preview?.text == "Ask Claude")
+        #expect(feed.preview?.catches.map(\.meant) == ["Claude"])
+        // Shown, not counted: only a committed take counts its catches.
+        #expect(words.word(heard: "cloud")?.totalCatches == 0)
 
         coordinator.onHotkeyUp()
-        // The pump's stop clears the caption synchronously — before the final
-        // commit resolves, not after.
-        #expect(feed.partial == nil)
-
+        // The pump's stop clears the preview synchronously, before the final
+        // commit resolves.
+        #expect(feed.preview == nil)
         try await waitUntil { feed.phase == .idle && !injector.injected.isEmpty }
-        #expect(feed.partial == nil)
+        #expect(injector.injected == ["Ask Claude "])
+        #expect(words.word(heard: "cloud")?.totalCatches == 1)
     }
 
+    /// Each preview decode reads only the audio after the last confirmed
+    /// segment (WhisperKit's rule: all but the last two segments of a decode
+    /// are confirmed), so the preview shows the whole take while a decode
+    /// stays short.
     @Test
-    func partialPumpStaysOffUnlessTheVariantConsumesIt() async throws {
+    func thePreviewDecodesFromTheLastConfirmedSegment() async throws {
+        let bundle = try makeFakeModelBundle()
+        defer { try? FileManager.default.removeItem(at: bundle) }
+        let first = ScriptedSpeechRecognizer.result([
+            (" Ask Claude", 0, 1.2), (" why the server", 1.2, 2.5), (" drops", 2.5, 3.0),
+        ])
+        let second = ScriptedSpeechRecognizer.result([
+            (" why the server", 0, 1.3), (" drops the", 1.3, 2.2), (" first", 2.2, 2.8),
+        ])
+        let recognizer = ScriptedSpeechRecognizer([first, second])
+        let engine = TranscriptionEngine(makeRecognizer: { recognizer })
+        try await engine.loadModel(from: bundle)
+
+        let capture = FakeAudioCapture(
+            cannedAudio: AudioData(samples: [0.1, 0.2], sampleRate: 16_000, duration: 2.0))
+        capture.cannedSnapshot = AudioData(
+            samples: [Float](repeating: 0.1, count: 160_000), sampleRate: 16_000, duration: 10)
+        let feed = DictationFeed()
+        let coordinator = DictationCoordinator(
+            audioCapture: capture, transcriptionEngine: engine, textInjector: FakeTextInjector(),
+            history: FakeTranscriptionStore(),
+            settings: SettingsManager(store: InMemorySettingsStore()), feed: feed,
+            frontmostApp: { nil })
+
+        coordinator.onHotkeyDown()
+        try await waitUntil { feed.preview?.text == "Ask Claude why the server drops the first" }
+        #expect(feed.preview?.confirmedTokens == 5)
+        let durations = await recognizer.audioDurations
+        #expect(durations.count >= 2)
+        #expect(abs(durations[0] - 10) < 0.001)
+        #expect(abs(durations[1] - 8.8) < 0.001)
+        coordinator.cancel()
+    }
+
+    /// No snapshot past the minimum: the recognizer never hears mid-capture
+    /// audio.
+    @Test
+    func noPreviewDecodeBeforeThereIsEnoughAudio() async throws {
         let bundle = try makeFakeModelBundle()
         defer { try? FileManager.default.removeItem(at: bundle) }
         let recognizer = InMemorySpeechRecognizer()
         let engine = try await makeEngine(recognizer: recognizer, bundle: bundle)
-
         let capture = FakeAudioCapture(
             cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0))
         capture.cannedSnapshot = AudioData(
-            samples: [Float](repeating: 0.1, count: 16_000), sampleRate: 16_000, duration: 1.0)
-        let settings = SettingsManager(store: InMemorySettingsStore())
+            samples: [Float](repeating: 0.1, count: 8_000), sampleRate: 16_000, duration: 0.5)
         let feed = DictationFeed()
-
         let coordinator = DictationCoordinator(
-            audioCapture: capture,
-            transcriptionEngine: engine,
-            textInjector: FakeTextInjector(),
+            audioCapture: capture, transcriptionEngine: engine, textInjector: FakeTextInjector(),
             history: FakeTranscriptionStore(),
-            settings: settings,
-            feed: feed
-        )
-        // Default policy: off. The pump never runs, the recognizer never
-        // hears mid-capture audio — the baseline path is untouched.
+            settings: SettingsManager(store: InMemorySettingsStore()), feed: feed)
+
         coordinator.onHotkeyDown()
         for _ in 0..<2000 { await Task.yield() }
-        #expect(feed.partial == nil)
+        #expect(feed.preview == nil)
         #expect(await recognizer.transcribeCount == 0)
         coordinator.cancel()
+    }
+
+    // MARK: - Holding a take (PRD #612)
+
+    private func runHeld(
+        setting: CheckBeforePasting, tapShift: Bool
+    ) async throws -> (injected: [String], take: DictatedTake?, held: Bool) {
+        let bundle = try makeFakeModelBundle()
+        defer { try? FileManager.default.removeItem(at: bundle) }
+        let recognizer = InMemorySpeechRecognizer(
+            result: TranscriptionResult(
+                text: "ship it", segments: [], language: "en", processingTime: 0))
+        let engine = try await makeEngine(recognizer: recognizer, bundle: bundle)
+        let injector = FakeTextInjector()
+        let feed = DictationFeed()
+        let settings = SettingsManager(store: InMemorySettingsStore())
+        settings.checkBeforePasting = setting
+        let coordinator = DictationCoordinator(
+            audioCapture: FakeAudioCapture(
+                cannedAudio: AudioData(samples: [0.1, 0.2], sampleRate: 16_000, duration: 2.0)),
+            transcriptionEngine: engine, textInjector: injector,
+            history: FakeTranscriptionStore(), settings: settings, feed: feed,
+            frontmostApp: { nil })
+        var delivered: DictatedTake?
+        coordinator.onTakeCommitted = { delivered = $0 }
+
+        coordinator.onHotkeyDown()
+        if tapShift { coordinator.shiftTapped() }
+        let held = feed.isHeld
+        coordinator.onHotkeyUp()
+        try await waitUntil { feed.phase == .idle && delivered != nil }
+        return (injector.injected, delivered, held)
+    }
+
+    /// ⇧ while talking keeps the take in the Lens: committed, not pasted.
+    @Test
+    func tappingShiftHoldsTheTakeInsteadOfPasting() async throws {
+        let run = try await runHeld(setting: .whenShiftTapped, tapShift: true)
+        #expect(run.held)
+        #expect(run.injected.isEmpty)
+        #expect(run.take?.held == true)
+        #expect(run.take?.pasted == false)
+    }
+
+    @Test
+    func withoutShiftTheTakePastesAsBefore() async throws {
+        let run = try await runHeld(setting: .whenShiftTapped, tapShift: false)
+        #expect(run.injected == ["Ship it "])
+        #expect(run.take?.held == false)
+    }
+
+    @Test
+    func theAlwaysSettingHoldsEveryTakeAndNeverIgnoresShift() async throws {
+        let always = try await runHeld(setting: .always, tapShift: false)
+        #expect(always.injected.isEmpty)
+        #expect(always.take?.held == true)
+
+        let never = try await runHeld(setting: .never, tapShift: true)
+        #expect(!never.held)
+        #expect(never.injected == ["Ship it "])
     }
 
     // MARK: - Happy path (Outcome → phase/beat mapping + commit effects)
@@ -707,9 +810,9 @@ struct DictationCoordinatorTests {
     }
 
     /// A committed take records a pair carrying the full lineage, and the
-    /// history entry links to it; the overlay affordances then work the pair.
+    /// history entry links to it.
     @Test
-    func committedTakeRecordsALinkedPairAndAffordancesWorkIt() async throws {
+    func committedTakeRecordsALinkedPair() async throws {
         let bundle = try makeFakeModelBundle()
         defer { try? FileManager.default.removeItem(at: bundle) }
         let (pairs, cleanup) = makePairStore()
@@ -736,9 +839,6 @@ struct DictationCoordinatorTests {
             proofreadPass: makeProofreadPass(replying: { _ in corrected }),
             pairs: pairs
         )
-        var historyOpened = 0
-        coordinator.onOpenDictationHistory = { historyOpened += 1 }
-
         coordinator.onHotkeyDown()
         coordinator.onHotkeyUp()
         try await waitUntil { coordinator.state == .idle && feed.beat != nil }
@@ -751,15 +851,6 @@ struct DictationCoordinatorTests {
         #expect(pair.committed == corrected)
         #expect(coordinator.lastTakePairID == pair.id)
         #expect(store.entries.first?.pairID == pair.id)
-
-        // One-click flag marks the pair gold…
-        coordinator.flagLastTakeWrong()
-        #expect(pairs.pair(withID: pair.id)?.flaggedWrong == true)
-
-        // …and "edit" stages the history focus and summons the window.
-        coordinator.editLastTake()
-        #expect(store.focusRequests == [pair.id])
-        #expect(historyOpened == 1)
     }
 
     /// A rejected take records its pair; "insert raw anyway" flags it (using

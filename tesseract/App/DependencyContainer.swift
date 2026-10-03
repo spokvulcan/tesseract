@@ -575,15 +575,8 @@ final class DependencyContainer: ObservableObject {
         return coordinator
     }()
 
-    // Overlay — the Overlay Feed every variant renders from, and the dumb
-    // panel that hosts whichever Overlay Variant the setting selects (the
-    // App Bindings variant rule installs the view; the panel itself is
-    // contentless). The pill follows the system appearance (owner-selected);
-    // the `contentAppearance` seam on OverlayPanel remains the lever if a
-    // forced light `.clear` glass is ever wanted — glass reads the AppKit
-    // appearance, not the SwiftUI color scheme.
+    // The Overlay Feed: the dictation signals the Lens renders from.
     lazy var dictationFeed = DictationFeed()
-    lazy var pillOverlay = OverlayPanel(placement: .pill)
 
     // Menu bar — constructed here so App Bindings can wire its dictation-state
     // effect before the app delegate attaches the window-management callbacks.
@@ -664,19 +657,13 @@ final class DependencyContainer: ObservableObject {
         coordinator.onTakeCommitted = { [weak self] take in
             self?.dictationLens.takeCommitted(take)
         }
-        // The Live Partial pump (ticket #291) runs only while the selected
-        // variant consumes the signal — the coordinator reads a policy
-        // closure; which variant is live never crosses into the pipeline.
-        coordinator.isLivePartialsEnabled = { [weak self] in
-            guard let self else { return false }
-            return OverlayVariants.variant(for: self.settingsManager.overlayVariantRaw)
-                .usesLivePartials
-        }
         return coordinator
     }()
 
-    /// The **Lens** (PRD #612, ADR-0085): ⌃⌥Space reopens the last take to fix
-    /// a word by typing the one meant.
+    /// The **Lens** (PRD #612, ADR-0085, ADR-0086): the one dictation
+    /// overlay. It streams the take while the key is held, holds it on ⇧,
+    /// and ⌃⌥Space reopens the last take to fix a word by typing the one
+    /// meant.
     lazy var dictationLens: LensController = makeDictationLens()
 
     private func makeDictationLens() -> LensController {
@@ -687,8 +674,9 @@ final class DependencyContainer: ObservableObject {
             model: LensModel(
                 learnedWords: learnedWordStore, pairs: correctionPairStore,
                 history: transcriptionHistory),
-            pasteBack: LensController.PasteBack(replacer: replacer),
-            inputCount: { [hotkeyManager] in hotkeyManager.inputCount },
+            pasteBack: LensController.PasteBack(
+                replacer: replacer, injector: textInjector,
+                restoreClipboard: { [settingsManager] in settingsManager.restoreClipboard }),
             vocabulary: { [learnedWordStore, correctionPairStore] in
                 LensVocabulary.build(
                     learned: learnedWordStore.words,
@@ -696,20 +684,18 @@ final class DependencyContainer: ObservableObject {
                         $0.correction ?? $0.committed
                     })
             },
-            isDictating: { [dictationFeed] in dictationFeed.phase.isActive })
-        controller.presenter = LensPanelPresenter(controller: controller)
+            isDictating: { [dictationFeed] in dictationFeed.phase.isActive },
+            checkBeforePasting: { [settingsManager] in settingsManager.checkBeforePasting },
+            fixHotkeyLabel: { [settingsManager] in settingsManager.fixHotkey.displayString },
+            pastes: { [settingsManager] in settingsManager.autoInsertText },
+            canTapShift: { [settingsManager] in !settingsManager.hotkey.isSingleModifier })
+        controller.presenter = LensPanelPresenter(controller: controller, feed: dictationFeed)
+        controller.onInsertRawAnyway = { [weak self] in
+            self?.dictationCoordinator.insertRawAnyway()
+        }
         controller.watch(dictationFeed)
         return controller
     }
-
-    /// The variant-agnostic overlay action surface (ticket #289): variants
-    /// render the feed and call these — they never see the coordinator.
-    lazy var overlayActions = OverlayActions(
-        flagLastTakeWrong: { [weak self] in self?.dictationCoordinator.flagLastTakeWrong() },
-        // The pencil opens the take in the Lens, where fixing a word lives.
-        editLastTake: { [weak self] in self?.dictationLens.reopenLastTake() },
-        insertRawAnyway: { [weak self] in self?.dictationCoordinator.insertRawAnyway() }
-    )
 
     private var hasSetup = false
 
@@ -841,8 +827,16 @@ final class DependencyContainer: ObservableObject {
                     id: HotkeyManager.dictationHotkeyID,
                     combo: settingsManager.hotkey,
                     onDown: { [weak self] in self?.dictationCoordinator.onHotkeyDown() },
-                    onUp: { [weak self] in self?.dictationCoordinator.onHotkeyUp() }
+                    onUp: { [weak self] in self?.dictationCoordinator.onHotkeyUp() },
+                    // A one-key dictation hotkey spoiled by another key: the
+                    // owner is typing with that modifier, not dictating.
+                    onCancel: { [weak self] in self?.dictationCoordinator.cancel() },
+                    // ⇧ while talking: the take waits in the Lens (PRD #612).
+                    onShiftTap: { [weak self] in self?.dictationCoordinator.shiftTapped() }
                 )
+                // The Lens is the dictation overlay: build its panel now so
+                // the first press shows it at once.
+                dictationLens.prepare()
                 // Register the fix hotkey (⌃⌥Space by default): reopens the
                 // last take in the Lens to fix a word by typing the one meant.
                 hotkeyManager.registerHotkey(
@@ -947,9 +941,6 @@ final class DependencyContainer: ObservableObject {
                 dictationState: { [dictationFeed] in
                     dictationFeed.phase
                 },
-                dictationBeat: { [dictationFeed] in
-                    dictationFeed.beat
-                },
                 speechState: { [speechCoordinator] in
                     speechCoordinator.state
                 },
@@ -973,20 +964,6 @@ final class DependencyContainer: ObservableObject {
                 modelDownloadStatuses: modelDownloadManager.$statuses.eraseToAnyPublisher()
             ),
             effects: .init(
-                setUpOverlayPanel: { [pillOverlay] in
-                    pillOverlay.setup()
-                },
-                setOverlayVariant: { [pillOverlay, dictationFeed, overlayActions] variantID in
-                    let variant = OverlayVariants.variant(for: variantID)
-                    pillOverlay.setPlacement(variant.placement)
-                    pillOverlay.setContent(variant.makeView(dictationFeed, overlayActions))
-                },
-                reassertOverlayFront: { [pillOverlay] in
-                    pillOverlay.reassertFront()
-                },
-                setOverlayInteractive: { [pillOverlay] in
-                    pillOverlay.setInteractive($0)
-                },
                 pushDictationStateToMenuBar: { [menuBarManager] in
                     menuBarManager.updateState(from: $0)
                 },

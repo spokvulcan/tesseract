@@ -80,8 +80,26 @@ nonisolated final class SampleBuffer: @unchecked Sendable {
         lock.unlock()
     }
 
-    /// A non-destructive copy of everything captured so far — the **Live
-    /// Partial** lane's mid-capture read (ticket #291). The tap keeps
+    /// A non-destructive copy of the samples from `start` on — the **Live
+    /// Preview**'s mid-capture read (PRD #612): only the audio after the last
+    /// confirmed segment, so a long take never copies its whole recording on
+    /// every decode. The tap keeps appending; the copy happens on the
+    /// caller's thread, never the real-time audio thread.
+    func snapshot(from start: Int) -> [Float] {
+        lock.lock()
+        defer { lock.unlock() }
+        var result: [Float] = []
+        var offset = 0
+        for chunk in sealedChunks + [currentChunk] {
+            defer { offset += chunk.count }
+            guard offset + chunk.count > start else { continue }
+            let from = max(0, start - offset)
+            result.append(contentsOf: chunk[from...])
+        }
+        return result
+    }
+
+    /// A non-destructive copy of everything captured so far. The tap keeps
     /// appending; the coalescing copy happens on the caller's thread, never
     /// the real-time audio thread.
     func snapshot() -> [Float] {
@@ -122,15 +140,29 @@ protocol AudioCapturing: AnyObject {
     var isCapturing: Bool { get }
     func startCapture() throws
     func stopCapture() -> AudioData?
-    /// A mid-capture snapshot of the audio so far — the **Live Partial**
-    /// lane's read (ticket #291). `nil` when not capturing or when the
-    /// implementation has nothing to offer (the default) — the partial track
-    /// degrades to silence, never an error.
+    /// A mid-capture snapshot of the audio so far. `nil` when not capturing
+    /// or when the implementation has nothing to offer (the default) — the
+    /// Live Preview degrades to nothing shown, never an error.
     func captureSnapshot() -> AudioData?
+    /// The audio from `seconds` into the capture to now — the **Live
+    /// Preview**'s read (PRD #612), which only needs what follows the last
+    /// confirmed segment.
+    func captureSnapshot(from seconds: TimeInterval) -> AudioData?
 }
 
 extension AudioCapturing {
     func captureSnapshot() -> AudioData? { nil }
+
+    /// Slices the whole snapshot; the engine copies only the tail.
+    func captureSnapshot(from seconds: TimeInterval) -> AudioData? {
+        guard let whole = captureSnapshot() else { return nil }
+        let start = min(
+            whole.samples.count, max(0, Int((seconds * whole.sampleRate).rounded(.down))))
+        let samples = Array(whole.samples[start...])
+        return AudioData(
+            samples: samples, sampleRate: whole.sampleRate,
+            duration: Double(samples.count) / max(whole.sampleRate, 1), raw: nil)
+    }
 }
 
 @MainActor
@@ -591,6 +623,19 @@ final class AudioCaptureEngine: AudioCapturing {
         guard isCapturing, !meteringOnly else { return nil }
         let samples = sampleBuffer.snapshot()
         guard !samples.isEmpty, inputSampleRate > 0 else { return nil }
+        return AudioData(
+            samples: samples,
+            sampleRate: inputSampleRate,
+            duration: Double(samples.count) / inputSampleRate,
+            raw: nil
+        )
+    }
+
+    func captureSnapshot(from seconds: TimeInterval) -> AudioData? {
+        guard isCapturing, !meteringOnly, inputSampleRate > 0 else { return nil }
+        let start = max(0, Int((seconds * inputSampleRate).rounded(.down)))
+        let samples = sampleBuffer.snapshot(from: start)
+        guard !samples.isEmpty else { return nil }
         return AudioData(
             samples: samples,
             sampleRate: inputSampleRate,

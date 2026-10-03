@@ -4,7 +4,7 @@ One page of ratified rules for every face-lifted surface. Cite this doc
 instead of re-deciding; changing a rule means amending this doc in the same
 PR. Ratified 2026-07-09 (map #211, ticket #214). Locked designs — agent chat
 (PR #184), Server Drawer, Skill Cluster (ADR-0030), Speech Reader control
-bar (ADR-0076), overlay HUD — are audited for consistency against this doc but
+bar (ADR-0076) — are audited for consistency against this doc but
 never redesigned under it.
 
 ## 1. Liquid Glass
@@ -53,7 +53,6 @@ same PR:
 - Slash-command popup (`SlashCommandPopupView`)
 - Skill Cluster (`SkillClusterView`, ADR-0030)
 - Speech Reader control bar (`ReaderControlBar`, ADR-0076)
-- Global overlay HUD (`GlobalOverlayHUD`)
 - Dictation recording button (`RecordingButtonView`)
 - Models action bar (`ModelsActionBar`)
 - Jarvis panel (`JarvisPanelController` over `GlassPanel`, ADR-0080): a
@@ -63,11 +62,13 @@ same PR:
   the field exists from the first layout (the macOS 27.0 focus freeze).
 - Capture panel (`CapturePanelController` over `GlassPanel`): the capture
   hotkey's bar near the top of the screen, same construction.
-- Lens (`LensController` over `GlassPanel`, ADR-0085): the dictation card at
-  the bottom center of the screen where a take is fixed by typing the word you
-  meant. Same construction as the Jarvis panel; it turns key only while a take
-  is being fixed, every button is non-focusable and the field exists from the
-  first layout.
+- Lens (`LensController` over `GlassPanel`, ADR-0085, ADR-0086): the one
+  dictation overlay, a card at the bottom center of the screen that streams
+  the take while it is recorded, shows it as it lands, holds it when ⇧ was
+  tapped, and is where a word is fixed by typing the word you meant. Same
+  construction as the Jarvis panel. It never turns key while listening, only
+  while a take waits or is being fixed; every button is non-focusable and the
+  field exists from the first layout.
 
 The inventory governs custom `.glassEffect` surfaces. The system glass
 button styles (`.glass` / `.glassProminent`) are standard components — they

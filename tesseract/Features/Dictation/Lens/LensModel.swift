@@ -2,7 +2,8 @@
 //  LensModel.swift
 //  tesseract
 //
-//  The **Lens**'s state while a take is fixed (PRD #612): the take as it
+//  The **Lens**'s state (PRD #612): the **Live Preview** while the owner
+//  talks, the take as it lands, and while a take is fixed, the take as it
 //  stands after each fix, what the owner is typing, the word it will
 //  replace, and what each fix taught. Each fix lands in the stores as it is
 //  made: the Learned Word (or the app it is now left alone in), the take's
@@ -24,17 +25,26 @@ final class LensModel {
         case afterPaste
         /// A take opened from the Dictation page: nothing is pasted back.
         case fromPage
+        /// ⇧ held the take: it waits here, not pasted yet; ↩ pastes it.
+        case held
 
         var how: CorrectionPair.Fix.How {
             switch self {
             case .afterPaste: .afterPaste
             case .fromPage: .page
+            case .held: .heldTake
             }
         }
     }
 
     enum Phase: Equatable, Sendable {
         case hidden
+        /// The owner is talking: the Live Preview streams in.
+        case listening
+        /// The key is up: the full pass is running.
+        case finishing
+        /// The take landed; the Lens shows it, then fades.
+        case landed
         /// The take is open and the Lens has the keyboard.
         case fixing
         /// The fix is done; the Lens shows what happened, then fades.
@@ -58,6 +68,28 @@ final class LensModel {
 
     private(set) var phase: Phase = .hidden
     private(set) var mode: Mode = .afterPaste
+
+    // MARK: Live
+
+    /// The app the take is going to.
+    private(set) var liveApp: TargetApp?
+    /// The latest preview; kept through finishing so the words stay up.
+    private(set) var preview: LivePreview?
+    /// ⇧ held this take: it will wait here.
+    private(set) var isHeld = false
+    /// The take that just landed, and its words the preview had wrong.
+    private(set) var landed: DictatedTake?
+    private(set) var settled: Set<Int> = []
+    /// A rejected take's raw text can still be inserted.
+    private(set) var canInsertRaw = false
+    /// What ⇧ does this take ("⇧ to check before pasting"), or nil when
+    /// the setting makes it do nothing.
+    var holdHint: String?
+    /// The fix hotkey as the owner set it, for "Missed one? ⌃⌥Space".
+    var fixHotkeyLabel = "⌃⌥Space"
+
+    // MARK: Fixing
+
     /// The take as it was opened.
     private(set) var take: DictatedTake?
     /// The take's text with every fix so far.
@@ -108,6 +140,71 @@ final class LensModel {
 
     // MARK: - Session
 
+    // MARK: - Live
+
+    /// Recording started: the Lens listens.
+    func listen(app: TargetApp?) {
+        resetTyping()
+        // Nothing of an earlier fix carries into a new take's card.
+        text = ""
+        tokens = []
+        catches = []
+        fixedTokens = []
+        fixCount = 0
+        receipts = []
+        learnedPairs = []
+        liveApp = app
+        preview = nil
+        isHeld = false
+        landed = nil
+        settled = []
+        result = nil
+        canInsertRaw = false
+        take = nil
+        note = nil
+        phase = .listening
+    }
+
+    /// A new preview (nil clears nothing: the last words stay up).
+    func show(_ preview: LivePreview?) {
+        guard phase == .listening, let preview else { return }
+        self.preview = preview
+    }
+
+    func setHeld(_ held: Bool) {
+        guard phase == .listening || phase == .finishing else { return }
+        isHeld = held
+    }
+
+    /// The key came up: the full pass runs.
+    func finishing() {
+        guard phase == .listening else { return }
+        phase = .finishing
+    }
+
+    /// The take landed: show it, with the words the preview had wrong.
+    func land(_ take: DictatedTake) {
+        settled = LensSettle.settled(preview: preview?.text ?? "", final: take.text)
+        landed = take
+        text = take.text
+        catches = take.catches
+        tokens = TakeText.tokens(take.text)
+        phase = .landed
+    }
+
+    /// A rejected take: the result line, and "Insert anyway".
+    func rejected(_ result: Result) {
+        resetTyping()
+        canInsertRaw = true
+        self.result = result
+        phase = .done
+    }
+
+    /// The preview's tokens, and how many are confirmed.
+    var liveTokens: [TakeToken] { TakeText.tokens(preview?.text ?? "") }
+
+    // MARK: - Session
+
     func open(_ take: DictatedTake, mode: Mode, vocabulary: [String]) {
         self.take = take
         self.mode = mode
@@ -121,6 +218,9 @@ final class LensModel {
         receipts = []
         learnedPairs = []
         result = nil
+        canInsertRaw = false
+        landed = nil
+        settled = []
         isManualTarget = false
         target = nil
         typed = ""
@@ -379,6 +479,7 @@ final class LensModel {
     /// The session ended; `result` is what the Lens says about it.
     func finish(_ result: Result) {
         resetTyping()
+        canInsertRaw = false
         self.result = result
         phase = .done
     }
@@ -389,6 +490,10 @@ final class LensModel {
         take = nil
         result = nil
         note = nil
+        preview = nil
+        landed = nil
+        settled = []
+        canInsertRaw = false
     }
 
     /// What the fixes taught, in one line: "Learned SRACT → Tesseract".

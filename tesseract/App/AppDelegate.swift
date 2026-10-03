@@ -136,12 +136,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.navigateToAgent()
         }
 
-        // The overlay "edit" affordance summons the main window onto the
-        // dictation page (the history has already staged its focus request).
-        container.dictationCoordinator.onOpenDictationHistory = { [weak self] in
-            self?.navigateToDictation()
-        }
-
         // Apply initial dock visibility (didSet doesn't fire during SettingsManager.init)
         container.settingsManager.applyDockVisibility()
     }

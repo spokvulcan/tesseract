@@ -132,4 +132,42 @@ struct LensViewRenderTests {
         model.typed = "claude"
         expectFits(try await render(model, named: "long"))
     }
+
+    // MARK: - The Lens as the dictation overlay
+
+    @Test func listeningWithAPreview() async throws {
+        let model = makeModel()
+        model.listen(app: Self.terminal)
+        model.holdHint = "⇧ to check before pasting"
+        model.show(LivePreview(text: "Ask Claude why the server", catches: [], confirmedTokens: 3))
+        expectFits(try await render(model, named: "listening"))
+    }
+
+    @Test func listeningBeforeTheFirstWords() async throws {
+        let model = makeModel()
+        model.listen(app: Self.terminal)
+        expectFits(try await render(model, named: "listening-empty"))
+    }
+
+    @Test func landedWithASettledWord() async throws {
+        let model = makeModel()
+        model.listen(app: Self.terminal)
+        model.show(LivePreview(text: "Ask Claude why this", catches: [], confirmedTokens: 2))
+        model.finishing()
+        model.land(
+            DictatedTake(
+                pairID: nil, text: "Ask Claude why the", catches: [], app: Self.terminal,
+                pasted: true, pastedInto: Self.terminal))
+        expectFits(try await render(model, named: "landed"))
+    }
+
+    @Test func aHeldTakeWaiting() async throws {
+        let model = makeModel()
+        model.open(
+            DictatedTake(
+                pairID: nil, text: "Ask cloud why.", catches: [], app: Self.terminal,
+                pasted: false, held: true),
+            mode: .held, vocabulary: [])
+        expectFits(try await render(model, named: "held"))
+    }
 }
