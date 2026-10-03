@@ -2,6 +2,8 @@
 
 - Status: Accepted
 - Date: 2026-09-27
+- Amended by: ADR-0084 (2026-10-03: on the phone, the talker and code
+  predictor run on the Neural Engine too; the Mac is unchanged)
 - Relates to: ADR-0074 (exact streaming decoder, polyphase upsamplers),
   ADR-0039 (residency, the GPU lease), ADR-0073 (storage roots)
 
