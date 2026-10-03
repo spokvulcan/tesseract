@@ -202,7 +202,9 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # refinement, the plan made before the sit-down, Breakpoints, Triage — only
 # people, never during a game —, agents, the Night Reflection, card actions,
 # delivered nudges), banner sources and game detection, the Agenda tools over
-# the in-memory store (delete_event included), capture and the one-key hotkey,
+# the in-memory store (delete_event included), the completion the EventKit
+# store hands its Reminders fetch (nonisolated, delivered off the main thread;
+# no store is touched), capture and the one-key hotkey,
 # the Timeline, cards and prompts, the Day Thread's store, the seen ledger, the
 # Delivery Ladder and governor, the Claude Code merge, the Profile and recall
 # (fixture conversation files), the trace, and the prefix-cache contract (a
@@ -219,6 +221,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/NightReflectionTests \
   -only-testing:tesseractTests/DayStateStoreTests \
   -only-testing:tesseractTests/AgendaToolsTests \
+  -only-testing:tesseractTests/EventKitAgendaStoreTests \
   -only-testing:tesseractTests/AgendaTimeTests \
   -only-testing:tesseractTests/CaptureParserTests \
   -only-testing:tesseractTests/NudgePlannerTests \
