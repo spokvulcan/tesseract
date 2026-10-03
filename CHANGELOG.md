@@ -1,5 +1,71 @@
 # Changelog
 
+## [1.18.0](https://github.com/spokvulcan/tesseract/compare/v1.17.0...v1.18.0) (2026-10-03)
+
+
+### Features
+
+* **agent:** TurboQuant KV under DFlash2 and the prefix cache ([#607](https://github.com/spokvulcan/tesseract/issues/607)) ([06ff021](https://github.com/spokvulcan/tesseract/commit/06ff02144f1e06fe9d63620deb0a7adc1974ffec))
+* **companion:** the Today home, daily moments and Reminders as the source of truth ([#601](https://github.com/spokvulcan/tesseract/issues/601)) ([d67ab03](https://github.com/spokvulcan/tesseract/commit/d67ab03aaf42dba55eef8ba32c2d6c517400eb5f))
+* **dictation:** learn a word from every fix in the Lens (Catch, slice 1) ([#615](https://github.com/spokvulcan/tesseract/issues/615)) ([440a053](https://github.com/spokvulcan/tesseract/commit/440a053734aef15d955afac9a3eb696dbf7f24f1))
+* **dictation:** the Dictation page becomes the catch record (Catch, slice 3) ([#617](https://github.com/spokvulcan/tesseract/issues/617)) ([bf29ac0](https://github.com/spokvulcan/tesseract/commit/bf29ac0c72c99556238736b1ff0c2ed737899c85))
+* **dictation:** the Lens streams the take and holds it on Shift (Catch, slice 2) ([#616](https://github.com/spokvulcan/tesseract/issues/616)) ([aaa98ff](https://github.com/spokvulcan/tesseract/commit/aaa98ffbb91bf48f6435311a317f8c379ed9e4f9))
+* **settings:** KV Cache Compression defaults to Smallest (turbo8v4) ([#611](https://github.com/spokvulcan/tesseract/issues/611)) ([c99a1b4](https://github.com/spokvulcan/tesseract/commit/c99a1b454f093fad76c1140ce8da146ff73e589a))
+* speech never waits for the LLM, and Companion fixes from its first day ([#604](https://github.com/spokvulcan/tesseract/issues/604)) ([fbf0043](https://github.com/spokvulcan/tesseract/commit/fbf0043a16d259a47104b2fd02ca413a4150ed66))
+
+
+### Bug Fixes
+
+* **agent:** read only the MTP head's file when a checkpoint has no index ([#597](https://github.com/spokvulcan/tesseract/issues/597)) ([2dd691c](https://github.com/spokvulcan/tesseract/commit/2dd691c7590a95f68e883f0d25375da1eb5e3a72))
+* **cache:** log one leafStore per turn when the phase rewinds ([#589](https://github.com/spokvulcan/tesseract/issues/589)) ([80f1afe](https://github.com/spokvulcan/tesseract/commit/80f1afec733f5b41883ad221eb63f6c052a9d9c1))
+* **cache:** log the evictions of drains the cache starts itself ([#588](https://github.com/spokvulcan/tesseract/issues/588)) ([86920e0](https://github.com/spokvulcan/tesseract/commit/86920e087120f09da81118f30f415d33daebd6d2))
+* **cache:** report a leaf stored only when the tree holds it ([#587](https://github.com/spokvulcan/tesseract/issues/587)) ([73c798a](https://github.com/spokvulcan/tesseract/commit/73c798a91aceff0b754f7adfe23f3c549a7cec75))
+* **models:** mark the DFlash2 draft loaded only when it loaded ([#586](https://github.com/spokvulcan/tesseract/issues/586)) ([b6e1cd9](https://github.com/spokvulcan/tesseract/commit/b6e1cd9f19f5949d9a42dd430ba7117a57c688ec))
+* **server:** a failed snapshot restore runs the turn cold and drops the snapshot ([#619](https://github.com/spokvulcan/tesseract/issues/619)) ([6978607](https://github.com/spokvulcan/tesseract/commit/6978607e8c670d61570bb844f68ccbc7c5db2354))
+* **server:** the Unkeyed Completion converts its cache to the KV Scheme ([#618](https://github.com/spokvulcan/tesseract/issues/618)) ([27e4951](https://github.com/spokvulcan/tesseract/commit/27e495105903a32ad678251ce1ff421fc80f4b94))
+* **speech:** count the Reader's words by Character, like the engine ([#590](https://github.com/spokvulcan/tesseract/issues/590)) ([e000b06](https://github.com/spokvulcan/tesseract/commit/e000b06078b7da0d1caa75c03208bf98fe1d0a78))
+* **speech:** keep a stopped request from acting after the stop ([#595](https://github.com/spokvulcan/tesseract/issues/595)) ([71443e9](https://github.com/spokvulcan/tesseract/commit/71443e935059cadb78cc3ac0ccd6bc810e79e224))
+* **speech:** take the voice model's loaded state from the engine ([#585](https://github.com/spokvulcan/tesseract/issues/585)) ([41630be](https://github.com/spokvulcan/tesseract/commit/41630bec3080e8c25d1f6219d74ce844f93f4fcc))
+
+
+### Performance Improvements
+
+* **agent:** measure TurboQuant KV and bring its decode level with bf16 ([#605](https://github.com/spokvulcan/tesseract/issues/605)) ([9423218](https://github.com/spokvulcan/tesseract/commit/942321812dfb7be439665495a7a9a3a270982b7e))
+* **agent:** TurboQuant verify partitions and a cheaper decode step ([#608](https://github.com/spokvulcan/tesseract/issues/608)) ([7b9f3a7](https://github.com/spokvulcan/tesseract/commit/7b9f3a7c104a8f4235744acd4b0c65af43120607))
+* **agent:** TurboQuant writes a step's rows in one dispatch ([#609](https://github.com/spokvulcan/tesseract/issues/609)) ([0782887](https://github.com/spokvulcan/tesseract/commit/07828879b772e96af7f85da78035765ef6a169e0))
+
+
+### Code Refactoring
+
+* **agent:** give speculative decoding one Speculation module ([#596](https://github.com/spokvulcan/tesseract/issues/596)) ([3634736](https://github.com/spokvulcan/tesseract/commit/363473653bd83051b1e3be5fd71e5eec7a216b36))
+* **cache:** store every leaf through one Leaf Admission ([#584](https://github.com/spokvulcan/tesseract/issues/584)) ([401035c](https://github.com/spokvulcan/tesseract/commit/401035ce4c311253ef383bd4bd12e908525e1ea9))
+
+
+### Documentation
+
+* **adr:** correct the AX error name in ADR-0047 ([#573](https://github.com/spokvulcan/tesseract/issues/573)) ([d0452e0](https://github.com/spokvulcan/tesseract/commit/d0452e0dc20eeddfe4715d0f4853267eccc37a94))
+* **adr:** propose ADR-0087, the Prefill Plan holds every decision before the check-out ([#621](https://github.com/spokvulcan/tesseract/issues/621)) ([8403c23](https://github.com/spokvulcan/tesseract/commit/8403c23e7acc04f04b5747fe1764c9964a6429ac))
+* **adr:** record ADR-0084, the iPhone ships read-aloud first ([#614](https://github.com/spokvulcan/tesseract/issues/614)) ([50084c4](https://github.com/spokvulcan/tesseract/commit/50084c44c599bc9c7485ab83c075f595531926dc))
+* **claude:** keep the experiment loop tight ([#613](https://github.com/spokvulcan/tesseract/issues/613)) ([b08ca00](https://github.com/spokvulcan/tesseract/commit/b08ca002a8c62cc73aab1b7a7794e0ce0aa44a30))
+
+
+### Tests
+
+* **cache:** keep the probe render test off the shared Emitted Path Index ([#592](https://github.com/spokvulcan/tesseract/issues/592)) ([8999681](https://github.com/spokvulcan/tesseract/commit/8999681e9522f32fcc7f4020c8c124b8f1ef2813))
+* **server:** run the catalog gate off the main actor ([#594](https://github.com/spokvulcan/tesseract/issues/594)) ([4262570](https://github.com/spokvulcan/tesseract/commit/4262570b1f1e2fb54703ee2c2b5c4e12580b6d47))
+* **server:** wait for the cancel itself in the start-race tests ([#591](https://github.com/spokvulcan/tesseract/issues/591)) ([bbcc41c](https://github.com/spokvulcan/tesseract/commit/bbcc41ce6707f3102aeb600b88f5f633db52f580))
+* **speech:** keep the speech suites passing in a parallel run ([#593](https://github.com/spokvulcan/tesseract/issues/593)) ([db5de0f](https://github.com/spokvulcan/tesseract/commit/db5de0fe623e8448325b10787f21470806a738d0))
+
+
+### Continuous Integration
+
+* bring back the Claude PR review with inline comments ([#575](https://github.com/spokvulcan/tesseract/issues/575)) ([6819b65](https://github.com/spokvulcan/tesseract/commit/6819b653f8e46952e3f1b79639652bed2ee76767))
+
+
+### Miscellaneous Chores
+
+* **deps:** re-pin mlx-swift-lm onto upstream main 9afc3b5 ([#606](https://github.com/spokvulcan/tesseract/issues/606)) ([2ae644b](https://github.com/spokvulcan/tesseract/commit/2ae644bc2f63fe3c46fb26c64773d3de9ec849b4))
+
 ## [1.17.0](https://github.com/spokvulcan/tesseract/compare/v1.16.0...v1.17.0) (2026-09-27)
 
 ### Highlights
