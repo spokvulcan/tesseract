@@ -11,7 +11,7 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../mlx-swift-lm"),
-        .package(url: "https://github.com/spokvulcan/mlx-swift", revision: "6058402c676de25560051acda772e80d86d696d1"),
+        .package(url: "https://github.com/spokvulcan/mlx-swift", revision: "2d1bd1b97d28dd00837bd6634d2698ab2ca16a2e"),
         // swift-transformers pinned to the spokvulcan fork (renderChatTemplate
         // carry, tesseract experiments-ledger C25). Exact-revision pin: SwiftPM
         // cannot mix revision and version requirements for one package, and

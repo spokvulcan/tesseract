@@ -74,6 +74,18 @@ dc43e62d"; `dc43e62d` is an mlx-**swift** revision seen in a stale DerivedData
 checkout, not an mlx revision. The mlx-core the app builds is
 `ce45c52505c8158ea48d2a54e8caae05efd86bfe` (tag `v0.31.1`).
 
+### Carried since 2026-10-03: upstream's MLXLogger (Swift only)
+
+mlx-swift `6058402` -> `2d1bd1b` on `pin-tesseract`: upstream mlx-swift's
+logging shim (`df2fda1` = #484, `2d1bd1b` = #493 without its
+`xcode/MLX.xcodeproj` hunk, which conflicts with this branch's project
+file and which SwiftPM does not read), cherry-picked with `-x`. It adds
+`Source/MLX/Logging.swift` and the `cLogSupport` C target and touches no
+Cmlx code; mlx-swift-lm uses `MLXLogger` since its #535. Both
+Package.swift pins (`Vendor/mlx-swift-lm`, `Vendor/tesseract-speech`)
+moved in lockstep (`docs/mlx-swift-lm-fork.md`, "Current pin
+(2026-10-03)"). Drops for free when the pin reaches mlx-swift 0.32.
+
 ## Why mlx-core is still on v0.31.1 (attempted 2026-07-27)
 
 mlx-core sits at v0.31.1 while upstream has moved 248 commits on (v0.32.0

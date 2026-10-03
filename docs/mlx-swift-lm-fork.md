@@ -32,6 +32,79 @@ the parked Gemma 4 12B multimodal stack (audio encoder + encoder-free
 `gemma4_unified` processor + suppress_tokens) that tesseract draft PR #359
 pins; it rejoins this table's carry list only if that experiment is revived.
 
+## Current pin (2026-10-03)
+
+Base: upstream `main` @ `9afc3b5` (seven commits past tag 3.32.3), 14
+commits past the 2026-09-15 base `c6446cf`. Branch `pin-upstream-mlx-swift`
+was rebuilt on it and force-pushed; the outgoing tips are tagged
+`pin-tip/2026-10-03-51542c4` (the branch) and `pin-tip/2026-10-03-f3307ff`
+(the app's gitlink, on `perf/turboquant-gqa-decode`). The app pins the new
+tip, `01ccea2`.
+
+What upstream brought: **our #631 merged** (the fused GDN projection as
+compile state); a WHT encoder race fix, #650, identical in effect to our
+`0d0a2c6`; the model cache extracted from `MLXFoundationModels` (#603 there);
+named image attachments with an `MLXLogger` in `MLXLMCommon` (#535); tool
+parameter booleans as Swift `Bool` (#653); MTP weights dropped from
+converted Qwen 3.5 VLM checkpoints (#642, the drafter loads them on its
+own); NemotronH dense checkpoints (#635); a synchronize before the
+cache-memory test reads (#667, the test our 2026-09-20 run saw fail); test
+and doc changes (#489, #647, #649, #668); and mlx-swift 0.32.2 then 0.32.3
+(#646, #657).
+
+How the carry moved:
+
+- mlx-swift stays on the fork. Upstream now requires 0.32.3, whose
+  thread-local streams still block us (`docs/mlx-core-fork.md`). Two
+  things in the new base need 0.32's Swift API, and both are met without
+  moving mlx-core:
+  - `576cfb0` `fix(deps): synchronize through Stream() on the pinned
+    mlx-swift` swaps the three `Stream.defaultStream.synchronize()` calls
+    (task-local and internal on 0.31.6) for `Stream()`. Fork-only; drops
+    when the pin reaches 0.32.
+  - `01ccea2` `chore(deps): pin mlx-swift to 2d1bd1b (upstream's
+    MLXLogger)` moves the pin to `spokvulcan/mlx-swift` `pin-tesseract`
+    `2d1bd1b`, which backports mlx-swift's logging shim verbatim (#484,
+    and #493 without its Xcode-project hunk). No Cmlx change.
+    `Vendor/tesseract-speech` moved in lockstep.
+- `b72340f` keeps what #631 did not cover: the DFlash2 verify traces
+  declare the fused projection as compile state too, and
+  `SiblingCycleTests` stays.
+- `97dcda8` keeps only the determinism test from `0d0a2c6`; the kernel fix
+  is upstream's #650.
+- `dc0ca71` (the residual-norm fusion) was re-expressed over #631's trace
+  state; everything else cherry-picked clean and re-hashed.
+
+Validation: serialized `MLXLMTests` green (XCTest 690, 5 skipped; Swift
+Testing 940 in 74 suites), including the cache-memory test that failed on
+the old pin. The app builds in Release, and `tesseractTests` passes (2,959
+tests in 348 suites).
+
+Carried on top of `9afc3b5`, in order (old hash in brackets; the
+2026-09-15 table below describes each):
+
+| Commit | What | Upstream status |
+| --- | --- | --- |
+| `997fa3a` [`536b670`] | mlx-swift fork pin | Permanent local |
+| `576cfb0` (new) | `Stream()` for the pinned mlx-swift | Permanent local until mlx-swift 0.32 |
+| `6b2e8e6` [`4662ad9`] | ChatTemplateRendering (C25) | Not filed |
+| `92e300b` [`a3cb04d`] | DFlash2 | PR #607, open |
+| `d61e1b9` [`6498a02`] | GenerationFinalizingTokenIterator public | Permanent local |
+| `b672912` [`8449a52`] | mlx-swift pin to `6058402` | Permanent local |
+| `8bc9780` `f6ffbde` `dc0ca71` [`1f83de0` `eadbf6c` `35c95ea`] | Qwen 3.5 fusions | Follow-ups to #607 |
+| `5e13bd8` `9181b05` `f5daea3` [`dc9bd1e` `4ad84b2` `530e84e`] | DFlash2 drafter kernels and dtype fix | Follow-ups to #607 |
+| `4f66a6a` [`46f0356`] | Tool-call end-tag scan | PR #625, open |
+| `f8bc9b4` `54a8cbb` `b69e1cb` [`676080b` `602a101` `51542c4`] | Hadamard-rotated checkpoints and stacking | PR #630, open (stacking held back) |
+| `4f53dd3` [`f177464`] | Cache capacity reservation | Prepared, not filed |
+| `3feb7d4` [`4bbca60`] | Indexed key-prefix shard selection | PR #632, open |
+| `b72340f` [`9ad90d7`] | Verify-trace compile state | Rest merged as #631 |
+| `069d9ae` [`f8b4827`] | Stacking frees each block | On #607's branch |
+| `5712f02` `eced762` [`5e353f1` `a3c1776`] | Sibling-cycle citations, trace label style | With #631's follow-up |
+| `00306ea` [`7d8e38e`] | Key prefix by safetensors headers | Not filed |
+| `97dcda8` [`0d0a2c6`] | WHT encode determinism test | Kernel half merged as #650 |
+| `a0f7740` [`f3307ff`] | TurboQuant GQA decode | Not filed |
+| `01ccea2` (new) | mlx-swift pin to `2d1bd1b` | Permanent local |
+
 ## TurboQuant GQA decode (2026-10-03, #603)
 
 The gitlink advances from `7d8e38e` to `f3307ff` on `perf/turboquant-gqa-decode`,
@@ -259,9 +332,8 @@ disclosure line is the owner's to write.
 ## Capacity reservation carry (2026-09-19, #533)
 
 The #533 app branch advanced the gitlink from `51542c4` to `f177464` on
-`codex/533-cache-capacity-reservation`; the current pin (`f3307ff` on
-`perf/turboquant-gqa-decode`) carries that commit underneath the later
-#550 work. This was a fast-forward carry; the shared
+`codex/533-cache-capacity-reservation`; the current pin carries that
+commit (now `4f53dd3`) underneath the later #550 work. This was a fast-forward carry; the shared
 `pin-upstream-mlx-swift` branch and every historical tip remain unchanged. `f177464` adds `KVCache.reserveCapacity(_:)`, honored
 by simple and quantized attention caches and forwarded by CacheList. Allocation
 increments double from 256 rows to 4096; prompt reservations use the initial
@@ -290,7 +362,7 @@ reservation regressions. Both Standards and Spec review are clear after the
 missing-path fix. Test-host model prewarms are disabled.
 No loaded-model, long-context or model-reload campaign was run.
 
-## Current pin (2026-09-15, second cut)
+## Pin of 2026-09-15, second cut (superseded 2026-10-03)
 
 Base: upstream `main` @ `c6446cf` — 9 commits past the 2026-09-03 base
 (`e3d4a20`). The same-day second cut adds #620 (clear the MLX buffer cache
