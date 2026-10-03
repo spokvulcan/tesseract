@@ -2217,9 +2217,11 @@ nonisolated final class ServerCompletion {
     /// allocation (ADR-0007 phase 2). The image-free (or non-conforming)
     /// fallback runs the vendor single-shot `prepare`. Either way decode runs on
     /// the state-threaded iterator so a `.logits` prefill keeps its returned
-    /// state. `kvBits` quantization (and a KV Scheme) is skipped on this path — there is no
+    /// state. `kvBits` quantization is skipped on this path — there is no
     /// capture to protect, and the degraded corner is not worth a per-step
-    /// quantization loop.
+    /// quantization loop. A KV Scheme is not skipped: the iterator converts
+    /// once after its prefill (ADR-0083, amended), and the arm keeps the
+    /// iterator's array as the final cache.
     ///
     /// Converted to the **Model Session** seam (ADR-0016): the arm consumes
     /// the port's verbs, so the sequencing suite drives it with the
@@ -2315,6 +2317,9 @@ nonisolated final class ServerCompletion {
                     prefillMs: prefillMs * 1000
                 )))
 
+        // A KV Scheme replaced the attention entries inside the iterator's
+        // prefill; keep the array decode advances.
+        let finalCacheOwner = FinalGenerationCache(iterator.cache)
         let generatedTokens = GeneratedTokenRecorder()
         let (stream, task) = TokenGenerationLoop.start(
             promptTokenCount: fullTokenCount,
@@ -2328,7 +2333,7 @@ nonisolated final class ServerCompletion {
         return HTTPPrefixCacheGeneration(
             stream: stream,
             completion: task,
-            finalCacheOwner: FinalGenerationCache(cache),
+            finalCacheOwner: finalCacheOwner,
             speculativeArm: nil,
             diagnosticsContext: diagnosticsContext,
             lookupMs: 0,

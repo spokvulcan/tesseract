@@ -113,3 +113,38 @@ under a budget cut, the SSD restart, demotion and hydration, and the image
 scenarios. No plain full-attention layer remained after prefill; the
 `turbo8v4` run passed again after the review fixes. Two DFlash2 passes over
 `turbo8v4` in one process give the same 256-token stream.
+
+## Amendment (2026-10-03): the Unkeyed Completion converts too
+
+Decision 2 named the keyed standard path and DFlash2 and missed the third
+path that prefills a scheme request: the **Unkeyed Completion**, served when
+an image-bearing request's Cache Key Path cannot be built. That path carried
+the scheme and never converted, so its attention stayed at full precision for
+the whole turn. Nothing there is cached, so the cost was RAM only.
+
+The fix follows DFlash2, not the keyed path. On this path the iterator runs
+the prefill: `StateThreadedTokenIterator`'s whole-prompt init calls the
+model's single-shot `prepare` for a text prompt and the anchored vision
+`prepare` for an image. The iterator keeps its own copy of the cache array,
+and a conversion replaces that array's entries, so a `quantizeKVCache` call
+from the Server Completion after building the iterator would leave decode on
+the old layers. The iterator therefore converts at the end of its own
+prefill, once the whole prompt is in the cache and before the first decode
+step, and exposes the array. The Unkeyed Completion keeps that array as its
+final cache.
+
+Both branches convert; the anchored vision branch is not an exception. One
+difference from the keyed path: there the last prompt token runs over the
+converted cache, while here the model's `prepare` has already run it, so the
+first decode step is the first forward over the compressed form. `kvBits`
+stays unapplied on this path (ADR-0007).
+
+Rejected: splitting `prepare` out of the iterator so the Server Completion
+converts as on the keyed path. It needs a new session verb and a second
+iterator form for a rare path, and the broader unification of generation
+starts is separate work. Documenting the skip instead was also rejected: the
+setting promises the smaller cache on every turn.
+
+`ServerCompletionUnkeyedSequencingTests` drives both branches on the toy
+model in `turbo8v4` and checks that every final layer is a
+`TurboQuantKVCache` that decode advanced.
