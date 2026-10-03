@@ -17,6 +17,12 @@ struct HotkeysSettingsPane: View {
         Form {
             Section("Global Hotkeys") {
                 HotkeyRecorderRow(label: "Dictation Push-to-Talk", combo: $settings.hotkey)
+                HotkeyRecorderRow(
+                    label: "Fix Last Take", combo: $settings.fixHotkey,
+                    resetTo: .controlOptionSpace, resetLabel: "Reset to ⌃⌥Space",
+                    help:
+                        "Reopens the last dictated take so you can fix a word by typing the one you meant."
+                )
                 HotkeyRecorderRow(label: "Speak Selected Text", combo: $settings.ttsHotkey)
                 HotkeyRecorderRow(label: "Talk to Tesseract", combo: $settings.agentHotkey)
                 HotkeyRecorderRow(
@@ -79,6 +85,9 @@ struct HotkeyRecorderRow: View {
     @Binding var combo: KeyCombo
     var resetTo: KeyCombo?
     var resetLabel: String = "Reset"
+    /// Effect-first help under the row, for a hotkey whose label alone
+    /// doesn't say what it does.
+    var help: String?
     @State private var isRecording = false
 
     var body: some View {
@@ -111,6 +120,13 @@ struct HotkeyRecorderRow: View {
                 }
                 .buttonStyle(.bordered)
             }
+        }
+
+        if let help {
+            Text(help)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
 
         if combo.isSingleModifier {

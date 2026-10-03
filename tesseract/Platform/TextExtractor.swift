@@ -77,19 +77,9 @@ final class TextExtractor: TextExtracting {
 
     // MARK: - Key Simulation
 
+    /// Cmd+C, marked as Tesseract's own (`SyntheticKeyEvents`).
     private func simulateCopy() {
-        let source = CGEventSource(stateID: .hidSystemState)
-
         let cKeyCode: CGKeyCode = 8  // kVK_ANSI_C
-
-        if let keyDown = CGEvent(keyboardEventSource: source, virtualKey: cKeyCode, keyDown: true) {
-            keyDown.flags = .maskCommand
-            keyDown.post(tap: .cghidEventTap)
-        }
-
-        if let keyUp = CGEvent(keyboardEventSource: source, virtualKey: cKeyCode, keyDown: false) {
-            keyUp.flags = .maskCommand
-            keyUp.post(tap: .cghidEventTap)
-        }
+        SyntheticKeyEvents.post(keyCode: cKeyCode, flags: .maskCommand)
     }
 }

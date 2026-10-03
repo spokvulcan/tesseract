@@ -80,6 +80,9 @@ protocol TranscriptionStoring: AnyObject {
     /// Asks the history surface to reveal (and offer editing on) the entry
     /// linked to a **Correction Pair** — the overlay "edit" affordance's hook.
     func requestFocus(pairID: UUID)
+    /// Rewrites the entry linked to a **Correction Pair** after a fix in the
+    /// **Lens** (PRD #612).
+    func replaceText(forPairID pairID: UUID, with text: String)
 }
 
 @MainActor
@@ -140,6 +143,15 @@ final class TranscriptionHistory: TranscriptionStoring {
     func requestFocus(pairID: UUID) {
         guard let entry = entries.first(where: { $0.pairID == pairID }) else { return }
         focusEntryID = entry.id
+    }
+
+    func replaceText(forPairID pairID: UUID, with text: String) {
+        guard let index = entries.firstIndex(where: { $0.pairID == pairID }),
+            entries[index].text != text
+        else { return }
+        entries[index].text = text
+        saveToDisk()
+        updateFlattenedItems()
     }
 
     func delete(_ entry: TranscriptionEntry) {

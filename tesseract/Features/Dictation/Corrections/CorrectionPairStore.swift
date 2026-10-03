@@ -80,6 +80,17 @@ final class CorrectionPairStore {
         saveToDisk()
     }
 
+    /// Records one word the owner fixed in the **Lens** (PRD #612) and the
+    /// take's text after it: the pair turns gold, and `correction` holds the
+    /// whole corrected take, the gold half of the training pair.
+    func recordFix(_ fix: CorrectionPair.Fix, correctedText: String, for id: UUID) {
+        guard let index = pairs.firstIndex(where: { $0.id == id }) else { return }
+        pairs[index].fixes.append(fix)
+        let trimmed = correctedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        pairs[index].correction = trimmed.isEmpty ? nil : trimmed
+        saveToDisk()
+    }
+
     func delete(_ id: UUID) {
         pairs.removeAll { $0.id == id }
         saveToDisk()

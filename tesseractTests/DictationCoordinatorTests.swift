@@ -72,7 +72,7 @@ final class FakeTextInjector: TextInjecting {
 @MainActor
 final class FakeTranscriptionStore: TranscriptionStoring {
     struct Entry: Equatable {
-        let text: String
+        var text: String
         let duration: TimeInterval
         let model: String
         var pairID: UUID?
@@ -95,6 +95,11 @@ final class FakeTranscriptionStore: TranscriptionStoring {
     func copyLatestToPasteboard() { copyCount += 1 }
 
     func requestFocus(pairID: UUID) { focusRequests.append(pairID) }
+
+    func replaceText(forPairID pairID: UUID, with text: String) {
+        guard let index = entries.firstIndex(where: { $0.pairID == pairID }) else { return }
+        entries[index].text = text
+    }
 }
 
 @MainActor
@@ -831,4 +836,136 @@ struct DictationCoordinatorTests {
         try await waitUntil { coordinator.state == .recording }
         #expect(capture.startCount == 2)
     }
+
+    // MARK: - Learned Words and the Lens (PRD #612)
+
+    /// A committed take pastes the owner's spelling and reaches the Lens with
+    /// its pair, its catches, its app and whether it was pasted.
+    @Test
+    func aCommittedTakeReachesTheLensWithItsCatchesAndApp() async throws {
+        let bundle = try makeFakeModelBundle()
+        defer { try? FileManager.default.removeItem(at: bundle) }
+        let (pairs, cleanup) = makePairStore()
+        defer { cleanup() }
+        let words = LearnedWordStore(
+            directory: FileManager.default.temporaryDirectory
+                .appendingPathComponent("coordinator-learned-\(UUID().uuidString)"))
+        words.learn(heard: "sract", meant: "Tesseract")
+
+        let recognizer = InMemorySpeechRecognizer(
+            result: TranscriptionResult(
+                text: "open the SRACT repo", segments: [], language: "en", processingTime: 0))
+        let engine = try await makeEngine(recognizer: recognizer, bundle: bundle)
+        let injector = FakeTextInjector()
+        let feed = DictationFeed()
+        let terminal = TargetApp(bundleID: "com.apple.Terminal", name: "Terminal", pid: 7)
+        let coordinator = DictationCoordinator(
+            audioCapture: FakeAudioCapture(
+                cannedAudio: AudioData(samples: [0.1, 0.2], sampleRate: 16_000, duration: 2.0)),
+            transcriptionEngine: engine,
+            textInjector: injector,
+            history: FakeTranscriptionStore(),
+            settings: SettingsManager(store: InMemorySettingsStore()),
+            feed: feed,
+            pairs: pairs,
+            learnedWords: words,
+            frontmostApp: { terminal }
+        )
+        var delivered: [DictatedTake] = []
+        coordinator.onTakeCommitted = { take in
+            // Handed over right after the paste, before the commit resolves.
+            #expect(injector.injected.count == 1)
+            delivered.append(take)
+        }
+
+        coordinator.onHotkeyDown()
+        coordinator.onHotkeyUp()
+        try await waitUntil { coordinator.state == .idle && feed.beat != nil }
+
+        #expect(injector.injected == ["Open the Tesseract repo "])
+        let take = try #require(delivered.first)
+        #expect(take.text == "Open the Tesseract repo")
+        #expect(take.pastedText == "Open the Tesseract repo ")
+        #expect(take.catches.map(\.meant) == ["Tesseract"])
+        #expect(take.catches.first?.tokenStart == 2)
+        #expect(take.app == terminal)
+        #expect(take.pastedInto == terminal)
+        #expect(take.pasted)
+        #expect(take.pairID == pairs.pairs.first?.id)
+        #expect(pairs.pairs.first?.learned == "Open the Tesseract repo")
+        #expect(pairs.pairs.first?.cleaned == "Open the SRACT repo")
+    }
+
+    /// A silent capture is never transcribed: no "Thank you." out of silence.
+    @Test
+    func aSilentCaptureIsNotTranscribed() async throws {
+        let bundle = try makeFakeModelBundle()
+        defer { try? FileManager.default.removeItem(at: bundle) }
+        let recognizer = InMemorySpeechRecognizer(
+            result: TranscriptionResult(
+                text: "Thank you.", segments: [], language: "en", processingTime: 0))
+        let engine = try await makeEngine(recognizer: recognizer, bundle: bundle)
+        let injector = FakeTextInjector()
+        let feed = DictationFeed()
+        let coordinator = DictationCoordinator(
+            audioCapture: FakeAudioCapture(
+                cannedAudio: AudioData(
+                    samples: [Float](repeating: 0, count: 32_000), sampleRate: 16_000,
+                    duration: 2.0)),
+            transcriptionEngine: engine,
+            textInjector: injector,
+            history: FakeTranscriptionStore(),
+            settings: SettingsManager(store: InMemorySettingsStore()),
+            feed: feed
+        )
+
+        coordinator.onHotkeyDown()
+        coordinator.onHotkeyUp()
+
+        #expect(coordinator.state == .error(.noSpeechDetected))
+        #expect(injector.injected.isEmpty)
+        #expect(await recognizer.transcribeCount == 0)
+    }
+
+    /// "Insert raw anyway" pastes the Learned Words' spelling, so it counts
+    /// its catches and hands the Lens a take that knows them.
+    @Test
+    func insertingARejectedTakeAnywayCountsAndCarriesItsCatches() async throws {
+        let bundle = try makeFakeModelBundle()
+        defer { try? FileManager.default.removeItem(at: bundle) }
+        let (pairs, cleanup) = makePairStore()
+        defer { cleanup() }
+        let words = LearnedWordStore(
+            directory: FileManager.default.temporaryDirectory
+                .appendingPathComponent("coordinator-raw-\(UUID().uuidString)"))
+        let id = try #require(words.learn(heard: "sract", meant: "Tesseract")?.wordID)
+        let recognizer = InMemorySpeechRecognizer(
+            result: TranscriptionResult(
+                text: "open the SRACT repo", segments: [], language: "en", processingTime: 0))
+        let engine = try await makeEngine(recognizer: recognizer, bundle: bundle)
+        let injector = FakeTextInjector()
+        let feed = DictationFeed()
+        let coordinator = DictationCoordinator(
+            audioCapture: FakeAudioCapture(
+                cannedAudio: AudioData(samples: [0.1, 0.2], sampleRate: 16_000, duration: 2.0)),
+            transcriptionEngine: engine, textInjector: injector,
+            history: FakeTranscriptionStore(),
+            settings: SettingsManager(store: InMemorySettingsStore()), feed: feed,
+            proofreadPass: makeProofreadPass(replying: { _ in "REJECT: mumbling" }),
+            pairs: pairs, learnedWords: words, frontmostApp: { nil })
+        var delivered: [DictatedTake] = []
+        coordinator.onTakeCommitted = { delivered.append($0) }
+
+        coordinator.onHotkeyDown()
+        coordinator.onHotkeyUp()
+        try await waitUntil { coordinator.lastRejectedRaw != nil }
+        #expect(words.word(withID: id)?.totalCatches == 0)
+
+        coordinator.insertRawAnyway()
+        try await waitUntil { !delivered.isEmpty }
+        #expect(injector.injected == ["Open the Tesseract repo "])
+        #expect(delivered.first?.catches.map(\.meant) == ["Tesseract"])
+        #expect(words.word(withID: id)?.totalCatches == 1)
+    }
+
 }

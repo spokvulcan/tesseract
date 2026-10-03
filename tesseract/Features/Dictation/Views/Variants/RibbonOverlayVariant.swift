@@ -323,7 +323,7 @@ struct RibbonOverlayView: View {
                 actions.flagLastTakeWrong()
                 dismissBeat()
             }
-            beatButton("pencil", label: "Edit in history") {
+            beatButton("pencil", label: "Fix a word") {
                 actions.editLastTake()
                 dismissBeat()
             }

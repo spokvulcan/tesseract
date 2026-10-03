@@ -192,6 +192,41 @@ struct SettingsManagerTests {
     }
 
     @Test
+    func fixHotkeyAndProofreadPassResetToTheirDefaults() {
+        // PRD #612: the fix hotkey persists like the other hotkeys, and Reset
+        // to Defaults brings back ⌃⌥Space with the Proofread Pass off.
+        let store = InMemorySettingsStore()
+        let settings = SettingsManager(store: store)
+        settings.fixHotkey = .f5
+        settings.proofreadDictation = true
+        #expect(SettingsManager(store: store).fixHotkey == .f5)
+        #expect(SettingsManager(store: store).proofreadDictation == true)
+
+        settings.resetToDefaults()
+        #expect(settings.fixHotkey == .controlOptionSpace)
+        #expect(settings.proofreadDictation == false)
+
+        let relaunched = SettingsManager(store: store)
+        #expect(relaunched.fixHotkey == .controlOptionSpace)
+        #expect(relaunched.proofreadDictation == false)
+    }
+
+    @Test
+    func aStoredProofreadPassIsTurnedOffOnceAndAnOptInStays() {
+        // PRD #612: installs that stored the old default (`true`, written by
+        // the toggle or by Reset to Defaults) are switched off once.
+        let store = InMemorySettingsStore()
+        SettingsCatalogue.proofreadDictation.write(true, to: store)
+        let settings = SettingsManager(store: store)
+        #expect(settings.proofreadDictation == false)
+
+        // A later opt-in survives every relaunch.
+        settings.proofreadDictation = true
+        #expect(SettingsManager(store: store).proofreadDictation == true)
+        #expect(SettingsManager(store: store).proofreadDictation == true)
+    }
+
+    @Test
     func resetToDefaultsReFiresThroughStore() {
         // Reset runs *after* init, so each assignment fires `didSet` and writes
         // through the store (and re-applies side effects) — exactly as today.
@@ -202,6 +237,8 @@ struct SettingsManagerTests {
         #expect(store.writes.contains("showInDock"))
         #expect(store.writes.contains("prefixCacheSSDBudgetCapBytes"))
         #expect(store.writes.contains("serverPort"))
+        #expect(store.writes.contains("fixHotkeyKeyCode"))
+        #expect(store.writes.contains("fixHotkeyModifiers"))
     }
 
     @Test

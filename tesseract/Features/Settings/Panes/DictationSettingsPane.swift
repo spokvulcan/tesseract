@@ -87,17 +87,22 @@ struct DictationSettingsPane: View {
             } header: {
                 Text("After Transcription")
             } footer: {
-                if settings.proofreadDictation
-                    && !container.modelDownloadManager.isDownloaded(
-                        ModelDefinition.defaultProofreadModelID)
-                {
+                VStack(alignment: .leading, spacing: 4) {
                     Text(
-                        "Types the transcription into the frontmost app, then puts whatever was on the clipboard back. Proofreading needs the Dictation Proofreader model — download it from the Models page."
+                        "Types the transcription into the frontmost app, then puts whatever was on the clipboard back."
                     )
-                } else {
-                    Text(
-                        "Types the transcription into the frontmost app, then puts whatever was on the clipboard back. Proofreading polishes punctuation and misheard words with a small local model when the system is idle."
-                    )
+                    if settings.proofreadDictation
+                        && !container.modelDownloadManager.isDownloaded(
+                            ModelDefinition.defaultProofreadModelID)
+                    {
+                        Text(
+                            "Proofreading needs the Dictation Proofreader model: download it from the Models page."
+                        )
+                    } else {
+                        Text(
+                            "Proofreading rewrites each take with a small local model and can change what you meant, so it is off by default. Fix a misheard word with \(settings.fixHotkey.displayString) instead, and it becomes a Learned Word."
+                        )
+                    }
                 }
             }
 

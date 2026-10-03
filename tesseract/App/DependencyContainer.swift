@@ -44,6 +44,10 @@ final class DependencyContainer: ObservableObject {
     // turn candidates gold.
     lazy var correctionPairStore = CorrectionPairStore()
 
+    // The Learned Words (PRD #612): "heard → meant" replacements the owner's
+    // fixes in the Lens taught, applied by every Voice Capture Session.
+    lazy var learnedWordStore = LearnedWordStore()
+
     // Transcription
     lazy var transcriptionEngine = TranscriptionEngine()
     lazy var transcriptionHistory = TranscriptionHistory()
@@ -156,7 +160,8 @@ final class DependencyContainer: ObservableObject {
         transcriptionEngine: transcriptionEngine,
         settings: settingsManager,
         proofreadPass: proofreadPass,
-        captureDump: captureDumpStore
+        captureDump: captureDumpStore,
+        learnedWords: learnedWordStore
     )
     lazy var capturePanel = CapturePanelController(
         capture: captureService, voice: captureVoiceInput)
@@ -229,7 +234,8 @@ final class DependencyContainer: ObservableObject {
         transcriptionEngine: transcriptionEngine,
         settings: settingsManager,
         proofreadPass: proofreadPass,
-        captureDump: captureDumpStore
+        captureDump: captureDumpStore,
+        learnedWords: learnedWordStore
     )
     /// The floating card rung: the Breakpoint card in a Siri-style glass panel.
     lazy var jarvisPanel: JarvisPanelController = JarvisPanelController(
@@ -361,7 +367,8 @@ final class DependencyContainer: ObservableObject {
         transcriptionEngine: transcriptionEngine,
         settings: settingsManager,
         proofreadPass: proofreadPass,
-        captureDump: captureDumpStore
+        captureDump: captureDumpStore,
+        learnedWords: learnedWordStore
     )
     lazy var composerDraft = ComposerDraftController(conversationImages: { [agent] in
         agent.state.messages.flatMap { message -> [ImageAttachment] in
@@ -469,7 +476,8 @@ final class DependencyContainer: ObservableObject {
                 captureDump: captureDumpStore,
                 isCaptureDumpEnabled: { [settingsManager] in
                     settingsManager.captureDumpEnabled
-                }
+                },
+                learnedWords: learnedWordStore
             ),
             meterLevel: { [dictationFeed] in dictationFeed.level },
             meterSpectrum: { [dictationFeed] in dictationFeed.spectrum },
@@ -649,8 +657,13 @@ final class DependencyContainer: ObservableObject {
             feed: dictationFeed,
             proofreadPass: proofreadPass,
             captureDump: captureDumpStore,
-            pairs: correctionPairStore
+            pairs: correctionPairStore,
+            learnedWords: learnedWordStore
         )
+        // Every committed take is the one ⌃⌥Space reopens in the Lens.
+        coordinator.onTakeCommitted = { [weak self] take in
+            self?.dictationLens.takeCommitted(take)
+        }
         // The Live Partial pump (ticket #291) runs only while the selected
         // variant consumes the signal — the coordinator reads a policy
         // closure; which variant is live never crosses into the pipeline.
@@ -662,11 +675,39 @@ final class DependencyContainer: ObservableObject {
         return coordinator
     }()
 
+    /// The **Lens** (PRD #612, ADR-0085): ⌃⌥Space reopens the last take to fix
+    /// a word by typing the one meant.
+    lazy var dictationLens: LensController = makeDictationLens()
+
+    private func makeDictationLens() -> LensController {
+        let replacer = InAppReplacer(
+            injector: textInjector,
+            inputCount: { [hotkeyManager] in hotkeyManager.inputCount })
+        let controller = LensController(
+            model: LensModel(
+                learnedWords: learnedWordStore, pairs: correctionPairStore,
+                history: transcriptionHistory),
+            pasteBack: LensController.PasteBack(replacer: replacer),
+            inputCount: { [hotkeyManager] in hotkeyManager.inputCount },
+            vocabulary: { [learnedWordStore, correctionPairStore] in
+                LensVocabulary.build(
+                    learned: learnedWordStore.words,
+                    recentTexts: correctionPairStore.pairs.prefix(200).compactMap {
+                        $0.correction ?? $0.committed
+                    })
+            },
+            isDictating: { [dictationFeed] in dictationFeed.phase.isActive })
+        controller.presenter = LensPanelPresenter(controller: controller)
+        controller.watch(dictationFeed)
+        return controller
+    }
+
     /// The variant-agnostic overlay action surface (ticket #289): variants
     /// render the feed and call these — they never see the coordinator.
     lazy var overlayActions = OverlayActions(
         flagLastTakeWrong: { [weak self] in self?.dictationCoordinator.flagLastTakeWrong() },
-        editLastTake: { [weak self] in self?.dictationCoordinator.editLastTake() },
+        // The pencil opens the take in the Lens, where fixing a word lives.
+        editLastTake: { [weak self] in self?.dictationLens.reopenLastTake() },
         insertRawAnyway: { [weak self] in self?.dictationCoordinator.insertRawAnyway() }
     )
 
@@ -801,6 +842,13 @@ final class DependencyContainer: ObservableObject {
                     combo: settingsManager.hotkey,
                     onDown: { [weak self] in self?.dictationCoordinator.onHotkeyDown() },
                     onUp: { [weak self] in self?.dictationCoordinator.onHotkeyUp() }
+                )
+                // Register the fix hotkey (⌃⌥Space by default): reopens the
+                // last take in the Lens to fix a word by typing the one meant.
+                hotkeyManager.registerHotkey(
+                    id: HotkeyManager.fixLastTakeHotkeyID,
+                    combo: settingsManager.fixHotkey,
+                    onDown: { [weak self] in self?.dictationLens.fixHotkeyPressed() }
                 )
                 // Register TTS hotkey. In a voice session it and the Agent
                 // hotkey are the interrupt key: Jarvis stops and listens
@@ -966,6 +1014,10 @@ final class DependencyContainer: ObservableObject {
                 },
                 updateCaptureHotkey: { [hotkeyManager] in
                     hotkeyManager.updateRegisteredHotkey(id: "capture", combo: $0)
+                },
+                updateFixHotkey: { [hotkeyManager] in
+                    hotkeyManager.updateRegisteredHotkey(
+                        id: HotkeyManager.fixLastTakeHotkeyID, combo: $0)
                 },
                 startHTTPServer: { [httpServer] in
                     await httpServer.start()

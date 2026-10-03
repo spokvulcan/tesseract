@@ -14,8 +14,8 @@ struct OverlayActions {
     /// One-click "that was wrong" on the last take — marks its Correction
     /// Pair gold. No window, no focus steal.
     let flagLastTakeWrong: @MainActor () -> Void
-    /// Opens the dictation history at the last take's entry (full editing
-    /// lives there — the overlay stays keyboard-free).
+    /// Opens the last take in the **Lens** (PRD #612), where a word is fixed
+    /// by typing the one meant.
     let editLastTake: @MainActor () -> Void
     /// Injects the raw text of a rejected take anyway (and flags its pair —
     /// using it *is* "the pass was wrong").

@@ -94,6 +94,8 @@ final class AppBindings {
         let updateAppshotHotkey: @MainActor (KeyCombo) -> Void
         /// Re-binds the capture hotkey (a thought into Reminders from any app).
         let updateCaptureHotkey: @MainActor (KeyCombo) -> Void
+        /// Re-binds the fix hotkey (reopens the last take in the **Lens**).
+        let updateFixHotkey: @MainActor (KeyCombo) -> Void
         let startHTTPServer: @MainActor () async -> Void
         let stopHTTPServer: @MainActor () -> Void
         let updateHTTPServerPort: @MainActor (UInt16) async -> Void
@@ -120,6 +122,7 @@ final class AppBindings {
             updateAgentHotkey: @escaping @MainActor (KeyCombo) -> Void,
             updateAppshotHotkey: @escaping @MainActor (KeyCombo) -> Void,
             updateCaptureHotkey: @escaping @MainActor (KeyCombo) -> Void = { _ in },
+            updateFixHotkey: @escaping @MainActor (KeyCombo) -> Void = { _ in },
             startHTTPServer: @escaping @MainActor () async -> Void,
             stopHTTPServer: @escaping @MainActor () -> Void,
             updateHTTPServerPort: @escaping @MainActor (UInt16) async -> Void,
@@ -140,6 +143,7 @@ final class AppBindings {
             self.updateAgentHotkey = updateAgentHotkey
             self.updateAppshotHotkey = updateAppshotHotkey
             self.updateCaptureHotkey = updateCaptureHotkey
+            self.updateFixHotkey = updateFixHotkey
             self.startHTTPServer = startHTTPServer
             self.stopHTTPServer = stopHTTPServer
             self.updateHTTPServerPort = updateHTTPServerPort
@@ -415,8 +419,9 @@ final class AppBindings {
         effects.setOverlayInteractive(false)
     }
 
-    /// The TTS / agent / appshot hotkey re-binds — same shape as the dictation
-    /// hotkey subscription, minus its unchanged-combo launch guard.
+    /// The TTS, agent, appshot, capture and fix hotkey re-binds: same shape as
+    /// the dictation hotkey subscription, minus its unchanged-combo launch
+    /// guard.
     private func installAuxiliaryHotkeySubscriptions() {
         observationTasks.append(
             Task { [weak self] in
@@ -444,6 +449,13 @@ final class AppBindings {
                 guard let self else { return }
                 for await hotkey in Observations({ self.settings.captureHotkey }) {
                     self.effects.updateCaptureHotkey(hotkey)
+                }
+            })
+        observationTasks.append(
+            Task { [weak self] in
+                guard let self else { return }
+                for await hotkey in Observations({ self.settings.fixHotkey }) {
+                    self.effects.updateFixHotkey(hotkey)
                 }
             })
     }

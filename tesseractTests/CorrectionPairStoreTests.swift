@@ -134,4 +134,42 @@ struct CorrectionPairStoreTests {
         }
         #expect(decoded.map(\.rawASR) == ["first", "second"])
     }
+
+    // MARK: - Fixes in the Lens (PRD #612)
+
+    /// A fix in the Lens turns the pair gold, records the heard and meant
+    /// words with how and where, and keeps the whole corrected take.
+    @Test func aFixInTheLensMakesThePairGold() throws {
+        let directory = makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = CorrectionPairStore(directory: directory)
+        let pair = makePair(raw: "ask cloud", committed: "Ask cloud", verdict: .skipped)
+        store.record(pair)
+        #expect(store.pair(withID: pair.id)?.isGold == false)
+
+        let fix = CorrectionPair.Fix(
+            heard: "cloud", meant: "Claude", how: .afterPaste, app: "com.apple.Terminal",
+            at: Date(timeIntervalSince1970: 1_000))
+        store.recordFix(fix, correctedText: "Ask Claude", for: pair.id)
+
+        let reloaded = try #require(CorrectionPairStore(directory: directory).pair(withID: pair.id))
+        #expect(reloaded.isGold)
+        #expect(reloaded.fixes == [fix])
+        #expect(reloaded.correction == "Ask Claude")
+    }
+
+    /// Pairs written before PRD #612 (no `learned`, no `fixes`) still load.
+    @Test func pairsFromBeforeLearnedWordsStillLoad() throws {
+        let json = """
+            {"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","timestamp":"2026-09-01T10:00:00Z",
+             "rawASR":"helo","cleaned":"Helo","verdict":"skipped","committed":"Helo",
+             "flaggedWrong":false,"conditions":{"duration":1,"language":"en","asrModel":"W"}}
+            """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let pair = try decoder.decode(CorrectionPair.self, from: Data(json.utf8))
+        #expect(pair.learned == nil)
+        #expect(pair.fixes.isEmpty)
+        #expect(!pair.isGold)
+    }
 }

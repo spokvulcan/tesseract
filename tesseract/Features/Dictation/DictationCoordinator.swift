@@ -28,6 +28,9 @@ final class DictationCoordinator {
     /// so "insert raw anyway" (an overlay affordance, or this API directly)
     /// can still deliver the user's words.
     private(set) var lastRejectedRaw: String?
+    /// What the Learned Words caught in that raw text: counted, and marked
+    /// in the Lens, if it is inserted anyway.
+    private var lastRejectedCatches: [LearnedWordCatch] = []
 
     /// The current lifecycle phase — a read-through to the feed, kept as the
     /// coordinator's public state surface for the in-window views and tests.
@@ -43,6 +46,11 @@ final class DictationCoordinator {
     /// *lifecycle* still belongs to the session; the pump only reads.
     private let audioCapture: any AudioCapturing
     private let transcriptionEngine: any Transcribing
+
+    /// The app in front now: read again at the paste, where a fix goes back.
+    private let frontmostApp: @MainActor () -> TargetApp?
+    /// Held for "insert raw anyway", which commits outside the session.
+    private let learnedWords: (any LearnedWordApplying)?
 
     /// The **Proofread Pass**, injected by the composition root; `nil` in
     /// tests that don't exercise it. The coordinator wraps it so the feed
@@ -62,6 +70,11 @@ final class DictationCoordinator {
     /// onto the dictation page. Set by the app delegate (window management
     /// is its turf); the coordinator only decides *when*.
     var onOpenDictationHistory: (@MainActor () -> Void)?
+
+    /// Every committed take, handed to the **Lens** (PRD #612) the moment it
+    /// lands, so ⌃⌥Space can reopen it. Called right after the paste, before
+    /// anything else can type into the app.
+    var onTakeCommitted: (@MainActor (DictatedTake) -> Void)?
 
     /// The maximum-recording-duration auto-stop. Caller-owned: it finalizes a stuck
     /// recording, which is a dictation-presentation concern, not part of the shared
@@ -97,13 +110,19 @@ final class DictationCoordinator {
         feed: DictationFeed,
         proofreadPass: ProofreadPass? = nil,
         captureDump: (any CaptureDumpStoring)? = nil,
-        pairs: CorrectionPairStore? = nil
+        pairs: CorrectionPairStore? = nil,
+        learnedWords: (any LearnedWordApplying)? = nil,
+        frontmostApp: @escaping @MainActor () -> TargetApp? = { TargetApp.frontmost() }
     ) {
+        self.frontmostApp = frontmostApp
+        self.learnedWords = learnedWords
         self.session = VoiceCaptureSession(
             audioCapture: audioCapture,
             transcriptionEngine: transcriptionEngine,
             captureDump: captureDump,
-            isCaptureDumpEnabled: { settings.captureDumpEnabled }
+            isCaptureDumpEnabled: { settings.captureDumpEnabled },
+            learnedWords: learnedWords,
+            frontmostApp: frontmostApp
         )
         self.textInjector = textInjector
         self.history = history
@@ -286,6 +305,12 @@ final class DictationCoordinator {
         case .tooShort:
             handleError(.recordingTooShort)
             DictationPerf.markResolved("error(tooShort)")
+        case .silent:
+            // Nothing was said: no transcription, so no "Thank you." pasted
+            // out of silence.
+            handleError(.noSpeechDetected)
+            feed.emit(.empty)
+            DictationPerf.markResolved("error(silent)")
         case .audio(let audioData, let dumpFile):
             process(audioData, dumpFile: dumpFile)
         }
@@ -322,12 +347,14 @@ final class DictationCoordinator {
             // link to it). Every take is a candidate — the flywheel collects
             // from day one; flags and edits turn candidates gold.
             var recordedPairID: UUID?
-            var onTake: (@MainActor (VoiceCaptureSession.Take) -> Void)?
-            if let pairs {
-                onTake = { [settings] take in
+            var observedTake: VoiceCaptureSession.Take?
+            let onTake: @MainActor (VoiceCaptureSession.Take) -> Void = { [settings, pairs] take in
+                observedTake = take
+                if let pairs {
                     let pair = CorrectionPair(
                         rawASR: take.rawASR,
                         cleaned: take.cleaned,
+                        learned: take.catches.isEmpty ? nil : take.learned,
                         proofread: {
                             if case .corrected(let text, _) = take.verdict { return text }
                             return nil
@@ -374,6 +401,14 @@ final class DictationCoordinator {
                     DictationPerf.record(
                         span: "inject", ms: DictationPerf.msSince(injectStart))
                 }
+                // Straight after the paste, before another key can reach the
+                // app: the Lens anchors "still the last thing typed" here.
+                onTakeCommitted?(
+                    DictatedTake(
+                        pairID: recordedPairID, text: text,
+                        catches: Self.catches(of: observedTake, committed: text),
+                        app: observedTake?.app, pasted: settings.autoInsertText,
+                        pastedInto: settings.autoInsertText ? frontmostApp() : nil))
             }
             DictationPerf.record(span: "session", ms: DictationPerf.msSince(sessionStart))
 
@@ -395,6 +430,7 @@ final class DictationCoordinator {
                 // phase returns to idle — no error gate. The beat carries the
                 // raw text for "insert raw anyway".
                 lastRejectedRaw = raw
+                lastRejectedCatches = observedTake?.catches ?? []
                 lastTakePairID = recordedPairID
                 feed.setPhase(.idle)
                 feed.emit(.rejected(raw: raw, reason: reason))
@@ -442,7 +478,19 @@ final class DictationCoordinator {
                 ?? settings.selectedSpeechToTextModelID,
             pairID: lastTakePairID
         )
-        guard settings.autoInsertText else { return }
+        // The raw text is now the last take: ⌃⌥Space must reopen it, and a
+        // fix must measure against what this paste typed, not the take before.
+        let catches = lastRejectedCatches
+        lastRejectedCatches = []
+        let take = DictatedTake(
+            pairID: lastTakePairID, text: raw, catches: catches, app: session.targetApp,
+            pasted: settings.autoInsertText,
+            pastedInto: settings.autoInsertText ? frontmostApp() : nil)
+        guard settings.autoInsertText else {
+            learnedWords?.recordCatches(catches)
+            onTakeCommitted?(take)
+            return
+        }
         textInjector.restoreClipboard = settings.restoreClipboard
         Task {
             // Surface a failed injection: the loan can refuse to borrow the
@@ -450,6 +498,8 @@ final class DictationCoordinator {
             // and a silent no-op here reads as the button doing nothing.
             do {
                 try await textInjector.inject(raw + " ")
+                learnedWords?.recordCatches(catches)
+                onTakeCommitted?(take)
             } catch let error as DictationError {
                 handleError(error)
             } catch {
@@ -473,6 +523,16 @@ final class DictationCoordinator {
         guard let lastTakePairID else { return }
         history.requestFocus(pairID: lastTakePairID)
         onOpenDictationHistory?()
+    }
+
+    /// The take's catches, positioned in the committed text (the Proofread
+    /// Pass may have rewritten it after the Learned Words ran).
+    private static func catches(
+        of take: VoiceCaptureSession.Take?, committed text: String
+    ) -> [LearnedWordCatch] {
+        guard let take, !take.catches.isEmpty else { return [] }
+        return take.learned == text
+            ? take.catches : LearnedWordMatcher.relocate(take.catches, in: text)
     }
 
     private static func pairVerdict(

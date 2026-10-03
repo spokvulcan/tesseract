@@ -233,6 +233,23 @@ struct AppBindingsTests {
             })
     }
 
+    @Test
+    func fixHotkeyChangeReBindsItsRegistration() async {
+        let h = makeHarness()
+        defer { h.bindings.stop() }
+
+        h.bindings.start()
+
+        let combo = KeyCombo(keyCode: 3, modifiers: [.control, .option])
+        h.settings.fixHotkey = combo
+
+        #expect(
+            await waitUntil {
+                h.recorder.events(withPrefix: "updateFixHotkey").last
+                    == "updateFixHotkey(\(combo.displayString))"
+            })
+    }
+
     /// The selected model is never silently switched: turning the Companion
     /// on leaves the owner's agent model alone.
     @Test
@@ -610,6 +627,7 @@ private func makeHarness(
             updateAgentHotkey: { recorder("updateAgentHotkey(\($0.displayString))") },
             updateAppshotHotkey: { recorder("updateAppshotHotkey(\($0.displayString))") },
             updateCaptureHotkey: { recorder("updateCaptureHotkey(\($0.displayString))") },
+            updateFixHotkey: { recorder("updateFixHotkey(\($0.displayString))") },
             startHTTPServer: { recorder("startHTTPServer") },
             stopHTTPServer: { recorder("stopHTTPServer") },
             updateHTTPServerPort: { recorder("updateHTTPServerPort(\($0))") },

@@ -582,7 +582,7 @@ private struct WhisperCommittedChip: View {
                 actions.flagLastTakeWrong()
                 dismiss()
             }
-            chipButton("pencil", label: "Edit in history") {
+            chipButton("pencil", label: "Fix a word") {
                 actions.editLastTake()
                 dismiss()
             }

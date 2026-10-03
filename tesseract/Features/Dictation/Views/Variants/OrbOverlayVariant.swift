@@ -344,7 +344,7 @@ struct OrbOverlayView: View {
                     actions.flagLastTakeWrong()
                     dismissBeat()
                 }
-                toastButton("pencil", label: "Edit in history") {
+                toastButton("pencil", label: "Fix a word") {
                     actions.editLastTake()
                     dismissBeat()
                 }

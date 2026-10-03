@@ -90,6 +90,7 @@ tesseract/
 │   ├── ObjCExceptions.swift           # NSException → thrown error seam (wraps AVFAudio graph steps)
 │   ├── ObjCExceptionCatcher.h/.m      # The one Objective-C file: the @try behind ObjCExceptions
 │   ├── TextInjector.swift             # Clipboard-based paste injection
+│   ├── InAppReplacer.swift            # Puts a Lens fix back in the app (ADR-0085)
 │   ├── TextExtractor.swift            # Selected text extraction
 │   ├── MenuBarManager.swift           # Status bar menu (NSStatusItem)
 │   ├── OverlayPanel.swift             # Dumb fixed-frame overlay host (NSPanel)
@@ -105,6 +106,8 @@ tesseract/
 │   │   ├── OverlayVariants.swift      # Overlay Variant registry (exploration scaffolding)
 │   │   ├── Proofread/                 # Proofread Pass (ADR-0034): policy, verdicts, MLX adapter
 │   │   ├── Corrections/               # Correction Pair flywheel (#289): value + bounded store
+│   │   ├── LearnedWords/              # Learned Words (ADR-0085): store, matcher, sounds-alike key
+│   │   ├── Lens/                      # Lens (ADR-0085): the fix card and the type-the-word fix
 │   │   └── Views/                     # Recording UI components + overlay variants
 │   ├── Speech/                        # engine v2 lives in Vendor/tesseract-speech
 │   │   ├── SpeechCoordinator.swift    # @Observable orchestrator; drains engine events
@@ -556,6 +559,9 @@ All AppKit bridging lives in `Platform/`. These are the features that SwiftUI ca
 
 - Global hotkeys (CGEventTap)
 - Clipboard text injection (CGEvent Cmd+V simulation)
+- Putting a Lens fix back in the app: the changed text selected back through
+  Accessibility and pasted over, or erased with backspaces and the fix pasted,
+  never in a password field (`InAppReplacer`)
 - Always-on-top overlay panels (NSPanel)
 - Menu bar status item (NSStatusItem)
 - The Speech Overlay: the words being read, over every app (a separate panel)
@@ -581,10 +587,23 @@ The Overlay Panel is a dumb, fixed-frame host: created once at launch, permanent
            └─► SpeechRecognizer port → WhisperKit inference → TranscriptionResult
 
 3. Post-processing
-   └─► TranscriptionPostProcessor → TextInjector.inject()
-       ├─► Copy to clipboard
-       └─► Simulate Cmd+V
+   └─► TranscriptionPostProcessor → Learned Words → Proofread Pass (opt-in)
+       └─► TextInjector.inject()
+           ├─► Copy to clipboard
+           └─► Simulate Cmd+V
+
+4. Fixing a word after the paste (Control+Option+Space, ADR-0085)
+   └─► Lens opens on the last take; the owner types the word meant
+       ├─► LensFix picks the words it replaces and decides what the fix teaches
+       ├─► LearnedWordStore learns it (or leaves a word alone in that app)
+       ├─► CorrectionPairStore marks the take gold with the fix
+       └─► InAppReplacer puts the fix in the app, only while the pasted
+           text is still the last thing typed there
 ```
+
+A silent capture stops before step 2's transcription. Learned Words apply inside
+the Voice Capture Session, so Voice Input and the Companion's captures gain them
+too.
 
 ### Audio Format Pipeline
 

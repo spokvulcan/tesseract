@@ -11,7 +11,8 @@
 //  The macOS 27.0 focus freeze (tools/overlay-focus-hang-lab): a focusable
 //  control that appears after the first layout freezes the main thread. So
 //  hosted content keeps every button `.focusable(false)` and creates its text
-//  field in the first layout, never later.
+//  field in the first layout, never later. The Lens (PRD #612) shares it too,
+//  anchored at the bottom of the screen and seeing its key presses first.
 //
 
 import AppKit
@@ -25,6 +26,15 @@ final class GlassPanel: NSPanel {
 
     /// Called when the panel should go away (Escape).
     var onCancel: (() -> Void)?
+
+    /// Sees each key press before the panel's views do; returning true
+    /// swallows it. The Lens takes ⇥, ↩, Esc and the arrows here, so its
+    /// text field only ever receives the word being typed.
+    var interceptKeyDown: ((NSEvent) -> Bool)?
+
+    /// Told of every key press (not its repeats) and click the panel
+    /// receives, before anything handles it.
+    var onInput: (() -> Void)?
 
     private let glass: NSGlassEffectView
 
@@ -71,6 +81,22 @@ final class GlassPanel: NSPanel {
         setFrame(frame, display: true, animate: false)
     }
 
+    /// Resize, keeping the bottom edge where it is.
+    func setHeightKeepingBottom(_ height: CGFloat) {
+        var frame = self.frame
+        frame.size.height = height
+        setFrame(frame, display: true, animate: false)
+    }
+
+    /// Centred horizontally near the bottom of `screen`'s visible frame,
+    /// where the dictation overlay sits.
+    func placeBottomCenter(on screen: NSScreen? = NSScreen.main, fromBottom: CGFloat) {
+        guard let screen else { return }
+        let visible = screen.visibleFrame
+        setFrameOrigin(
+            NSPoint(x: visible.midX - frame.width / 2, y: visible.minY + fromBottom))
+    }
+
     /// Top-right of the visible frame, the Siri panel's corner.
     func placeTopRight(margin: CGFloat = 16) {
         guard let screen = NSScreen.main else { return }
@@ -90,5 +116,18 @@ final class GlassPanel: NSPanel {
 
     override func cancelOperation(_ sender: Any?) {
         onCancel?()
+    }
+
+    override func sendEvent(_ event: NSEvent) {
+        switch event.type {
+        case .keyDown where !event.isARepeat, .leftMouseDown, .rightMouseDown, .otherMouseDown:
+            onInput?()
+        default:
+            break
+        }
+        if event.type == .keyDown, let interceptKeyDown, interceptKeyDown(event) {
+            return
+        }
+        super.sendEvent(event)
     }
 }
