@@ -1176,7 +1176,7 @@ the **Read-Along**; a recording test peer makes the segment-boundary switch
 assertable. In engine v2 its switch timing comes from **Segment Script**
 ground truth, not playback bookkeeping.
 _Avoid_: notch overlay / TTSNotchPanelController (retired adapter, not the seam),
-highlight view, **Overlay Panel** (the separate dictation HUD surface).
+highlight view, the **Lens** (the separate dictation overlay).
 
 ### Speech page (ADR-0076)
 
@@ -1202,7 +1202,7 @@ It shows one continuous feed of the reading: the heard line on top, the next
 below, the column moving up a line as the voice reaches it; text is never
 swapped in place (ADR-0077). In its automatic scope it hides while the Speech
 page is in front. Replaced the TTS notch.
-_Avoid_: notch, TTS notch panel (retired), **Overlay Panel** (the dictation HUD),
+_Avoid_: notch, TTS notch panel (retired), the **Lens** (the dictation overlay),
 pages (its retired two-line pages).
 
 **Voice Source**:
@@ -1905,8 +1905,8 @@ on, the pass reads the text after them. Strictly fail-open: disabled, model not
 downloaded, the LLM generating (skip-when-busy — it *reads* whether the **LLM Gate**
 is held, never waits on it), budget overrun, or any error all commit the raw text
 unchanged. Runs inside the **Voice Capture Session**, so dictation and
-**Voice Input** both gain it; its word-level edits ride the commit for overlay
-narration, and a rejected take's raw text stays available for "insert raw anyway".
+**Voice Input** both gain it; its word-level edits ride the commit, and a rejected
+take's raw text stays available for the **Lens**'s "Insert anyway".
 _Avoid_: post-processing (the regex cleanup that always runs, pass or no pass),
 autocorrect, grammar check, second agent (it is a fixed-prompt pass, not an agent).
 
@@ -1917,10 +1917,10 @@ correction — plus capture conditions and a Capture Dump audio reference; the l
 bounded, exportable training-pair collection the flywheel feeds from day one. Every
 take is a *candidate*; an owner signal (a word fixed in the **Lens**, recorded with
 the heard and meant words, how the take was reached and the app; a correction edit
-in the history; or a one-click wrong-flag from the overlay's lingering beat) makes
-it *gold* — evicted last, its audio exempt from the dump's ring eviction. The
-**Lens** takes the keyboard while a take is being fixed; full-text editing lives in
-the history window.
+or the wrong-flag in the history; or "Insert anyway" on a take the **Proofread Pass**
+rejected) makes it *gold*: evicted last, its audio exempt from the dump's ring
+eviction. The **Lens** takes the keyboard while a take waits or is being fixed;
+full-text editing lives in the history window.
 _Avoid_: training data (unqualified — pairs are candidates until gold),
 feedback log, transcription history (the sibling store it links to by id),
 fine-tune corpus (the export's *consumer*, out of scope — see the map).
@@ -1943,22 +1943,44 @@ snippet.
 **Catch**:
 One application of a **Learned Word** to a take: the misheard words it replaced in
 that take's text. Counted per day once the take commits (a rejected, failed or
-superseded take caught nothing); a catch the owner fixes back in the **Lens** is
-taken back.
+superseded take caught nothing, and a catch shown in the **Live Preview** is not
+counted); a catch the owner fixes back in the **Lens** is taken back.
 _Avoid_: correction or fix (the owner's act; a catch is the app's), hit, match.
 
 **Lens**:
-The dictation card where a take is fixed: a glass panel at the bottom center of the
-screen that the fix hotkey (⌃⌥Space) opens on the last take. The owner types the
-word they meant; the Lens picks the words that sound like it (← → or a click pick by
-hand). A fix makes the take's **Correction Pair** gold, teaches a **Learned Word**
-when it is a mishearing, and goes back into the app while the pasted text is still
-the last thing typed there. It takes the keyboard only while a take is being fixed and gives focus
-back when done (ADR-0084). For now the recording overlay is still the **Overlay
-Variant**; the Lens becomes the one dictation overlay when it streams (PRD #612).
-_Avoid_: overlay (unqualified: the **Overlay Panel** hosts the recording overlay),
-editor, fix window, popup, history editor (the full-text editor in the history
-window).
+The one dictation overlay: a glass card at the bottom center of the screen that
+shows a take while it is recorded (the **Live Preview**), while it finishes, as it
+lands (the words the preview had wrong settle into place), while it waits as a
+**Held Take**, and while it is fixed. The fix hotkey (⌃⌥Space) reopens the last
+take; the owner types the word they meant, and the Lens picks the words that sound
+like it (← → or a click pick by hand). A fix makes the take's **Correction Pair**
+gold, teaches a **Learned Word** when it is a mishearing, and goes back into the app
+while the pasted text is still the last thing typed there. It never takes focus
+while listening: it takes the keyboard only while a take waits or is being fixed,
+and gives focus back when done (ADR-0084, ADR-0085).
+_Avoid_: overlay (unqualified), pill, HUD, Overlay Variant and Overlay Panel (both
+retired: the Lens replaced the variant registry, its Setting and the pill's
+fixed-frame panel), editor, fix window, popup, history editor (the full-text
+editor in the history window).
+
+**Live Preview**:
+What the **Lens** shows while a take is recorded: the same Whisper model's decodes
+of the take so far, read the way the take will be (the regex cleanup and the
+**Learned Words**, so a learned word flips as it is heard), as confirmed words and
+a provisional tail that the next decode rewrites. Only ever shown: what pastes is
+the full pass over the whole take after release (ADR-0085). Succeeds the Live
+Partial signal (#291).
+_Avoid_: Live Partial (the retired trailing-window signal), partial, caption,
+streamed transcript (streamed text is never pasted), interim result.
+
+**Held Take**:
+A take that waits in the **Lens** instead of pasting: committed (history,
+**Correction Pair**, **Catches**) but pasted only when the owner presses ↩, with
+any fixes. Esc or clicking away keeps it unpasted, and the fix hotkey brings it
+back. The Check Before Pasting setting decides which takes are held: one where the
+owner tapped ⇧ while talking (the default), every take, or none (ADR-0085).
+_Avoid_: waiting take (the Lens's state, not the take), pending paste, draft,
+queued take.
 
 ### Voice session (Companion)
 
@@ -2424,46 +2446,25 @@ _Avoid_: writing a global alpha, tuner→manager callbacks or weak back-referenc
 
 ### Overlay presentation
 
-**Overlay Panel**:
-The transparent, click-through global `NSPanel` that floats above all apps and
-hosts the live **Overlay Variant**'s view — a dumb, fixed-frame canvas that is
-created once, stays permanently ordered front, and never resizes, fades, or
-reacts to dictation state itself: all visibility and motion belong to the
-hosted SwiftUI content. Takes its **Overlay Placement** at construction and
-swaps hosted content on demand; the **Speech Overlay** is a separate panel,
-not an Overlay Panel.
-_Avoid_: overlay controller / manager, HUD window, generic NSPanel wrapper,
-show/hide or animated-frame panel APIs (retired — SwiftUI owns all motion),
-config-flag panel, the **Speech Overlay** (a separate, interactive surface), the
-full-screen border overlay (retired — a legacy MVP exploration).
-
 **Overlay Placement**:
-Where an **Overlay Panel**'s fixed canvas sits for a given **Screen Geometry**,
-expressed as a state-free pure value an **Overlay Variant** brings along with
-its hosted view. One preset exists — pill.
+Where a floating panel's fixed canvas sits for a given **Screen Geometry**: a
+state-free pure value, so the canvas never moves or resizes with what it shows.
+The Companion's voice overlay concepts bring one along; the **Lens** places its own
+glass panel, and the pill's placement went with the pill.
 _Avoid_: layout strategy, frame provider, per-state frames or resize-animation
 flags (retired — the canvas is fixed), overlay style (the retired
 pill-vs-border user **Setting**).
 
 **Overlay Feed**:
-The one variant-agnostic surface of dictation signals every **Overlay Variant**
-renders from: typed lifecycle phases, typed errors, terminal outcome beats
-carrying the committed text, and the audio meter (level + spectrum). The
-dictation coordinator is its sole phase/beat writer; the capture engine's meter
-stream drives its meter. Variants consume the feed and nothing else, so the
-dictation pipeline never learns which variant is live.
+The one surface of dictation signals the **Lens** renders from: typed lifecycle
+phases, typed errors, terminal outcome beats carrying the committed text, the
+**Live Preview** while recording, the take's app, whether ⇧ held the take, and the
+audio meter (level + spectrum). The dictation coordinator writes everything but the
+meter, which the capture engine's meter stream drives. The Lens follows the feed
+itself, so the dictation pipeline never learns what draws it.
 _Avoid_: overlay state / OverlayState (retired push-model object), view model,
-pre-flattened error strings, per-variant state surfaces.
-
-**Overlay Variant**:
-One live dictation-overlay design exploration (map #283): a hosted view over
-the shared **Overlay Feed** plus the **Overlay Placement** of the canvas it
-draws in, selected at runtime by a **Setting** and switchable live. Exploration
-scaffolding — the registry and its Setting are deleted when the redesign
-program prunes to one winner. The winner is the **Lens** (Voice capture), which
-today only fixes a take and takes over recording when it streams (PRD #612).
-_Avoid_: theme, skin, style, prototype window (variants live in the real
-panel), a permanent plugin surface (it is scaffolding).
+pre-flattened error strings, per-variant state surfaces (retired with the Overlay
+Variants).
 
 **Screen Geometry**:
 The plain screen rectangles — full frame and visible frame — that an **Overlay
@@ -2528,8 +2529,8 @@ class; per-setting device checks (the tier answers them all, once).
 
 **App Bindings**:
 The module owning the app's launch sequence and every long-lived runtime subscription
-that carries a rule (model auto-load and hot-swap, lazy-reload guards, server and
-overlay-style reactions, hotkey rebinding, the single dictation-state fan-out) — the
+that carries a rule (model auto-load and hot-swap, lazy-reload guards, server
+reactions, hotkey rebinding, the single dictation-state fan-out) — the
 launch-time mirror of the teardown-owning termination coordinator. Distinct from the
 composition root, which stays pure wiring with no behaviour.
 _Avoid_: app glue (pre-carve working name), setup() behaviour, launch coordinator,

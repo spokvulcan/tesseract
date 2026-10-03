@@ -33,6 +33,10 @@ final class FakePasteBack {
     }
 
     var outcome: LensController.PasteBack.Outcome = .replaced
+    /// Where a held take's paste lands; nil fails the paste.
+    var pasteApp: TargetApp? = TargetApp(
+        bundleID: "com.apple.Terminal", name: "Terminal", pid: 7)
+    private(set) var pastes: [String] = []
     private(set) var anchored: [String] = []
     private(set) var replaced: [(from: String, to: String, keysAllowed: Int)] = []
 
@@ -46,6 +50,10 @@ final class FakePasteBack {
                 let from = (anchor as? Anchor)?.pasted ?? ""
                 self?.replaced.append((from, corrected, keys))
                 return self?.outcome ?? .replaced
+            },
+            paste: { [weak self] text in
+                self?.pastes.append(text)
+                return self?.pasteApp
             })
     }
 }
@@ -77,7 +85,7 @@ struct LensControllerTests {
         let pasteBack = FakePasteBack()
         let keys = KeyCounter()
         let controller = LensController(
-            model: model, pasteBack: pasteBack.pasteBack, inputCount: { keys.count },
+            model: model, pasteBack: pasteBack.pasteBack,
             vocabulary: { ["Claude", "Tesseract"] }, isDictating: dictating)
         let presenter = RecordingLensPresenter()
         controller.presenter = presenter
@@ -191,7 +199,6 @@ struct LensControllerTests {
         f.controller.takeCommitted(take("Ask cloud why."))
         f.controller.fixHotkeyPressed()
         for _ in 0..<6 { f.controller.noteLensInput() }  // "claude" typed into the Lens
-        f.keys.count += 6
         f.controller.model.typed = "claude"
 
         #expect(press(f, kVK_Return))
@@ -367,17 +374,188 @@ struct LensControllerTests {
 
     // MARK: - Dictation
 
-    @Test func startingToDictateClosesTheLens() async {
+    @Test func startingToDictateTurnsAFixIntoListeningWithoutTheKeyboard() async {
         let f = makeFixture()
         let feed = DictationFeed()
         f.controller.watch(feed)
         f.controller.takeCommitted(take("Ask cloud why."))
         f.controller.fixHotkeyPressed()
-        #expect(f.controller.model.phase == .fixing)
+        f.controller.model.typed = "claude"
+        #expect(press(f, kVK_Tab))
 
         feed.setPhase(.recording)
-        await waitUntil { f.controller.model.phase == .hidden }
+        await waitUntil { f.controller.model.phase == .listening }
+        // The keyboard goes back before the new take can paste.
+        #expect(Array(f.presenter.events.suffix(2)) == ["release", "show"])
+        // The fix made with ⇥ stays with the take.
+        #expect(f.controller.lastTake?.text == "Ask Claude why.")
+    }
+
+    // MARK: - The Lens as the dictation overlay (slice 2)
+
+    private func preview(_ text: String, confirmed: Int = 0) -> LivePreview {
+        LivePreview(text: text, catches: [], confirmedTokens: confirmed)
+    }
+
+    @Test func theLensListensStreamsAndLandsTheTake() async {
+        let f = makeFixture()
+        let feed = DictationFeed()
+        f.controller.watch(feed)
+
+        feed.setTargetApp(Self.terminal)
+        feed.setPhase(.recording)
+        await waitUntil { f.controller.model.phase == .listening }
+        #expect(f.presenter.events == ["release", "show"])
+        #expect(f.controller.model.liveApp == Self.terminal)
+
+        feed.setPreview(preview("Ask cloud why this", confirmed: 2))
+        await waitUntil { f.controller.model.preview != nil }
+        #expect(f.controller.model.liveTokens.count == 4)
+
+        feed.setPhase(.processing)
+        await waitUntil { f.controller.model.phase == .finishing }
+        // The words stay up while the full pass runs.
+        #expect(f.controller.model.preview?.text == "Ask cloud why this")
+
+        f.controller.takeCommitted(take("Ask cloud why the"))
+        #expect(f.controller.model.phase == .landed)
+        // "this" became "the": that word settles.
+        #expect(f.controller.model.settled == [3])
+    }
+
+    @Test func aHeldTakeWaitsAndReturnPastesIt() async {
+        let f = makeFixture()
+        let held = DictatedTake(
+            pairID: nil, text: "Ask cloud why.", catches: [], app: Self.terminal, pasted: false,
+            held: true)
+        f.controller.takeCommitted(held)
+        #expect(f.controller.model.phase == .fixing)
+        #expect(f.controller.model.mode == .held)
+        #expect(f.presenter.events == ["show+key"])
+
+        f.controller.model.typed = "claude"
+        #expect(press(f, kVK_Return))
+        await waitUntil { f.controller.model.phase == .done }
+        #expect(f.pasteBack.pastes == ["Ask Claude why. "])
+        #expect(f.controller.model.result?.line == "Pasted into Terminal")
+        #expect(f.controller.lastTake?.pasted == true)
+        #expect(f.controller.lastTake?.held == false)
+        // Anchored on the paste, so ⌃⌥Space can still fix it.
+        #expect(f.pasteBack.anchored == ["Ask Claude why. "])
+    }
+
+    @Test func escKeepsAHeldTakeAndTheHotkeyBringsItBack() {
+        let f = makeFixture()
+        let held = DictatedTake(
+            pairID: nil, text: "Ask cloud why.", catches: [], app: Self.terminal, pasted: false,
+            held: true)
+        f.controller.takeCommitted(held)
+
+        #expect(press(f, kVK_Escape))
+        #expect(f.controller.model.phase == .done)
+        #expect(f.controller.model.result?.line == "Kept, not pasted")
+        #expect(f.pasteBack.pastes.isEmpty)
+
+        f.controller.fixHotkeyPressed()
+        #expect(f.controller.model.phase == .fixing)
+        #expect(f.controller.model.mode == .held)
+    }
+
+    @Test func aFailedPasteKeepsTheHeldTake() async {
+        let f = makeFixture()
+        f.pasteBack.pasteApp = nil
+        f.controller.takeCommitted(
+            DictatedTake(
+                pairID: nil, text: "Ship it.", catches: [], app: Self.terminal, pasted: false,
+                held: true))
+        #expect(press(f, kVK_Return))
+        await waitUntil { f.controller.model.phase == .done }
+        #expect(f.controller.model.result?.line == "Couldn't paste the take")
+        #expect(f.controller.lastTake?.held == true)
+    }
+
+    @Test func aSilentTakeSaysSo() async {
+        let f = makeFixture()
+        let feed = DictationFeed()
+        f.controller.watch(feed)
+        feed.setPhase(.recording)
+        await waitUntil { f.controller.model.phase == .listening }
+
+        feed.setPhase(.error(.noSpeechDetected))
+        await waitUntil { f.controller.model.phase == .done }
+        #expect(f.controller.model.result?.line == "Didn't hear anything")
+    }
+
+    @Test func aRejectedTakeOffersInsertAnyway() async {
+        let f = makeFixture()
+        let feed = DictationFeed()
+        var inserted = 0
+        f.controller.onInsertRawAnyway = { inserted += 1 }
+        f.controller.watch(feed)
+        feed.setPhase(.recording)
+        await waitUntil { f.controller.model.phase == .listening }
+        feed.setPhase(.processing)
+        feed.emit(.rejected(raw: "asdf", reason: "unintelligible"))
+        await waitUntil { f.controller.model.canInsertRaw }
+        #expect(f.controller.model.result?.line == "Didn't catch that")
+
+        f.controller.insertRawAnyway()
+        #expect(inserted == 1)
         #expect(f.controller.model.phase == .hidden)
-        #expect(f.presenter.events.last == "hide")
+    }
+
+    @Test func anErrorAtThePressShowsEvenWithTheLensClosed() async {
+        let f = makeFixture()
+        let feed = DictationFeed()
+        f.controller.watch(feed)
+
+        feed.setPhase(.error(.microphoneBusy))
+        await waitUntil { f.controller.model.phase == .done }
+        #expect(f.controller.model.result?.line == "The microphone is in use")
+        #expect(f.presenter.events.last == "show")
+    }
+
+    @Test func anErrorLeavesATakeBeingFixedAlone() async {
+        let f = makeFixture()
+        let feed = DictationFeed()
+        f.controller.watch(feed)
+        f.controller.takeCommitted(take("Ask cloud why."))
+        f.controller.fixHotkeyPressed()
+
+        feed.setPhase(.error(.textInjectionFailed("refused")))
+        for _ in 0..<200 { await Task.yield() }
+        #expect(f.controller.model.phase == .fixing)
+    }
+
+    @Test func aNewTakesCardCarriesNothingOfTheLastFix() async {
+        let f = makeFixture()
+        let feed = DictationFeed()
+        f.controller.watch(feed)
+        f.controller.takeCommitted(take("Ask cloud why."))
+        f.controller.fixHotkeyPressed()
+        f.controller.model.typed = "claude"
+        #expect(press(f, kVK_Tab))
+
+        feed.setPhase(.recording)
+        await waitUntil { f.controller.model.phase == .listening }
+        #expect(f.controller.model.text.isEmpty)
+        #expect(f.controller.model.receipts.isEmpty)
+        #expect(f.controller.model.fixedTokens.isEmpty)
+    }
+
+    @Test func withAutoInsertOffNoHoldIsPromised() async {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lens-noinsert-\(UUID().uuidString)", isDirectory: true)
+        let controller = LensController(
+            model: LensModel(
+                learnedWords: LearnedWordStore(directory: directory), pairs: nil, history: nil),
+            pasteBack: .none, vocabulary: { [] }, pastes: { false })
+        let presenter = RecordingLensPresenter()
+        controller.presenter = presenter
+        let feed = DictationFeed()
+        controller.watch(feed)
+        feed.setPhase(.recording)
+        await waitUntil { controller.model.phase == .listening }
+        #expect(controller.model.holdHint == nil)
     }
 }

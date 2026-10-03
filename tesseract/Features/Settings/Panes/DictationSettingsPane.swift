@@ -6,8 +6,9 @@
 import SwiftUI
 
 /// The Dictation pane (#213): microphone, dictation model, transcription
-/// language, duration, the after-transcription behavior, and the recent
-/// recordings diagnostics store.
+/// language, duration, whether a take waits in the Lens before it pastes,
+/// the after-transcription behavior, and the recent recordings diagnostics
+/// store.
 struct DictationSettingsPane: View {
     @Environment(SettingsManager.self) private var settings
     @EnvironmentObject private var container: DependencyContainer
@@ -80,6 +81,17 @@ struct DictationSettingsPane: View {
             }
 
             Section {
+                Picker("Check Before Pasting", selection: $settings.checkBeforePasting) {
+                    ForEach(CheckBeforePasting.allCases) { option in
+                        Text(option.displayName).tag(option)
+                    }
+                }
+                .pickerStyle(.segmented)
+            } footer: {
+                Text(checkBeforePastingHelp)
+            }
+
+            Section {
                 Toggle("Automatically Insert Text", isOn: $settings.autoInsertText)
                 Toggle("Restore Clipboard Contents", isOn: $settings.restoreClipboard)
                     .disabled(!settings.autoInsertText)
@@ -126,5 +138,16 @@ struct DictationSettingsPane: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private var checkBeforePastingHelp: String {
+        switch settings.checkBeforePasting {
+        case .whenShiftTapped:
+            "Tap ⇧ while you talk and the take waits in the Lens until you press ↩, so you can fix a word before it lands."
+        case .always:
+            "Every take waits in the Lens until you press ↩, so you can fix a word before it lands."
+        case .never:
+            "Every take pastes when you let go. Fix a word afterwards with \(settings.fixHotkey.displayString)."
+        }
     }
 }

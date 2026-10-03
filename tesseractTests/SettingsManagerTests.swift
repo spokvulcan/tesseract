@@ -212,6 +212,43 @@ struct SettingsManagerTests {
     }
 
     @Test
+    func checkBeforePastingPersistsAndResetsToWhenShiftTapped() {
+        // PRD #612: the choice survives a relaunch, writes only its own key,
+        // and Reset to Defaults brings back "When I tap ⇧".
+        let store = InMemorySettingsStore()
+        let settings = SettingsManager(store: store)
+        store.resetWriteRecording()
+        settings.checkBeforePasting = .always
+        #expect(store.writes == ["checkBeforePasting"])
+        #expect(SettingsManager(store: store).checkBeforePasting == .always)
+
+        settings.checkBeforePasting = .never
+        #expect(SettingsManager(store: store).checkBeforePasting == .never)
+
+        settings.resetToDefaults()
+        #expect(settings.checkBeforePasting == .whenShiftTapped)
+        #expect(SettingsManager(store: store).checkBeforePasting == .whenShiftTapped)
+    }
+
+    @Test
+    func checkBeforePastingUnknownRawValueDegradesToWhenShiftTapped() {
+        let store = InMemorySettingsStore()
+        store.set("sometimes", for: "checkBeforePasting")
+        let settings = SettingsManager(store: store)
+        #expect(settings.checkBeforePasting == .whenShiftTapped)
+    }
+
+    @Test
+    func checkBeforePastingDecidesWhetherATakeWaits() {
+        #expect(CheckBeforePasting.whenShiftTapped.takeWaits(shiftTapped: true))
+        #expect(!CheckBeforePasting.whenShiftTapped.takeWaits(shiftTapped: false))
+        #expect(CheckBeforePasting.always.takeWaits(shiftTapped: false))
+        #expect(CheckBeforePasting.always.takeWaits(shiftTapped: true))
+        #expect(!CheckBeforePasting.never.takeWaits(shiftTapped: true))
+        #expect(!CheckBeforePasting.never.takeWaits(shiftTapped: false))
+    }
+
+    @Test
     func aStoredProofreadPassIsTurnedOffOnceAndAnOptInStays() {
         // PRD #612: installs that stored the old default (`true`, written by
         // the toggle or by Reset to Defaults) are switched off once.
@@ -239,6 +276,7 @@ struct SettingsManagerTests {
         #expect(store.writes.contains("serverPort"))
         #expect(store.writes.contains("fixHotkeyKeyCode"))
         #expect(store.writes.contains("fixHotkeyModifiers"))
+        #expect(store.writes.contains("checkBeforePasting"))
     }
 
     @Test

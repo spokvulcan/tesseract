@@ -108,8 +108,8 @@ nonisolated enum CompanionBeatSummonsOutcome: Sendable {
 /// PROTOTYPE (map #301, ticket #328) — owns the demo lifecycle: reads the
 /// concept picker at play time, raises a throwaway overlay panel, hands the
 /// scene to the scripted driver, and tears the panel down when the scene
-/// dissolves. Unlike dictation's always-resident `OverlayPanel`, this panel
-/// exists only while a scene runs — a prototype leaves nothing behind.
+/// dissolves. Unlike the dictation Lens's panel, built once at launch, this
+/// panel exists only while a scene runs — a prototype leaves nothing behind.
 ///
 /// Since reaction round 1 it is also the walking skeleton's alternative
 /// summons surface: `summonBeat` raises the picked concept for a *real*

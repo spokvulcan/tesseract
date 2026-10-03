@@ -4,6 +4,10 @@
 - Date: 2026-10-03
 - Amends: ADR-0034 (the Proofread Pass is off by default and no longer the
   corrector; Settings keeps it as an opt-in)
+- Amended by: ADR-0085 (2026-10-03: the Lens is the one dictation overlay and
+  streams the take while it is recorded, so the recording overlay is no longer
+  the Overlay Variant (decision 6); it also takes the keyboard while a held
+  take waits)
 - Relates to: #612 (the Catch PRD, slice 1), #289 (the Correction Pair
   flywheel), #283 (the dictation overlay redesign map), ADR-0081 (dictation
   never waits for the LLM; Learned Words need no model at all), ADR-0073 (the

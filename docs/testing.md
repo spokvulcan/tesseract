@@ -117,18 +117,21 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/AudioPlaybackTests \
   -only-testing:tesseractTests/StreamingSchedulerTests
 
-# Dictation and Learned Words (ADR-0084; quit the app first, its capture engine
-# starves test hosts): the Voice Capture Session (Learned Words after the regex
-# cleanup, the silent-capture skip, every caller), the regex cleanup, the
+# Dictation and Learned Words (ADR-0084/0085; quit the app first, its capture
+# engine starves test hosts): the Voice Capture Session (Learned Words after the
+# regex cleanup, the silent-capture skip, every caller), the regex cleanup, the
 # Correction Pair store and the gold mark a fix gives, the sounds-alike key, take
 # tokens, matching and the Learned Word store (exceptions per app, ordinary words
 # not learned, Forget and Undo), the fix (target by sound on real mishearings,
-# what a fix teaches, several fixes in one take), the Lens state, putting a fix
-# back in the app, the hotkeys, and paste. The repo has no snapshot suites: the
-# Lens views are covered by LensViewRenderTests, which hosts each state the way
-# the panel does (as MainWindowPageTests hosts the pages) and checks it fits the
-# card, with no pixel comparison; TEST_RUNNER_LENS_RENDER_DIR=<dir> also writes a
-# PNG of each state to look at.
+# what a fix teaches, several fixes in one take), the Live Preview (the
+# confirmation rule, decoding from the last confirmed segment over a scripted
+# recognizer, release cancelling the preview), ⇧ holding a take and the Check
+# Before Pasting setting, the Lens state (listening, landing, a held take pasted
+# or kept), putting a fix back in the app, the hotkeys, and paste. The repo has
+# no snapshot suites: the Lens views are covered by LensViewRenderTests, which
+# hosts each state the way the panel does (as MainWindowPageTests hosts the
+# pages) and checks it fits the card, with no pixel comparison;
+# TEST_RUNNER_LENS_RENDER_DIR=<dir> also writes a PNG of each state to look at.
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
   -skipPackagePluginValidation \
   -only-testing:tesseractTests/DictationCoordinatorTests \
@@ -137,6 +140,8 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/TranscriptionPostProcessorTests \
   -only-testing:tesseractTests/TranscriptionEngineTests \
   -only-testing:tesseractTests/DictationFeedTests \
+  -only-testing:tesseractTests/LivePreviewAssemblerTests \
+  -only-testing:tesseractTests/LensSettleTests \
   -only-testing:tesseractTests/HotkeyMatcherTests \
   -only-testing:tesseractTests/TextInjectorTests \
   -only-testing:tesseractTests/AgentVoiceInputControllerTests \
@@ -151,7 +156,9 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/CaptureLevelTests \
   -only-testing:tesseractTests/InAppReplacerTests \
   -only-testing:tesseractTests/InAppEditTests \
-  -only-testing:tesseractTests/ModifierTapDetectorTests
+  -only-testing:tesseractTests/ModifierTapDetectorTests \
+  -only-testing:tesseractTests/SettingsCatalogueTests \
+  -only-testing:tesseractTests/SettingsManagerTests
 
 # Speech page (ADR-0076/0077): the Reader over the real coordinator and
 # engine, the Read-Along clock and its word timing, text geometry, the
@@ -204,8 +211,9 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # the in-memory store (delete_event included), capture and the one-key hotkey,
 # the Timeline, cards and prompts, the Day Thread's store, the seen ledger, the
 # Delivery Ladder and governor, the Claude Code merge, the Profile and recall
-# (fixture conversation files), the trace, and the prefix-cache contract (a
-# byte-identical system prompt; the Now Tag on every user message):
+# (fixture conversation files), the trace, the voice overlay's placements, and
+# the prefix-cache contract (a byte-identical system prompt; the Now Tag on
+# every user message):
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
   -skipPackagePluginValidation \
   -only-testing:tesseractTests/DayEngineNudgeTests \
@@ -234,7 +242,8 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/DayKeyTests \
   -only-testing:tesseractTests/NowTagTests \
   -only-testing:tesseractTests/SystemPromptAssemblerTests \
-  -only-testing:tesseractTests/RetiredCompanionDataTests
+  -only-testing:tesseractTests/RetiredCompanionDataTests \
+  -only-testing:tesseractTests/OverlayPlacementTests
 
 # The LLM Gate (ADR-0081) and the menu's Models section: one LLM generation at
 # a time (FIFO, handoff, cancellation), the runs and the proofreader that read

@@ -11,14 +11,18 @@ import os
 protocol Transcribing: AnyObject {
     func transcribe(_ audioData: AudioData, language: String) async throws -> TranscriptionResult
     func cancelTranscription()
-    /// The **Live Partial** lane (ticket #291): best-effort transcription of a
-    /// mid-capture snapshot. Skip-not-queue — `nil` whenever transcribing now
-    /// would contend with the final take (default: always skip).
-    func transcribePartial(_ audioData: AudioData, language: String) async -> String?
+    /// The **Live Preview** lane (PRD #612, after the Live Partial of #291):
+    /// best-effort transcription of mid-capture audio. Returns the whole result
+    /// so the caller can confirm segments; segment times are relative to the
+    /// start of `audioData`, not of the take. Skip-not-queue: `nil` whenever
+    /// transcribing now would contend with the final take (default: always skip).
+    func transcribePartial(_ audioData: AudioData, language: String) async -> TranscriptionResult?
 }
 
 extension Transcribing {
-    func transcribePartial(_ audioData: AudioData, language: String) async -> String? { nil }
+    func transcribePartial(_ audioData: AudioData, language: String) async -> TranscriptionResult? {
+        nil
+    }
 }
 
 @Observable @MainActor
@@ -54,10 +58,12 @@ final class TranscriptionEngine: Transcribing {
     /// WhisperKit load: double ANE prepare, double transient memory.
     private var inFlightLoad: Task<Void, Error>?
 
-    /// The single in-flight **Live Partial** decode (ticket #291). Retained so
-    /// the final `transcribe` can cancel it at entry — the recognizer actor
-    /// serializes calls, so an uncancelled partial would delay the release→
-    /// inject path by up to one window decode.
+    /// The single in-flight **Live Preview** decode (PRD #612). Retained so the
+    /// final `transcribe` can cancel it at entry: the recognizer actor
+    /// serializes calls, so an uncancelled preview would delay the release to
+    /// inject path by up to one window decode. Cancelled, it still costs at
+    /// most the encoder pass already running (WhisperKit checks cancellation
+    /// before the encoder and before every decoder step).
     private var currentPartial: Task<TranscriptionResult, Error>?
 
     init(
@@ -132,7 +138,7 @@ final class TranscriptionEngine: Transcribing {
             throw DictationError.transcriptionInProgress
         }
 
-        // The final take outranks the partial lane: cancel any partial decode
+        // The final take outranks the preview lane: cancel any preview decode
         // so this transcription never queues behind it on the recognizer actor.
         currentPartial?.cancel()
 
@@ -260,13 +266,17 @@ final class TranscriptionEngine: Transcribing {
         isTranscribing = false
     }
 
-    /// The **Live Partial** lane (ticket #291). Everything about it is
+    /// The **Live Preview** lane (PRD #612). Everything about it is
     /// subordinate to the final take: it skips rather than contends (no decode
-    /// while a final transcription is in flight or another partial is still
+    /// while a final transcription is in flight or another preview is still
     /// running), it never triggers a model load, it never touches
-    /// `isTranscribing` (observable UI state), and every failure — including
-    /// cancellation by an arriving final — degrades to `nil`, never an error.
-    func transcribePartial(_ audioData: AudioData, language: String) async -> String? {
+    /// `isTranscribing` (observable UI state), and every failure, including
+    /// cancellation by an arriving final or by the caller, degrades to `nil`,
+    /// never an error. The result's segment times are the recognizer's, so
+    /// relative to the start of `audioData`; the caller rebases them.
+    func transcribePartial(_ audioData: AudioData, language: String) async
+        -> TranscriptionResult?
+    {
         guard currentTranscription == nil, currentPartial == nil,
             let recognizer, !audioData.isEmpty
         else { return nil }
@@ -280,7 +290,17 @@ final class TranscriptionEngine: Transcribing {
             // Identity-guarded, as everywhere: never free a successor's slot.
             if currentPartial == task { currentPartial = nil }
         }
-        return (try? await task.value)?.text
+        // The decode is unstructured (so the final can cancel it through the
+        // slot); a caller that stops waiting, such as the preview pump on
+        // release, cancels it too rather than leaving it on the recognizer.
+        let result = await withTaskCancellationHandler {
+            try? await task.value
+        } onCancel: {
+            task.cancel()
+        }
+        // A cancelled decode is stale even if the recognizer finished anyway.
+        guard !task.isCancelled else { return nil }
+        return result
     }
 }
 

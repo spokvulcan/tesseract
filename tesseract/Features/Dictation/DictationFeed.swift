@@ -6,16 +6,17 @@
 import Foundation
 import Observation
 
-/// The **Overlay Feed** (map #283): the one variant-agnostic surface of
-/// dictation signals every **Overlay Variant** renders from — typed phases,
-/// typed errors, outcome beats carrying the committed text, and the audio
-/// meter (level + spectrum). Variants consume the feed and nothing else;
-/// the pipeline never learns which variant is live.
+/// The **Overlay Feed** (map #283): the one surface of dictation signals
+/// the **Lens** renders from — typed phases, typed errors, outcome beats
+/// carrying the committed text, the **Live Preview** while recording, the
+/// take's app and whether ⇧ held it, and the audio meter (level +
+/// spectrum).
 ///
-/// One writer, many readers: `DictationCoordinator` drives `phase` and
-/// `beat`; the audio meter stream (attached once at composition) drives
-/// `level` / `spectrum`. Views read whichever properties they render, so a
-/// meter tick invalidates only meter-reading subtrees.
+/// One writer, many readers: `DictationCoordinator` drives `phase`, `beat`,
+/// `preview`, `targetApp` and `isHeld`; the audio meter stream (attached once
+/// at composition) drives `level` / `spectrum`. Views read whichever
+/// properties they render, so a meter tick invalidates only meter-reading
+/// subtrees.
 @Observable
 @MainActor
 final class DictationFeed {
@@ -28,7 +29,7 @@ final class DictationFeed {
         case recording
         case processing
         /// The **Proofread Pass** is polishing the transcription — a distinct
-        /// phase so variants can narrate it (map #283).
+        /// phase so the Lens can narrate it (map #283).
         case proofreading
         case error(DictationError)
 
@@ -41,12 +42,12 @@ final class DictationFeed {
     }
 
     /// A terminal outcome of one dictation, delivered as a **beat**: a
-    /// transient event distinct from `phase`, so a variant can give the happy
+    /// transient event distinct from `phase`, so the Lens can give the happy
     /// path an ending (and a future correction affordance a hook) even though
     /// the phase has already returned to `.idle`.
     enum Outcome: Equatable, Sendable {
         /// `edits` is the **Proofread Pass**'s word-swap diff — what a
-        /// variant narrates (empty when the pass skipped or changed nothing).
+        /// the Lens narrates (empty when the pass skipped or changed nothing).
         case committed(text: String, duration: TimeInterval, edits: [WordEdit])
         case empty
         /// The Proofread Pass rejected a wrong-words take. Passive: the
@@ -63,23 +64,23 @@ final class DictationFeed {
         let outcome: Outcome
     }
 
-    /// How long a terminal beat's affordances linger (ticket #289) — shared
-    /// by the variants' lingering pills and the App Bindings rule that keeps
-    /// the panel clickable for exactly this window, so the two can't drift.
-    static let affordanceLinger: Duration = .seconds(2.5)
-
     private(set) var phase: Phase = .idle
     /// Wall-clock start of the current `.recording` phase; `nil` outside it.
-    /// Variants derive elapsed-time displays from this.
+    /// Views derive elapsed-time displays from this.
     private(set) var recordingStarted: Date?
     private(set) var beat: Beat?
 
-    /// The **Live Partial** signal (ticket #291): a revising snapshot of what
-    /// ASR hears while recording. Replaced wholesale on each revision (partials
-    /// rewrite themselves — never append), scoped to `.recording`, and `nil`
-    /// whenever streaming is unavailable (partials off, model busy, no words
-    /// yet) — variants that ignore it keep working unchanged.
-    private(set) var partial: String?
+    /// The **Live Preview** (PRD #612): what Whisper hears while recording,
+    /// confirmed words and a provisional tail, with the Learned Words
+    /// applied. Replaced wholesale on each decode, scoped to `.recording`,
+    /// and `nil` until the first words land.
+    private(set) var preview: LivePreview?
+
+    /// The app the take is going to (in front when it started).
+    private(set) var targetApp: TargetApp?
+
+    /// ⇧ was tapped this take: it waits in the Lens instead of pasting.
+    private(set) var isHeld = false
 
     /// Overall loudness, 0–1 (normalized from dBFS in the audio tap).
     private(set) var level: Float = 0
@@ -90,26 +91,38 @@ final class DictationFeed {
     private var nextBeatID: UInt64 = 0
     private var meterPump: Task<Void, Never>?
 
-    // MARK: - Driver side (coordinator + composition root; never variants)
+    // MARK: - Driver side (coordinator + composition root; never views)
 
     func setPhase(_ newPhase: Phase) {
         if case .recording = newPhase {
-            if recordingStarted == nil { recordingStarted = Date() }
+            if recordingStarted == nil {
+                recordingStarted = Date()
+                isHeld = false
+            }
         } else {
             recordingStarted = nil
-            // Recording-scoped: a partial never outlives its take (the pump
+            // Recording-scoped: a preview never outlives its take (the pump
             // clears too, but the phase flip is the authoritative edge).
-            partial = nil
+            preview = nil
         }
         phase = newPhase
     }
 
-    /// Publishes a Live Partial revision (or clears with `nil`). Writes are
-    /// dropped outside `.recording` so a decode that resolves after the key
-    /// release cannot resurrect a caption for a finished take.
-    func setPartial(_ text: String?) {
-        guard text == nil || phase == .recording else { return }
-        if partial != text { partial = text }
+    /// Publishes a Live Preview (or clears with `nil`). Writes are dropped
+    /// outside `.recording` so a decode that resolves after the key release
+    /// cannot resurrect a preview for a finished take.
+    func setPreview(_ preview: LivePreview?) {
+        guard preview == nil || phase == .recording else { return }
+        if self.preview != preview { self.preview = preview }
+    }
+
+    func setTargetApp(_ app: TargetApp?) {
+        if targetApp != app { targetApp = app }
+    }
+
+    /// ⇧ was tapped (again): the take waits in the Lens, or no longer does.
+    func setHeld(_ held: Bool) {
+        if isHeld != held { isHeld = held }
     }
 
     func emit(_ outcome: Outcome) {

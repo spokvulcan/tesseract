@@ -41,9 +41,14 @@ enum SettingsCatalogue {
     /// done, or a choice made since, so a later opt-in is never undone.
     static let proofreadDefaultOffApplied = Setting.bool(
         "proofreadDefaultOffApplied", default: false)
-    /// Exploration scaffolding (map #283): selects the live Overlay Variant;
-    /// deleted when the redesign prunes to one winner.
-    static let overlayVariantRaw = Setting.string("overlayVariant", default: "classic")
+    /// Whether a finished take waits in the **Lens** for ↩ before it pastes
+    /// (``CheckBeforePasting``, PRD #612). By default only a take where ⇧
+    /// was tapped while talking waits.
+    static let checkBeforePastingRaw = Setting.string(
+        "checkBeforePasting", default: CheckBeforePasting.whenShiftTapped.rawValue)
+    // The Lens replaced the Overlay Variant registry (PRD #612, map #283),
+    // so the `overlayVariant` key is abandoned, not migrated: reading
+    // simply stopped.
     static let samplingPresetRaw = Setting.string(
         "samplingPreset", default: SamplingPreset.automatic.rawValue)
 

@@ -72,8 +72,16 @@ final class SettingsManager {
         }
     }
 
-    var overlayVariantRaw: String {
-        didSet { SettingsCatalogue.overlayVariantRaw.write(overlayVariantRaw, to: store) }
+    /// The **check-before-pasting** setting (``CheckBeforePasting``). Read
+    /// when a take finishes, so a change applies to the next take. Stored
+    /// raw so an unrecognized value degrades to `.whenShiftTapped`.
+    var checkBeforePastingRaw: String {
+        didSet { SettingsCatalogue.checkBeforePastingRaw.write(checkBeforePastingRaw, to: store) }
+    }
+
+    var checkBeforePasting: CheckBeforePasting {
+        get { CheckBeforePasting(rawValue: checkBeforePastingRaw) ?? .whenShiftTapped }
+        set { checkBeforePastingRaw = newValue.rawValue }
     }
 
     var samplingPresetRaw: String {
@@ -777,7 +785,7 @@ final class SettingsManager {
             SettingsCatalogue.proofreadDefaultOffApplied.write(true, to: store)
         }
         self.proofreadDictation = SettingsCatalogue.proofreadDictation.load(from: store)
-        self.overlayVariantRaw = SettingsCatalogue.overlayVariantRaw.load(from: store)
+        self.checkBeforePastingRaw = SettingsCatalogue.checkBeforePastingRaw.load(from: store)
         self.samplingPresetRaw = SettingsCatalogue.samplingPresetRaw.load(from: store)
         self.selectedMicrophoneUID = SettingsCatalogue.selectedMicrophoneUID.load(from: store)
         self.captureDumpEnabled = SettingsCatalogue.captureDumpEnabled.load(from: store)
@@ -954,6 +962,7 @@ final class SettingsManager {
         autoInsertText = SettingsCatalogue.autoInsertText.default
         restoreClipboard = SettingsCatalogue.restoreClipboard.default
         proofreadDictation = SettingsCatalogue.proofreadDictation.default
+        checkBeforePastingRaw = SettingsCatalogue.checkBeforePastingRaw.default
         selectedMicrophoneUID = SettingsCatalogue.selectedMicrophoneUID.default
         captureDumpEnabled = SettingsCatalogue.captureDumpEnabled.default
         language = SettingsCatalogue.language.default
@@ -1017,7 +1026,6 @@ final class SettingsManager {
         kvCacheCompressionRaw = SettingsCatalogue.kvCacheCompressionRaw.default
         showSkillPills = SettingsCatalogue.showSkillPills.default
         translateTargetLanguage = SettingsCatalogue.translateTargetLanguage.default
-        overlayVariantRaw = SettingsCatalogue.overlayVariantRaw.default
         samplingPresetRaw = SettingsCatalogue.samplingPresetRaw.default
         agentReasoningEffortRaw = SettingsCatalogue.agentReasoningEffortRaw.default
         isServerEnabled = SettingsCatalogue.isServerEnabled.default

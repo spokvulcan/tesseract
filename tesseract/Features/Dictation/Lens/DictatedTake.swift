@@ -24,10 +24,13 @@ nonisolated struct DictatedTake: Equatable, Sendable {
     /// The app in front when the paste landed: where a fix is put back. Nil
     /// when it was not read; `app` stands in.
     let pastedInto: TargetApp?
+    /// ⇧ held it, or the setting says always: it waits in the Lens, not
+    /// pasted yet.
+    let held: Bool
 
     init(
         pairID: UUID?, text: String, catches: [LearnedWordCatch], app: TargetApp?,
-        pasted: Bool, at: Date = Date(), pastedInto: TargetApp? = nil
+        pasted: Bool, at: Date = Date(), pastedInto: TargetApp? = nil, held: Bool = false
     ) {
         self.pairID = pairID
         self.text = text
@@ -36,6 +39,7 @@ nonisolated struct DictatedTake: Equatable, Sendable {
         self.pasted = pasted
         self.at = at
         self.pastedInto = pastedInto
+        self.held = held
     }
 
     /// What the paste typed: the text and the space after it.

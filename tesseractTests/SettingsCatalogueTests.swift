@@ -70,6 +70,17 @@ struct SettingsCatalogueTests {
     }
 
     @Test
+    func checkBeforePastingDefaultsToWhenShiftTapped() {
+        // PRD #612: by default a take waits in the Lens only when ⇧ was
+        // tapped while talking.
+        let store = InMemorySettingsStore()
+        #expect(SettingsCatalogue.checkBeforePastingRaw.key == "checkBeforePasting")
+        #expect(SettingsCatalogue.checkBeforePastingRaw.load(from: store) == "whenShiftTapped")
+        let settings = SettingsManager(store: store)
+        #expect(settings.checkBeforePasting == .whenShiftTapped)
+    }
+
+    @Test
     func captureSettingsRoundTripThroughTheStore() {
         // Voice Processing has no setting anymore — it is the standard capture
         // mode (PRD #188); the Capture Dump toggle is what remains.

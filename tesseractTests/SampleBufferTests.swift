@@ -62,4 +62,23 @@ struct SampleBufferTests {
 
         #expect(buffer.getAndClear() == [])
     }
+
+    /// The Live Preview reads only what follows the last confirmed segment:
+    /// the tail from any sample index, across chunk seals, without draining.
+    @Test
+    func snapshotFromAnIndexCopiesOnlyTheTail() {
+        let buffer = SampleBuffer()
+        buffer.reserveCapacity(4)
+        buffer.append([1, 2, 3])
+        buffer.append([4, 5, 6])
+        buffer.append([7, 8, 9])
+
+        #expect(buffer.snapshot(from: 0) == [1, 2, 3, 4, 5, 6, 7, 8, 9])
+        #expect(buffer.snapshot(from: 4) == [5, 6, 7, 8, 9])
+        #expect(buffer.snapshot(from: 3) == [4, 5, 6, 7, 8, 9])
+        #expect(buffer.snapshot(from: 9) == [])
+        #expect(buffer.snapshot(from: 20) == [])
+        // Non-destructive.
+        #expect(buffer.getAndClear() == [1, 2, 3, 4, 5, 6, 7, 8, 9])
+    }
 }
