@@ -68,7 +68,8 @@ nonisolated enum PrefillExecutor {
         prefillStepSize: Int,
         consumeAll: Bool = false,
         initialState: LMOutput.State? = nil,
-        evalPolicy: EvalPolicy = .pipelined
+        evalPolicy: EvalPolicy = .pipelined,
+        storedForm: KVScheme? = nil
     ) throws -> Output {
         let ndim = text.tokens.ndim
         let total = text.tokens.dim(-1)
@@ -123,6 +124,7 @@ nonisolated enum PrefillExecutor {
             checkpoints: checkpoints,
             checkpointBaseOffset: checkpointBaseOffset,
             cache: cache,
+            storedForm: storedForm,
             processChunk: forward
         )
 
@@ -176,7 +178,8 @@ nonisolated enum PrefillExecutor {
             cache: &cache,
             kvBits: parameters.kvBits,
             kvGroupSize: parameters.kvGroupSize,
-            quantizedKVStart: parameters.quantizedKVStart
+            quantizedKVStart: parameters.quantizedKVStart,
+            kvScheme: parameters.kvScheme
         )
         return try TokenIterator(
             input: LMInput(text: remainder),

@@ -149,4 +149,21 @@ import Testing
         }
         #expect(withoutPenalties)
     }
+
+    /// An iterator built from parameters keeps the vendor's KV plan (a KV
+    /// Scheme's single-shot arm, the Speculation Plan): the penalties leave
+    /// the parameters and the app processor rides a component instead.
+    @Test func componentsCarryTheAppProcessorWithoutTheVendorPenalties() {
+        var parameters = GenerateParameters(temperature: 0.6)
+        parameters.presencePenalty = 1.5
+        parameters.repetitionPenalty = 1.1
+        parameters.kvScheme = KVScheme.turbo8v4.rawValue
+        let (stripped, components) = GenerationLogitProcessor.components(for: parameters)
+        #expect(stripped.presencePenalty == nil)
+        #expect(stripped.repetitionPenalty == nil)
+        #expect(stripped.kvScheme == "turbo8v4")
+        #expect(components.logitProcessor(parameters: stripped) != nil)
+        let (_, none) = GenerationLogitProcessor.components(for: GenerateParameters())
+        #expect(none.logitProcessor(parameters: GenerateParameters()) == nil)
+    }
 }

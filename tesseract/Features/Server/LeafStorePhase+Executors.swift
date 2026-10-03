@@ -299,7 +299,8 @@ nonisolated extension LeafStorePhase {
                         prefillStepSize: prefillStepSize,
                         consumeAll: true,
                         initialState: positionAnchorRopeDelta.map(PositionAnchor.seededState),
-                        evalPolicy: .pipelined
+                        evalPolicy: .pipelined,
+                        storedForm: context.partitionKey.kvScheme
                     )
                 }
                 timings.prefillSeconds = secondsSince(prefillStart)

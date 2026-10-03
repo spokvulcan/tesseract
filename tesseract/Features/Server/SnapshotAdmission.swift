@@ -211,8 +211,14 @@ nonisolated struct SnapshotAdmission: Sendable {
             requestID: requestID,
             leafIsEndOfTurn: endOfTurn,
             reserveObservation: source.map { source in
+                // A KV Scheme partition stores compressed leaves, but a cold
+                // turn's live cache holds full-precision rows until prefill
+                // ends; price the lane at that density (the recurrent state
+                // scales too, which only errs toward a larger reserve).
                 ActiveInferenceReserve.LeafObservation(
-                    bytes: snapshot.memoryBytes,
+                    bytes: partitionKey.kvScheme.map {
+                        Int((Double(snapshot.memoryBytes) * $0.fullPrecisionRatio).rounded(.up))
+                    } ?? snapshot.memoryBytes,
                     tokenCount: snapshot.tokenOffset,
                     source: source,
                     maximumAdvance: maximumAdvance

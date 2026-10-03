@@ -58,7 +58,19 @@ _Avoid_: quantized live cache, compressed leaf lease.
 **Stored Form**:
 The per-partition dtype policy for bodies at rest, warm and on SSD: fp16 or
 quantized at a given bit width and group size. It is part of cache partition identity.
+A partition with a **KV Scheme** stores the scheme's TurboQuant layers.
 _Avoid_: live KV dtype, per-segment compression choice.
+
+**KV Scheme**:
+How a request holds its full-attention KV once its prompt is prefilled: full
+precision, or TurboQuant (`turbo8v4`: 8-bit affine keys, `turbo0v4`: bf16 keys,
+both with 4-bit values). The KV Cache Compression setting picks it for a model
+that supports it (Qwen3.8-27B). It is a request fact and part of cache partition
+identity (ADR-0083): the prompt prefills unquantized, the cache converts after
+prefill (inside DFlash2's iterator on a speculative turn), and the turn's leaf
+stores compressed layers that only a request of the same scheme restores.
+_Avoid_: kvBits (the unrelated affine quantization the product never sets), KV
+quantization (ambiguous between the two).
 
 **Snapshot State**:
 The per-radix-node lifecycle value: a six-case enum (`empty`, `ramOnly`,
@@ -2197,7 +2209,7 @@ background prefill).
 
 **Speculation Plan**:
 What one request runs speculatively, decided once from the request's facts (text-only
-input, KV quantization, temperature, prompt length, whether a prefix is restored,
+input, KV quantization and **KV Scheme**, temperature, prompt length, whether a prefix is restored,
 which leaf the turn stores): the arm, the advance allowance its rounds add to the
 turn's maximum advance, and where the app's prefill hands over to the iterator. The
 **Server Completion** and the **Raw Generation Start** read the same plan; no plan

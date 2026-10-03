@@ -18,10 +18,12 @@ import Testing
             let prefilled = try session.prefill(
                 text: .init(tokens: MLXArray(Array(1...8).map(Int32.init))), cache: live,
                 checkpoints: [4: .branchPoint], checkpointBaseOffset: 0,
-                prefillStepSize: 4, consumeAll: true, initialState: nil, evalPolicy: .pipelined)
+                prefillStepSize: 4, consumeAll: true, initialState: nil, evalPolicy: .pipelined,
+                storedForm: nil)
             let view = try #require(prefilled.snapshots.first)
             for var layer in live { layer.state = layer.state.map { $0.asType(dtype) } }
-            let full = try #require(session.captureSnapshot(cache: live, offset: 8, type: .leaf))
+            let full = try #require(
+                session.captureSnapshot(cache: live, offset: 8, type: .leaf, storedForm: nil))
             let warm = try session.compress(full, bits: 8)
             let baseline = try session.restore(view, backingLeaf: full)
             let restored = try session.restore(view, backingLeaf: warm)
@@ -84,13 +86,15 @@ import Testing
             _ = try session.prefill(
                 text: .init(tokens: MLXArray(Array(1...4).map(Int32.init))[.newAxis]), cache: cache,
                 checkpoints: [:], checkpointBaseOffset: 0, prefillStepSize: 4,
-                consumeAll: true, initialState: nil, evalPolicy: .checkedSynchronous)
+                consumeAll: true, initialState: nil, evalPolicy: .checkedSynchronous,
+                storedForm: nil)
             // The image-prefix edge captures directly after checked evaluation,
             // before the chunk loop starts at this absolute key-path offset.
             let branch = try #require(
-                session.captureSnapshot(cache: cache, offset: 4, type: .branchPoint))
+                session.captureSnapshot(
+                    cache: cache, offset: 4, type: .branchPoint, storedForm: nil))
             let system = try #require(
-                session.captureSnapshot(cache: cache, offset: 4, type: .system))
+                session.captureSnapshot(cache: cache, offset: 4, type: .system, storedForm: nil))
             #expect(branch.memoryBytes == 0)
             #expect(system.memoryBytes == 256)
             #expect(try session.restore(system).first?.offset == 4)
@@ -108,17 +112,20 @@ import Testing
             let prefilled = try session.prefill(
                 text: .init(tokens: MLXArray(Array(1...8).map(Int32.init))), cache: live,
                 checkpoints: [4: .branchPoint], checkpointBaseOffset: 0,
-                prefillStepSize: 4, consumeAll: true, initialState: nil, evalPolicy: .pipelined)
+                prefillStepSize: 4, consumeAll: true, initialState: nil, evalPolicy: .pipelined,
+                storedForm: nil)
             let view = try #require(prefilled.snapshots.first)
-            let leaf = try #require(session.captureSnapshot(cache: live, offset: 8, type: .leaf))
+            let leaf = try #require(
+                session.captureSnapshot(cache: live, offset: 8, type: .leaf, storedForm: nil))
             var baseline = try session.newCache(parameters: parameters)
             session.quantizeKVCache(&baseline, parameters: parameters)
             _ = try session.prefill(
                 text: .init(tokens: MLXArray(Array(1...4).map(Int32.init))), cache: baseline,
                 checkpoints: [:], checkpointBaseOffset: 0,
-                prefillStepSize: 4, consumeAll: true, initialState: nil, evalPolicy: .pipelined)
+                prefillStepSize: 4, consumeAll: true, initialState: nil, evalPolicy: .pipelined,
+                storedForm: nil)
             let owned = try #require(
-                session.captureSnapshot(cache: baseline, offset: 4, type: .system))
+                session.captureSnapshot(cache: baseline, offset: 4, type: .system, storedForm: nil))
             let (payload, owed) = try SnapshotPayload.deferred(for: view, backingLeaf: leaf)
             #expect(payload.totalBytes == owned.memoryBytes)
             #expect(view.materializationByteCount(backingLeaf: leaf) == owned.memoryBytes)
@@ -162,13 +169,13 @@ import Testing
             _ = try session.prefill(
                 text: .init(tokens: MLXArray(Array(1...4).map(Int32.init))), cache: live,
                 checkpoints: [:], checkpointBaseOffset: 0, prefillStepSize: 4,
-                consumeAll: true, initialState: nil, evalPolicy: .pipelined)
+                consumeAll: true, initialState: nil, evalPolicy: .pipelined, storedForm: nil)
             for var layer in live { layer.state = layer.state.map { $0.asType(dtype) } }
             let recurrent = MambaCache()
             recurrent.state = [MLXArray([Float(42), 17])]
             let full = try #require(
                 session.captureSnapshot(
-                    cache: live + [recurrent], offset: 4, type: .leaf))
+                    cache: live + [recurrent], offset: 4, type: .leaf, storedForm: nil))
             let warm = try session.compress(full, bits: 8)
             #expect(warm.isWarm)
             #expect(warm.memoryBytes < full.memoryBytes)

@@ -94,15 +94,18 @@ struct SSDWriteEagernessTests {
             _ = try session.prefill(
                 text: .init(tokens: MLXArray([Int32(1), 2, 3, 4])), cache: cache,
                 checkpoints: [:], checkpointBaseOffset: 0, prefillStepSize: 4,
-                consumeAll: true, initialState: nil, evalPolicy: .pipelined)
+                consumeAll: true, initialState: nil, evalPolicy: .pipelined, storedForm: nil)
             let view = try #require(
-                session.captureSnapshot(cache: cache, offset: 4, type: .branchPoint))
+                session.captureSnapshot(
+                    cache: cache, offset: 4, type: .branchPoint, storedForm: nil))
             _ = try session.prefill(
                 text: .init(tokens: MLXArray([Int32(5), 6, 7, 8])), cache: cache,
                 checkpoints: [:], checkpointBaseOffset: 4, prefillStepSize: 4,
-                consumeAll: true, initialState: nil, evalPolicy: .pipelined)
+                consumeAll: true, initialState: nil, evalPolicy: .pipelined, storedForm: nil)
             return (
-                view, try #require(session.captureSnapshot(cache: cache, offset: 8, type: .leaf))
+                view,
+                try #require(
+                    session.captureSnapshot(cache: cache, offset: 8, type: .leaf, storedForm: nil))
             )
         }
         let admission = try #require(
@@ -229,7 +232,7 @@ struct SSDWriteEagernessTests {
                 _ = try session.prefill(
                     text: .init(tokens: MLXArray([Int32(1)])), cache: cache,
                     checkpoints: [:], checkpointBaseOffset: 0, prefillStepSize: 1,
-                    consumeAll: true, initialState: nil, evalPolicy: .pipelined)
+                    consumeAll: true, initialState: nil, evalPolicy: .pipelined, storedForm: nil)
             }
         }
         await gate.reached()

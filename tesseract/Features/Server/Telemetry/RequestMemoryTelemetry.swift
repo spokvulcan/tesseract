@@ -246,7 +246,7 @@ nonisolated final class RequestMemoryTelemetry: @unchecked Sendable {
             if entry is MambaCache {
                 recurrent += bytes
             } else if entry is KVCacheSimple || entry is RotatingKVCache
-                || entry is QuantizedKVCache
+                || entry is QuantizedKVCache || entry is TurboQuantKVCache
             {
                 attention += bytes
             } else {

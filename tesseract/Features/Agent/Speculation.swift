@@ -79,9 +79,11 @@ nonisolated struct Speculation: Sendable {
     /// The **Speculation Plan** for one request, or `nil` when it decodes
     /// without speculation. The engagement table, in one place:
     ///
-    /// - Speculation needs text-only input over unquantized KV. The rounds
-    ///   rewind verify rows in place, which only plain `KVCacheSimple` rows
-    ///   support, and a quantized-KV request keys a different partition.
+    /// - Speculation needs text-only input whose KV a verify pass can
+    ///   write in place: full precision, or a TurboQuant **KV Scheme** for
+    ///   DFlash2 (its iterator converts after prefill and verifies over the
+    ///   compressed rows). Affine `kvBits` never speculates, and MTP does not
+    ///   take a KV Scheme.
     /// - DFlash2, when resident, is preferred and engages on every such
     ///   request, warm or cold, whatever leaf it stores (ADR-0059): the app
     ///   prefills and captures up to the split, and the iterator
@@ -100,7 +102,7 @@ nonisolated struct Speculation: Sendable {
         if let dflash2 {
             return SpeculationPlan(drafter: .dflash2(dflash2))
         }
-        if let mtp, request.temperature == 0, !request.restoresPrefix,
+        if let mtp, request.kvScheme == nil, request.temperature == 0, !request.restoresPrefix,
             request.storedLeaf == .directLeaf,
             mtpPrefillFits(promptTokens: request.promptTokens)
         {
@@ -122,8 +124,10 @@ nonisolated struct SpeculationRequest: Sendable, Equatable {
     /// No image, video or audio reaches the model (on the keyed path, the
     /// identity key space).
     var isTextOnly: Bool
-    /// The request's KV quantization; `nil` is unquantized.
+    /// The request's affine KV quantization; `nil` is unquantized.
     var kvBits: Int?
+    /// The request's **KV Scheme**; `nil` is full precision.
+    var kvScheme: KVScheme? = nil
     var temperature: Float
     /// Tokens in the whole prompt.
     var promptTokens: Int
@@ -208,8 +212,10 @@ nonisolated struct SpeculationPlan: Sendable {
     /// Penalties ride the app logit processor (ADR-0053), injected through
     /// `GenerationComponents`; they are stripped from the iterator's
     /// parameters so the vendor's parameter-built penalty processor never
-    /// doubles them. The caller's parameters carry no `kvBits`: the plan
-    /// refuses quantized KV.
+    /// doubles them. The caller's parameters carry no `kvBits` (the plan
+    /// refuses affine KV); a KV Scheme rides them to the DFlash2 iterator,
+    /// which converts after its prefill, so read the cache back from
+    /// ``SpeculativeDecodeIterator/cache``.
     func makeIterator(
         input: LMInput,
         model: any LanguageModel,
@@ -217,20 +223,8 @@ nonisolated struct SpeculationPlan: Sendable {
         prefilledPrefixTokens: Int,
         parameters: GenerateParameters
     ) throws -> SpeculativeDecodeIterator {
-        var iteratorParameters = parameters
-        iteratorParameters.repetitionPenalty = nil
-        iteratorParameters.presencePenalty = nil
-        iteratorParameters.frequencyPenalty = nil
-        var components = GenerationComponents()
-        if let processor = GenerationLogitProcessor.resolve(
-            for: parameters, pathQuantizesKVUpFront: true)
-        {
-            // One iterator = one generation, so handing the factory a single
-            // resolved instance preserves the fresh-state contract; the box
-            // routes the non-Sendable processor into the @Sendable factory.
-            let box = UnsafeSendableBox(processor)
-            components = components.appendingLogitProcessor { box.value }
-        }
+        let (iteratorParameters, components) = GenerationLogitProcessor.components(
+            for: parameters)
         switch drafter {
         case .mtp(let drafter):
             precondition(
@@ -270,6 +264,16 @@ nonisolated enum SpeculativeDecodeIterator {
         switch self {
         case .mtp: .mtp
         case .dflash2: .dflash2
+        }
+    }
+
+    /// The target cache the iterator decodes into, after its prefill: a
+    /// KV Scheme replaced the attention entries of the array it was given.
+    /// `nil` for MTP, which never takes a scheme.
+    var cache: [any KVCache]? {
+        switch self {
+        case .mtp: nil
+        case .dflash2(let iterator): iterator.cache
         }
     }
 

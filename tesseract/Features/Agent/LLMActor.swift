@@ -796,6 +796,7 @@ actor LLMActor {
             frequencyContextSize: parameters.frequencyContextSize
         )
         generateParameters.prefill = PrefillParameters(stepSize: parameters.prefillStepSize)
+        generateParameters.kvScheme = parameters.kvScheme?.rawValue
         return generateParameters
     }
 

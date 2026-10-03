@@ -375,6 +375,11 @@ nonisolated struct PartitionMeta: Codable, Sendable, Equatable {
     /// instead of retroactively reclaiming long-lived caches.
     var lastUsedAt: Double?
 
+    /// The partition key's **KV Scheme** raw value; `nil` for full
+    /// precision. Optional-with-nil like `templateContextDigest`, so every
+    /// existing `_meta.json` decodes unchanged — no schema bump.
+    let kvScheme: String?
+
     init(
         modelID: String,
         modelFingerprint: String,
@@ -383,7 +388,8 @@ nonisolated struct PartitionMeta: Codable, Sendable, Equatable {
         createdAt: Double,
         schemaVersion: Int,
         templateContextDigest: String? = nil,
-        lastUsedAt: Double? = nil
+        lastUsedAt: Double? = nil,
+        kvScheme: String? = nil
     ) {
         self.modelID = modelID
         self.modelFingerprint = modelFingerprint
@@ -393,6 +399,7 @@ nonisolated struct PartitionMeta: Codable, Sendable, Equatable {
         self.schemaVersion = schemaVersion
         self.templateContextDigest = templateContextDigest
         self.lastUsedAt = lastUsedAt
+        self.kvScheme = kvScheme
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -404,6 +411,7 @@ nonisolated struct PartitionMeta: Codable, Sendable, Equatable {
         case schemaVersion
         case templateContextDigest
         case lastUsedAt
+        case kvScheme
     }
 
     init(from decoder: Decoder) throws {
@@ -418,6 +426,7 @@ nonisolated struct PartitionMeta: Codable, Sendable, Equatable {
             String.self, forKey: .templateContextDigest
         )
         self.lastUsedAt = try container.decodeIfPresent(Double.self, forKey: .lastUsedAt)
+        self.kvScheme = try container.decodeIfPresent(String.self, forKey: .kvScheme)
     }
 
     /// True when `other` describes the same partition identity — every
@@ -433,6 +442,7 @@ nonisolated struct PartitionMeta: Codable, Sendable, Equatable {
             && kvGroupSize == other.kvGroupSize
             && schemaVersion == other.schemaVersion
             && templateContextDigest == other.templateContextDigest
+            && kvScheme == other.kvScheme
     }
 }
 
@@ -641,7 +651,9 @@ extension CachePartitionKey {
     /// field with a `T` presence tag; the canonical digest appends
     /// **nothing**, so every partition persisted before the field existed
     /// keeps its exact directory name. The two forms cannot collide: the
-    /// four-field form never contains a fifth separator. Nullable fields
+    /// four-field form never contains a fifth separator. A **KV Scheme**
+    /// appends `\0K` and its name the same way (after the template field
+    /// when both are present); full precision appends nothing. Nullable fields
     /// (`kvBits`, `modelFingerprint`) use a presence tag: `"N"` for `nil`,
     /// `"S"` followed by the value for `Some`. The tag is load-
     /// bearing — a bare sentinel string like `"none"` would
@@ -662,6 +674,9 @@ extension CachePartitionKey {
             "\(modelID)\0\(kvBitsField)\0\(kvGroupSize)\0\(fingerprintField)"
         if templateContextDigest != HTTPPrefixCacheConversation.defaultTemplateContextDigest {
             canonical += "\0T\(templateContextDigest)"
+        }
+        if let kvScheme {
+            canonical += "\0K\(kvScheme.rawValue)"
         }
 
         // FNV-1a 32-bit: offset_basis = 0x811c9dc5, prime = 0x01000193.

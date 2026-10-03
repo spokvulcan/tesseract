@@ -192,6 +192,25 @@ between families and modes, so it gets its own column.
   (22% acceptance, 0.64×) — the draft was distilled against the
   full-precision target, so the pairing is refused at load.
 
+## KV cache compression (KV Scheme, ADR-0083)
+
+Settings → Agent → KV Cache Compression picks a TurboQuant **KV Scheme** for
+`qwen3.8-27b` and `qwen3.8-27b-paro` (`KVScheme.supports`); every other model
+keeps full precision. Off by default. The prompt prefills at full precision,
+the 16 attention layers convert once prefill ends, and the prefix cache
+stores them compressed.
+
+| Setting | Scheme | Keys | Values | KV bytes per token (27B) | vs bf16 |
+| --- | --- | --- | --- | --- | --- |
+| Off | — | bf16 | bf16 | 65,536 | 1× |
+| Smallest | `turbo8v4` | 8-bit affine | 4-bit TurboQuant | 25,856 | 2.53× smaller |
+| Balanced | `turbo0v4` | bf16 | 4-bit TurboQuant | 41,216 | 1.59× smaller |
+
+Plain decode runs within about 2% of bf16 at 8K to 64K under either scheme
+(#603). DFlash2 speculates over both; MTP does not. Per DFlash2 round at a
+29K prompt (greedy, 2026-10-03): bf16 83.9 ms, `turbo8v4` 89.0 ms,
+`turbo0v4` 75.7 ms, at the same acceptance.
+
 ## Client settings that follow from this
 
 - **Pi** (`~/.pi/agent/models.json`, provider `tesseract`): `contextWindow`

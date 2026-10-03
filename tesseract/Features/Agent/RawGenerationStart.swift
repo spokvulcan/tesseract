@@ -88,6 +88,7 @@ nonisolated enum RawGenerationStart {
                 isTextOnly: prepared.image == nil && prepared.video == nil
                     && prepared.audio == nil,
                 kvBits: parameters.kvBits,
+                kvScheme: parameters.kvScheme.flatMap(KVScheme.init(rawValue:)),
                 temperature: parameters.temperature,
                 promptTokens: promptTokenCount,
                 restoresPrefix: false,
@@ -96,11 +97,16 @@ nonisolated enum RawGenerationStart {
         let loop: (AsyncStream<RawGeneration>, Task<Void, Never>)
         var engagedArm: SpeculativeArm?
         if let speculation {
-            let cache = try session.newCache(parameters: parameters)
-            for layer in cache { layer.reserveCapacity(promptTokenCount) }
+            // The array stays inside this call: a KV Scheme replaces its
+            // attention entries in the iterator, and a reference held here
+            // would keep the full-precision buffers for the whole generation.
             let iterator = try session.makeSpeculativeDecodeIterator(
-                prepared, cache: cache, prefilledPrefixTokens: 0, plan: speculation,
-                parameters: parameters)
+                prepared,
+                cache: try {
+                    let cache = try session.newCache(parameters: parameters)
+                    for layer in cache { layer.reserveCapacity(promptTokenCount) }
+                    return cache
+                }(), prefilledPrefixTokens: 0, plan: speculation, parameters: parameters)
             prefill.prefillMs = (Date.timeIntervalSinceReferenceDate - prefillStarted) * 1000
             engagedArm = speculation.arm
             loop = iterator.startGeneration(

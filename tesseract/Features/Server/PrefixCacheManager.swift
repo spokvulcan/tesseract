@@ -22,6 +22,10 @@ nonisolated struct CachePartitionKey: Hashable, Sendable, Comparable {
     let modelID: String
     let kvBits: Int?
     let kvGroupSize: Int
+    /// The request's **KV Scheme** (`nil`: full precision). It is the
+    /// partition's **Stored Form**: its bodies hold TurboQuant layers once a
+    /// turn has decoded, so another scheme never restores them.
+    let kvScheme: KVScheme?
     /// Stable hex SHA-256 of the loaded model's weight files
     /// (`ModelFingerprint.computeFingerprint`). Folded in so a weight swap
     /// under the same `modelID` cannot surface stale persisted snapshots.
@@ -36,12 +40,14 @@ nonisolated struct CachePartitionKey: Hashable, Sendable, Comparable {
         modelID: String,
         kvBits: Int?,
         kvGroupSize: Int,
+        kvScheme: KVScheme? = nil,
         modelFingerprint: String? = nil,
         templateContextDigest: String = HTTPPrefixCacheConversation.defaultTemplateContextDigest
     ) {
         self.modelID = modelID
         self.kvBits = kvBits
         self.kvGroupSize = kvGroupSize
+        self.kvScheme = kvScheme
         self.modelFingerprint = modelFingerprint
         self.templateContextDigest = templateContextDigest
     }
@@ -55,7 +61,8 @@ nonisolated struct CachePartitionKey: Hashable, Sendable, Comparable {
             rhs.modelID, rhs.kvBits ?? -1, rhs.kvGroupSize,
             rhs.modelFingerprint ?? "", rhs.templateContextDigest
         )
-        return lhsHead < rhsHead
+        if lhsHead != rhsHead { return lhsHead < rhsHead }
+        return (lhs.kvScheme?.rawValue ?? "") < (rhs.kvScheme?.rawValue ?? "")
     }
 }
 
@@ -2046,6 +2053,7 @@ final class PrefixCacheManager {
                 modelID: partition.meta.modelID,
                 kvBits: partition.meta.kvBits,
                 kvGroupSize: partition.meta.kvGroupSize,
+                kvScheme: partition.meta.kvScheme.flatMap(KVScheme.init(rawValue:)),
                 modelFingerprint: partition.meta.modelFingerprint,
                 templateContextDigest: partition.meta.templateContextDigest
                     ?? HTTPPrefixCacheConversation.defaultTemplateContextDigest
@@ -2158,7 +2166,8 @@ final class PrefixCacheManager {
             schemaVersion: SnapshotManifestSchema.currentVersion,
             templateContextDigest: partitionKey.templateContextDigest
                 == HTTPPrefixCacheConversation.defaultTemplateContextDigest
-                ? nil : partitionKey.templateContextDigest
+                ? nil : partitionKey.templateContextDigest,
+            kvScheme: partitionKey.kvScheme?.rawValue
         )
         store.registerPartition(meta, for: partitionKey)
     }
@@ -2783,7 +2792,7 @@ final class PrefixCacheManager {
         for (key, tree) in partitions {
             for node in tree.allSnapshotNodes() {
                 guard let snapshot = node.state.body else { continue }
-                if key.kvBits != nil || snapshot.checkpointType == .system
+                if key.kvBits != nil || key.kvScheme != nil || snapshot.checkpointType == .system
                     || !snapshot.canCompress || attempted.contains(snapshot.bodyID)
                     || (opportunistic && snapshot.checkpointType != .leaf)
                 {
@@ -2837,7 +2846,8 @@ final class PrefixCacheManager {
                             replacement = session.captureSnapshot(
                                 cache: try session.restore(work.snapshot),
                                 offset: work.snapshot.tokenOffset,
-                                type: work.snapshot.checkpointType)
+                                type: work.snapshot.checkpointType,
+                                storedForm: work.candidate.partitionKey.kvScheme)
                         }
                     } catch {
                         Log.agent.error("Warm Body conversion failed: \(error)")

@@ -35,7 +35,8 @@ import MLXLMCommon
                 let recurrent = MambaCache()
                 recurrent.state = [MLXArray([Float(offset)])]
                 return try #require(
-                    session.captureSnapshot(cache: [cache, recurrent], offset: offset, type: type))
+                    session.captureSnapshot(
+                        cache: [cache, recurrent], offset: offset, type: type, storedForm: nil))
             }
             return try (
                 capture(4, type: .branchPoint),

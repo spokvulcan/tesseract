@@ -46,22 +46,24 @@ import Testing
             _ = try session.prefill(
                 text: .init(tokens: MLXArray(prefix.prefix(2).map(Int32.init))),
                 cache: cache, checkpoints: [:], checkpointBaseOffset: 0, prefillStepSize: 2,
-                consumeAll: true, initialState: nil, evalPolicy: .pipelined)
+                consumeAll: true, initialState: nil, evalPolicy: .pipelined, storedForm: nil)
             let system = try #require(
-                session.captureSnapshot(cache: cache, offset: 2, type: .system))
+                session.captureSnapshot(cache: cache, offset: 2, type: .system, storedForm: nil))
             _ = try session.prefill(
                 text: .init(tokens: MLXArray(prefix.suffix(2).map(Int32.init))),
                 cache: cache, checkpoints: [:], checkpointBaseOffset: 2, prefillStepSize: 2,
-                consumeAll: true, initialState: nil, evalPolicy: .pipelined)
+                consumeAll: true, initialState: nil, evalPolicy: .pipelined, storedForm: nil)
             let view = try #require(
-                session.captureSnapshot(cache: cache, offset: 4, type: .branchPoint))
+                session.captureSnapshot(
+                    cache: cache, offset: 4, type: .branchPoint, storedForm: nil))
             _ = try session.prefill(
                 text: .init(tokens: MLXArray([Int32(42), 42, 42, 42])),
                 cache: cache, checkpoints: [:], checkpointBaseOffset: 4, prefillStepSize: 4,
-                consumeAll: true, initialState: nil, evalPolicy: .pipelined)
+                consumeAll: true, initialState: nil, evalPolicy: .pipelined, storedForm: nil)
             return (
                 system, view,
-                try #require(session.captureSnapshot(cache: cache, offset: 8, type: .leaf))
+                try #require(
+                    session.captureSnapshot(cache: cache, offset: 8, type: .leaf, storedForm: nil))
             )
         }
         let store = TieredSnapshotStore(ssdConfig: nil)
@@ -187,9 +189,11 @@ import Testing
                 prefillStepSize: 1024,
                 consumeAll: true,
                 initialState: nil,
-                evalPolicy: .pipelined
+                evalPolicy: .pipelined,
+                storedForm: nil
             )
-            return session.captureSnapshot(cache: cache, offset: boundaryTokens.count, type: .leaf)
+            return session.captureSnapshot(
+                cache: cache, offset: boundaryTokens.count, type: .leaf, storedForm: nil)
         }
         let boundarySnapshot = try #require(boundaryLeaf)
         let boundaryAdmission = try #require(

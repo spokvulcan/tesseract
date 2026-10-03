@@ -213,6 +213,11 @@ enum SettingsCatalogue {
     static let speculationModeRaw = Setting.string(
         "speculationMode", default: SpeculationMode.automatic.rawValue)
 
+    /// The **KV Cache Compression** setting (``KVCacheCompression``): the
+    /// TurboQuant KV Scheme requests use on a model that supports one.
+    static let kvCacheCompressionRaw = Setting.string(
+        "kvCacheCompression", default: KVCacheCompression.off.rawValue)
+
     /// Retired predecessor of ``speculationModeRaw`` — read only by the
     /// one-time migration, never surfaced.
     static let legacyMTPSpeculationEnabled = Setting.bool("mtpSpeculationEnabled", default: true)

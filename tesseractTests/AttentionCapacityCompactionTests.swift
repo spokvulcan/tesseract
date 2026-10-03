@@ -67,6 +67,25 @@ struct AttentionCapacityCompactionTests {
         #expect(after.retainedBytes == 8 * 512 * 256)
     }
 
+    /// A TurboQuant layer (a KV Scheme's) that rewound past rows a turn
+    /// grew into rebuilds at its offset with the same rows.
+    @Test func aRewoundTurboQuantLayerCompactsToItsOffset() {
+        let layer = TurboQuantSnapshotTests.turboLayer(keyBits: 8, rows: 3_000)
+        for seed in UInt64(0)..<8 { TurboQuantSnapshotTests.step(layer, seed: seed) }
+        layer.trim(2_000)
+        let kept = TurboQuantSnapshotTests.bytes(layer)
+        let before = AttentionCapacityCompaction.measure([layer])
+        #expect(before.retainedBytes > before.thresholdBytes)
+        let outcome = AttentionCapacityCompaction.compactIfNeeded([layer])
+        #expect(outcome.compactedLayers == 1)
+        #expect(outcome.freedBytes == before.retainedBytes)
+        #expect(AttentionCapacityCompaction.measure([layer]).retainedBytes == 0)
+        #expect(layer.offset == 1_008)
+        #expect(TurboQuantSnapshotTests.bytes(layer) == kept)
+        TurboQuantSnapshotTests.step(layer, seed: 99)
+        #expect(layer.offset == 1_009)
+    }
+
     @Test func belowTheThresholdNothingChanges() {
         let cache = makeCache(layers: 8, rows: 2_048 + 100)
         for layer in cache { layer.trim(100) }

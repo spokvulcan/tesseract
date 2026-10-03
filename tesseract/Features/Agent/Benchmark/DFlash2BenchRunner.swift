@@ -40,6 +40,12 @@ nonisolated struct DFlash2BenchRunner {
     private static var check: Bool { arguments.contains("--bench-check") }
     private static var captureFullStream: Bool { check || option("--bench-json") != nil }
     private static var draftPolicy: String { option("--bench-draft-policy") ?? "4bit" }
+    /// `--bench-kv-scheme turbo8v4|turbo0v4`: both arms hold their KV in the
+    /// scheme after prefill (the AR iterator through its plan, DFlash2 in its
+    /// own prefill).
+    private static var kvScheme: KVScheme? {
+        option("--bench-kv-scheme").flatMap(KVScheme.init(rawValue:))
+    }
 
     private static func option(_ name: String) -> String? {
         guard let i = arguments.firstIndex(of: name), i + 1 < arguments.count else { return nil }
@@ -1298,6 +1304,7 @@ nonisolated struct DFlash2BenchRunner {
         func runAR(_ runIndex: Int, prepared: LMInput = prepared) throws -> ArmResult {
             var parameters = GenerateParameters(maxTokens: maxNewTokens)
             parameters.temperature = 0
+            parameters.kvScheme = kvScheme?.rawValue
             let prefillStart = ContinuousClock.now
             var iterator = try TokenIterator(
                 input: prepared, model: context.model, cache: nil,
@@ -1337,6 +1344,7 @@ nonisolated struct DFlash2BenchRunner {
         ) throws -> ArmResult {
             var parameters = GenerateParameters(maxTokens: maxNewTokens)
             parameters.temperature = 0
+            parameters.kvScheme = kvScheme?.rawValue
             let cache = try context.model.newCache(parameters: parameters)
             let prefillStart = ContinuousClock.now
             var iterator = try DFlash2SpeculativeTokenIterator(
@@ -1344,6 +1352,15 @@ nonisolated struct DFlash2BenchRunner {
                 mainCache: cache, parameters: parameters, blockSize: blockSize,
                 components: components(label: "dflash2-bs\(blockSize)"))
             let prefillSeconds = elapsedSeconds(since: prefillStart)
+            if let kvScheme {
+                let turbo = iterator.cache.compactMap { $0 as? TurboQuantKVCache }
+                emit(
+                    "[dflash2-bench] \(kvScheme.rawValue): \(turbo.count) TurboQuant layers, "
+                        + "\(turbo.filter(\.isCompressed).count) compressed, "
+                        + String(
+                            format: "%.1f MB",
+                            Double(turbo.reduce(0) { $0 + $1.memoryBytes }) / 1e6))
+            }
             // Diagnostic window for the mlx fork's MLX_KERNEL_PROFILE probe.
             setenv("MLX_KERNEL_PROFILE_ACTIVE", "spec", 1)
             defer { unsetenv("MLX_KERNEL_PROFILE_ACTIVE") }

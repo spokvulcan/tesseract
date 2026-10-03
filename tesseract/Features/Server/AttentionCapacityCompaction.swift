@@ -9,7 +9,8 @@ import MLXLMCommon
 /// retained capacity exceeds the threshold, the full-attention layers are
 /// rebuilt at the offset's rows plus one growth step — private arrays, the
 /// logical rows copied in — so the next append does not immediately pay a
-/// whole-body concatenation. Whole-state and quantized layers are untouched.
+/// whole-body concatenation. A TurboQuant layer rebuilds at its offset.
+/// Whole-state and affine-quantized layers are untouched.
 ///
 /// Threshold: the smaller of a quarter of the logical body and
 /// `maximumThresholdBytes`, measured by the
@@ -47,11 +48,34 @@ nonisolated enum AttentionCapacityCompaction {
         }
     }
 
+    /// Compressed TurboQuant layers (a KV Scheme's), with the bytes of
+    /// their rows up to the offset and past it. Their buffers can differ in
+    /// rows (raw keys grow apart from the values), so each array counts its
+    /// own.
+    private static func measurableTurbo(
+        _ cache: [any KVCache]
+    ) -> [(layer: TurboQuantKVCache, body: Int, retained: Int)] {
+        cache.compactMap { entry in
+            guard let layer = entry as? TurboQuantKVCache, layer.isCompressed else { return nil }
+            var body = 0
+            var total = 0
+            for array in layer.innerState() where array.ndim >= 3 && array.dim(2) >= layer.offset {
+                total += array.nbytes
+                body += array.nbytes / array.dim(2) * layer.offset
+            }
+            return (layer, body, total - body)
+        }
+    }
+
     static func measure(_ cache: [any KVCache]) -> Outcome {
         var outcome = Outcome()
         for (layer, capacity, rowBytes) in measurable(cache) {
             outcome.bodyBytes += rowBytes * layer.offset
             outcome.retainedBytes += rowBytes * (capacity - layer.offset)
+        }
+        for turbo in measurableTurbo(cache) {
+            outcome.bodyBytes += turbo.body
+            outcome.retainedBytes += turbo.retained
         }
         outcome.thresholdBytes = threshold(bodyBytes: outcome.bodyBytes)
         return outcome
@@ -85,6 +109,17 @@ nonisolated enum AttentionCapacityCompaction {
             precondition(layer.offset == offset)
             eval(fresh)
             outcome.freedBytes += rowBytes * (capacity - target)
+            outcome.compactedLayers += 1
+        }
+        // A TurboQuant layer rebuilds at exactly its offset from private
+        // copies of its state; its next append grows one step.
+        for turbo in measurableTurbo(cache) where turbo.retained > 0 {
+            let offset = turbo.layer.offset
+            let fresh = turbo.layer.state.map { HybridCacheSnapshot.deepCopyState($0) }
+            eval(fresh)
+            turbo.layer.state = fresh
+            precondition(turbo.layer.offset == offset)
+            outcome.freedBytes += turbo.retained
             outcome.compactedLayers += 1
         }
         return outcome

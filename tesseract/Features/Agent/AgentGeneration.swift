@@ -66,6 +66,10 @@ struct AgentGenerateParameters: Sendable, Codable {
     /// just strands the previous partition's snapshots. Decoupling the live dtype
     /// from the stored dtype is #259.
     var kvBits: Int?
+    /// The request's **KV Scheme**: TurboQuant after prefill, or `nil` for
+    /// full precision. Set from the KV Cache Compression setting for a model
+    /// that supports it; never together with `kvBits`.
+    var kvScheme: KVScheme?
     /// Group size for KV cache quantization.
     var kvGroupSize: Int = 64
     /// Token chunk size for prompt prefill.

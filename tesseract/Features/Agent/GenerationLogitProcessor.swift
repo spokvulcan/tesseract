@@ -27,7 +27,8 @@ import MLXLMCommon
 /// `nonisolated` decider returning the processor value; the paths own the
 /// effect of building their iterator around it.
 ///
-/// The `kvBits` carve-out. The explicit-processor `TokenIterator` init does no
+/// The `kvBits` carve-out (a KV Scheme is carved out the same way). The
+/// explicit-processor `TokenIterator` init does no
 /// in-iterator KV-cache quantization, so a path may only hand it an app
 /// processor when it has already quantized the cache up front (or when
 /// `kvBits` is nil, so there is nothing to quantize). The single-shot arm has
@@ -57,9 +58,31 @@ nonisolated enum GenerationLogitProcessor {
         for parameters: GenerateParameters,
         pathQuantizesKVUpFront: Bool
     ) -> (any LogitProcessor)? {
-        if !pathQuantizesKVUpFront, parameters.kvBits != nil {
+        if !pathQuantizesKVUpFront, parameters.kvBits != nil || parameters.kvScheme != nil {
             return nil
         }
         return AgentLogitProcessors.processor(for: parameters)
+    }
+
+    /// For an iterator built from parameters, which keeps the vendor's
+    /// in-iterator KV plan: the parameters without the penalties, and the
+    /// app processor that applies them as a generation component (the
+    /// vendor's parameter-built penalties would seed from the prompt and
+    /// double the app's).
+    static func components(
+        for parameters: GenerateParameters
+    ) -> (parameters: GenerateParameters, components: GenerationComponents) {
+        var stripped = parameters
+        stripped.repetitionPenalty = nil
+        stripped.presencePenalty = nil
+        stripped.frequencyPenalty = nil
+        guard let processor = AgentLogitProcessors.processor(for: parameters) else {
+            return (stripped, GenerationComponents())
+        }
+        // One iterator = one generation, so a single resolved instance keeps
+        // the fresh-state contract; the box routes the non-Sendable processor
+        // into the @Sendable factory.
+        let box = UnsafeSendableBox(processor)
+        return (stripped, GenerationComponents().appendingLogitProcessor { box.value })
     }
 }
