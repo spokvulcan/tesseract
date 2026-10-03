@@ -5,6 +5,8 @@
 - Amends: ADR-0016 (the Model Session sheds its per-drafter members for one
   speculation fact and one plan-taking verb; the amendment's "revisit inside
   the seam only if verbs cluster in practice" has been met)
+- Amended by: ADR-0087 (2026-10-03, proposed: the keyed path asks inside the
+  Prefill Planner; see the amendment at the end)
 - Relates to: ADR-0056 (MTP cold path and its leaf-mode amendment), ADR-0057
   and ADR-0061 (DFlash2), ADR-0059 (DFlash2 on the keyed path, the prefill
   split, the KV-quant gate), ADR-0053 (penalties through the app processor),
@@ -196,3 +198,18 @@ head, the 27B PARO with a grafted bf16 head, traps in the fused RMSNorm
 branch, so MTP engagement is covered by the plan's table and the
 presence-only drafter.
 
+## Amendment (2026-10-03): the keyed path asks inside the Prefill Planner (ADR-0087, proposed)
+
+This takes effect when ADR-0087 is accepted. Once it is built, the keyed path
+asks the session's Speculation inside the Prefill Planner, once per request,
+after the planner decides restore or cold, and the Prefill Plan carries the
+answer: the arm and split in its Decode Handover, the allowance in its
+Maximum Advance, a whole-prompt arm as its Cache Opening. Engagement still
+lives only in `Speculation.plan(for:)`, and the `SpeculationPlan` type is
+unchanged; plan application hands it to iterator construction without
+reading it. A failed restore keeps the same answer, as ADR-0069's 2026-10-03
+amendment already requires. This ADR said the MTP fold "fits better when the
+Prefill Plan takes back its decisions". Once ADR-0087 is built the fold
+becomes a planner-row change, and it stays deferred until MTP drafting is
+verified on a real model and the telemetry an MTP turn would gain is
+accepted.
