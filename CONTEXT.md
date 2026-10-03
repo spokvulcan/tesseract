@@ -2486,6 +2486,14 @@ there; the app takes them in, and opens the newest, when it next comes to the
 front.
 _Avoid_: share queue, pending imports.
 
+**Thermal Policy**:
+The rule from the phone's thermal state to what the voice does: nominal or
+fair, the neural voice reads; serious, the **System Voice** reads from the
+next segment until the phone is back to fair; critical, reading stops. The
+Reader says why each time. It changes the voice, not the pacing: reading
+ahead in bursts or just in time costs the same per second of audio.
+_Avoid_: heat throttling, cooldown mode.
+
 **System Voice**:
 The phone's own speech synthesizer, reading where the neural voice can't:
 while that voice downloads or is prepared, on a phone too slow for it, and

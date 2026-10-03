@@ -338,7 +338,11 @@ language among the voice's ten), and `SpeechReaderTests`' tap and language
 cases, and `TextIntakeTests` (a saved news page gives its article and not its
 menus, ads or comments; a PDF's lines join back into paragraphs; Markdown loses
 its marks; Safari's script results, plain text and a PDF from the share sheet;
-the **Library Inbox** handing texts to the Library). The package's
+the **Library Inbox** handing texts to the Library), `PocketControlsTests` (a
+call stops the reading and it goes on from the heard sentence; lost headphones
+stop it; the lock screen's buttons play, pause and skip by sentence; a pause
+becomes a stop when the app leaves the screen) and `ThermalPolicyTests`. The
+package's
 `SystemVoiceSynthesizerTests` drive the **System Voice**
 adapter with a scripted renderer: resampling to 24 kHz, whole frames, and word
 marks turned into word starts that never run ahead of their audio. CI's `build-ios` job only

@@ -13,6 +13,11 @@ import Observation
 @Observable @MainActor
 final class PhoneReading {
     private var readers: [UUID: SpeechReader] = [:]
+    /// The text opened last: what the lock screen's Play reads when nothing
+    /// is being read.
+    private(set) var lastOpened: UUID?
+    /// Why reading changed by itself (the phone got hot), while it matters.
+    var notice: String?
 
     @ObservationIgnored private let library: ReaderLibrary
     @ObservationIgnored private let coordinator: SpeechCoordinator
@@ -34,9 +39,17 @@ final class PhoneReading {
         readers.first { $0.value.isReading }.map { ($0.key, $0.value) }
     }
 
+    /// The text being read, else the one opened last, with its Reader.
+    var current: (id: UUID, reader: SpeechReader)? {
+        if let nowReading { return nowReading }
+        guard let lastOpened, let reader = readers[lastOpened] else { return nil }
+        return (lastOpened, reader)
+    }
+
     /// The Reader of text `id`: the one already open, else a new one. Nil
     /// when the Library no longer has the text.
     func open(_ id: UUID) -> SpeechReader? {
+        lastOpened = id
         if let reader = readers[id] { return reader }
         guard let entry = library.entry(id) else { return nil }
         readers = readers.filter { $0.value.isReading }
@@ -53,5 +66,6 @@ final class PhoneReading {
     func close(_ id: UUID) {
         readers[id]?.stop()
         readers[id] = nil
+        if lastOpened == id { lastOpened = nil }
     }
 }

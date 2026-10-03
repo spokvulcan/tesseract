@@ -203,6 +203,7 @@ tesseract-ios/                   # The iPhone app's own files (ADR-0066, ADR-008
 ├── PhoneReading.swift           # The Library's open texts: a Reader per text
 ├── PhoneAudioSession.swift      # Spoken-audio session around the Mac's playback adapter
 ├── PhoneIntake.swift            # Files opened in the app, and the Library Inbox taken in
+├── PhonePocket.swift            # Interruptions, routes, heat, lock-screen commands, Now Playing
 └── Views/                       # Library, Reader (UITextView on TextKit 2), transport, voices, settings
 
 tesseract-share/                 # "Read in Tesseract": the share extension
@@ -241,7 +242,13 @@ text aloud (ADR-0084), so the target takes only the read-aloud code:
   Facade (`PhoneSettings`), the **Preset Voices**, a text's language
   (`TTSLanguage.detected`), and getting text in (`Features/Speech/Intake`:
   a page's article through swift-readability, a PDF's text through PDFKit,
-  Markdown without its marks, the **Library Inbox**).
+  Markdown without its marks, the **Library Inbox**), and reading in the pocket
+  (`Features/Speech/Pocket`: `PocketControls`, which turns a call, lost
+  headphones, the lock screen's buttons or the app leaving the screen into
+  what the Reader does, and the **Thermal Policy**). Whatever stops the audio
+  from outside the app stops the reading at the heard sentence, and playing
+  again reads from it: a stream held paused in the background could not come
+  back once the system stopped its audio engine.
 - **The share extension** (`tesseract-share`, embedded in the app) builds the
   `Intake` folder and nothing else of the app. In Safari its script hands over
   the page's HTML, so the app never fetches a page. It never runs the voice:

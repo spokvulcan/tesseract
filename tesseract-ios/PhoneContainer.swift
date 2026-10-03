@@ -37,9 +37,14 @@ final class PhoneContainer {
 
     lazy var intake = PhoneIntake(library: library)
 
+    lazy var pocket = PhonePocket(
+        controls: PocketControls { [unowned self] in self.reading.current?.reader },
+        reading: reading, library: library, settings: settings)
+
     init() {
         if library.isNew {
             library.add(PhoneWelcome.text, title: PhoneWelcome.title)
         }
+        pocket.start()
     }
 }

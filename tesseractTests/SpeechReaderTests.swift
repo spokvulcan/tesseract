@@ -15,7 +15,7 @@ import TesseractSpeech
 @testable import Tesseract_Agent
 
 @MainActor
-private struct ReaderHarness {
+struct ReaderHarness {
     let coordinator: SpeechCoordinator
     let synthesizer: ScriptedSpeechSynthesizer
     let playback: InMemoryAudioPlayback

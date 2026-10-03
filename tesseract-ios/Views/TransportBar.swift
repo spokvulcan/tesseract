@@ -14,6 +14,7 @@ struct TransportBar: View {
     @Environment(SpeechCoordinator.self) private var coordinator
     @Environment(SpeechEnginePresenter.self) private var engine
     @Environment(PhoneSettings.self) private var settings
+    @Environment(PhoneReading.self) private var reading
     @State private var showsVoices = false
 
     var body: some View {
@@ -25,7 +26,7 @@ struct TransportBar: View {
                 HStack {
                     Text(status.text)
                         .foregroundStyle(status.isError ? Color.red : Color.secondary)
-                        .lineLimit(1)
+                        .lineLimit(2)
                     Spacer()
                     SpeedMenu()
                 }
@@ -77,6 +78,7 @@ struct TransportBar: View {
     /// Time left, or what is happening instead: loading, starting, an error.
     private var status: (text: String, isError: Bool) {
         if case .error(let message) = coordinator.state { return (message, true) }
+        if let notice = reading.notice { return (notice, false) }
         if engine.isLoading { return ("Loading the voice…", false) }
         if case .generating = coordinator.state, reader.isReading, reader.highlight == nil {
             return ("Starting…", false)
