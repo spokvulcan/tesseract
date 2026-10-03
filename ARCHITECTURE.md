@@ -105,7 +105,8 @@ tesseract/
 │   │   ├── Corrections/               # Correction Pair flywheel (#289): value + bounded store
 │   │   ├── LearnedWords/              # Learned Words (ADR-0084): store, matcher, sounds-alike key
 │   │   ├── Lens/                      # Lens (ADR-0084/0085): the one dictation overlay, Live Preview, the fix
-│   │   └── Views/                     # Recording UI components
+│   │   ├── CatchRecord/               # Catch Record (PRD #612): the Dictation page's model, chart, tiles, takes
+│   │   └── Views/                     # Main window shell, the Dictation page, the history sheet
 │   ├── Speech/                        # engine v2 lives in Vendor/tesseract-speech
 │   │   ├── SpeechCoordinator.swift    # @Observable orchestrator; drains engine events
 │   │   ├── SpeechEnginePresenter.swift# @Observable residency mirror of the pkg engine
@@ -121,7 +122,7 @@ tesseract/
 │   │   ├── TranscriptionEngine.swift  # @Observable facade over SpeechRecognizer
 │   │   ├── SpeechRecognizer.swift     # Model port (seam) for ASR
 │   │   ├── WhisperKitSpeechRecognizer.swift  # CoreML adapter
-│   │   ├── TranscriptionHistory.swift # @Observable, JSON persistence
+│   │   ├── TranscriptionHistory.swift # @Observable, JSON persistence; entries keep catches and app
 │   │   └── TranscriptionPostProcessor.swift
 │   ├── Agent/
 │   │   ├── ChatSession.swift          # @Observable spine; folds agent events into ChatItems (ADR-0024)
@@ -210,14 +211,13 @@ The app uses Swift's Observation framework (`@Observable`) for all primary state
 **SwiftUI views** consume `@Observable` types via `@Environment(Type.self)`:
 
 ```swift
-struct DictationContentView: View {
-    @Environment(DictationCoordinator.self) private var coordinator
+struct GeneralSettingsPane: View {
     @Environment(SettingsManager.self) private var settings
 
     var body: some View {
         // For bindings, use @Bindable:
         @Bindable var settings = settings
-        Toggle("Play sounds", isOn: $settings.playSounds)
+        Toggle("Play Sounds", isOn: $settings.playSounds)
     }
 }
 ```
@@ -375,7 +375,7 @@ parameters.
 .injectDependencies(from: container)
 // Expands to:
 //   .injectCoreDependencies(...)       — settings, permissions, container
-//   .injectDictationDependencies(...)  — coordinator, engine, history, audio
+//   .injectDictationDependencies(...)  — coordinator, engine, history, pairs, Learned Words, audio, fixInLens
 //   .injectSpeechDependencies(...)     — coordinator, engine presenter
 //   .injectAgentDependencies(...)      — coordinator, engine, conversation store
 //   .injectModelDependencies(...)      — download manager, inference arbiter
@@ -401,7 +401,7 @@ The app uses `Window("Tesseract", id: "main")` — a single-instance window. Thi
 Coordinators manage user-facing flows as state machines:
 
 - **DictationCoordinator**: idle → recording → processing → idle (text injection happens during processing; a held take skips it and waits in the Lens)
-- **LensModel**: hidden → listening → finishing → landed, or fixing (a held take, or a take reopened to fix) → done → hidden
+- **LensModel**: hidden → listening → finishing → landed, or fixing (a held take, a take reopened to fix, or a take opened from the Dictation page) → done → hidden
 - **SpeechCoordinator**: idle → capturingText → generating → streaming/playing (⇄ paused) → idle
 - **ChatSession**: folds the Agent double-loop's events into committed `ChatItem` values plus one streaming `LivePart` (ADR-0024)
 
@@ -571,6 +571,44 @@ All AppKit bridging lives in `Platform/`. These are the features that SwiftUI ca
 
 The one dictation overlay is the **Lens** (PRD #612, ADR-0084, ADR-0085), in a `GlassPanel` at the bottom center of the screen, built at launch so the first press shows it at once. It follows the Overlay Feed itself (phases, beats, the Live Preview, the take's app, the hold), so no App Bindings rule pushes to it. The panel never becomes key while the owner talks; it takes the keyboard only while a held take waits or a take is being fixed, and gives it back before anything pastes. The Overlay Variant registry, the classic pill and its fixed-frame panel are gone; `OverlayPlacement` and `OverlayScreenLocator` remain for the Companion's voice overlay.
 
+### 9. The Dictation Page (the Catch Record)
+
+The Dictation page is the **Catch Record** (PRD #612): what the Learned Words
+caught this week, what they are, and today's takes, each one click from a fix
+in the Lens. `DictationContentView` reads the Learned Word, Correction Pair and
+transcription history stores from the environment and builds a `CatchRecord`
+from their values (`tesseract/Features/Dictation/CatchRecord/`). `CatchRecord`
+is a pure value: seven days of catches and fixes, one tile per Learned Word
+still known, today's takes, the page's sentence and the line under it, and the
+runs that mark a caught or fixed word. The page and `CatchRecordTests` read the
+same thing. On it:
+
+- `CatchWeekChart`: the week in Swift Charts, Caught and You fixed stacked per
+  day with a legend (design language §5).
+- `LearnedWordTile`: one Learned Word (heard forms, the fix that taught it as a
+  before-and-after strip, the apps it is left alone in), with Forget in its
+  context menu. Forget returns the store's receipt, and the page's Undo line
+  hands it back.
+- `TodayTakeRow`: one of today's takes, its catches marked by `CaughtText`; a
+  click opens it in the Lens.
+
+The toolbar holds the record button, History, and Export Corrections (the
+Correction Pairs as JSONL). History presents `TranscriptionHistorySheet`: the
+full history by day, its catches marked the same way, where an entry's context
+menu opens it in the Lens, copies it or deletes it. The page and the sheet
+reach the Lens through `FixInLensAction`, an environment value that
+`injectDictationDependencies` wires to `LensController.openFromPage`; its
+default does nothing, so a preview or a test needs no Lens. Each
+`TranscriptionEntry` keeps its catches and the app the take went to, so a take
+opened from the page shows what was caught and a fix can leave a word alone in
+that app; entries written before that decode with neither.
+
+Gone with the old page: its custom-glass recording button
+(`RecordingButtonView`), the history's side-by-side Correction Pair editor and
+its Flag as Wrong button, and the focus request that opened that editor from
+the retired pill (`requestFocus(pairID:)` and `focusEntryID` on
+`TranscriptionHistory`). Fixing a take happens only in the Lens.
+
 ---
 
 ## Data Flow
@@ -599,6 +637,7 @@ The one dictation overlay is the **Lens** (PRD #612, ADR-0084, ADR-0085), in a `
 
 3. Post-processing
    └─► TranscriptionPostProcessor → Learned Words → Proofread Pass (opt-in)
+       ├─► TranscriptionHistory.add: the text, its catches and the app
        ├─► TextInjector.inject() (not for a held take)
        │   ├─► Copy to clipboard
        │   └─► Simulate Cmd+V
@@ -610,8 +649,20 @@ The one dictation overlay is the **Lens** (PRD #612, ADR-0084, ADR-0085), in a `
        ├─► LensFix picks the words it replaces and decides what the fix teaches
        ├─► LearnedWordStore learns it (or leaves a word alone in that app)
        ├─► CorrectionPairStore marks the take gold with the fix
+       ├─► TranscriptionHistory.replaceText: the entry's new text and catches
        └─► InAppReplacer puts the fix in the app, only while the pasted
            text is still the last thing typed there
+
+5. Fixing a word from the Dictation page (the Catch Record)
+   └─► a click on one of today's takes (or Fix a Word in the history sheet)
+       └─► FixInLensAction (the fixInLens environment value)
+           └─► LensController.openFromPage(take): refused while a take is
+               recorded or a fix is put back; a take open in the Lens is kept
+               (a held one waits for Control+Option+Space, with its fixes)
+               ├─► the Lens opens the take as the history keeps it
+               ├─► the same fix as step 4, recorded as made from the page
+               └─► nothing is pasted back; if it is the take Control+Option+Space
+                   reopens, the reopen starts from the fixed text
 ```
 
 A silent capture stops before step 2's transcription. Learned Words apply inside

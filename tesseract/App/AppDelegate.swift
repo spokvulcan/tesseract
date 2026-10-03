@@ -237,9 +237,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showMainWindow()
     }
 
-    /// Summon the main window onto the Dictation page — the overlay "edit"
-    /// affordance's target (the history entry focus rides separately on
-    /// `TranscriptionHistory.focusEntryID`).
+    /// Summon the main window onto the Dictation page.
     func navigateToDictation() {
         navigationSelection?.wrappedValue = .dictation
         showMainWindow()

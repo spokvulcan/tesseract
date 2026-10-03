@@ -1915,12 +1915,13 @@ One dictation take's full text lineage — raw ASR, regex-cleaned, after the
 **Learned Words**, **Proofread Pass** output + verdict, committed text, the owner's
 correction — plus capture conditions and a Capture Dump audio reference; the local,
 bounded, exportable training-pair collection the flywheel feeds from day one. Every
-take is a *candidate*; an owner signal (a word fixed in the **Lens**, recorded with
-the heard and meant words, how the take was reached and the app; a correction edit
-or the wrong-flag in the history; or "Insert anyway" on a take the **Proofread Pass**
-rejected) makes it *gold*: evicted last, its audio exempt from the dump's ring
-eviction. The **Lens** takes the keyboard while a take waits or is being fixed;
-full-text editing lives in the history window.
+take is a *candidate*; an owner signal makes it *gold*: evicted last, its audio
+exempt from the dump's ring eviction. The signals are a word fixed in the **Lens**
+(in a **Held Take**, after the paste, or from the **Catch Record**), recorded with
+the heard and meant words, how the take was reached and the app; "Insert anyway" on
+a take the **Proofread Pass** rejected; and, on older pairs, a correction or
+wrong-flag saved in the history before its editor was retired. Fixing a take
+happens only in the **Lens**; nothing edits a pair's text by hand.
 _Avoid_: training data (unqualified — pairs are candidates until gold),
 feedback log, transcription history (the sibling store it links to by id),
 fine-tune corpus (the export's *consumer*, out of scope — see the map).
@@ -1934,8 +1935,8 @@ cleanup: whole words, any case, case fitted at a sentence start, skipped in an a
 it is left alone in. Learned on the first fix, unless the fix touches only ordinary
 words, only changes a word's ending, or does not sound like what was heard (a
 rewrite): those fix that take only. Fixing it back in an app leaves it alone there.
-Forget keeps the word, so Forget can be undone, and only a new fix learns it again
-(ADR-0084).
+Forget (on its tile in the **Catch Record**) keeps the word, so Forget can be
+undone, and only a new fix learns it again (ADR-0084).
 _Avoid_: dictionary entry, custom vocabulary (a list the recognizer is biased
 toward, which is out of scope), replacement rule (unqualified), autocorrect,
 snippet.
@@ -1944,7 +1945,8 @@ snippet.
 One application of a **Learned Word** to a take: the misheard words it replaced in
 that take's text. Counted per day once the take commits (a rejected, failed or
 superseded take caught nothing, and a catch shown in the **Live Preview** is not
-counted); a catch the owner fixes back in the **Lens** is taken back.
+counted); a catch the owner fixes back in the **Lens** is taken back. The **Catch
+Record** counts them per day.
 _Avoid_: correction or fix (the owner's act; a catch is the app's), hit, match.
 
 **Lens**:
@@ -1952,16 +1954,19 @@ The one dictation overlay: a glass card at the bottom center of the screen that
 shows a take while it is recorded (the **Live Preview**), while it finishes, as it
 lands (the words the preview had wrong settle into place), while it waits as a
 **Held Take**, and while it is fixed. The fix hotkey (⌃⌥Space) reopens the last
-take; the owner types the word they meant, and the Lens picks the words that sound
-like it (← → or a click pick by hand). A fix makes the take's **Correction Pair**
-gold, teaches a **Learned Word** when it is a mishearing, and goes back into the app
-while the pasted text is still the last thing typed there. It never takes focus
-while listening: it takes the keyboard only while a take waits or is being fixed,
-and gives focus back when done (ADR-0084, ADR-0085).
+take, and the **Catch Record** opens one of today's takes, or any take in its
+history; the owner types the word they meant, and the Lens picks the words that
+sound like it (← → or a click pick by hand). A fix makes the take's **Correction
+Pair** gold, teaches a **Learned Word** when it is a mishearing, and goes back into
+the app while the pasted text is still the last thing typed there (a take opened
+from the Catch Record is not pasted back). It never takes focus while listening:
+it takes the keyboard only while a take waits or is being fixed, and gives focus
+back when done (ADR-0084, ADR-0085).
 _Avoid_: overlay (unqualified), pill, HUD, Overlay Variant and Overlay Panel (both
 retired: the Lens replaced the variant registry, its Setting and the pill's
-fixed-frame panel), editor, fix window, popup, history editor (the full-text
-editor in the history window).
+fixed-frame panel), editor, fix window, popup, history editor (the history's
+full-text pair editor, retired with the **Catch Record**: the Lens is the one
+place a take is fixed).
 
 **Live Preview**:
 What the **Lens** shows while a take is recorded: the same Whisper model's decodes
@@ -1981,6 +1986,18 @@ back. The Check Before Pasting setting decides which takes are held: one where t
 owner tapped ⇧ while talking (the default), every take, or none (ADR-0085).
 _Avoid_: waiting take (the Lens's state, not the take), pending paste, draft,
 queued take.
+
+**Catch Record**:
+The Dictation page, showing the **Learned Words** at work: one sentence and a
+seven-day chart of this week's **Catches** and the owner's fixes; one tile per
+Learned Word (every way it was heard, the fix that taught it as before and after,
+the apps it is left alone in), each with Forget and Undo; and today's takes,
+each one click from a fix in the **Lens**. A forgotten word leaves the tiles, the
+chart and the sentence; today's takes still show what it caught. The full
+transcription history stays one toolbar button away, beside
+recording and the **Correction Pair** export (PRD #612).
+_Avoid_: dashboard, stats, Dictation history (the history is behind the toolbar,
+not the page), word list.
 
 ### Voice session (Companion)
 

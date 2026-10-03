@@ -171,6 +171,7 @@ final class LensController {
             // A new take: a fix in progress keeps what it made, and a new
             // take must never paste into the Lens's own field.
             keepFixes()
+            keepPageFixes()
             dismissTask?.cancel()
             // A waiting or fixing Lens holds the keyboard: give it back
             // before the new take can paste.
@@ -273,6 +274,18 @@ final class LensController {
         lastTake = fixed(take)
     }
 
+    /// A fix made from the Dictation page to the take ⌃⌥Space reopens
+    /// carries into it, so the reopen starts from the fixed text; the take
+    /// keeps where it was pasted.
+    private func keepPageFixes() {
+        guard model.mode == .fromPage, model.isChanged, let take = model.take,
+            let last = lastTake, let pairID = take.pairID, last.pairID == pairID
+        else { return }
+        lastTake = DictatedTake(
+            pairID: pairID, text: model.text, catches: model.catches, app: last.app,
+            pasted: last.pasted, at: last.at, pastedInto: last.pastedInto, held: last.held)
+    }
+
     private func fixed(_ take: DictatedTake, pasted: Bool? = nil) -> DictatedTake {
         DictatedTake(
             pairID: take.pairID, text: model.text, catches: model.catches, app: take.app,
@@ -301,6 +314,22 @@ final class LensController {
             return
         }
         open(take, mode: take.held && !take.pasted ? .held : .afterPaste)
+    }
+
+    /// Opens one of the Dictation page's takes for fixing. A take open in
+    /// the Lens is kept as a new take keeps it: a held take waits for
+    /// ⌃⌥Space and fixes made stay with it (a click on the page has already
+    /// closed it, when the Lens lost the keyboard; a context menu has not).
+    /// Refused while a take is recorded or a fix is being put back.
+    @discardableResult
+    func openFromPage(_ take: DictatedTake) -> Bool {
+        guard !isDictating(), !isPuttingBack else { return false }
+        if model.phase == .fixing {
+            keepFixes()
+            keepPageFixes()
+        }
+        open(take, mode: .fromPage)
+        return true
     }
 
     /// Opens a take for fixing (⌃⌥Space, a held take, or a take on the
@@ -375,6 +404,7 @@ final class LensController {
 
         guard model.mode == .afterPaste, take.pasted, let anchor else {
             if model.mode == .afterPaste { lastTake = fixed }
+            keepPageFixes()
             model.finish(LensModel.Result(line: "Fixed", detail: nil))
             settle()
             return
@@ -474,7 +504,11 @@ final class LensController {
             return
         }
         releaseKeyboard()
-        lastTake = fixed(take)
+        if model.mode == .fromPage {
+            keepPageFixes()
+        } else {
+            lastTake = fixed(take)
+        }
         model.finish(
             LensModel.Result(
                 line: take.pasted

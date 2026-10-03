@@ -132,6 +132,18 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # hosts each state the way the panel does (as MainWindowPageTests hosts the
 # pages) and checks it fits the card, with no pixel comparison;
 # TEST_RUNNER_LENS_RENDER_DIR=<dir> also writes a PNG of each state to look at.
+# The Catch Record (the Dictation page, PRD #612): CatchRecordTests pins the
+# page's model (the week's catches and fixes per day, a tile per Learned Word
+# still known, today's takes and how each opens in the Lens, the sentence and
+# the marked words); DictationPageTests opens the page (empty, and with Learned
+# Words, fixes and today's takes) and its History sheet with the app's wiring,
+# as MainWindowPageTests does, so a missing dependency crashes on that case;
+# TranscriptionHistoryTests pins entries keeping their catches and app across
+# a reload (older entries load without them) and a fix rewriting an entry's
+# text and catches (its app kept); and LensControllerTests also opens a take
+# from the page (refused while a take is recorded; a held or after-paste take
+# open in the Lens kept with its fixes; a page fix to the last take carrying
+# into the ⌃⌥Space reopen; cancelling one never making it the last take).
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
   -skipPackagePluginValidation \
   -only-testing:tesseractTests/DictationCoordinatorTests \
@@ -153,6 +165,9 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/LensModelTests \
   -only-testing:tesseractTests/LensControllerTests \
   -only-testing:tesseractTests/LensViewRenderTests \
+  -only-testing:tesseractTests/CatchRecordTests \
+  -only-testing:tesseractTests/DictationPageTests \
+  -only-testing:tesseractTests/TranscriptionHistoryTests \
   -only-testing:tesseractTests/CaptureLevelTests \
   -only-testing:tesseractTests/InAppReplacerTests \
   -only-testing:tesseractTests/InAppEditTests \
