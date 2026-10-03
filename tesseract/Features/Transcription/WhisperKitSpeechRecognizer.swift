@@ -43,7 +43,7 @@ actor WhisperKitSpeechRecognizer: SpeechRecognizer {
         //   15% over a take), and dictation is still faster on the GPU than on
         //   the Neural Engine with the LLM busy.
         // Models share memory, not turns (ADR-0081); the Lens streams and the
-        // paste stays a full pass (ADR-0085). If the slowdown matters, the
+        // paste stays a full pass (ADR-0086). If the slowdown matters, the
         // fallback is a second encoder on the Neural Engine while the LLM Gate
         // is held, for about 1.2 GB more memory.
         // Load from bundled model path - use the exact folder containing model files

@@ -1900,7 +1900,7 @@ _Avoid_: coordinator (it is composed by the coordinators, not one), capture engi
 The optional LLM polish stage between transcription and commit (ADR-0034): a second,
 small co-resident MLX model — its own, never the agent's — that fixes punctuation,
 capitalization, and misheard words, or rejects an unintelligible take outright.
-Off by default and opt-in (ADR-0084): **Learned Words** are the corrector, and when
+Off by default and opt-in (ADR-0085): **Learned Words** are the corrector, and when
 on, the pass reads the text after them. Strictly fail-open: disabled, model not
 downloaded, the LLM generating (skip-when-busy — it *reads* whether the **LLM Gate**
 is held, never waits on it), budget overrun, or any error all commit the raw text
@@ -1935,7 +1935,7 @@ it is left alone in. Learned on the first fix, unless the fix touches only ordin
 words, only changes a word's ending, or does not sound like what was heard (a
 rewrite): those fix that take only. Fixing it back in an app leaves it alone there.
 Forget keeps the word, so Forget can be undone, and only a new fix learns it again
-(ADR-0084).
+(ADR-0085).
 _Avoid_: dictionary entry, custom vocabulary (a list the recognizer is biased
 toward, which is out of scope), replacement rule (unqualified), autocorrect,
 snippet.
@@ -1957,7 +1957,7 @@ like it (← → or a click pick by hand). A fix makes the take's **Correction P
 gold, teaches a **Learned Word** when it is a mishearing, and goes back into the app
 while the pasted text is still the last thing typed there. It never takes focus
 while listening: it takes the keyboard only while a take waits or is being fixed,
-and gives focus back when done (ADR-0084, ADR-0085).
+and gives focus back when done (ADR-0085, ADR-0086).
 _Avoid_: overlay (unqualified), pill, HUD, Overlay Variant and Overlay Panel (both
 retired: the Lens replaced the variant registry, its Setting and the pill's
 fixed-frame panel), editor, fix window, popup, history editor (the full-text
@@ -1968,7 +1968,7 @@ What the **Lens** shows while a take is recorded: the same Whisper model's decod
 of the take so far, read the way the take will be (the regex cleanup and the
 **Learned Words**, so a learned word flips as it is heard), as confirmed words and
 a provisional tail that the next decode rewrites. Only ever shown: what pastes is
-the full pass over the whole take after release (ADR-0085). Succeeds the Live
+the full pass over the whole take after release (ADR-0086). Succeeds the Live
 Partial signal (#291).
 _Avoid_: Live Partial (the retired trailing-window signal), partial, caption,
 streamed transcript (streamed text is never pasted), interim result.
@@ -1978,7 +1978,7 @@ A take that waits in the **Lens** instead of pasting: committed (history,
 **Correction Pair**, **Catches**) but pasted only when the owner presses ↩, with
 any fixes. Esc or clicking away keeps it unpasted, and the fix hotkey brings it
 back. The Check Before Pasting setting decides which takes are held: one where the
-owner tapped ⇧ while talking (the default), every take, or none (ADR-0085).
+owner tapped ⇧ while talking (the default), every take, or none (ADR-0086).
 _Avoid_: waiting take (the Lens's state, not the take), pending paste, draft,
 queued take.
 
@@ -2512,16 +2512,15 @@ the landing surface must state download progress honestly if setup is still
 running.
 _Avoid_: dismissal, close animation.
 
-### Phone (ADR-0066)
+### Phone (ADR-0066, ADR-0084)
 
 **Device Tier**:
 The phone's sizing class, read once at launch from physical memory. It is the
 one answer to every "how much fits on this phone" question: context window,
 output cap, compaction preset, prefix-cache budgets, buffer-cache limit, the
 catalog entries offered, and the free memory the neural voice needs before it
-loads. Below the floor the tier is *unsupported*. v1 has one supported tier,
-8 GB, which larger phones share until someone measures them (ADR-0066
-amendment).
+loads. Below the floor the tier is *unsupported*. It arrives with the chat model
+in release 2; read-aloud alone has nothing to size (ADR-0084).
 _Avoid_: RAM tier (the prefix cache's in-memory tier), device profile, memory
 class; per-setting device checks (the tier answers them all, once).
 

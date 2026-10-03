@@ -660,7 +660,7 @@ final class DependencyContainer: ObservableObject {
         return coordinator
     }()
 
-    /// The **Lens** (PRD #612, ADR-0084, ADR-0085): the one dictation
+    /// The **Lens** (PRD #612, ADR-0085, ADR-0086): the one dictation
     /// overlay. It streams the take while the key is held, holds it on ⇧,
     /// and ⌃⌥Space reopens the last take to fix a word by typing the one
     /// meant.

@@ -1,8 +1,8 @@
-# ADR-0085: The Lens streams, and the paste stays a full pass
+# ADR-0086: The Lens streams, and the paste stays a full pass
 
 - Status: Accepted
 - Date: 2026-10-03
-- Amends: ADR-0084 (the Lens is the one dictation overlay, not only the card
+- Amends: ADR-0085 (the Lens is the one dictation overlay, not only the card
   where a take is fixed; it also takes the keyboard while a held take waits)
 - Relates to: #612 (the Catch PRD, slice 2), #291 (the Live Partial signal the
   Live Preview succeeds), #283 (the dictation overlay redesign map, whose
@@ -77,7 +77,7 @@ Where two systems disagree, Parakeet TDT 0.6B v2 decides which is right.
    Learned Words run on every preview, for the take's app, so a learned word
    flips to the owner's spelling as it is heard and a word left alone in that
    app stays alone. Catches on the preview are shown, not counted: only a
-   committed take counts its Catches (ADR-0084). The Proofread Pass never runs
+   committed take counts its Catches (ADR-0085). The Proofread Pass never runs
    on the preview.
 4. **Whisper's audio encoder runs on the GPU.** It is one setting in the
    adapter's `WhisperKitConfig` (`audioEncoderCompute: .cpuAndGPU`); the mel
@@ -128,7 +128,7 @@ Where two systems disagree, Parakeet TDT 0.6B v2 decides which is right.
    non-activating panel that stays non-key while the owner talks, so the app
    being dictated into keeps the keyboard. It becomes key only while a take
    waits or is being fixed, and gives the keyboard back before anything
-   pastes. ADR-0084 had it take the keyboard only while fixing.
+   pastes. ADR-0085 had it take the keyboard only while fixing.
 10. **Accessibility.** Reduce Motion turns flips (a provisional word rewritten,
     a learned word turning into the owner's spelling) and settles into
     crossfades and stills the level dot. Reduce Transparency puts an opaque

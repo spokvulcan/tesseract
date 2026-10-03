@@ -2,7 +2,7 @@
 //  LivePreview.swift
 //  tesseract
 //
-//  The **Live Preview** (PRD #612, ADR-0085): what the Lens shows while the
+//  The **Live Preview** (PRD #612, ADR-0086): what the Lens shows while the
 //  owner is still talking, decoded by the same Whisper model as the final
 //  pass. Each decode reads the audio from the end of the last confirmed
 //  segment, so the Lens can show the whole take while a decode stays short.

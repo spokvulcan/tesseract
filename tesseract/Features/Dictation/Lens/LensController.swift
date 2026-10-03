@@ -2,7 +2,7 @@
 //  LensController.swift
 //  tesseract
 //
-//  The **Lens** (PRD #612, ADR-0084, ADR-0085): the one dictation overlay.
+//  The **Lens** (PRD #612, ADR-0085, ADR-0086): the one dictation overlay.
 //  While the owner holds the dictation key it streams the **Live Preview**
 //  in a glass card at the bottom of the screen; when the key comes up the
 //  full pass lands and the words the preview had wrong settle into place.

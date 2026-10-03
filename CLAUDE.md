@@ -13,6 +13,39 @@ MLX.
 - Model numbers (context, output length, sampling) → `docs/model-parameters.md`
 - Decisions & domain → `CONTEXT.md`, `docs/adr/`
 
+## Experiments and benchmarks: keep the loop tight
+
+Many cheap, trustworthy measurements per hour beat one slow end-to-end run.
+
+- **Smallest harness first.** Measure a kernel or cache change in a vendor
+  microbench (e.g. `TurboQuantDecodeMicrobench`: synthetic K/V at any
+  context, seconds per run). Load the real model only to confirm the
+  finished change.
+- **Prefill once.** Loaded-model prefill dominates wall time (PARO: about
+  35 s for 8K tokens, per arm). Capture the prefilled cache once and
+  restore it per arm, as `--turboquant-bench` does with
+  `HybridCacheSnapshot`. `--dflash2-bench` re-prefills every arm and
+  `--bench-check` adds a whole AR arm: run only the arms the question
+  needs, on the shortest prompt that shows the effect.
+- **Build once, run many.** `build-for-testing`, then
+  `test-without-building -only-testing:<suite>` while iterating; full
+  suites once, before committing. Read a script's source before passing it
+  flags: `scripts/bench.sh` builds and runs on any argument.
+- **A/B in one build.** Put both variants behind a temporary env switch,
+  alternate them (ABAB, at least four runs), compare medians, and keep a
+  reference arm (bf16 SDPA) in every run to catch GPU clock drift. Runs from
+  different builds or hours drift 10–20% on this machine.
+  `MLX_KERNEL_PROFILE` serializes the GPU: read it for relative per-kernel
+  cost only.
+- **Quiet GPU.** Check `ps -Ao pcpu,comm -r | head` before measuring;
+  animated wallpapers, video and other GPU apps skew results.
+- **Watch long runs.** Run anything over two minutes in the background with
+  a timeout, note its expected duration, poll its output, and kill it when it
+  overruns. A subagent with no new tool call for five minutes is stuck: stop
+  it and do the work directly.
+- **Failures in unrelated suites:** run the same suite on the base commit
+  and diff the failure lists before chasing them.
+
 ## Agent skills
 
 ### Issue tracker

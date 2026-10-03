@@ -1,10 +1,10 @@
-# ADR-0084: Learned Words replace the Proofread Pass as the corrector, and the Lens takes the keyboard
+# ADR-0085: Learned Words replace the Proofread Pass as the corrector, and the Lens takes the keyboard
 
 - Status: Accepted
 - Date: 2026-10-03
 - Amends: ADR-0034 (the Proofread Pass is off by default and no longer the
   corrector; Settings keeps it as an opt-in)
-- Amended by: ADR-0085 (2026-10-03: the Lens is the one dictation overlay and
+- Amended by: ADR-0086 (2026-10-03: the Lens is the one dictation overlay and
   streams the take while it is recorded, so the recording overlay is no longer
   the Overlay Variant (decision 6); it also takes the keyboard while a held
   take waits)
