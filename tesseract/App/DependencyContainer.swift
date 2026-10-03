@@ -40,8 +40,8 @@ final class DependencyContainer: ObservableObject {
     }()
 
     // The Correction Pair flywheel (ticket #289): every dictation take is
-    // recorded as a training-pair candidate; overlay flags and history edits
-    // turn candidates gold.
+    // recorded as a training-pair candidate; a word fixed in the Lens or
+    // "Insert anyway" on a rejected take turns it gold.
     lazy var correctionPairStore = CorrectionPairStore()
 
     // The Learned Words (PRD #612): "heard → meant" replacements the owner's

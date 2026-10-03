@@ -124,6 +124,9 @@ Where two systems disagree, Parakeet TDT 0.6B v2 decides which is right.
    a take the Proofread Pass rejected says "Didn't catch that" with the reason
    and "Insert anyway". The pill's one-click wrong flag and its link to the
    history go: fixing lives in the Lens, and the history keeps its own flag.
+   *Amended 2026-10-03 by the catch record (#612, slice 3):* the history's
+   flag went with its pair editor, so "Insert anyway" is the one wrong flag
+   left; pairs flagged before keep their flag and stay gold.
 9. **The Lens never takes focus while listening.** It shows as a
    non-activating panel that stays non-key while the owner talks, so the app
    being dictated into keeps the keyboard. It becomes key only while a take

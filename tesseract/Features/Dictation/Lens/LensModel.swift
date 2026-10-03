@@ -435,7 +435,7 @@ final class LensModel {
                 heard: edit.replaced, meant: edit.written, how: how, app: take.app?.bundleID,
                 at: now()),
             correctedText: text, for: pairID)
-        history?.replaceText(forPairID: pairID, with: text)
+        history?.replaceText(forPairID: pairID, with: text, catches: catches)
     }
 
     private func resetTyping() {

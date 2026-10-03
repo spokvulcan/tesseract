@@ -49,9 +49,11 @@ final class LearnedWordStore: LearnedWordApplying {
     ///   - directory: storage directory; defaults to the app-support home
     ///     the Correction Pairs use. Injectable for tests.
     ///   - now: the clock catches and learning are stamped with.
+    ///   - calendar: the days catches are counted under; it follows the
+    ///     system time zone, as the catch record's week does.
     init(
         directory: URL? = nil, now: @escaping @MainActor () -> Date = { Date() },
-        calendar: Calendar = .current
+        calendar: Calendar = .autoupdatingCurrent
     ) {
         let base =
             directory

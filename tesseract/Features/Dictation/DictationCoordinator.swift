@@ -25,8 +25,8 @@ final class DictationCoordinator {
     private(set) var lastTranscription: String = ""
 
     /// The raw text of the last take the **Proofread Pass** rejected — kept
-    /// so "insert raw anyway" (an overlay affordance, or this API directly)
-    /// can still deliver the user's words.
+    /// so "Insert anyway" (the Lens's button, or this API directly) can
+    /// still deliver the user's words.
     private(set) var lastRejectedRaw: String?
     /// What the Learned Words caught in that raw text: counted, and marked
     /// in the Lens, if it is inserted anyway.
@@ -407,13 +407,16 @@ final class DictationCoordinator {
             ) { [self] text, duration in
                 lastTranscription = text
                 committedDuration = duration
+                let catches = Self.catches(of: observedTake, committed: text)
 
                 history.add(
                     text: text,
                     duration: duration,
                     model: ModelDefinition.withID(settings.selectedSpeechToTextModelID)?.displayName
                         ?? settings.selectedSpeechToTextModelID,
-                    pairID: recordedPairID
+                    pairID: recordedPairID,
+                    catches: catches,
+                    app: Self.historyApp(observedTake?.app)
                 )
 
                 // A held take waits in the Lens: it pastes from there.
@@ -430,8 +433,7 @@ final class DictationCoordinator {
                 // app: the Lens anchors "still the last thing typed" here.
                 onTakeCommitted?(
                     DictatedTake(
-                        pairID: recordedPairID, text: text,
-                        catches: Self.catches(of: observedTake, committed: text),
+                        pairID: recordedPairID, text: text, catches: catches,
                         app: observedTake?.app, pasted: pastes,
                         pastedInto: pastes ? frontmostApp() : nil, held: held))
             }
@@ -496,17 +498,19 @@ final class DictationCoordinator {
         if let lastTakePairID {
             pairs?.flagWrong(lastTakePairID)
         }
+        // The raw text is now the last take: ⌃⌥Space must reopen it, and a
+        // fix must measure against what this paste typed, not the take before.
+        let catches = lastRejectedCatches
+        lastRejectedCatches = []
         history.add(
             text: raw,
             duration: 0,
             model: ModelDefinition.withID(settings.selectedSpeechToTextModelID)?.displayName
                 ?? settings.selectedSpeechToTextModelID,
-            pairID: lastTakePairID
+            pairID: lastTakePairID,
+            catches: catches,
+            app: Self.historyApp(session.targetApp)
         )
-        // The raw text is now the last take: ⌃⌥Space must reopen it, and a
-        // fix must measure against what this paste typed, not the take before.
-        let catches = lastRejectedCatches
-        lastRejectedCatches = []
         let take = DictatedTake(
             pairID: lastTakePairID, text: raw, catches: catches, app: session.targetApp,
             pasted: settings.autoInsertText,
@@ -541,6 +545,12 @@ final class DictationCoordinator {
         guard let take, !take.catches.isEmpty else { return [] }
         return take.learned == text
             ? take.catches : LearnedWordMatcher.relocate(take.catches, in: text)
+    }
+
+    /// The app as the history keeps it (no pid: it is stale by the time the
+    /// Dictation page opens the take).
+    private static func historyApp(_ app: TargetApp?) -> TranscriptionEntry.App? {
+        app.map { TranscriptionEntry.App(bundleID: $0.bundleID, name: $0.name) }
     }
 
     private static func pairVerdict(

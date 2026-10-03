@@ -40,7 +40,8 @@ struct LensModelTests {
             conditions: .init(duration: 3, language: "en", asrModel: "test"))
         pairs.record(pair)
         let history = FakeTranscriptionStore()
-        history.add(text: text, duration: 3, model: "test", pairID: pair.id)
+        history.add(
+            text: text, duration: 3, model: "test", pairID: pair.id, catches: catches, app: nil)
         let model = LensModel(learnedWords: words, pairs: pairs, history: history)
         let take = DictatedTake(
             pairID: pair.id, text: text, catches: catches, app: Self.notes, pasted: true)

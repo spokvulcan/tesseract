@@ -95,23 +95,6 @@ struct CorrectionPairStoreTests {
         #expect(store.protectedAudioFileNames == ["capture-1.wav"])
     }
 
-    @Test func settingACorrectionMakesGoldAndClearingReverts() {
-        let directory = makeTempDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-
-        let store = CorrectionPairStore(directory: directory)
-        let pair = makePair(audio: "capture-2.wav")
-        store.record(pair)
-
-        store.setCorrection("hello world, corrected by hand", for: pair.id)
-        #expect(store.pair(withID: pair.id)?.correction == "hello world, corrected by hand")
-        #expect(store.protectedAudioFileNames == ["capture-2.wav"])
-
-        store.setCorrection("   ", for: pair.id)
-        #expect(store.pair(withID: pair.id)?.correction == nil)
-        #expect(store.protectedAudioFileNames.isEmpty)
-    }
-
     @Test func exportIsOneDecodableJSONObjectPerLineOldestFirst() throws {
         let directory = makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

@@ -53,7 +53,6 @@ same PR:
 - Slash-command popup (`SlashCommandPopupView`)
 - Skill Cluster (`SkillClusterView`, ADR-0030)
 - Speech Reader control bar (`ReaderControlBar`, ADR-0076)
-- Dictation recording button (`RecordingButtonView`)
 - Models action bar (`ModelsActionBar`)
 - Jarvis panel (`JarvisPanelController` over `GlassPanel`, ADR-0080): a
   Siri-style floating card over every app. An `NSGlassEffectView` content view
@@ -133,7 +132,8 @@ native macOS metrics untouched.
 
 Ratified with the Cache cutover (map #269, ticket #277). Charts are Swift
 Charts; the shared pieces live in `ChartSupport.swift`. The reference
-surfaces are the Cache Overview's three charts and the Activity rail.
+surfaces are the Cache Overview's three charts and the Activity rail; the
+Dictation page's week (`CatchWeekChart`) is the small two-series case.
 
 - **The categorical palette is `ChartPalette` — four fixed slots, assigned
   in fixed order, never cycled.** Light `#2A78D6 · #1BAF7A · #D68C27 ·

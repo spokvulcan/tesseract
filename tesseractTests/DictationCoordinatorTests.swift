@@ -76,29 +76,40 @@ final class FakeTranscriptionStore: TranscriptionStoring {
         let duration: TimeInterval
         let model: String
         var pairID: UUID?
+        var catches: [LearnedWordCatch]
+        var app: TranscriptionEntry.App?
 
-        init(text: String, duration: TimeInterval, model: String, pairID: UUID? = nil) {
+        init(
+            text: String, duration: TimeInterval, model: String, pairID: UUID? = nil,
+            catches: [LearnedWordCatch] = [], app: TranscriptionEntry.App? = nil
+        ) {
             self.text = text
             self.duration = duration
             self.model = model
             self.pairID = pairID
+            self.catches = catches
+            self.app = app
         }
     }
     private(set) var entries: [Entry] = []
     private(set) var copyCount = 0
-    private(set) var focusRequests: [UUID] = []
 
-    func add(text: String, duration: TimeInterval, model: String, pairID: UUID?) {
-        entries.append(Entry(text: text, duration: duration, model: model, pairID: pairID))
+    func add(
+        text: String, duration: TimeInterval, model: String, pairID: UUID?,
+        catches: [LearnedWordCatch], app: TranscriptionEntry.App?
+    ) {
+        entries.append(
+            Entry(
+                text: text, duration: duration, model: model, pairID: pairID,
+                catches: catches, app: app))
     }
 
     func copyLatestToPasteboard() { copyCount += 1 }
 
-    func requestFocus(pairID: UUID) { focusRequests.append(pairID) }
-
-    func replaceText(forPairID pairID: UUID, with text: String) {
+    func replaceText(forPairID pairID: UUID, with text: String, catches: [LearnedWordCatch]) {
         guard let index = entries.firstIndex(where: { $0.pairID == pairID }) else { return }
         entries[index].text = text
+        entries[index].catches = catches
     }
 }
 
@@ -352,7 +363,8 @@ struct DictationCoordinatorTests {
             textInjector: injector,
             history: store,
             settings: settings,
-            feed: feed
+            feed: feed,
+            frontmostApp: { TargetApp(bundleID: "com.apple.Terminal", name: "Terminal", pid: 7) }
         )
 
         #expect(coordinator.state == .idle)
@@ -377,9 +389,12 @@ struct DictationCoordinatorTests {
         // The terminal beat carries the committed text so a variant can end the
         // happy path (and a future correction affordance can hook it).
         #expect(feed.beat?.outcome == .committed(text: expected, duration: 2.0, edits: []))
+        // The entry keeps the app in front when the take started.
         #expect(
             store.entries == [
-                FakeTranscriptionStore.Entry(text: expected, duration: 2.0, model: "Whisper Turbo")
+                FakeTranscriptionStore.Entry(
+                    text: expected, duration: 2.0, model: "Whisper Turbo",
+                    app: TranscriptionEntry.App(bundleID: "com.apple.Terminal", name: "Terminal"))
             ])
         #expect(injector.injected == [expected + " "])
         #expect(injector.restoreClipboard == settings.restoreClipboard)
@@ -950,12 +965,13 @@ struct DictationCoordinatorTests {
         let injector = FakeTextInjector()
         let feed = DictationFeed()
         let terminal = TargetApp(bundleID: "com.apple.Terminal", name: "Terminal", pid: 7)
+        let store = FakeTranscriptionStore()
         let coordinator = DictationCoordinator(
             audioCapture: FakeAudioCapture(
                 cannedAudio: AudioData(samples: [0.1, 0.2], sampleRate: 16_000, duration: 2.0)),
             transcriptionEngine: engine,
             textInjector: injector,
-            history: FakeTranscriptionStore(),
+            history: store,
             settings: SettingsManager(store: InMemorySettingsStore()),
             feed: feed,
             pairs: pairs,
@@ -985,6 +1001,14 @@ struct DictationCoordinatorTests {
         #expect(take.pairID == pairs.pairs.first?.id)
         #expect(pairs.pairs.first?.learned == "Open the Tesseract repo")
         #expect(pairs.pairs.first?.cleaned == "Open the SRACT repo")
+        // The history entry keeps the same catches and the app, for the
+        // Dictation page.
+        #expect(store.entries.count == 1)
+        let entry = try #require(store.entries.first)
+        #expect(entry.catches == take.catches)
+        #expect(entry.pairID == take.pairID)
+        #expect(
+            entry.app == TranscriptionEntry.App(bundleID: "com.apple.Terminal", name: "Terminal"))
     }
 
     /// A silent capture is never transcribed: no "Thank you." out of silence.
@@ -1036,11 +1060,12 @@ struct DictationCoordinatorTests {
         let engine = try await makeEngine(recognizer: recognizer, bundle: bundle)
         let injector = FakeTextInjector()
         let feed = DictationFeed()
+        let store = FakeTranscriptionStore()
         let coordinator = DictationCoordinator(
             audioCapture: FakeAudioCapture(
                 cannedAudio: AudioData(samples: [0.1, 0.2], sampleRate: 16_000, duration: 2.0)),
             transcriptionEngine: engine, textInjector: injector,
-            history: FakeTranscriptionStore(),
+            history: store,
             settings: SettingsManager(store: InMemorySettingsStore()), feed: feed,
             proofreadPass: makeProofreadPass(replying: { _ in "REJECT: mumbling" }),
             pairs: pairs, learnedWords: words, frontmostApp: { nil })
@@ -1051,12 +1076,19 @@ struct DictationCoordinatorTests {
         coordinator.onHotkeyUp()
         try await waitUntil { coordinator.lastRejectedRaw != nil }
         #expect(words.word(withID: id)?.totalCatches == 0)
+        // A rejected take is not in the history until it is inserted anyway.
+        #expect(store.entries.isEmpty)
 
         coordinator.insertRawAnyway()
         try await waitUntil { !delivered.isEmpty }
         #expect(injector.injected == ["Open the Tesseract repo "])
         #expect(delivered.first?.catches.map(\.meant) == ["Tesseract"])
         #expect(words.word(withID: id)?.totalCatches == 1)
+        // The history entry carries the same catches.
+        #expect(store.entries.count == 1)
+        #expect(store.entries.first?.text == "Open the Tesseract repo")
+        #expect(store.entries.first?.catches == delivered.first?.catches)
+        #expect(store.entries.first?.catches.first?.tokenStart == 2)
     }
 
 }

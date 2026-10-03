@@ -7,7 +7,7 @@
 //  proofread output + verdict, what was committed, and the owner's
 //  correction — plus the capture conditions and a reference to its Capture
 //  Dump audio. Every take is a training-pair candidate; an owner fix in the
-//  **Lens** (PRD #612), an edit or a wrong-flag makes it gold.
+//  **Lens** (PRD #612) or "Insert anyway" on a rejected take makes it gold.
 //
 
 import Foundation
@@ -70,10 +70,12 @@ nonisolated struct CorrectionPair: Codable, Equatable, Identifiable, Sendable {
     let rejectReason: String?
     /// What was actually injected; `nil` for a rejected take.
     let committed: String?
-    /// The owner's hand-corrected text (full editing lives in the history
-    /// window) — the gold half of a training pair.
+    /// The take's text after the owner's fixes in the Lens (older pairs: a
+    /// correction saved in the retired history editor), the gold half of a
+    /// training pair.
     var correction: String?
-    /// One-click "that was wrong" from the overlay affordance.
+    /// Set by "Insert anyway" on a take the Proofread Pass rejected (older
+    /// pairs: the retired overlay and history flags).
     var flaggedWrong: Bool
     /// The words the owner fixed in the Lens, oldest first.
     var fixes: [Fix]

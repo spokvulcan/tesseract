@@ -5,8 +5,11 @@
 //  Pins the **Lens**'s flow around a fix (PRD #612): ⌃⌥Space reopens the
 //  last take, the Lens's own keys (⇥ ↩ Esc ← →), the keyboard handed back
 //  before the fix is put back in the app, what the result line says when
-//  the app still holds the paste and when it moved on, and the Lens closing
-//  when dictation starts. The panel and the app are fakes: no window opens.
+//  the app still holds the paste and when it moved on, the Lens closing
+//  when dictation starts, and a take opened from the Dictation page
+//  (refused while a take is recorded, keeping a take open in the Lens, its
+//  fix carried into the take ⌃⌥Space reopens and nowhere else). The panel
+//  and the app are fakes: no window opens.
 //
 
 import AppKit
@@ -557,5 +560,248 @@ struct LensControllerTests {
         feed.setPhase(.recording)
         await waitUntil { controller.model.phase == .listening }
         #expect(controller.model.holdHint == nil)
+    }
+
+    // MARK: - A take opened from the Dictation page (slice 3)
+
+    private static let terminalEntry = TranscriptionEntry.App(
+        bundleID: "com.apple.Terminal", name: "Terminal")
+
+    /// A take as the Dictation page opens it, from its history entry.
+    private func pageTake(_ text: String, pairID: UUID? = UUID()) -> DictatedTake {
+        DictatedTake.fromPage(
+            pairID: pairID, text: text, catches: [], app: Self.terminalEntry, at: Date())
+    }
+
+    /// The take ⌃⌥Space reopens, pasted under its Correction Pair.
+    private func pastedTake(
+        _ text: String, pairID: UUID, pastedInto: TargetApp? = nil
+    ) -> DictatedTake {
+        DictatedTake(
+            pairID: pairID, text: text, catches: [], app: Self.terminal, pasted: true,
+            pastedInto: pastedInto)
+    }
+
+    @Test func aPageTakeOpensForFixingWithTheKeyboard() {
+        let f = makeFixture()
+        let opened = f.controller.openFromPage(pageTake("Ask cloud why."))
+
+        #expect(opened)
+        #expect(f.controller.model.phase == .fixing)
+        #expect(f.controller.model.mode == .fromPage)
+        #expect(f.controller.model.text == "Ask cloud why.")
+        #expect(f.presenter.events == ["show+key"])
+        // Opening a take from the page does not make it the last take.
+        #expect(f.controller.lastTake == nil)
+    }
+
+    @Test func aPageTakeIsRefusedWhileDictating() {
+        let f = makeFixture(dictating: { true })
+        let opened = f.controller.openFromPage(pageTake("Ask cloud why."))
+
+        #expect(!opened)
+        #expect(f.controller.model.phase == .hidden)
+        #expect(f.presenter.events.isEmpty)
+    }
+
+    /// A click on the page closes a waiting take first (the Lens loses the
+    /// keyboard); the context menu does not, so opening keeps it the same
+    /// way: unpasted, with its fixes, for ⌃⌥Space.
+    @Test func aPageTakeKeepsAHeldTakeWaitingForTheFixHotkey() {
+        let f = makeFixture()
+        let held = DictatedTake(
+            pairID: UUID(), text: "Ask cloud why.", catches: [], app: Self.terminal,
+            pasted: false, held: true)
+        f.controller.takeCommitted(held)
+        f.controller.model.typed = "claude"
+        #expect(press(f, kVK_Tab))
+
+        let page = pageTake("Ship the build tonight.")
+        let opened = f.controller.openFromPage(page)
+
+        #expect(opened)
+        #expect(f.controller.model.mode == .fromPage)
+        #expect(f.controller.model.take == page)
+        #expect(f.pasteBack.pastes.isEmpty)
+        #expect(f.controller.lastTake?.text == "Ask Claude why.")
+        #expect(f.controller.lastTake?.held == true)
+        #expect(f.controller.lastTake?.pasted == false)
+
+        #expect(press(f, kVK_Escape))
+        f.controller.fixHotkeyPressed()
+        #expect(f.controller.model.mode == .held)
+        #expect(f.controller.model.text == "Ask Claude why.")
+    }
+
+    @Test func aPageTakeKeepsTheFixesOfTheLastTakeBeingFixed() {
+        let f = makeFixture()
+        f.controller.takeCommitted(take("Ask cloud why."))
+        f.controller.fixHotkeyPressed()
+        f.controller.model.typed = "claude"
+        #expect(press(f, kVK_Tab))
+
+        let opened = f.controller.openFromPage(pageTake("Ship it."))
+
+        #expect(opened)
+        #expect(f.controller.model.mode == .fromPage)
+        #expect(f.controller.model.text == "Ship it.")
+        #expect(f.controller.lastTake?.text == "Ask Claude why.")
+    }
+
+    @Test func aSecondPageTakeReplacesTheFirst() {
+        let f = makeFixture()
+        let second = pageTake("Ship the build tonight.")
+        let openedFirst = f.controller.openFromPage(pageTake("Ask cloud why."))
+        let openedSecond = f.controller.openFromPage(second)
+
+        #expect(openedFirst)
+        #expect(openedSecond)
+        #expect(f.controller.model.phase == .fixing)
+        #expect(f.controller.model.mode == .fromPage)
+        #expect(f.controller.model.take == second)
+        #expect(f.controller.model.text == "Ship the build tonight.")
+    }
+
+    @Test func aPageFixToTheLastTakeCarriesIntoTheReopen() {
+        let f = makeFixture()
+        let pairID = UUID()
+        let textEdit = TargetApp(bundleID: "com.apple.TextEdit", name: "TextEdit", pid: 9)
+        f.controller.takeCommitted(
+            pastedTake("Ask cloud why.", pairID: pairID, pastedInto: textEdit))
+
+        let opened = f.controller.openFromPage(pageTake("Ask cloud why.", pairID: pairID))
+        #expect(opened)
+        f.controller.model.typed = "claude"
+        #expect(press(f, kVK_Return))
+        #expect(f.controller.model.phase == .done)
+        #expect(f.controller.model.result?.line == "Fixed")
+        // Nothing is put back in the app from the page.
+        #expect(f.pasteBack.replaced.isEmpty)
+
+        f.controller.fixHotkeyPressed()
+        #expect(f.controller.model.phase == .fixing)
+        #expect(f.controller.model.mode == .afterPaste)
+        #expect(f.controller.model.text == "Ask Claude why.")
+        let reopened = f.controller.model.take
+        #expect(reopened?.pairID == pairID)
+        #expect(reopened?.pasted == true)
+        #expect(reopened?.pastedInto == textEdit)
+        #expect(reopened?.app == Self.terminal)
+    }
+
+    @Test func aPageFixToAnotherTakeLeavesTheLastTakeAlone() {
+        let f = makeFixture()
+        let last = pastedTake("Ship the build tonight.", pairID: UUID())
+        f.controller.takeCommitted(last)
+
+        let opened = f.controller.openFromPage(pageTake("Ask cloud why."))
+        #expect(opened)
+        f.controller.model.typed = "claude"
+        #expect(press(f, kVK_Return))
+        #expect(f.controller.model.phase == .done)
+        #expect(f.controller.lastTake == last)
+
+        f.controller.fixHotkeyPressed()
+        #expect(f.controller.model.text == "Ship the build tonight.")
+    }
+
+    @Test func aPageTakeWithNoPairNeverCarriesIntoTheLastTake() {
+        let f = makeFixture()
+        let last = take("Ask cloud why.")
+        f.controller.takeCommitted(last)
+
+        let opened = f.controller.openFromPage(pageTake("Ask cloud why.", pairID: nil))
+        #expect(opened)
+        f.controller.model.typed = "claude"
+        #expect(press(f, kVK_Return))
+        #expect(f.controller.lastTake == last)
+    }
+
+    @Test func cancellingAChangedPageTakeDoesNotMakeItTheLastTake() {
+        let f = makeFixture()
+        let opened = f.controller.openFromPage(pageTake("Ask cloud why."))
+        #expect(opened)
+        f.controller.model.typed = "claude"
+        #expect(press(f, kVK_Tab))
+        #expect(f.controller.model.isChanged)
+
+        #expect(press(f, kVK_Escape))
+        #expect(f.controller.model.phase == .done)
+        #expect(f.controller.model.result?.line == "Fixed")
+        #expect(f.controller.lastTake == nil)
+        // What the fix taught stays.
+        #expect(f.words.word(heard: "cloud")?.meant == "Claude")
+
+        f.controller.fixHotkeyPressed()
+        #expect(f.controller.model.result?.line == "Nothing to fix yet")
+    }
+
+    @Test func cancellingAChangedPageTakeLeavesAnotherLastTakeAlone() {
+        let f = makeFixture()
+        let last = pastedTake("Ship the build tonight.", pairID: UUID())
+        f.controller.takeCommitted(last)
+
+        let opened = f.controller.openFromPage(pageTake("Ask cloud why."))
+        #expect(opened)
+        f.controller.model.typed = "claude"
+        #expect(press(f, kVK_Tab))
+        f.controller.cancelFix()
+
+        #expect(f.controller.model.phase == .done)
+        #expect(f.controller.lastTake == last)
+    }
+
+    @Test func cancellingAPageFixToTheLastTakeStillCarriesIt() {
+        let f = makeFixture()
+        let pairID = UUID()
+        f.controller.takeCommitted(pastedTake("Ask cloud why.", pairID: pairID))
+
+        let opened = f.controller.openFromPage(pageTake("Ask cloud why.", pairID: pairID))
+        #expect(opened)
+        f.controller.model.typed = "claude"
+        #expect(press(f, kVK_Tab))
+        // ⌃⌥Space on an open take closes it.
+        f.controller.fixHotkeyPressed()
+        #expect(f.controller.model.phase == .done)
+
+        #expect(f.controller.lastTake?.text == "Ask Claude why.")
+        #expect(f.controller.lastTake?.pasted == true)
+        f.controller.fixHotkeyPressed()
+        #expect(f.controller.model.mode == .afterPaste)
+        #expect(f.controller.model.text == "Ask Claude why.")
+    }
+
+    @Test func openingAnotherPageTakeKeepsAFixToTheLastTake() {
+        let f = makeFixture()
+        let pairID = UUID()
+        f.controller.takeCommitted(pastedTake("Ask cloud why.", pairID: pairID))
+
+        let openedFirst = f.controller.openFromPage(pageTake("Ask cloud why.", pairID: pairID))
+        f.controller.model.typed = "claude"
+        #expect(press(f, kVK_Tab))
+        let openedSecond = f.controller.openFromPage(pageTake("Ship the build tonight."))
+
+        #expect(openedFirst)
+        #expect(openedSecond)
+        #expect(f.controller.lastTake?.text == "Ask Claude why.")
+        #expect(f.controller.lastTake?.pairID == pairID)
+    }
+
+    @Test func startingToDictateKeepsAPageFixToTheLastTake() async {
+        let f = makeFixture()
+        let feed = DictationFeed()
+        f.controller.watch(feed)
+        let pairID = UUID()
+        f.controller.takeCommitted(pastedTake("Ask cloud why.", pairID: pairID))
+
+        let opened = f.controller.openFromPage(pageTake("Ask cloud why.", pairID: pairID))
+        #expect(opened)
+        f.controller.model.typed = "claude"
+        #expect(press(f, kVK_Tab))
+
+        feed.setPhase(.recording)
+        await waitUntil { f.controller.model.phase == .listening }
+        #expect(f.controller.lastTake?.text == "Ask Claude why.")
+        #expect(f.controller.lastTake?.pasted == true)
     }
 }
