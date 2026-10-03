@@ -67,7 +67,8 @@ precision, or TurboQuant (`turbo8v4`: 8-bit affine keys, `turbo0v4`: bf16 keys,
 both with 4-bit values). The KV Cache Compression setting picks it for a model
 that supports it (Qwen3.8-27B). It is a request fact and part of cache partition
 identity (ADR-0083): the prompt prefills unquantized, the cache converts after
-prefill (inside DFlash2's iterator on a speculative turn), and the turn's leaf
+prefill (inside the iterator on a DFlash2 turn and on an **Unkeyed
+Completion**, where the iterator runs the prefill), and the turn's leaf
 stores compressed layers that only a request of the same scheme restores.
 _Avoid_: kvBits (the unrelated affine quantization the product never sets), KV
 quantization (ambiguous between the two).

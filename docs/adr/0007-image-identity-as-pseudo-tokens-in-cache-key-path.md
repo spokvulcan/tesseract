@@ -186,7 +186,9 @@ format.
   intervention that should almost never fire.
 - **Unkeyed Completion skips decode-time KV quantization** (strips `kvBits`
   rather than replicating the iterator's per-step swap). Cost is RAM-only, on a
-  path whose cache is discarded after the request anyway.
+  path whose cache is discarded after the request anyway. The **KV Scheme** is
+  not skipped: the iterator converts once at the end of its prefill (ADR-0083,
+  amendment of 2026-10-03).
 - A separate anomaly — one 2000×1159 screenshot expanding to ~43,500 pad tokens
   (vs the provable ~2,268) — is **deferred, not chased**: it needs runtime
   ground truth, and the chunked continuation makes even a 43 K-pad image

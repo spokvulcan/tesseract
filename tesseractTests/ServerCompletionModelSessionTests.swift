@@ -389,4 +389,67 @@ import Testing
                 == [.prepare, .newCache, .visionContinuationQuery, .makePreparingDecodeIterator]
         )
     }
+
+    /// A **KV Scheme** reaches the Unkeyed Completion too (ADR-0083,
+    /// amended): once the prompt is in the cache, the attention layers
+    /// convert to the scheme, and the arm keeps the converted array that
+    /// decode advances. Both prefills are covered, the model's single-shot
+    /// `prepare` (text) and the anchored vision `prepare` (image).
+    @Test(arguments: [false, true])
+    func unkeyedArmDecodesOverTheKVSchemeCache(anchorsVision: Bool) async throws {
+        let tokenizer = ToySequencingTokenizer()
+        let prompt = try Self.promptTokens(tokenizer)
+        let completion = Array(Self.completionText.utf8).map(Int.init)
+        // `turbo8v4` groups its affine keys, so the head must hold a group.
+        let model = ToyLanguageModel(script: prompt + completion, headDim: 64)
+        let provider = ToyModelSessionProvider(
+            model: model, tokenizer: tokenizer, anchorsVision: anchorsVision)
+        let parameters = {
+            var parameters = ToyRequestKeying.parameters()
+            parameters.kvScheme = KVScheme.turbo8v4.rawValue
+            return parameters
+        }()
+
+        let generation = try await provider.withSession { session in
+            let (request, prepared) = try await ToyRequestKeying.unkeyedRequest(
+                in: session, userText: Self.userText, parameters: parameters)
+            let input =
+                anchorsVision
+                ? LMInput(
+                    text: prepared.text,
+                    image: LMInput.ProcessedImage(
+                        pixels: MLXArray.zeros([4, 3]), frames: [THW(1, 2, 2)]))
+                : prepared
+            return try await ServerCompletion.makeUnkeyedGeneration(
+                session: session,
+                request: request,
+                input: input,
+                parameters: parameters,
+                toolSpecs: nil,
+                fullAttentionScratchProfile: nil,
+                visionAttentionScratchProfile: nil,
+                diagnosticsContext: Self.diagnostics(),
+                progressHandler: nil
+            )
+        }
+
+        var text = ""
+        for await event in generation.stream {
+            if case .chunk(let chunk) = event { text += chunk }
+        }
+        await generation.completion.value
+
+        #expect(text == Self.completionText)
+        #expect(
+            provider.recorder.verbs.contains(.visionContinuationQuery) == anchorsVision)
+        #expect(generation.finalCache.count == 2)
+        for layer in generation.finalCache {
+            let turbo = layer as? TurboQuantKVCache
+            #expect(turbo != nil, "expected TurboQuantKVCache, got \(type(of: layer))")
+            #expect(turbo?.keyBits == KVScheme.turbo8v4.keyBits)
+            // The kept layers are the ones decode advanced: the prompt, the
+            // completion and the forward that produced the EOS.
+            #expect(layer.offset == prompt.count + completion.count + 1)
+        }
+    }
 }

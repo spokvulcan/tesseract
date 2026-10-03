@@ -1545,7 +1545,9 @@ compressed cache (`TEST_RUNNER_TURBOQUANT_DECODE_BENCH_CHUNKS=64,512,1024`).
 App side: `TurboQuantSnapshotTests` (capture, restore, move, prefix views,
 the Stored Form, the SSD round trip), `SpeculationPlanTests` (a scheme keeps
 DFlash2 and refuses MTP), `RequestFactsTests` and `SnapshotManifestTests`
-(the scheme in the partition key, digest and meta).
+(the scheme in the partition key, digest and meta),
+`ServerCompletionUnkeyedSequencingTests` (an Unkeyed Completion decodes over
+the scheme's layers after both the text and the anchored vision prefill).
 
 Loaded-model checks: `scripts/dflash2-bench.sh --bench-kv-scheme turbo8v4`
 runs both arms in the scheme (prompts from `--bench-prompt-file`), and

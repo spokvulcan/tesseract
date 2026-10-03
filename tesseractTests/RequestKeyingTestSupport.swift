@@ -43,7 +43,8 @@ nonisolated enum ToyRequestKeying {
     /// `unrecognizedPlaceholderFamily`. A tokenizer that renders only text
     /// parts (`ToySequencingTokenizer`) prepares the text render alone.
     static func unkeyedRequest(
-        in session: any ModelSession, userText: String
+        in session: any ModelSession, userText: String,
+        parameters: GenerateParameters = ToyRequestKeying.parameters()
     ) async throws -> (request: UnkeyedRequest, input: LMInput) {
         let conversation = HTTPPrefixCacheConversation(
             systemPrompt: nil,
@@ -55,7 +56,7 @@ nonisolated enum ToyRequestKeying {
         guard
             case .unkeyed(let request, let input) = try await RequestKeyingPhase.run(
                 session: session, conversation: conversation, canonicalTools: nil,
-                renderContext: .canonical, parameters: parameters(), modelID: "toy/model",
+                renderContext: .canonical, parameters: parameters, modelID: "toy/model",
                 modelFingerprint: nil, imageKeying: nil)
         else { throw NotKeyedAsExpected() }
         return (request, input)
