@@ -2470,16 +2470,15 @@ the landing surface must state download progress honestly if setup is still
 running.
 _Avoid_: dismissal, close animation.
 
-### Phone (ADR-0066)
+### Phone (ADR-0066, ADR-0084)
 
 **Device Tier**:
 The phone's sizing class, read once at launch from physical memory. It is the
 one answer to every "how much fits on this phone" question: context window,
 output cap, compaction preset, prefix-cache budgets, buffer-cache limit, the
 catalog entries offered, and the free memory the neural voice needs before it
-loads. Below the floor the tier is *unsupported*. v1 has one supported tier,
-8 GB, which larger phones share until someone measures them (ADR-0066
-amendment).
+loads. Below the floor the tier is *unsupported*. It arrives with the chat model
+in release 2; read-aloud alone has nothing to size (ADR-0084).
 _Avoid_: RAM tier (the prefix cache's in-memory tier), device profile, memory
 class; per-setting device checks (the tier answers them all, once).
 
