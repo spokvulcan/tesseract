@@ -301,7 +301,8 @@ final class SpeechCoordinator {
     /// session's first segment becomes its take.
     private func openOrReuseSession(language: String? = nil) async throws -> SpeechSession {
         let (voiceDescription, language) = ttsVoiceContext(language: language)
-        let key = "\(voiceDescription ?? "")|\(language)"
+        let preset = settings.presetVoice
+        let key = "\(preset ?? voiceDescription ?? "")|\(language)"
         if let session, sessionVoiceKey == key { return session }
 
         await session?.close()
@@ -312,11 +313,16 @@ final class SpeechCoordinator {
             engine.noteLoading("Loading voice model…")
         }
         do {
-            let pinned = pinnedVoices.voice(
-                description: voiceDescription, language: language,
-                model: ModelDefinition.textToSpeechModelSpec)
+            // A Preset Voice is the checkpoint's own speaker: nothing to pin.
+            let pinned =
+                preset == nil
+                ? pinnedVoices.voice(
+                    description: voiceDescription, language: language,
+                    model: ModelDefinition.textToSpeechModelSpec)
+                : nil
             let voice: Voice =
-                pinned.map { .pinned($0) }
+                preset.map { .preset(speaker: $0, language: language) }
+                ?? pinned.map { .pinned($0) }
                 ?? voiceDescription.map { .designed(description: $0, language: language) }
                 ?? .standard(language: language)
             let opened = try await engine.engine.session(.readAloud, voice: voice)

@@ -8,6 +8,12 @@
 //   ab        — #339-matched settings (seed 42, t=0.9 for both models,
 //               p=1.0, rp=1.05) for same-seed A/B against
 //               research/model-bench-339/audio WAVs
+//   phone     — the iPhone's stack on this Mac (ADR-0084): the 0.6B
+//               CustomVoice checkpoint (--checkpoint) prepared for the Neural
+//               Engine with MLX only on the CPU, behind the VoiceHandover with
+//               the System Voice; times the preparation (twice: the second
+//               finds the first's manifest), the Speed Check's render, then
+//               reads --text-file as a Preset Voice (--voice, a speaker)
 //
 // Usage: v2-listen --mode pinned|longform|ab [--precision 8bit|6bit|bf16]
 //          [--checkpoint DIR] [--out-dir DIR] [--text-file PATH] [--seed N]
@@ -215,6 +221,45 @@ func write(_ capture: UtteranceCapture, to url: URL, label: String) throws {
 let args = parseArgs()
 let outDir = URL(fileURLWithPath: args.outDir, isDirectory: true)
 try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+
+if args.mode == "phone" {
+    guard let directory = args.checkpoint, let textFile = args.textFile else {
+        fatalError("phone needs --checkpoint (the 0.6B CustomVoice) and --text-file")
+    }
+    let checkpoint = URL(fileURLWithPath: directory, isDirectory: true)
+    let cache = outDir.appendingPathComponent("neural-voice", isDirectory: true)
+    let neural = Qwen3Synthesizer(
+        checkpointDirectory: { _ in checkpoint }, neuralEngineCache: cache, neuralVoice: true)
+    for attempt in 1 ... 2 {
+        let started = Date()
+        let report = try await neural.prepareNeuralVoice(.customVoice06B) { phase in
+            print(String(format: "  %6.1f s  %@", Date().timeIntervalSince(started), "\(phase)"))
+        }
+        print(String(format: "prepared #%d in %.1f s: %@", attempt, Date().timeIntervalSince(started), report))
+    }
+    let speaker = args.voice ?? "ryan"
+    let timing = try await neural.timeRender(
+        "Here is how quickly this voice reads on this machine.", speaker: speaker,
+        language: "English")
+    print(String(format: "speed check: RTF %.3f, first audio %.0f ms", timing.realTimeFactor, timing.firstAudio * 1000))
+
+    let engine = SpeechEngine(
+        model: .customVoice06B,
+        synthesizer: VoiceHandover(
+            primary: neural, fallback: SystemVoiceSynthesizer(),
+            speakers: await neural.presetSpeakers(), choose: { .primary }),
+        diagnostics: args.timing ? StderrTimingTap() : nil)
+    let text = try String(contentsOfFile: textFile, encoding: .utf8)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    let session = try await engine.session(
+        SessionProfile(reference: .pinned, pacing: .eager),
+        voice: .preset(speaker: speaker, language: "English"))
+    let utterance = try await session.speak(text, options: SpeechOptions(seed: .fixed(args.seed)))
+    let capture = try await drain(utterance)
+    try write(capture, to: outDir.appendingPathComponent("phone.wav"), label: "phone \(speaker)")
+    await session.close()
+    exit(0)
+}
 
 // The engine only loads from disk: the app's model store, or --checkpoint.
 let modelSpec = spec(for: args.precision)

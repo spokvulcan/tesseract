@@ -195,6 +195,18 @@ when that buffer runs out, and a notification says why.
 - Episode Origin, Device Tier, the Foreground Gate and the published LLM
   checkpoint wait for the release that needs them.
 
+## Amendment: the voice downloads from Hugging Face (2026-10-03, slice 4)
+
+#515 left slice 4 to choose between a second **Model Fetching** adapter and
+Apple-hosted asset packs. It took the adapter: a background URLSession over
+the Hugging Face files the Mac's catalog already uses, so the download goes
+on with the screen locked, resumes mid-file and rejoins its transfer after a
+relaunch, Wi-Fi only unless the owner allows cellular. Asset packs would need
+an App Store Connect upload from the owner for every checkpoint change, and a
+second path for development builds. The phone fetches only what it runs: the
+codec's decoder is the front of a file that also holds its encoder, so the
+phone fetches that range and rewrites the file's header (1.75 GB in all).
+
 ## Accepted costs
 
 - The phone gets no chat until release 2 and no memory until later still.

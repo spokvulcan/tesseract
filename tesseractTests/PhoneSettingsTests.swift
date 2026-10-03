@@ -28,6 +28,7 @@ struct PhoneSettingsTests {
         #expect(settings.ttsPlaybackRate == 1.0)
         #expect(settings.ttsParameters == TTSParameters())
         #expect(settings.readerHighlight == .both)
+        #expect(!settings.allowsCellularDownloads, "Wi-Fi only unless the owner allows cellular")
     }
 
     @Test func aChangeSurvivesARelaunch() {

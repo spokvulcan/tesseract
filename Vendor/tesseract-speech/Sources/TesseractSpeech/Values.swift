@@ -268,6 +268,20 @@ public enum Readiness: Int, Sendable, Equatable, Comparable {
     }
 }
 
+/// A stage of preparing the phone's voice for the Neural Engine (ADR-0084),
+/// for its progress.
+public enum VoicePreparationPhase: Sendable, Equatable {
+    /// The checkpoint loads.
+    case loading
+    /// MLX measures the checkpoint: the first time only.
+    case measuring
+    /// One of the voice's graphs is built and compiled, or loaded as built
+    /// before: the codec, the talker, the code predictor.
+    case building(String)
+    /// The graphs are checked against MLX: the first time only.
+    case checking
+}
+
 /// No download phase: the engine only loads a checkpoint already on disk.
 /// Fetching it is the app's model download manager's job.
 public enum EnginePhase: Sendable, Equatable {

@@ -13,6 +13,7 @@ struct LibraryScreen: View {
     @Environment(ReaderLibrary.self) private var library
     @Environment(PhoneReading.self) private var reading
     @Environment(PhoneIntake.self) private var intake
+    @Environment(PhoneVoice.self) private var voice
     @State private var showsSettings = false
     @State private var showsFiles = false
 
@@ -20,6 +21,9 @@ struct LibraryScreen: View {
         @Bindable var intake = intake
         NavigationStack(path: $intake.path) {
             List {
+                if !voice.isReading {
+                    NeuralVoiceBanner()
+                }
                 ForEach(library.entries) { entry in
                     NavigationLink(value: entry.id) {
                         LibraryRow(entry: entry, progress: library.progress[entry.id] ?? 0)
@@ -157,5 +161,32 @@ private struct NowReadingBar: View {
         .glassEffect(.regular, in: .capsule)
         .padding(.horizontal, 12)
         .padding(.bottom, 4)
+    }
+}
+
+/// Until the neural voice reads: what is happening with it, and the download
+/// with its size the first time.
+private struct NeuralVoiceBanner: View {
+    @Environment(PhoneVoice.self) private var voice
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Neural voice", systemImage: "waveform")
+                .font(.headline)
+            Text(voice.summary)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            if case .downloading(let received, let total) = voice.state, total > 0 {
+                ProgressView(value: Double(received), total: Double(total))
+            }
+            if case .notDownloaded = voice.state {
+                Button("Download \(ModelDefinition.phoneVoice.sizeDescription)") {
+                    voice.download()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(.vertical, 6)
+        .listRowSeparator(.hidden)
     }
 }

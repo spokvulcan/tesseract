@@ -640,3 +640,67 @@ private let shortText = "Hello there, this is a short utterance."
         #expect(resumed.count == 4 * Self.frame, "sound resets the run")
     }
 }
+
+// MARK: - The phone's two voices (ADR-0084)
+
+@Suite struct VoiceHandoverTests {
+
+    /// Each segment goes to the voice chosen as it starts: a change between
+    /// segments takes effect at the next one, and the utterance's frames run
+    /// on without a gap across it.
+    @Test func aChangeOfVoiceLandsOnASegmentBoundary() async throws {
+        let neural = ScriptedSynthesizer()
+        let system = ScriptedSynthesizer()
+        let choices = ChoiceScript([.fallback, .primary, .fallback])
+        let engine = SpeechEngine(
+            model: .customVoice06B,
+            synthesizer: VoiceHandover(
+                primary: neural, fallback: system, speakers: ["ryan"],
+                choose: { await choices.next() }))
+        let session = try await engine.session(
+            .readAloud, voice: .preset(speaker: "ryan", language: "English"))
+        let utterance = try await session.speak(longText)
+        var frames = 0
+        for try await event in utterance.events {
+            if case .audio(let chunk) = event {
+                #expect(chunk.frames.lowerBound == frames, "gapless across voices")
+                frames = chunk.frames.upperBound
+            }
+        }
+        // The second segment, and only it, in the neural voice.
+        #expect(utterance.segmentCount >= 2)
+        #expect(await neural.requests.count == 1)
+        #expect(await system.requests.count == utterance.segmentCount - 1)
+        #expect(await neural.requests.first?.speaker == "ryan")
+    }
+
+    /// The engine's loading and warming reach only the fallback: the primary
+    /// is the app's to prepare, and to keep through an unload.
+    @Test func theEngineLifecycleReachesOnlyTheFallback() async throws {
+        let neural = ScriptedSynthesizer()
+        let system = ScriptedSynthesizer()
+        let engine = SpeechEngine(
+            model: .customVoice06B,
+            synthesizer: VoiceHandover(
+                primary: neural, fallback: system, speakers: ["ryan"], choose: { .fallback }))
+        try await engine.prepare(.warm)
+        await engine.unload()
+        #expect(await system.loadCount == 1)
+        #expect(await system.unloadCount == 1)
+        #expect(await neural.loadCount == 0)
+        #expect(await neural.unloadCount == 0)
+    }
+}
+
+/// Choices handed out in order, the last one repeating.
+private actor ChoiceScript {
+    private var choices: [VoiceHandover.Choice]
+
+    init(_ choices: [VoiceHandover.Choice]) {
+        self.choices = choices
+    }
+
+    func next() -> VoiceHandover.Choice {
+        choices.count > 1 ? choices.removeFirst() : choices[0]
+    }
+}

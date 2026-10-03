@@ -45,6 +45,24 @@ final class Qwen3TTSNeuralVoice: @unchecked Sendable {
 
 // MARK: - Preparing
 
+/// A stage of preparing the Neural Engine voice, for its progress.
+public enum NeuralVoicePhase: Sendable, Equatable {
+    /// MLX measures the checkpoint on the CPU: the first time only.
+    case measuring
+    /// A graph is built and compiled, or loaded as built before.
+    case building(String)
+    /// The graphs are checked against MLX: the first time only.
+    case checking
+}
+
+/// What a preparation found that the next one can trust: the precision MLX
+/// measured, and the check the graphs passed with it.
+struct NeuralVoiceManifest: Codable {
+    var talker: NeuralPrecision
+    var codePredictor: NeuralPrecision
+    var check: String
+}
+
 extension Qwen3TTSModel {
     /// Moves the talker and the code predictor to the Neural Engine
     /// (ADR-0084, ADR-0085). MLX first runs a short probe on the CPU, which
@@ -55,6 +73,10 @@ extension Qwen3TTSModel {
     /// From then on generation runs them there, and runs MLX only on the
     /// CPU: the prompt's embeddings and the codec's front end.
     ///
+    /// A preparation that passed leaves a manifest in `cacheDirectory`, so
+    /// the next one for this checkpoint and these graphs skips the probe and
+    /// the check (MLX on the CPU, the slow part) and only loads the models.
+    ///
     /// `contextLength` bounds a prompt and its frames. `alignment` is the
     /// head word timing reads, fixed in the talker's graph; generations
     /// asking for another get no rows. With `.cpuOnly` (tests) the models
@@ -63,10 +85,21 @@ extension Qwen3TTSModel {
     @discardableResult
     public func prepareNeuralVoice(
         cacheDirectory: URL, contextLength: Int = 512, alignment: Qwen3TTSAlignmentHead? = nil,
-        computeUnits: MLComputeUnits = .cpuAndNeuralEngine
+        computeUnits: MLComputeUnits = .cpuAndNeuralEngine,
+        onPhase: (@Sendable (NeuralVoicePhase) -> Void)? = nil
     ) async throws -> String {
         let requireNeuralEngine = computeUnits != .cpuOnly
         let source = checkpointKey()
+        let alignment = validated(alignment)
+        let head = alignment.map { "\($0.layer).\($0.head)" } ?? "none"
+        let manifestURL = cacheDirectory.appendingPathComponent(
+            NeuralModelStore.key(
+                "qwen3tts-voice",
+                "talker v\(Qwen3TTSNeuralTalkerGraph.version) L\(contextLength) a\(head) "
+                    + "code predictor v\(Qwen3TTSNeuralCodePredictorGraph.version) \(computeUnits.rawValue) "
+                    + source) + ".json")
+        let manifest = try? JSONDecoder().decode(
+            NeuralVoiceManifest.self, from: Data(contentsOf: manifestURL))
         let clock = ContinuousClock()
         var started = clock.now
         var stages: [String] = []
@@ -75,15 +108,24 @@ extension Qwen3TTSModel {
             stages.append(String(format: "%@ %.1f s", stage, (now - started) / .seconds(1)))
             started = now
         }
-        let reference = try neuralReference()
-        lap("MLX probe")
-        let talkerPrecision = NeuralPrecision(largestProducts: reference.talkerProducts)
-        let predictorPrecision = NeuralPrecision(largestProducts: reference.codePredictorProducts)
+        var reference: NeuralReference?
+        if manifest == nil {
+            onPhase?(.measuring)
+            reference = try neuralReference()
+            lap("MLX probe")
+        }
+        let talkerPrecision =
+            manifest?.talker ?? NeuralPrecision(largestProducts: reference!.talkerProducts)
+        let predictorPrecision =
+            manifest?.codePredictor
+            ?? NeuralPrecision(largestProducts: reference!.codePredictorProducts)
+        onPhase?(.building("talker"))
         let (neuralTalker, talkerPlacement) = try await Qwen3TTSNeuralTalker.load(
-            talker: talker, contextLength: contextLength, alignment: validated(alignment),
+            talker: talker, contextLength: contextLength, alignment: alignment,
             precision: talkerPrecision, cacheDirectory: cacheDirectory, sourceKey: source,
             computeUnits: computeUnits, requireNeuralEngine: requireNeuralEngine)
         lap("talker")
+        onPhase?(.building("code predictor"))
         let (predictor, predictorPlacement) = try await Qwen3TTSNeuralCodePredictor.load(
             predictor: talker.codePredictor, topK: Qwen3TTSSampling.topK,
             precision: predictorPrecision, cacheDirectory: cacheDirectory, sourceKey: source,
@@ -106,18 +148,26 @@ extension Qwen3TTSModel {
                     projection: { fc2(silu(fc1($0.asType(.float32)))) }))
         }
         lap("host tables")
-        let check = try neuralAgreement(voice, reference)
-        lap("check")
-        let report =
-            "talker: \(talkerPlacement), \(talkerPrecision); "
-            + "code predictor: \(predictorPlacement), \(predictorPrecision); \(check); "
-            + stages.joined(separator: ", ")
-        guard check.passes else {
-            throw AudioGenerationError.modelNotInitialized(
-                "The Neural Engine voice differs from MLX's: \(report).")
+        var checked = manifest?.check ?? ""
+        if let reference {
+            onPhase?(.checking)
+            let check = try neuralAgreement(voice, reference)
+            lap("check")
+            guard check.passes else {
+                throw AudioGenerationError.modelNotInitialized(
+                    "The Neural Engine voice differs from MLX's: talker \(talkerPrecision), "
+                        + "code predictor \(predictorPrecision); \(check).")
+            }
+            checked = check.description
+            try? JSONEncoder().encode(
+                NeuralVoiceManifest(
+                    talker: talkerPrecision, codePredictor: predictorPrecision, check: checked)
+            ).write(to: manifestURL)
         }
         lock.withLock { neuralVoice = voice }
-        return report
+        return "talker: \(talkerPlacement), \(talkerPrecision); "
+            + "code predictor: \(predictorPlacement), \(predictorPrecision); \(checked)"
+            + (manifest == nil ? "" : " (checked before)") + "; " + stages.joined(separator: ", ")
     }
 
     /// Back to the talker and the code predictor in MLX.

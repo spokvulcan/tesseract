@@ -343,11 +343,22 @@ call stops the reading and it goes on from the heard sentence; lost headphones
 stop it; the lock screen's buttons play, pause and skip by sentence; a pause
 becomes a stop when the app leaves the screen), `ThermalPolicyTests` and
 `ReadingMeterTests` (each segment's real-time factor from the engine's
-diagnostics marks, and the report a TestFlight tester copies). The
-package's
+diagnostics marks, and the report a TestFlight tester copies),
+`SpeedCheckTests` (a measured real-time factor in; the neural voice or the
+System Voice, and the speed menu's rates, out), `TrimmingModelFetchingTests`
+(the codec's decoder kept from a file that also holds its encoder: the header
+rewritten in place, MLX loading what is left, and the download manager
+fetching only those bytes over the in-memory peer) and `ModelCatalogTests`'
+phone entry. The package's
 `SystemVoiceSynthesizerTests` drive the **System Voice**
 adapter with a scripted renderer: resampling to 24 kHz, whole frames, and word
-marks turned into word starts that never run ahead of their audio. CI's `build-ios` job only
+marks turned into word starts that never run ahead of their audio, and its
+`VoiceHandoverTests` the switch between the neural voice and the System Voice,
+which lands on a segment boundary with the frames gapless across it. The
+phone's own adapters (the background download, `PhoneVoice`) are checked on
+the device; on this Mac, `v2-listen --mode phone` runs the phone's speech stack
+(MLX on the CPU, the voice on the Neural Engine, its Voice Preparation twice and
+the Speed Check's render) on the 0.6B checkpoint. CI's `build-ios` job only
 builds it. Build it the same way before pushing a change to a shared folder
 (ARCHITECTURE.md → The iPhone app), so a Mac-only file that slipped into one
 fails here rather than in CI:

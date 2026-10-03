@@ -71,4 +71,8 @@ enum SettingsCatalogue {
     /// The phone's Preset Voice: one of the checkpoint's speakers (#515).
     /// The owner picks the default by ear before TestFlight.
     static let phoneVoice = Setting.string("phoneVoice", default: "ryan")
+
+    /// Whether the phone may download the voice over cellular; Wi-Fi only
+    /// unless the owner allows it (#515).
+    static let phoneCellularDownloads = Setting.bool("phoneCellularDownloads", default: false)
 }

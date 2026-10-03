@@ -5,8 +5,9 @@
 //  The iPhone app's composition root: pure wiring, like the Mac's
 //  `DependencyContainer`. The speech code is the Mac's (the coordinator, the
 //  Read-Along, the Reader); what differs is the voice behind the engine and
-//  the adapters around it. Until the neural voice comes to the phone (#515,
-//  slice 4) the system voice reads.
+//  the adapters around it: the neural voice on the Neural Engine once it is
+//  downloaded and prepared, and the System Voice until then, wherever it
+//  can't keep up, and when the phone is too warm (#515).
 //
 
 import Foundation
@@ -14,7 +15,7 @@ import TesseractSpeech
 
 @MainActor
 final class PhoneContainer {
-    let settings = PhoneSettings()
+    let settings: PhoneSettings
     let library = ReaderLibrary()
     /// The **Read-Along** (ADR-0076): the one clock of which word is heard.
     let readAlong = SpeechReadAlong()
@@ -23,9 +24,17 @@ final class PhoneContainer {
     /// The last reading's speed and warmth, for a TestFlight report.
     let meter = ReadingMeter()
 
+    /// The neural voice: its download, Voice Preparation and Speed Check.
+    let voice: PhoneVoice
+
     lazy var engine = SpeechEnginePresenter(
         engine: SpeechEngine(
-            model: .customVoice06B, synthesizer: SystemVoiceSynthesizer(), diagnostics: meter))
+            model: .customVoice06B,
+            synthesizer: VoiceHandover(
+                primary: voice.synthesizer, fallback: SystemVoiceSynthesizer(),
+                speakers: PresetVoice.all.map(\.id),
+                choose: { [voice] in await voice.choice }),
+            diagnostics: meter))
 
     lazy var coordinator = SpeechCoordinator(
         textExtractor: PasteboardTextExtractor(),
@@ -46,6 +55,9 @@ final class PhoneContainer {
         reading: reading, library: library, settings: settings)
 
     init() {
+        let settings = PhoneSettings()
+        self.settings = settings
+        voice = PhoneVoice(settings: settings)
         if library.isNew {
             library.add(PhoneWelcome.text, title: PhoneWelcome.title)
         }

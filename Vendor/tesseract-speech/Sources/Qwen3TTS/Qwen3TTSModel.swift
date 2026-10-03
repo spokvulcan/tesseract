@@ -124,20 +124,33 @@ public final class Qwen3TTSModel: @unchecked Sendable {
     /// returns, and whenever it throws, generation uses MLX. Returns what
     /// the compute plan and the check found. `frames` is the chunk the
     /// Neural Engine decodes per call (at most 8: its width limit on M1–M3).
+    ///
+    /// A check that passed leaves a note beside the compiled model, so later
+    /// preparations of the same model skip it (it runs MLX's conv stack).
     @discardableResult
     public func prepareNeuralEngine(cacheDirectory: URL, frames: Int = 3) async throws -> String {
         precondition(frames >= 1 && frames <= 8)
-        let probe = try lock.withLock { neuralProbe } ?? makeNeuralProbe()
+        let source = sourceKey()
+        let checked = cacheDirectory.appendingPathComponent(
+            Qwen3TTSNeuralCodec.cacheKey(
+                config: codecDecoder.config, frames: frames, sourceKey: source) + ".checked")
         let (codec, placement) = try await Qwen3TTSNeuralCodec.load(
             decoder: codecDecoder, frames: frames, cacheDirectory: cacheDirectory,
-            sourceKey: sourceKey())
+            sourceKey: source)
+        if let note = try? String(contentsOf: checked, encoding: .utf8) {
+            lock.withLock { neuralCodec = codec }
+            return "\(placement); \(note) (checked before)"
+        }
+        let probe = try lock.withLock { neuralProbe } ?? makeNeuralProbe()
         let snr = try agreement(codec, probe)
         guard snr >= 35 else {
             throw AudioGenerationError.modelNotInitialized(
                 "The Neural Engine codec's audio differs from MLX's (\(String(format: "%.1f", snr)) dB).")
         }
+        let note = String(format: "%.1f dB against MLX", snr)
+        try? note.write(to: checked, atomically: true, encoding: .utf8)
         lock.withLock { neuralCodec = codec }
-        return "\(placement); \(String(format: "%.1f", snr)) dB against MLX"
+        return "\(placement); \(note)"
     }
 
     /// Back to the MLX conv stack.

@@ -2501,6 +2501,21 @@ while the phone cools down. It reads in the text's language and is never a
 voice identity: the chosen **Preset Voice** stays chosen while it reads.
 _Avoid_: fallback voice, backup voice, Apple voice.
 
+**Voice Preparation**:
+Turning the downloaded checkpoint into the Neural Engine graphs this phone
+runs: building and compiling them, checking them against the checkpoint, and
+the **Speed Check**. The first one takes minutes; it runs again only when the
+graphs or the checkpoint change, and every later launch only loads what it
+built, in seconds. The **System Voice** reads meanwhile.
+_Avoid_: installation, compilation, setup.
+
+**Speed Check**:
+The timed render at the end of **Voice Preparation** that says whether this
+phone's neural voice keeps up. A phone too slow for normal speed reads with the
+**System Voice** and says why; one that keeps up at some speeds but not all
+offers only those in the speed menu.
+_Avoid_: benchmark, performance test.
+
 **Device Tier**:
 The phone's sizing class, read once at launch from physical memory. It is the
 one answer to every "how much fits on this phone" question: context window,

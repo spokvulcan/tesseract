@@ -204,6 +204,8 @@ tesseract-ios/                   # The iPhone app's own files (ADR-0066, ADR-008
 ├── PhoneAudioSession.swift      # Spoken-audio session around the Mac's playback adapter
 ├── PhoneIntake.swift            # Files opened in the app, and the Library Inbox taken in
 ├── PhonePocket.swift            # Interruptions, routes, heat, lock-screen commands, Now Playing
+├── PhoneVoice.swift             # The neural voice: download, Voice Preparation, Speed Check, which voice reads
+├── PhoneModelFetching.swift     # Model Fetching over a background URLSession
 └── Views/                       # Library, Reader (UITextView on TextKit 2), transport, voices, settings
 
 tesseract-share/                 # "Read in Tesseract": the share extension
@@ -249,6 +251,20 @@ text aloud (ADR-0084), so the target takes only the read-aloud code:
   from outside the app stops the reading at the heard sentence, and playing
   again reads from it: a stream held paused in the background could not come
   back once the system stopped its audio engine.
+- **The neural voice** (`PhoneVoice`): Qwen3-TTS 0.6B on the Neural Engine
+  (ADR-0084, ADR-0085). Its catalog entry (`ModelDefinition.phoneVoice`)
+  downloads through the Mac's download manager, over a second **Model
+  Fetching** adapter: a background URLSession that goes on with the screen
+  locked, resumes mid-file and rejoins a transfer after a relaunch (the app
+  delegate hands it the session's events), Wi-Fi only unless the owner
+  allows cellular. A trimming adapter in front of it keeps only the codec's
+  decoder from the file that also holds its encoder. **Voice Preparation**
+  then builds the graphs into Application Support (out of backups), the first
+  time in minutes and afterwards in seconds, and the **Speed Check** times a
+  render. The engine's synthesizer is a `VoiceHandover`: the neural voice for
+  each segment while it is ready, keeps up and the **Thermal Policy** allows
+  it, the **System Voice** otherwise; the speed menu offers the rates the
+  Speed Check allows.
 - **The share extension** (`tesseract-share`, embedded in the app) builds the
   `Intake` folder and nothing else of the app. In Safari its script hands over
   the page's HTML, so the app never fetches a page. It never runs the voice:

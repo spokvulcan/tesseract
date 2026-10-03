@@ -22,4 +22,11 @@ protocol SpeechSettings: AnyObject {
     var ttsParameters: TTSParameters { get }
     /// Designed voices the owner named and saved.
     var savedVoices: [SavedVoice] { get set }
+    /// The Preset Voice that reads, where the voice is a CustomVoice
+    /// checkpoint's speaker (the phone); nil where voices are designed.
+    var presetVoice: String? { get }
+}
+
+extension SpeechSettings {
+    var presetVoice: String? { nil }
 }

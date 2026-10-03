@@ -24,6 +24,15 @@ final class PhoneSettings: SpeechSettings {
         didSet { SettingsCatalogue.phoneVoice.write(phoneVoice, to: store) }
     }
 
+    var presetVoice: String? { phoneVoice }
+
+    /// Whether the voice may download over cellular.
+    var allowsCellularDownloads: Bool {
+        didSet {
+            SettingsCatalogue.phoneCellularDownloads.write(allowsCellularDownloads, to: store)
+        }
+    }
+
     var ttsPlaybackRate: Double {
         didSet { SettingsCatalogue.ttsPlaybackRate.write(ttsPlaybackRate, to: store) }
     }
@@ -91,6 +100,7 @@ final class PhoneSettings: SpeechSettings {
     init(store: any SettingsStore = UserDefaultsSettingsStore()) {
         self.store = store
         self.phoneVoice = SettingsCatalogue.phoneVoice.load(from: store)
+        self.allowsCellularDownloads = SettingsCatalogue.phoneCellularDownloads.load(from: store)
         self.ttsPlaybackRate = SettingsCatalogue.ttsPlaybackRate.load(from: store)
         self.ttsVoiceDescription = SettingsCatalogue.ttsVoiceDescription.load(from: store)
         self.ttsLanguage = SettingsCatalogue.ttsLanguage.load(from: store)

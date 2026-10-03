@@ -138,12 +138,12 @@ private struct Scrubber: View {
     }
 }
 
-/// Read-aloud speed: changes pace, not pitch.
+/// Read-aloud speed: changes pace, not pitch. With the neural voice, only
+/// the rates its Speed Check found it keeps up with.
 private struct SpeedMenu: View {
     @Environment(SpeechCoordinator.self) private var coordinator
     @Environment(PhoneSettings.self) private var settings
-
-    private static let rates: [Double] = [0.75, 0.9, 1.0, 1.15, 1.25, 1.5, 1.75, 2.0]
+    @Environment(PhoneVoice.self) private var voice
 
     var body: some View {
         Menu {
@@ -153,7 +153,7 @@ private struct SpeedMenu: View {
                     get: { settings.ttsPlaybackRate },
                     set: { coordinator.setPlaybackRate($0) })
             ) {
-                ForEach(Self.rates, id: \.self) { rate in
+                ForEach(voice.playableRates, id: \.self) { rate in
                     Text(Self.label(rate)).tag(rate)
                 }
             }

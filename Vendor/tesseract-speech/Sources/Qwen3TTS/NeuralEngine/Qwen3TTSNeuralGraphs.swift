@@ -142,7 +142,7 @@ struct NeuralGeometry: Sendable, Equatable {
 /// product grows past `int8ProductLimit`. Each keeps its down projection in
 /// fp16, with the product scaled by a power of two to stay inside fp16 (the
 /// up projection carries the scale, down undoes it).
-struct NeuralPrecision: Sendable, Equatable, CustomStringConvertible {
+struct NeuralPrecision: Sendable, Equatable, Codable, CustomStringConvertible {
     /// Layer index to its product's scale.
     var outliers: [Int: Float]
 
