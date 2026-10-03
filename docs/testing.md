@@ -358,10 +358,11 @@ which lands on a segment boundary with the frames gapless across it. The
 phone's own adapters (the background download, `PhoneVoice`) are checked on
 the device; on this Mac, `v2-listen --mode phone` runs the phone's speech stack
 (MLX on the CPU, the voice on the Neural Engine, its Voice Preparation twice and
-the Speed Check's render) on the 0.6B checkpoint. CI's `build-ios` job only
-builds it. Build it the same way before pushing a change to a shared folder
-(ARCHITECTURE.md → The iPhone app), so a Mac-only file that slipped into one
-fails here rather than in CI:
+the Speed Check's render) on the 0.6B checkpoint, and prints the memory
+footprint iOS counts after each preparation and the reading. CI's
+`build-ios` job only builds it. Build it the same way before pushing a change
+to a shared folder (ARCHITECTURE.md → The iPhone app), so a Mac-only file that
+slipped into one fails here rather than in CI:
 
 ```bash
 xcodebuild build -project tesseract.xcodeproj -scheme tesseract-ios \

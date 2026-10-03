@@ -32,6 +32,9 @@ public final class Qwen3TTSModel: @unchecked Sendable {
     /// prepared: then generation runs there, and MLX only on the CPU
     /// (`Qwen3TTSModel+NeuralVoice`).
     var neuralVoice: Qwen3TTSNeuralVoice?
+    /// Their MLX weights are gone (`releaseMLXVoice`): only the Neural
+    /// Engine can generate.
+    var mlxVoiceReleased = false
 
     /// The instruct turn's KV for the last description used: every prompt
     /// opens with it, and under causal attention it reads the same whatever
@@ -433,6 +436,10 @@ public final class Qwen3TTSModel: @unchecked Sendable {
             return try runNeural(
                 neural, prompt: prompt, sampling: sampling, seed: seed, chunkFrames: chunkFrames,
                 alignment: alignment, onAudio: onAudio, onAlignment: onAlignment)
+        }
+        guard !lock.withLock({ mlxVoiceReleased }) else {
+            throw AudioGenerationError.modelNotInitialized(
+                "The voice's MLX weights were released for the Neural Engine voice.")
         }
         generationLock.lock()
         defer { generationLock.unlock() }

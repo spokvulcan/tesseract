@@ -198,6 +198,9 @@ public actor Qwen3Synthesizer: SpeechSynthesizing {
             case .checking: onPhase?(.checking)
             }
         }
+        // The Neural Engine has its own copy now: the MLX one is dead weight
+        // on a phone.
+        model.releaseMLXVoice()
         neuralVoiceReady = true
         warmed = true
         return "codec: \(codec); \(voice)"

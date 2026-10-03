@@ -170,11 +170,30 @@ extension Qwen3TTSModel {
             + (manifest == nil ? "" : " (checked before)") + "; " + stages.joined(separator: ", ")
     }
 
-    /// Back to the talker and the code predictor in MLX.
+    /// Back to the talker and the code predictor in MLX, while they are
+    /// still loaded (`releaseMLXVoice`).
     public func disableNeuralVoice() {
         lock.withLock { neuralVoice = nil }
     }
 
+    /// Frees the MLX weights a prepared Neural Engine voice no longer reads:
+    /// the talker's layers, norm, head and 8-bit text projection, and the
+    /// whole code predictor (about 650 MB for the 0.6B). What stays is what
+    /// the prompt needs, the codec embedding and the text table, and the
+    /// codec. MLX can't generate after this; a new load can.
+    public func releaseMLXVoice() {
+        guard lock.withLock({ neuralVoice }) != nil else { return }
+        Device.withDefaultDevice(.cpu) {
+            let empty: (MLXArray) -> MLXArray = { _ in MLXArray.zeros([0]) }
+            for layer in talker.model.layers { layer.apply(map: empty) }
+            talker.model.norm.apply(map: empty)
+            talker.codecHead.apply(map: empty)
+            talker.textProjection.apply(map: empty)
+            talker.codePredictor.apply(map: empty)
+        }
+        lock.withLock { mlxVoiceReleased = true }
+        Memory.clearCache()
+    }
 
     /// MLX on the CPU over a short prompt: the talker's logits and hidden
     /// state after it, and every layer's largest MLP product, the talker's

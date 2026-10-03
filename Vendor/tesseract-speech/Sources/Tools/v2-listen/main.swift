@@ -90,6 +90,19 @@ func peakRSSGB() -> Double {
     return Double(usage.ru_maxrss) / 1e9
 }
 
+/// The process's physical footprint now, what iOS's memory limit counts.
+func footprintGB() -> Double {
+    var info = task_vm_info_data_t()
+    var count = mach_msg_type_number_t(
+        MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+    let result = withUnsafeMutablePointer(to: &info) {
+        $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+            task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+        }
+    }
+    return result == KERN_SUCCESS ? Double(info.phys_footprint) / 1e9 : -1
+}
+
 func spec(for precision: String) -> TTSModelSpec {
     switch precision {
     case "8bit": return .voiceDesign17B(.q8)
@@ -231,11 +244,16 @@ if args.mode == "phone" {
     let neural = Qwen3Synthesizer(
         checkpointDirectory: { _ in checkpoint }, neuralEngineCache: cache, neuralVoice: true)
     for attempt in 1 ... 2 {
+        if attempt == 2 {
+            // A fresh load, as a relaunch would: the first released its MLX copy.
+            await neural.unload()
+        }
         let started = Date()
         let report = try await neural.prepareNeuralVoice(.customVoice06B) { phase in
             print(String(format: "  %6.1f s  %@", Date().timeIntervalSince(started), "\(phase)"))
         }
         print(String(format: "prepared #%d in %.1f s: %@", attempt, Date().timeIntervalSince(started), report))
+        print(String(format: "  footprint now %.2f GB", footprintGB()))
     }
     let speaker = args.voice ?? "ryan"
     let timing = try await neural.timeRender(
@@ -257,6 +275,7 @@ if args.mode == "phone" {
     let utterance = try await session.speak(text, options: SpeechOptions(seed: .fixed(args.seed)))
     let capture = try await drain(utterance)
     try write(capture, to: outDir.appendingPathComponent("phone.wav"), label: "phone \(speaker)")
+    print(String(format: "footprint after reading %.2f GB", footprintGB()))
     await session.close()
     exit(0)
 }
