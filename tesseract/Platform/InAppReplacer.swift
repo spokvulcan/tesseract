@@ -2,7 +2,7 @@
 //  InAppReplacer.swift
 //  tesseract
 //
-//  A fix put back where a pasted take landed (PRD #612, ADR-0084). After a
+//  A fix put back where a pasted take landed (PRD #612, ADR-0085). After a
 //  paste, ⌃⌥Space reopens the take in the **Lens**; when the owner fixes a
 //  word there, the fix goes into the app too, but only while the pasted
 //  text is still the last thing typed there: the same app in front, no key

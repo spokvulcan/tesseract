@@ -90,7 +90,7 @@ tesseract/
 │   ├── ObjCExceptions.swift           # NSException → thrown error seam (wraps AVFAudio graph steps)
 │   ├── ObjCExceptionCatcher.h/.m      # The one Objective-C file: the @try behind ObjCExceptions
 │   ├── TextInjector.swift             # Clipboard-based paste injection
-│   ├── InAppReplacer.swift            # Puts a Lens fix back in the app (ADR-0084)
+│   ├── InAppReplacer.swift            # Puts a Lens fix back in the app (ADR-0085)
 │   ├── TextExtractor.swift            # Selected text extraction
 │   ├── MenuBarManager.swift           # Status bar menu (NSStatusItem)
 │   ├── OverlayPlacement.swift         # Overlay canvas frame math (pure value, unit-tested)
@@ -103,8 +103,8 @@ tesseract/
 │   │   ├── DictationFeed.swift        # Overlay Feed: phases, beats, Live Preview, hold, meter
 │   │   ├── Proofread/                 # Proofread Pass (ADR-0034): policy, verdicts, MLX adapter
 │   │   ├── Corrections/               # Correction Pair flywheel (#289): value + bounded store
-│   │   ├── LearnedWords/              # Learned Words (ADR-0084): store, matcher, sounds-alike key
-│   │   ├── Lens/                      # Lens (ADR-0084/0085): the one dictation overlay, Live Preview, the fix
+│   │   ├── LearnedWords/              # Learned Words (ADR-0085): store, matcher, sounds-alike key
+│   │   ├── Lens/                      # Lens (ADR-0085/0086): the one dictation overlay, Live Preview, the fix
 │   │   ├── CatchRecord/               # Catch Record (PRD #612): the Dictation page's model, chart, tiles, takes
 │   │   └── Views/                     # Main window shell, the Dictation page, the history sheet
 │   ├── Speech/                        # engine v2 lives in Vendor/tesseract-speech
@@ -194,7 +194,7 @@ tesseract/
 │
 └── Models/                      # Shared data types
     ├── DictationError.swift
-    ├── CheckBeforePasting.swift # Which takes wait in the Lens (ADR-0085)
+    ├── CheckBeforePasting.swift # Which takes wait in the Lens (ADR-0086)
     ├── NavigationItem.swift     # Sidebar routing enum
     ├── KeyCombo.swift
     └── ...
@@ -313,7 +313,7 @@ playback**):
   `DictationError` mapping *above* the port; the port is model-only. The engine
   also runs the Live Preview lane, which skips rather than queues behind the final
   pass and is cancelled by it. The WhisperKit adapter runs Whisper's audio encoder
-  on the GPU and its text decoder on the Neural Engine (ADR-0085).
+  on the GPU and its text decoder on the Neural Engine (ADR-0086).
 - **TTS (engine v2)** — the TTS engine is the `SpeechEngine` **actor** in the
   `Vendor/tesseract-speech` package (ADR-0038/0039), consumed through its
   session/utterance API. Its own ports live in the package: `SpeechSynthesizing`
@@ -471,7 +471,7 @@ change under a running generation, and mirrors residency (`.llm`/`.tts`) for
 Offload Model. Speech, dictation, the proofreader and the embedder never take the
 gate: MLX's process-wide evaluation lock keeps concurrent use safe, so a voice
 reply interleaves with a generation instead of waiting for it. Whisper's audio
-encoder runs on the GPU too, and a generation slows while it decodes (ADR-0085).
+encoder runs on the GPU too, and a generation slows while it decodes (ADR-0086).
 The proofreader still *skips* while the LLM generates (ADR-0034), so a dictation
 never waits.
 LLM consumers depend on the single-member `InferenceArbitrating` seam; tests
@@ -569,7 +569,7 @@ All AppKit bridging lives in `Platform/`. These are the features that SwiftUI ca
 - Menu bar status item (NSStatusItem)
 - The Speech Overlay: the words being read, over every app (a separate panel)
 
-The one dictation overlay is the **Lens** (PRD #612, ADR-0084, ADR-0085), in a `GlassPanel` at the bottom center of the screen, built at launch so the first press shows it at once. It follows the Overlay Feed itself (phases, beats, the Live Preview, the take's app, the hold), so no App Bindings rule pushes to it. The panel never becomes key while the owner talks; it takes the keyboard only while a held take waits or a take is being fixed, and gives it back before anything pastes. The Overlay Variant registry, the classic pill and its fixed-frame panel are gone; `OverlayPlacement` and `OverlayScreenLocator` remain for the Companion's voice overlay.
+The one dictation overlay is the **Lens** (PRD #612, ADR-0085, ADR-0086), in a `GlassPanel` at the bottom center of the screen, built at launch so the first press shows it at once. It follows the Overlay Feed itself (phases, beats, the Live Preview, the take's app, the hold), so no App Bindings rule pushes to it. The panel never becomes key while the owner talks; it takes the keyboard only while a held take waits or a take is being fixed, and gives it back before anything pastes. The Overlay Variant registry, the classic pill and its fixed-frame panel are gone; `OverlayPlacement` and `OverlayScreenLocator` remain for the Companion's voice overlay.
 
 ### 9. The Dictation Page (the Catch Record)
 
@@ -620,7 +620,7 @@ the retired pill (`requestFocus(pairID:)` and `focusEntryID` on
    └─► HotkeyManager.onHotkeyDown()
        └─► DictationCoordinator.startRecording()
            ├─► AudioCaptureEngine.startCapture()
-           └─► Live Preview pump (ADR-0085), 300 ms after each decode lands
+           └─► Live Preview pump (ADR-0086), 300 ms after each decode lands
                ├─► LivePreviewAssembler: the audio since the last confirmed segment
                ├─► TranscriptionEngine.transcribePartial → TranscriptionResult
                ├─► all but the last two segments confirmed; the rest is the tail
@@ -644,7 +644,7 @@ the retired pill (`requestFocus(pairID:)` and `focusEntryID` on
        └─► Lens: the take lands and the words the preview had wrong settle
            (LensSettle), or a held take waits: Return pastes it, Esc keeps it
 
-4. Fixing a word after the paste (Control+Option+Space, ADR-0084)
+4. Fixing a word after the paste (Control+Option+Space, ADR-0085)
    └─► Lens opens on the last take; the owner types the word meant
        ├─► LensFix picks the words it replaces and decides what the fix teaches
        ├─► LearnedWordStore learns it (or leaves a word alone in that app)
@@ -704,7 +704,7 @@ Key architectural decisions (durable records live in `docs/adr/`):
 - **`Observations` async sequence for non-view code**: Replaces Combine `$property.sink` for observing `@Observable` types outside SwiftUI views.
 - **`AgentFactory` separate from container**: Container wires dependencies; factory orchestrates multi-step bootstrap.
 - **The Overlay Feed is the one signal surface**: The Lens renders from the shared `DictationFeed` (typed phases/errors, outcome beats, the Live Preview, the hold, level + spectrum); the dictation pipeline never learns what draws it. The Lens replaced the Overlay Variant registry and its Setting (PRD #612).
-- **The Lens streams, the paste stays a full pass** (ADR-0085): the Live Preview decodes the take with the same Whisper model while it is recorded, only for show; release cancels it, and what pastes is Whisper's full pass over the whole take. Whisper's audio encoder runs on the GPU, which halves the wait after release.
+- **The Lens streams, the paste stays a full pass** (ADR-0086): the Live Preview decodes the take with the same Whisper model while it is recorded, only for show; release cancels it, and what pastes is Whisper's full pass over the whole take. Whisper's audio encoder runs on the GPU, which halves the wait after release.
 - **App Bindings owns the launch sequence and subscription rules**: Carved out of the composition root behind a closure-struct interface — the launch mirror of `AppTerminationCoordinator`. One dictation-state subscription feeds the menu bar (no second path, no race), and the initial selected speech-to-text model load runs as an owned child task so the HTTP server is reachable immediately at launch. It also heals a missing dictation-model selection onto a downloaded variant and hot-swaps when the user changes the selection. The container stays pure wiring and passes the deletion test. See `CONTEXT.md` → App composition.
 - **Defer Agent package extraction**: Don't extract `Features/Agent` into a separate Swift package until dependency boundaries are clearer.
 - **Defer separate Settings scene**: Keep settings in the main window sidebar.

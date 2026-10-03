@@ -2,7 +2,7 @@
 //  LivePreviewAssemblerTests.swift
 //  tesseractTests
 //
-//  The **Live Preview**'s confirmation rule (PRD #612, ADR-0085): each
+//  The **Live Preview**'s confirmation rule (PRD #612, ADR-0086): each
 //  decode reads the audio after the last confirmed segment; when a decode
 //  returns more than two segments, all but the last two are confirmed and
 //  the next decode starts where they end. The rest is the provisional tail.
