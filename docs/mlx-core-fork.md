@@ -86,6 +86,41 @@ Package.swift pins (`Vendor/mlx-swift-lm`, `Vendor/tesseract-speech`)
 moved in lockstep (`docs/mlx-swift-lm-fork.md`, "Current pin
 (2026-10-03)"). Drops for free when the pin reaches mlx-swift 0.32.
 
+### Carried since 2026-10-03: in-place custom kernel outputs
+
+mlx `b6a5f3b6` -> `3c6990d9` on `pin-tesseract`, mlx-swift `2d1bd1b` ->
+`1bb678a` (the gitlink bump only; no `mlx-generated` change, the commit
+touches host code). A custom kernel output named `inplace_<input>` updates
+that input's buffer: under `MLX_DYNSLICE_INPLACE` it aliases the buffer
+exactly as the in-place dynamic slice update does (same safety contract),
+otherwise mlx donates the buffer or copies it first. No API change in mlx-c
+or mlx-swift; the name carries the request, like the `fastmath_*` prefix.
+TurboQuant's row write uses it to encode and write a decode token or a
+verify block into all of a cache's buffers in one dispatch
+(`docs/mlx-swift-lm-fork.md`, "TurboQuant optimization loop"). The vendor
+probes for it once and falls back to separate ops on an mlx without it.
+Verified after re-resolution: both DerivedData checkouts are clean at
+`1bb678a` / `3c6990d9` and their diff from `b6a5f3b6` is the benched patch;
+the clean-build rerun of `TurboQuantRowWriteTests` passed.
+
+### Carried since 2026-10-03: cheaper quantized and custom kernel dispatch
+
+mlx `3c6990d9` -> `e90cd38a`, mlx-swift `1bb678a` -> `db60fb7` (gitlink
+only). PARO decode is host-bound (`benchmarks/turboquant/2026-10-03/README.md`,
+loop 2), and a host profile of its decode step found two per-dispatch costs
+that do no work: a quantized matmul formatted its kernel's template
+definition string on every dispatch even when the pipeline was cached
+(now memoized by kernel name, which is already the library's cache key),
+and every custom kernel dispatch compared its whole generated source
+against the library cache's copy (now a pointer compare on a source token
+shared by the call site's memo; a kernel built without one falls back to
+the full compare). Together about 3% of the host's sampled decode time;
+an A/B of the loaded PARO model measured 2.6 ms less encode per step on
+average (noisy: 29.5 and 31.4 ms against 34.3 and 31.9). Verified after
+re-resolution: both checkouts clean at `db60fb7` / `e90cd38a`, diff from
+`3c6990d9` equal to the benched patch; vendor suites pass; a PARO smoke
+leg of both arms matched its reference streams.
+
 ## Why mlx-core is still on v0.31.1 (attempted 2026-07-27)
 
 mlx-core sits at v0.31.1 while upstream has moved 248 commits on (v0.32.0

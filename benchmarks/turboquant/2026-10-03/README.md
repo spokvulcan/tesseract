@@ -44,11 +44,81 @@ four alternating rounds, mean tok/s):
 turbo8v4 on PARO stays 8% behind with either arm order. A per-kernel GPU
 profile of the two schemes differs by 1% (4,362 vs 4,317 ms over 64
 tokens), so the gap is in how the pipelined step overlaps, not kernel
-time; not yet explained.
+time. Loop 2 (below) traced it to the host.
 
 **DFlash2 on PARO** (`--dflash2-bench`, 8K prompt, 256 tokens, one run):
 bf16 148 ms per round, turbo8v4 135, turbo0v4 131, same acceptance; every
 arm's DFlash2 stream matched its AR stream.
+
+## Loop 2: PARO decode is host-bound
+
+On the PARO pack the CPU spends about as long building and encoding a
+decode step as the GPU spends running it. Timed inside the vendor's token
+loop (`--dflash2-bench` AR arm, 8K prompt, 256 tokens, command-buffer cap
+lifted so encoding never waits on the GPU), steady state per step:
+
+| arm | graph build | encode | waiting for the token | GPU busy |
+|---|---|---|---|---|
+| bf16 | 11.4 ms | 33.5 ms | 1.3 ms | 45.9 ms |
+| turbo8v4 | 12.9 ms | 33.8 ms | 0.0 ms | 44.4 ms |
+| turbo0v4 | 12.4 ms | 34.4 ms | 0.0 ms | 44.2 ms |
+
+TurboQuant's GPU step is shorter than bf16's, but the host never waits, so
+its extra work per layer sets the rate. The command-buffer trace agrees:
+the GPU idles 1 to 15 ms at token boundaries in the slow runs. Two vendor
+changes cut that work.
+
+**Folded scale and casts** (`d0ed0be`). The decode kernels take the
+activation dtype in and out and apply the softmax scale themselves: three
+dispatches fewer per layer, bit-identical.
+
+**One-dispatch row write** (`cba1803`, on mlx `3c6990d9`'s in-place custom
+kernel outputs). Encode, key quantization and every buffer write of a
+decode token or verify block run in one kernel, byte-identical to the
+separate ops. CPU time per decode step for the 16 attention layers
+(`testCacheStepCPU`, fp16, 8K rows, in-place writes on):
+
+| arm | build | encode | step with GPU wait |
+|---|---|---|---|
+| bf16 | 0.80 ms | 1.20 ms | 4.04 ms |
+| turbo8v4, separate ops | 1.75 ms | 2.89 ms | 6.27 ms |
+| turbo8v4, one dispatch | 1.67 ms | 1.28 ms | 4.81 ms |
+| turbo0v4, separate ops | 1.47 ms | 2.18 ms | 5.45 ms |
+| turbo0v4, one dispatch | 1.37 ms | 1.22 ms | 3.95 ms |
+
+A serialized per-kernel GPU profile (`MLX_KERNEL_PROFILE`, turbo0v4, 64
+tokens) puts the write at 24 ms per 1,024 layer calls against about 80 ms
+for the separate slice updates alone.
+
+**Loaded model, PARO** (`--dflash2-bench --bench-check`, 8K prompt, 256
+tokens, three interleaved rounds per build, median):
+
+| build | arm | bf16 | turbo8v4 | turbo0v4 |
+|---|---|---|---|---|
+| before loop 2 | AR tok/s | 21.2 | 18.3 | 21.1 |
+| loop 2 | AR tok/s | 21.1 | 20.9 | 21.5 |
+| loop 2 | DFlash2 ms/round | 138.3 | 143.7 | 139.7 |
+
+One loop-2 turbo8v4 run still stalled (18.8 tok/s, 1.6 s of GPU idle);
+the other two ran at 20.9 and 21.1. Run-to-run spread is large on this
+machine: two identical turbo0v4 runs measured 11.25 and 13.25 s of DFlash2
+GPU time for the same rounds, with an animated wallpaper decoding video on
+the GPU, so the DFlash2 column does not separate the arms.
+
+**Affine key staging in the verify kernel** (`109c6a8`,
+`testVerifyKernelPartitions`, 16 partitions, kernel alone, both variants
+in one build behind a temporary switch, four alternating runs each,
+median ms per 16 layers):
+
+| rows | bf16 SDPA | turbo8v4, old staging | turbo8v4, new staging | turbo0v4 |
+|---|---|---|---|---|
+| 8K | 6.9 | 7.10 | 6.63 | 6.7 |
+| 32K | 21.9 | 23.51 | 20.90 | 21.5 |
+| 64K | 42.6 | 45.36 | 40.69 | 41.0 |
+
+At 32K and 64K every new-staging run beat every old one; SDPA and
+`turbo0v4` (which this path does not touch) stayed flat across the eight
+runs, so the GPU clock did not move.
 
 ## Measured, not shipped
 

@@ -207,9 +207,11 @@ stores them compressed.
 | Balanced | `turbo0v4` | bf16 | 4-bit TurboQuant | 41,216 | 1.59× smaller |
 
 Plain decode runs within about 2% of bf16 at 8K to 64K under either scheme
-on the 4-bit checkpoint (#603). On the PARO pack `turbo0v4` decodes 7%
-faster than bf16 at 8K and `turbo8v4` 8% slower, so Balanced is the better
-pick there (`benchmarks/turboquant/2026-10-03/README.md`). DFlash2 speculates over both; MTP does not. Per DFlash2 round at a
+on the 4-bit checkpoint (#603). On the PARO pack, whose decode is bound by
+the CPU's per-step dispatch work, `turbo0v4` decodes 2% faster than bf16
+at 8K and `turbo8v4` 1% slower with occasional stalls, so Balanced is the
+better pick there (`benchmarks/turboquant/2026-10-03/README.md`, loop 2).
+DFlash2 speculates over both; MTP does not. Per DFlash2 round at a
 29K prompt (greedy, 2026-10-03): bf16 83.9 ms, `turbo8v4` 89.0 ms,
 `turbo0v4` 75.7 ms, at the same acceptance.
 
