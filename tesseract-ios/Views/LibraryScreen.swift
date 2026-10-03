@@ -12,11 +12,13 @@ import TesseractSpeech
 struct LibraryScreen: View {
     @Environment(ReaderLibrary.self) private var library
     @Environment(PhoneReading.self) private var reading
-    @State private var path: [UUID] = []
+    @Environment(PhoneIntake.self) private var intake
     @State private var showsSettings = false
+    @State private var showsFiles = false
 
     var body: some View {
-        NavigationStack(path: $path) {
+        @Bindable var intake = intake
+        NavigationStack(path: $intake.path) {
             List {
                 ForEach(library.entries) { entry in
                     NavigationLink(value: entry.id) {
@@ -36,7 +38,9 @@ struct LibraryScreen: View {
                 if library.entries.isEmpty {
                     ContentUnavailableView(
                         "Nothing to read yet", systemImage: "text.page",
-                        description: Text("Copy some text, then tap Paste."))
+                        description: Text(
+                            "Copy some text and tap Paste, share a page from Safari, or open a file."
+                        ))
                 }
             }
             .navigationTitle("Library")
@@ -50,20 +54,36 @@ struct LibraryScreen: View {
                         guard text.contains(where: { !$0.separatesWords }) else { return }
                         Task { @MainActor in
                             let entry = library.add(text)
-                            path.append(entry.id)
+                            intake.path = [entry.id]
                         }
                     }
                     .labelStyle(.iconOnly)
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Open a file", systemImage: "folder") { showsFiles = true }
+                }
+            }
+            .fileImporter(isPresented: $showsFiles, allowedContentTypes: TextIntake.fileTypes) {
+                result in
+                if case .success(let url) = result { intake.open(file: url) }
+            }
+            .alert(
+                "Can't open this file",
+                isPresented: Binding(
+                    get: { intake.failure != nil }, set: { if !$0 { intake.failure = nil } })
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(intake.failure ?? "")
             }
             .navigationDestination(for: UUID.self) { id in
                 ReaderScreen(id: id)
             }
             .safeAreaInset(edge: .bottom) {
-                if let now = reading.nowReading, path.last != now.id {
+                if let now = reading.nowReading, intake.path.last != now.id {
                     NowReadingBar(
                         title: library.entry(now.id)?.title ?? "", reader: now.reader
-                    ) { path.append(now.id) }
+                    ) { intake.path.append(now.id) }
                 }
             }
             .onAppear { library.refreshProgress() }

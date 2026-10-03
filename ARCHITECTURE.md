@@ -202,7 +202,12 @@ tesseract-ios/                   # The iPhone app's own files (ADR-0066, ADR-008
 ├── PhoneContainer.swift         # Composition root (pure wiring)
 ├── PhoneReading.swift           # The Library's open texts: a Reader per text
 ├── PhoneAudioSession.swift      # Spoken-audio session around the Mac's playback adapter
+├── PhoneIntake.swift            # Files opened in the app, and the Library Inbox taken in
 └── Views/                       # Library, Reader (UITextView on TextKit 2), transport, voices, settings
+
+tesseract-share/                 # "Read in Tesseract": the share extension
+├── ShareViewController.swift    # Reads what was shared, drops its text in the Library Inbox
+└── ExtensionPreprocessing.js    # Runs in Safari: hands over the page's HTML
 ```
 
 ### The iPhone app
@@ -234,7 +239,14 @@ text aloud (ADR-0084), so the target takes only the read-aloud code:
 - **Shared logic for the phone lives in the shared folders**, so the Mac test
   target covers it: the **Library** (`ReaderLibrary`), the phone's Settings
   Facade (`PhoneSettings`), the **Preset Voices**, a text's language
-  (`TTSLanguage.detected`).
+  (`TTSLanguage.detected`), and getting text in (`Features/Speech/Intake`:
+  a page's article through swift-readability, a PDF's text through PDFKit,
+  Markdown without its marks, the **Library Inbox**).
+- **The share extension** (`tesseract-share`, embedded in the app) builds the
+  `Intake` folder and nothing else of the app. In Safari its script hands over
+  the page's HTML, so the app never fetches a page. It never runs the voice:
+  it drops the text in the app group's **Library Inbox**, and the app takes
+  it in when it comes to the front.
 
 CI's `build-ios` job builds the target for any iOS device, unsigned; the
 release pipeline waits for it. The shared code's tests run in the Mac test

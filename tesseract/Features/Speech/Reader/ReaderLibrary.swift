@@ -110,6 +110,17 @@ final class ReaderLibrary {
         if next != progress { progress = next }
     }
 
+    /// Adds every text waiting in `inbox`, as dropped, and empties it.
+    /// Returns what it added, newest last.
+    @discardableResult
+    func takeIn(from inbox: LibraryInbox) -> [Entry] {
+        inbox.pending().map { item in
+            let entry = add(item.text.text, title: item.text.title, added: item.dropped)
+            inbox.remove(item.file)
+            return entry
+        }
+    }
+
     // MARK: - Titles
 
     /// The first line with words in it, cut to a phrase's length.

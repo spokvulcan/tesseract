@@ -2479,6 +2479,13 @@ text; the phone's Reader opens one text of the Library at a time, and keeps
 reading it while the owner browses the others.
 _Avoid_: documents, reading list, queue (nothing plays one text after another).
 
+**Library Inbox**:
+Where the share sheet's "Read in Tesseract" leaves a text for the **Library**:
+a folder the app and its extension share. The extension only drops texts
+there; the app takes them in, and opens the newest, when it next comes to the
+front.
+_Avoid_: share queue, pending imports.
+
 **System Voice**:
 The phone's own speech synthesizer, reading where the neural voice can't:
 while that voice downloads or is prepared, on a phone too slow for it, and

@@ -335,7 +335,11 @@ their own suites: `ReaderLibraryTests` (the **Library**: add, order, delete,
 each text's Bookmark and language, a relaunch), `PhoneSettingsTests` (the phone's
 Settings Facade over the shared Catalogue keys), `TTSLanguageTests` (a text's
 language among the voice's ten), and `SpeechReaderTests`' tap and language
-cases. The package's `SystemVoiceSynthesizerTests` drive the **System Voice**
+cases, and `TextIntakeTests` (a saved news page gives its article and not its
+menus, ads or comments; a PDF's lines join back into paragraphs; Markdown loses
+its marks; Safari's script results, plain text and a PDF from the share sheet;
+the **Library Inbox** handing texts to the Library). The package's
+`SystemVoiceSynthesizerTests` drive the **System Voice**
 adapter with a scripted renderer: resampling to 24 kHz, whole frames, and word
 marks turned into word starts that never run ahead of their audio. CI's `build-ios` job only
 builds it. Build it the same way before pushing a change to a shared folder

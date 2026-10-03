@@ -35,6 +35,8 @@ final class PhoneContainer {
     lazy var reading = PhoneReading(
         library: library, coordinator: coordinator, readAlong: readAlong, settings: settings)
 
+    lazy var intake = PhoneIntake(library: library)
+
     init() {
         if library.isNew {
             library.add(PhoneWelcome.text, title: PhoneWelcome.title)
