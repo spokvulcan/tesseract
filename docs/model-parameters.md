@@ -196,7 +196,8 @@ between families and modes, so it gets its own column.
 
 Settings → Agent → KV Cache Compression picks a TurboQuant **KV Scheme** for
 `qwen3.8-27b` and `qwen3.8-27b-paro` (`KVScheme.supports`); every other model
-keeps full precision. Off by default. The prompt prefills at full precision,
+keeps full precision. Defaults to Smallest (`turbo8v4`) for now, while its
+quality is checked in long sessions. The prompt prefills at full precision,
 the 16 attention layers convert once prefill ends, and the prefix cache
 stores them compressed.
 
@@ -246,7 +247,10 @@ included); a reply that hits it falls back to the deterministic card.
 The Day Thread compacts past its ceiling (Settings → Companion, 64k tokens by
 default). On the 27B hybrid checkpoints only 16 of 64 layers hold a KV cache,
 64 KB per token at full precision, so a 64k-token thread is about 4 GB during
-each moment (a full day measured 22.7k tokens, about 1.4 GB).
+each moment (a full day measured 22.7k tokens, about 1.4 GB). Under the
+default `turbo8v4` KV Scheme the cache holds 25 KB per token once prefill
+ends, about 1.7 GB for 64k tokens (0.6 GB for that day); the prompt itself
+still prefills at full precision.
 
 The MLX buffer pool (`LLMActor.Defaults.cacheLimitMB`, process-wide) keeps at
 most 512 MB of freed buffers for reuse: decode's small buffers fit, and a long

@@ -215,8 +215,10 @@ enum SettingsCatalogue {
 
     /// The **KV Cache Compression** setting (``KVCacheCompression``): the
     /// TurboQuant KV Scheme requests use on a model that supports one.
+    /// Defaults to Smallest (`turbo8v4`) while its quality is checked in
+    /// long sessions.
     static let kvCacheCompressionRaw = Setting.string(
-        "kvCacheCompression", default: KVCacheCompression.off.rawValue)
+        "kvCacheCompression", default: KVCacheCompression.turbo8v4.rawValue)
 
     /// Retired predecessor of ``speculationModeRaw`` — read only by the
     /// one-time migration, never surfaced.
