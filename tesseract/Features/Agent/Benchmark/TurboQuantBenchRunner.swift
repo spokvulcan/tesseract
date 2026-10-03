@@ -241,6 +241,17 @@ final class TurboQuantBenchRunner {
         var quality: [QualityRecord] = []
         for scheme in options.schemes {
             var cache = try snapshot.restore()
+            if let dtype = scheme.roundsRecurrentState {
+                var largest: Float = 0
+                for case let recurrent as ArraysCache in cache {
+                    recurrent.state = recurrent.state.map {
+                        guard $0.dtype == .float32 else { return $0 }
+                        largest = max(largest, abs($0).max().item(Float.self))
+                        return $0.asType(dtype).asType(.float32)
+                    }
+                }
+                emit("\(scheme.name): largest recurrent magnitude \(largest)")
+            }
             let record = try teacherForced(
                 model: model, cache: &cache, remainder: warmed.remainder, scheme: scheme,
                 label: scheme.name, steps: options.maxNew, attentionLayers: attentionLayers,
@@ -276,7 +287,7 @@ final class TurboQuantBenchRunner {
         var speed: [SpeedRecord] = []
         for round in 0..<options.runs {
             let order = round.isMultiple(of: 2) ? options.schemes : options.schemes.reversed()
-            for scheme in order {
+            for scheme in order where scheme.roundsRecurrentState == nil {
                 let record = try decodePass(
                     model: model, snapshot: snapshot, fullText: prepared.text,
                     remainder: warmed.remainder, scheme: scheme, round: round,
@@ -302,7 +313,13 @@ final class TurboQuantBenchRunner {
         // The unquantized speed passes run the production iterator over the
         // same restored cache the reference pass forwarded by hand, so they
         // must reproduce its greedy stream.
-        var checks: [BenchmarkHarness.CheckResult] = quality.dropFirst().map { record in
+        // A rounded-recurrent arm changes the restored state, so its step 0
+        // differs by design.
+        let restoredExactly = Set(
+            options.schemes.filter { $0.roundsRecurrentState == nil }.map(\.name))
+        var checks: [BenchmarkHarness.CheckResult] = quality.dropFirst().filter {
+            restoredExactly.contains($0.arm)
+        }.map { record in
             BenchmarkHarness.CheckResult(
                 name: "\(record.arm) step 0 KL is 0",
                 passed: record.stepZeroKL == 0,
@@ -617,12 +634,26 @@ final class TurboQuantBenchRunner {
         /// `nil` for the unquantized reference.
         let configuration: KVCacheConfiguration?
         let expectation: Expectation
+        /// `+rbf16` / `+rf16`: the restored recurrent state is rounded to
+        /// bfloat16 / float16, as a snapshot stored in that dtype would restore
+        /// it. A quality arm only.
+        var roundsRecurrentState: DType? = nil
 
         /// `fp16`, `affine<bits>`, or `turbo<key>v<value>` with keys fp16 (`0`)
         /// or 8-bit affine and 3- or 4-bit values: the schemes the vendor's
         /// boundary-layer protection leaves alone, so every attention layer
         /// takes the scheme and the check stays exact.
         static func parse(_ name: String) throws -> KVScheme {
+            for (suffix, dtype) in [("+rbf16", DType.bfloat16), ("+rf16", .float16)]
+            where name.hasSuffix(suffix) {
+                let base = try parse(String(name.dropLast(suffix.count)))
+                guard base.roundsRecurrentState == nil else {
+                    throw TurboQuantBenchError.unsupportedScheme(name)
+                }
+                return KVScheme(
+                    name: name, configuration: base.configuration, expectation: base.expectation,
+                    roundsRecurrentState: dtype)
+            }
             if name == "fp16" {
                 return KVScheme(name: name, configuration: nil, expectation: .unquantized)
             }

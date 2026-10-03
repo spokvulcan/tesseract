@@ -32,6 +32,27 @@ the parked Gemma 4 12B multimodal stack (audio encoder + encoder-free
 `gemma4_unified` processor + suppress_tokens) that tesseract draft PR #359
 pins; it rejoins this table's carry list only if that experiment is revived.
 
+## TurboQuant optimization loop (2026-10-03)
+
+The gitlink advances from `56ccc88` to `a4ed063` on
+`perf/turboquant-verify-loop` (fast-forward). Measurements:
+`benchmarks/turboquant/2026-10-03/README.md`.
+
+- `0eee3cc` `perf(turboquant): fewer key partitions for the verify kernel`.
+  16 partitions up to 32K rows, 32 beyond (was 32 below 2K, 64 above). One
+  verify pass's attention over 16 layers, bf16 / turbo8v4 / turbo0v4: 26.0 /
+  26.1 / 22.3 ms at 32K rows.
+- `a4ed063` `perf(turboquant): build a decode step's graph in half the CPU
+  time`. Dynamic slice updates append a decode token (seven times cheaper to
+  build than subscript assignments), the separated paths' slices are built
+  lazily, the scale and pass 2's block count are cached arrays. PARO decode
+  at 8K: turbo0v4 17.7 tok/s against bf16 16.6 (was 4% behind).
+
+Parked on the fork as `exp/flash-d256` (not in the pin): a flash pass over
+full-precision K/V for head dim 256 that avoids mlx's score matrix but runs
+1.5–1.8x SDPA's time. Validation at `a4ed063`: `TurboQuantVerifyTests`,
+`TurboQuantIntegrationTests`, `TurboQuantGQAFlashTests` (36 cases).
+
 ## TurboQuant under DFlash2 and the prefix cache (2026-10-03, ADR-0083)
 
 The gitlink advances from `01ccea2` to `56ccc88` on
