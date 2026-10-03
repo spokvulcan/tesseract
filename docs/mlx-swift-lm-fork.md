@@ -35,8 +35,30 @@ pins; it rejoins this table's carry list only if that experiment is revived.
 ## TurboQuant optimization loop (2026-10-03)
 
 The gitlink advances from `56ccc88` to `a4ed063` on
-`perf/turboquant-verify-loop` (fast-forward). Measurements:
-`benchmarks/turboquant/2026-10-03/README.md`.
+`perf/turboquant-verify-loop` (fast-forward), then to `cba1803` (loop 2,
+below). Measurements: `benchmarks/turboquant/2026-10-03/README.md`.
+
+Loop 2 found PARO decode host-bound: building and encoding a step costs the
+CPU about as long as the GPU takes to run it, so TurboQuant's extra
+dispatches per layer set the decode rate. Three commits:
+
+- `d0ed0be` `perf(turboquant): fold the decode step's query scale and casts
+  into its kernels`. The GQA kernel loads activation-dtype queries and
+  scales them, pass 2 writes the activation dtype, the WHT encode reads
+  bf16/f16 rows: three dispatches fewer per layer, bit-identical
+  (`testFoldedScaleAndCastsAreBitIdentical`).
+- `f2f8d22` `chore(deps): pin mlx-swift to 1bb678a`: the mlx gitlink
+  `3c6990d9`, in-place custom kernel outputs (`docs/mlx-core-fork.md`).
+  Moved in lockstep with `Vendor/tesseract-speech` and the app's
+  Package.resolved.
+- `cba1803` `perf(turboquant): write a step's rows in one dispatch`. One
+  kernel encodes the values, quantizes the keys (mlx's affine 8-bit,
+  byte-identical to `quantized()`) or copies them raw, and writes every
+  buffer in place at the row position, for decode tokens and DFlash2
+  verify blocks. Replaces an encode, a quantize and three to five slice
+  updates per layer (`TurboQuantRowWriteTests`). `TURBO_FUSED_WRITE=0`
+  restores the separate ops; an mlx without in-place outputs gets them
+  automatically.
 
 - `0eee3cc` `perf(turboquant): fewer key partitions for the verify kernel`.
   16 partitions up to 32K rows, 32 beyond (was 32 below 2K, 64 above). One
