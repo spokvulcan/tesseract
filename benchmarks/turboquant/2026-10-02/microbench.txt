@@ -1,0 +1,174 @@
+step T=8192 bf16 KVCacheSimple + SDPA: 2.628 ms per 16 layers
+step T=8192 turbo8v4: 2.871 ms per 16 layers
+step T=8192 turbo0v4: 2.408 ms per 16 layers
+step T=32768 bf16 KVCacheSimple + SDPA: 8.074 ms per 16 layers
+step T=32768 turbo8v4: 7.663 ms per 16 layers
+step T=32768 turbo0v4: 6.806 ms per 16 layers
+step T=65536 bf16 KVCacheSimple + SDPA: 15.001 ms per 16 layers
+step T=65536 turbo8v4: 13.634 ms per 16 layers
+step T=65536 turbo0v4: 12.294 ms per 16 layers
+T=8192 bf16 SDPA: 2.545 ms per 16 layers
+T=8192 turbo8v4 GQA: 4.764 ms per 16 layers
+T=8192 turbo0v4 GQA: 4.065 ms per 16 layers
+T=8192 turbo8v4 per-head (sliced): 9.645 ms per 16 layers
+T=8192 ratio vs SDPA: turbo8v4 GQA 1.87x, turbo0v4 GQA 1.60x, turbo8v4 per-head 3.79x
+T=8192 turbo8v4 GQA hps=1 nsg=1 maxBlocks=64: 3.434 ms per 16 layers
+T=8192 turbo0v4 GQA hps=1 nsg=1 maxBlocks=64: 2.358 ms per 16 layers
+T=8192 turbo8v4 GQA hps=1 nsg=1 maxBlocks=128: 3.114 ms per 16 layers
+T=8192 turbo0v4 GQA hps=1 nsg=1 maxBlocks=128: 2.337 ms per 16 layers
+T=8192 turbo8v4 GQA hps=1 nsg=2 maxBlocks=64: 3.148 ms per 16 layers
+T=8192 turbo0v4 GQA hps=1 nsg=2 maxBlocks=64: 2.297 ms per 16 layers
+T=8192 turbo8v4 GQA hps=1 nsg=2 maxBlocks=128: 3.116 ms per 16 layers
+T=8192 turbo0v4 GQA hps=1 nsg=2 maxBlocks=128: 2.372 ms per 16 layers
+T=8192 turbo8v4 GQA hps=1 nsg=4 maxBlocks=64: 3.137 ms per 16 layers
+T=8192 turbo0v4 GQA hps=1 nsg=4 maxBlocks=64: 2.541 ms per 16 layers
+T=8192 turbo8v4 GQA hps=1 nsg=4 maxBlocks=128: 3.163 ms per 16 layers
+T=8192 turbo0v4 GQA hps=1 nsg=4 maxBlocks=128: 2.461 ms per 16 layers
+T=8192 turbo8v4 GQA hps=2 nsg=1 maxBlocks=64: 2.394 ms per 16 layers
+T=8192 turbo0v4 GQA hps=2 nsg=1 maxBlocks=64: 2.278 ms per 16 layers
+T=8192 turbo8v4 GQA hps=2 nsg=1 maxBlocks=128: 2.280 ms per 16 layers
+T=8192 turbo0v4 GQA hps=2 nsg=1 maxBlocks=128: 2.079 ms per 16 layers
+T=8192 turbo8v4 GQA hps=2 nsg=2 maxBlocks=64: 2.464 ms per 16 layers
+T=8192 turbo0v4 GQA hps=2 nsg=2 maxBlocks=64: 2.408 ms per 16 layers
+T=8192 turbo8v4 GQA hps=2 nsg=2 maxBlocks=128: 2.376 ms per 16 layers
+T=8192 turbo0v4 GQA hps=2 nsg=2 maxBlocks=128: 2.073 ms per 16 layers
+T=8192 turbo8v4 GQA hps=2 nsg=4 maxBlocks=64: 2.404 ms per 16 layers
+T=8192 turbo0v4 GQA hps=2 nsg=4 maxBlocks=64: 2.402 ms per 16 layers
+T=8192 turbo8v4 GQA hps=2 nsg=4 maxBlocks=128: 2.397 ms per 16 layers
+T=8192 turbo0v4 GQA hps=2 nsg=4 maxBlocks=128: 2.182 ms per 16 layers
+T=8192 turbo8v4 GQA hps=3 nsg=1 maxBlocks=64: 2.115 ms per 16 layers
+T=8192 turbo0v4 GQA hps=3 nsg=1 maxBlocks=64: 2.054 ms per 16 layers
+T=8192 turbo8v4 GQA hps=3 nsg=1 maxBlocks=128: 2.397 ms per 16 layers
+T=8192 turbo0v4 GQA hps=3 nsg=1 maxBlocks=128: 2.127 ms per 16 layers
+T=8192 turbo8v4 GQA hps=3 nsg=2 maxBlocks=64: 2.322 ms per 16 layers
+T=8192 turbo0v4 GQA hps=3 nsg=2 maxBlocks=64: 2.007 ms per 16 layers
+T=8192 turbo8v4 GQA hps=3 nsg=2 maxBlocks=128: 2.450 ms per 16 layers
+T=8192 turbo0v4 GQA hps=3 nsg=2 maxBlocks=128: 2.318 ms per 16 layers
+T=8192 turbo8v4 GQA hps=3 nsg=4 maxBlocks=64: 2.391 ms per 16 layers
+T=8192 turbo0v4 GQA hps=3 nsg=4 maxBlocks=64: 2.140 ms per 16 layers
+T=8192 turbo8v4 GQA hps=3 nsg=4 maxBlocks=128: 2.487 ms per 16 layers
+T=8192 turbo0v4 GQA hps=3 nsg=4 maxBlocks=128: 2.290 ms per 16 layers
+T=8192 turbo8v4 GQA hps=6 nsg=1 maxBlocks=64: 3.679 ms per 16 layers
+T=8192 turbo0v4 GQA hps=6 nsg=1 maxBlocks=64: 2.827 ms per 16 layers
+T=8192 turbo8v4 GQA hps=6 nsg=1 maxBlocks=128: 3.547 ms per 16 layers
+T=8192 turbo0v4 GQA hps=6 nsg=1 maxBlocks=128: 2.735 ms per 16 layers
+T=8192 turbo8v4 GQA hps=6 nsg=2 maxBlocks=64: 3.647 ms per 16 layers
+T=8192 turbo0v4 GQA hps=6 nsg=2 maxBlocks=64: 2.606 ms per 16 layers
+T=8192 turbo8v4 GQA hps=6 nsg=2 maxBlocks=128: 3.711 ms per 16 layers
+T=8192 turbo0v4 GQA hps=6 nsg=2 maxBlocks=128: 2.862 ms per 16 layers
+T=8192 turbo8v4 GQA hps=6 nsg=4 maxBlocks=64: 3.874 ms per 16 layers
+T=8192 turbo0v4 GQA hps=6 nsg=4 maxBlocks=64: 3.093 ms per 16 layers
+T=8192 turbo8v4 GQA hps=6 nsg=4 maxBlocks=128: 4.801 ms per 16 layers
+T=8192 turbo0v4 GQA hps=6 nsg=4 maxBlocks=128: 4.056 ms per 16 layers
+T=32768 bf16 SDPA: 7.574 ms per 16 layers
+T=32768 turbo8v4 GQA: 12.697 ms per 16 layers
+T=32768 turbo0v4 GQA: 9.681 ms per 16 layers
+T=32768 turbo8v4 per-head (sliced): 34.772 ms per 16 layers
+T=32768 ratio vs SDPA: turbo8v4 GQA 1.68x, turbo0v4 GQA 1.28x, turbo8v4 per-head 4.59x
+T=32768 turbo8v4 GQA hps=1 nsg=1 maxBlocks=64: 10.222 ms per 16 layers
+T=32768 turbo0v4 GQA hps=1 nsg=1 maxBlocks=64: 7.300 ms per 16 layers
+T=32768 turbo8v4 GQA hps=1 nsg=1 maxBlocks=128: 10.338 ms per 16 layers
+T=32768 turbo0v4 GQA hps=1 nsg=1 maxBlocks=128: 7.336 ms per 16 layers
+T=32768 turbo8v4 GQA hps=1 nsg=2 maxBlocks=64: 10.232 ms per 16 layers
+T=32768 turbo0v4 GQA hps=1 nsg=2 maxBlocks=64: 7.271 ms per 16 layers
+T=32768 turbo8v4 GQA hps=1 nsg=2 maxBlocks=128: 10.296 ms per 16 layers
+T=32768 turbo0v4 GQA hps=1 nsg=2 maxBlocks=128: 7.424 ms per 16 layers
+T=32768 turbo8v4 GQA hps=1 nsg=4 maxBlocks=64: 10.271 ms per 16 layers
+T=32768 turbo0v4 GQA hps=1 nsg=4 maxBlocks=64: 7.254 ms per 16 layers
+T=32768 turbo8v4 GQA hps=1 nsg=4 maxBlocks=128: 10.386 ms per 16 layers
+T=32768 turbo0v4 GQA hps=1 nsg=4 maxBlocks=128: 7.449 ms per 16 layers
+T=32768 turbo8v4 GQA hps=2 nsg=1 maxBlocks=64: 7.126 ms per 16 layers
+T=32768 turbo0v4 GQA hps=2 nsg=1 maxBlocks=64: 6.385 ms per 16 layers
+T=32768 turbo8v4 GQA hps=2 nsg=1 maxBlocks=128: 7.118 ms per 16 layers
+T=32768 turbo0v4 GQA hps=2 nsg=1 maxBlocks=128: 6.349 ms per 16 layers
+T=32768 turbo8v4 GQA hps=2 nsg=2 maxBlocks=64: 7.159 ms per 16 layers
+T=32768 turbo0v4 GQA hps=2 nsg=2 maxBlocks=64: 6.306 ms per 16 layers
+T=32768 turbo8v4 GQA hps=2 nsg=2 maxBlocks=128: 7.233 ms per 16 layers
+T=32768 turbo0v4 GQA hps=2 nsg=2 maxBlocks=128: 6.266 ms per 16 layers
+T=32768 turbo8v4 GQA hps=2 nsg=4 maxBlocks=64: 7.161 ms per 16 layers
+T=32768 turbo0v4 GQA hps=2 nsg=4 maxBlocks=64: 6.153 ms per 16 layers
+T=32768 turbo8v4 GQA hps=2 nsg=4 maxBlocks=128: 7.358 ms per 16 layers
+T=32768 turbo0v4 GQA hps=2 nsg=4 maxBlocks=128: 6.308 ms per 16 layers
+T=32768 turbo8v4 GQA hps=3 nsg=1 maxBlocks=64: 6.588 ms per 16 layers
+T=32768 turbo0v4 GQA hps=3 nsg=1 maxBlocks=64: 6.166 ms per 16 layers
+T=32768 turbo8v4 GQA hps=3 nsg=1 maxBlocks=128: 6.494 ms per 16 layers
+T=32768 turbo0v4 GQA hps=3 nsg=1 maxBlocks=128: 6.143 ms per 16 layers
+T=32768 turbo8v4 GQA hps=3 nsg=2 maxBlocks=64: 6.683 ms per 16 layers
+T=32768 turbo0v4 GQA hps=3 nsg=2 maxBlocks=64: 6.046 ms per 16 layers
+T=32768 turbo8v4 GQA hps=3 nsg=2 maxBlocks=128: 6.727 ms per 16 layers
+T=32768 turbo0v4 GQA hps=3 nsg=2 maxBlocks=128: 6.002 ms per 16 layers
+T=32768 turbo8v4 GQA hps=3 nsg=4 maxBlocks=64: 6.695 ms per 16 layers
+T=32768 turbo0v4 GQA hps=3 nsg=4 maxBlocks=64: 5.950 ms per 16 layers
+T=32768 turbo8v4 GQA hps=3 nsg=4 maxBlocks=128: 6.656 ms per 16 layers
+T=32768 turbo0v4 GQA hps=3 nsg=4 maxBlocks=128: 5.936 ms per 16 layers
+T=32768 turbo8v4 GQA hps=6 nsg=1 maxBlocks=64: 11.878 ms per 16 layers
+T=32768 turbo0v4 GQA hps=6 nsg=1 maxBlocks=64: 8.959 ms per 16 layers
+T=32768 turbo8v4 GQA hps=6 nsg=1 maxBlocks=128: 11.517 ms per 16 layers
+T=32768 turbo0v4 GQA hps=6 nsg=1 maxBlocks=128: 8.540 ms per 16 layers
+T=32768 turbo8v4 GQA hps=6 nsg=2 maxBlocks=64: 12.074 ms per 16 layers
+T=32768 turbo0v4 GQA hps=6 nsg=2 maxBlocks=64: 8.445 ms per 16 layers
+T=32768 turbo8v4 GQA hps=6 nsg=2 maxBlocks=128: 12.027 ms per 16 layers
+T=32768 turbo0v4 GQA hps=6 nsg=2 maxBlocks=128: 8.536 ms per 16 layers
+T=32768 turbo8v4 GQA hps=6 nsg=4 maxBlocks=64: 11.969 ms per 16 layers
+T=32768 turbo0v4 GQA hps=6 nsg=4 maxBlocks=64: 9.776 ms per 16 layers
+T=32768 turbo8v4 GQA hps=6 nsg=4 maxBlocks=128: 12.639 ms per 16 layers
+T=32768 turbo0v4 GQA hps=6 nsg=4 maxBlocks=128: 9.725 ms per 16 layers
+T=65536 bf16 SDPA: 13.822 ms per 16 layers
+T=65536 turbo8v4 GQA: 23.648 ms per 16 layers
+T=65536 turbo0v4 GQA: 17.209 ms per 16 layers
+T=65536 turbo8v4 per-head (sliced): 71.142 ms per 16 layers
+T=65536 ratio vs SDPA: turbo8v4 GQA 1.71x, turbo0v4 GQA 1.25x, turbo8v4 per-head 5.15x
+T=65536 turbo8v4 GQA hps=1 nsg=1 maxBlocks=64: 20.434 ms per 16 layers
+T=65536 turbo0v4 GQA hps=1 nsg=1 maxBlocks=64: 15.666 ms per 16 layers
+T=65536 turbo8v4 GQA hps=1 nsg=1 maxBlocks=128: 20.233 ms per 16 layers
+T=65536 turbo0v4 GQA hps=1 nsg=1 maxBlocks=128: 14.636 ms per 16 layers
+T=65536 turbo8v4 GQA hps=1 nsg=2 maxBlocks=64: 21.027 ms per 16 layers
+T=65536 turbo0v4 GQA hps=1 nsg=2 maxBlocks=64: 15.593 ms per 16 layers
+T=65536 turbo8v4 GQA hps=1 nsg=2 maxBlocks=128: 20.505 ms per 16 layers
+T=65536 turbo0v4 GQA hps=1 nsg=2 maxBlocks=128: 15.314 ms per 16 layers
+T=65536 turbo8v4 GQA hps=1 nsg=4 maxBlocks=64: 20.791 ms per 16 layers
+T=65536 turbo0v4 GQA hps=1 nsg=4 maxBlocks=64: 13.732 ms per 16 layers
+T=65536 turbo8v4 GQA hps=1 nsg=4 maxBlocks=128: 21.310 ms per 16 layers
+T=65536 turbo0v4 GQA hps=1 nsg=4 maxBlocks=128: 13.973 ms per 16 layers
+T=65536 turbo8v4 GQA hps=2 nsg=1 maxBlocks=64: 14.453 ms per 16 layers
+T=65536 turbo0v4 GQA hps=2 nsg=1 maxBlocks=64: 13.177 ms per 16 layers
+T=65536 turbo8v4 GQA hps=2 nsg=1 maxBlocks=128: 13.911 ms per 16 layers
+T=65536 turbo0v4 GQA hps=2 nsg=1 maxBlocks=128: 12.100 ms per 16 layers
+T=65536 turbo8v4 GQA hps=2 nsg=2 maxBlocks=64: 15.400 ms per 16 layers
+T=65536 turbo0v4 GQA hps=2 nsg=2 maxBlocks=64: 11.981 ms per 16 layers
+T=65536 turbo8v4 GQA hps=2 nsg=2 maxBlocks=128: 13.938 ms per 16 layers
+T=65536 turbo0v4 GQA hps=2 nsg=2 maxBlocks=128: 12.989 ms per 16 layers
+T=65536 turbo8v4 GQA hps=2 nsg=4 maxBlocks=64: 14.398 ms per 16 layers
+T=65536 turbo0v4 GQA hps=2 nsg=4 maxBlocks=64: 11.879 ms per 16 layers
+T=65536 turbo8v4 GQA hps=2 nsg=4 maxBlocks=128: 14.413 ms per 16 layers
+T=65536 turbo0v4 GQA hps=2 nsg=4 maxBlocks=128: 12.065 ms per 16 layers
+T=65536 turbo8v4 GQA hps=3 nsg=1 maxBlocks=64: 12.526 ms per 16 layers
+T=65536 turbo0v4 GQA hps=3 nsg=1 maxBlocks=64: 11.986 ms per 16 layers
+T=65536 turbo8v4 GQA hps=3 nsg=1 maxBlocks=128: 12.592 ms per 16 layers
+T=65536 turbo0v4 GQA hps=3 nsg=1 maxBlocks=128: 12.028 ms per 16 layers
+T=65536 turbo8v4 GQA hps=3 nsg=2 maxBlocks=64: 12.747 ms per 16 layers
+T=65536 turbo0v4 GQA hps=3 nsg=2 maxBlocks=64: 11.669 ms per 16 layers
+T=65536 turbo8v4 GQA hps=3 nsg=2 maxBlocks=128: 13.017 ms per 16 layers
+T=65536 turbo0v4 GQA hps=3 nsg=2 maxBlocks=128: 12.015 ms per 16 layers
+T=65536 turbo8v4 GQA hps=3 nsg=4 maxBlocks=64: 12.649 ms per 16 layers
+T=65536 turbo0v4 GQA hps=3 nsg=4 maxBlocks=64: 12.029 ms per 16 layers
+T=65536 turbo8v4 GQA hps=3 nsg=4 maxBlocks=128: 12.876 ms per 16 layers
+T=65536 turbo0v4 GQA hps=3 nsg=4 maxBlocks=128: 11.263 ms per 16 layers
+T=65536 turbo8v4 GQA hps=6 nsg=1 maxBlocks=64: 23.130 ms per 16 layers
+T=65536 turbo0v4 GQA hps=6 nsg=1 maxBlocks=64: 18.697 ms per 16 layers
+T=65536 turbo8v4 GQA hps=6 nsg=1 maxBlocks=128: 25.990 ms per 16 layers
+T=65536 turbo0v4 GQA hps=6 nsg=1 maxBlocks=128: 18.249 ms per 16 layers
+T=65536 turbo8v4 GQA hps=6 nsg=2 maxBlocks=64: 23.552 ms per 16 layers
+T=65536 turbo0v4 GQA hps=6 nsg=2 maxBlocks=64: 17.906 ms per 16 layers
+T=65536 turbo8v4 GQA hps=6 nsg=2 maxBlocks=128: 23.118 ms per 16 layers
+T=65536 turbo0v4 GQA hps=6 nsg=2 maxBlocks=128: 16.348 ms per 16 layers
+T=65536 turbo8v4 GQA hps=6 nsg=4 maxBlocks=64: 23.240 ms per 16 layers
+T=65536 turbo0v4 GQA hps=6 nsg=4 maxBlocks=64: 16.613 ms per 16 layers
+T=65536 turbo8v4 GQA hps=6 nsg=4 maxBlocks=128: 23.653 ms per 16 layers
+T=65536 turbo0v4 GQA hps=6 nsg=4 maxBlocks=128: 17.268 ms per 16 layers
+switch-over T=8192 turbo8v4: 52.2 / 33.7 / 31.0 ms per 16 layers
+switch-over T=8192 turbo0v4: 25.1 / 24.3 / 24.3 ms per 16 layers
+switch-over T=32768 turbo8v4: 77.2 / 79.8 / 82.4 ms per 16 layers
+switch-over T=32768 turbo0v4: 72.3 / 71.5 / 72.1 ms per 16 layers
+switch-over T=65536 turbo8v4: 151.4 / 148.7 / 172.3 ms per 16 layers
+switch-over T=65536 turbo0v4: 148.4 / 150.9 / 149.5 ms per 16 layers

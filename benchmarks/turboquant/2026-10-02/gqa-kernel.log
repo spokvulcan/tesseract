@@ -1,0 +1,51 @@
+[00:15:29.856] TurboQuant bench starting: model=Qwen3.8-27B (MLX 4bit) contexts=[8192, 32768, 65536] schemes=["fp16", "turbo8v4", "turbo0v4"] maxNew=512 runs=2 prefillStep=1024 noiseFloorStep=0 nice=0 source=d67ab03a-dirty
+[00:15:29.856] Corpus: /Users/owl/projects/tesseract/docs/adr files=80 bytes=600782 sha256=d23190e6dbc1caf562549a647f68d1f538d35a510b3ca6835168550f545a8888
+[00:15:34.578] Loaded in 4.71s: active=15.13GB loadPeak=17.41GB
+[00:15:34.580] === context 8192 ===
+[00:16:17.230] prompt=8193 tok (attention layers=16, kv dtype=bfloat16) prefill=42.04s @ 194.88 tok/s peak=17.10GB snapshot=0.69GB
+[00:16:45.559] quality fp16: KL mean=0.000e+00 median=0.000e+00 p99=0.000e+00 max=0.000e+00 step0=0.000e+00 top1=100.00% (mismatches=0) kv=65536.00 B/tok allocated=0.59GB classes=["KVCacheSimple"]
+[00:17:15.587] quality turbo8v4: KL mean=1.290e-03 median=3.769e-05 p99=1.303e-02 max=1.692e-02 step0=0.000e+00 top1=99.80% (mismatches=1) kv=25856.00 B/tok allocated=0.23GB classes=["TurboQuantKVCache"]
+[00:17:47.857] quality turbo0v4: KL mean=1.244e-03 median=2.544e-05 p99=1.198e-02 max=2.042e-02 step0=0.000e+00 top1=99.80% (mismatches=1) kv=41216.00 B/tok allocated=0.36GB classes=["TurboQuantKVCache"]
+[00:18:15.652] speed fp16 round=0: decode=18.61 tok/s prime=100.60ms firstToken=70.50ms switchOver=140.58ms decodePeak=16.04GB runPeak=17.10GB residentGrowth=0.74GB greedyDiverges=never thermal=nominal
+[00:18:43.004] speed turbo8v4 round=0: decode=18.91 tok/s prime=58.21ms firstToken=182.41ms switchOver=226.15ms decodePeak=15.99GB runPeak=17.10GB residentGrowth=0.39GB greedyDiverges=274 thermal=nominal
+[00:19:10.160] speed turbo0v4 round=0: decode=19.01 tok/s prime=64.73ms firstToken=111.39ms switchOver=158.71ms decodePeak=15.99GB runPeak=17.10GB residentGrowth=0.52GB greedyDiverges=341 thermal=nominal
+[00:19:35.708] speed turbo0v4 round=1: decode=20.21 tok/s prime=63.56ms firstToken=86.92ms switchOver=129.99ms decodePeak=15.99GB runPeak=17.10GB residentGrowth=0.52GB greedyDiverges=341 thermal=nominal
+[00:20:01.573] speed turbo8v4 round=1: decode=20.05 tok/s prime=64.75ms firstToken=190.58ms switchOver=234.89ms decodePeak=15.99GB runPeak=17.10GB residentGrowth=0.39GB greedyDiverges=274 thermal=nominal
+[00:20:27.264] speed fp16 round=1: decode=20.07 tok/s prime=70.80ms firstToken=47.26ms switchOver=95.03ms decodePeak=16.05GB runPeak=17.10GB residentGrowth=0.74GB greedyDiverges=never thermal=nominal
+[00:20:27.273] === context 32768 ===
+[00:23:42.660] prompt=32769 tok (attention layers=16, kv dtype=bfloat16) prefill=192.65s @ 170.09 tok/s peak=21.10GB snapshot=2.30GB
+[00:24:15.065] quality fp16: KL mean=0.000e+00 median=0.000e+00 p99=0.000e+00 max=0.000e+00 step0=0.000e+00 top1=100.00% (mismatches=0) kv=65536.00 B/tok allocated=2.20GB classes=["KVCacheSimple"]
+[00:24:50.475] quality turbo8v4: KL mean=8.221e-04 median=1.066e-05 p99=8.174e-03 max=1.432e-02 step0=0.000e+00 top1=99.22% (mismatches=4) kv=25856.00 B/tok allocated=0.86GB classes=["TurboQuantKVCache"]
+[00:25:23.082] quality turbo0v4: KL mean=9.367e-04 median=1.105e-05 p99=9.471e-03 max=1.369e-02 step0=0.000e+00 top1=99.61% (mismatches=2) kv=41216.00 B/tok allocated=1.37GB classes=["TurboQuantKVCache"]
+[00:25:50.995] speed fp16 round=0: decode=18.68 tok/s prime=198.91ms firstToken=78.96ms switchOver=140.03ms decodePeak=17.88GB runPeak=21.10GB residentGrowth=2.35GB greedyDiverges=never thermal=nominal
+[00:26:18.886] speed turbo8v4 round=0: decode=18.99 tok/s prime=180.39ms firstToken=580.61ms switchOver=633.10ms decodePeak=17.96GB runPeak=21.10GB residentGrowth=1.02GB greedyDiverges=94 thermal=nominal
+[00:26:46.848] speed turbo0v4 round=0: decode=18.70 tok/s prime=186.75ms firstToken=238.20ms switchOver=285.69ms decodePeak=17.76GB runPeak=21.10GB residentGrowth=1.54GB greedyDiverges=94 thermal=nominal
+[00:27:14.533] speed turbo0v4 round=1: decode=18.99 tok/s prime=207.76ms firstToken=339.21ms switchOver=386.79ms decodePeak=17.76GB runPeak=21.10GB residentGrowth=1.54GB greedyDiverges=94 thermal=nominal
+[00:27:42.096] speed turbo8v4 round=1: decode=19.24 tok/s prime=193.66ms firstToken=599.80ms switchOver=651.86ms decodePeak=17.96GB runPeak=21.10GB residentGrowth=1.02GB greedyDiverges=94 thermal=nominal
+[00:28:08.989] speed fp16 round=1: decode=19.32 tok/s prime=173.69ms firstToken=56.96ms switchOver=113.53ms decodePeak=17.84GB runPeak=21.10GB residentGrowth=2.35GB greedyDiverges=never thermal=nominal
+[00:28:09.066] === context 65536 ===
+[00:36:23.072] prompt=65537 tok (attention layers=16, kv dtype=bfloat16) prefill=490.36s @ 133.65 tok/s peak=26.47GB snapshot=4.45GB
+[00:37:00.743] quality fp16: KL mean=0.000e+00 median=0.000e+00 p99=0.000e+00 max=0.000e+00 step0=0.000e+00 top1=100.00% (mismatches=0) kv=65536.00 B/tok allocated=4.35GB classes=["KVCacheSimple"]
+[00:37:43.802] quality turbo8v4: KL mean=1.192e-03 median=3.676e-05 p99=9.410e-03 max=4.748e-02 step0=0.000e+00 top1=98.83% (mismatches=6) kv=25856.00 B/tok allocated=1.71GB classes=["TurboQuantKVCache"]
+[00:38:18.649] quality turbo0v4: KL mean=1.215e-03 median=2.399e-05 p99=9.267e-03 max=6.673e-02 step0=0.000e+00 top1=98.63% (mismatches=7) kv=41216.00 B/tok allocated=2.72GB classes=["TurboQuantKVCache"]
+[00:38:50.574] speed fp16 round=0: decode=16.54 tok/s prime=424.14ms firstToken=68.94ms switchOver=129.22ms decodePeak=20.24GB runPeak=26.47GB residentGrowth=4.50GB greedyDiverges=never thermal=nominal
+[00:39:23.794] speed turbo8v4 round=0: decode=16.89 tok/s prime=412.57ms firstToken=1877.94ms switchOver=2117.26ms decodePeak=20.62GB runPeak=26.47GB residentGrowth=1.87GB greedyDiverges=49 thermal=nominal
+[00:39:56.771] speed turbo0v4 round=0: decode=16.93 tok/s prime=455.58ms firstToken=1749.11ms switchOver=1917.03ms decodePeak=20.21GB runPeak=26.47GB residentGrowth=2.89GB greedyDiverges=49 thermal=nominal
+[00:40:30.738] speed turbo0v4 round=1: decode=16.40 tok/s prime=449.44ms firstToken=1727.59ms switchOver=1891.02ms decodePeak=20.21GB runPeak=26.47GB residentGrowth=2.89GB greedyDiverges=49 thermal=nominal
+[00:41:03.580] speed turbo8v4 round=1: decode=16.94 tok/s prime=437.62ms firstToken=1610.44ms switchOver=1752.32ms decodePeak=20.62GB runPeak=26.47GB residentGrowth=1.87GB greedyDiverges=49 thermal=fair
+[00:41:35.466] speed fp16 round=1: decode=16.55 tok/s prime=436.21ms firstToken=70.05ms switchOver=137.29ms decodePeak=20.24GB runPeak=26.47GB residentGrowth=4.50GB greedyDiverges=never thermal=fair
+[00:41:35.597] === summary ===
+[00:41:35.598] ctx=8192 prompt=8193 prefillPeak=17.10GB noiseFloorKL=-
+[00:41:35.598]   fp16: KL mean=0.000e+00 p99=0.000e+00 top1=100.00% decode=19.34 tok/s (0.00%) kv=65536.00 B/tok (1.00x) runPeak=17.10GB
+[00:41:35.599]   turbo8v4: KL mean=1.290e-03 p99=1.303e-02 top1=99.80% decode=19.48 tok/s (0.72%) kv=25856.00 B/tok (2.53x) runPeak=17.10GB
+[00:41:35.599]   turbo0v4: KL mean=1.244e-03 p99=1.198e-02 top1=99.80% decode=19.61 tok/s (1.40%) kv=41216.00 B/tok (1.59x) runPeak=17.10GB
+[00:41:35.600] ctx=32768 prompt=32769 prefillPeak=21.10GB noiseFloorKL=-
+[00:41:35.600]   fp16: KL mean=0.000e+00 p99=0.000e+00 top1=100.00% decode=19.00 tok/s (0.00%) kv=65536.00 B/tok (1.00x) runPeak=21.10GB
+[00:41:35.601]   turbo8v4: KL mean=8.221e-04 p99=8.174e-03 top1=99.22% decode=19.12 tok/s (0.60%) kv=25856.00 B/tok (2.53x) runPeak=21.10GB
+[00:41:35.601]   turbo0v4: KL mean=9.367e-04 p99=9.471e-03 top1=99.61% decode=18.85 tok/s (-0.82%) kv=41216.00 B/tok (1.59x) runPeak=21.10GB
+[00:41:35.601] ctx=65536 prompt=65537 prefillPeak=26.47GB noiseFloorKL=-
+[00:41:35.602]   fp16: KL mean=0.000e+00 p99=0.000e+00 top1=100.00% decode=16.54 tok/s (0.00%) kv=65536.00 B/tok (1.00x) runPeak=26.47GB
+[00:41:35.602]   turbo8v4: KL mean=1.192e-03 p99=9.410e-03 top1=98.83% decode=16.91 tok/s (2.23%) kv=25856.00 B/tok (2.53x) runPeak=26.47GB
+[00:41:35.603]   turbo0v4: KL mean=1.215e-03 p99=9.267e-03 top1=98.63% decode=16.67 tok/s (0.75%) kv=41216.00 B/tok (1.59x) runPeak=26.47GB
+[00:41:35.882] Report written to: /var/folders/xz/mc9p7psx2q58z5zdl3b0p7zw0000gn/T/tesseract-debug/benchmark/turboquant-bench/turboquant_bench_2026-10-03_00-15-29.json
+[00:41:35.882] Overall: PASS

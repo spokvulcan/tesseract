@@ -32,6 +32,59 @@ the parked Gemma 4 12B multimodal stack (audio encoder + encoder-free
 `gemma4_unified` processor + suppress_tokens) that tesseract draft PR #359
 pins; it rejoins this table's carry list only if that experiment is revived.
 
+## TurboQuant GQA decode (2026-10-03, #603)
+
+The gitlink advances from `7d8e38e` to `f3307ff` on `perf/turboquant-gqa-decode`,
+two commits on top of the previous pin (fast-forward; `pin-upstream-mlx-swift`
+and every historical tip unchanged). Only the `--turboquant-bench` harness
+builds a TurboQuant cache, so neither commit changes a production path; both
+came out of measuring TurboQuant for #603
+(`benchmarks/turboquant/2026-10-02/README.md`).
+
+- `0d0a2c6` `fix(turboquant): read both butterfly slots before writing in the
+  WHT encoder`. From stage 5 on, the fused value encoder's butterfly partners
+  sit in different SIMD groups, and each thread could overwrite its slot before
+  its partner had read it. The stored codes then differed between runs from one
+  input: on Qwen3.8-27B no two TurboQuant decodes from one restored cache
+  agreed (0 of 9 pairs), and with the fix every pair did (12 of 12).
+  `testFusedEncodeWHTIsDeterministic` fails on all 19 repeat encodes without the
+  barrier.
+- `f3307ff` `perf(turboquant): decode each block once per group of query
+  heads`. A GQA decode kernel for the raw-K and affine-K modes: one decode of
+  each block per group of three query heads, the caches read in place by row
+  stride (the `..<T` slices were copied every step), and a parallel pass 2.
+  Qwen 3.5 runs TurboQuant decode through its compiled segments
+  (`supportsUntracedDecodeAttention`). `TURBO_FLASH_GQA=0` keeps the per-head
+  kernels.
+
+Steady-state decode against bf16 KV at 8K, 32K and 64K prompt tokens,
+Qwen3.8-27B 4-bit (`--turboquant-bench`, two ABBA rounds of 512 tokens,
+Apple M3 Max 48 GB). Before is the 2026-10-02 sweep on `7d8e38e`, after the
+2026-10-03 run on this carry's code:
+
+| | 8K | 32K | 64K |
+|---|---|---|---|
+| turbo8v4 before | −21% | −51% | −64% |
+| turbo8v4 after | +0.7% | +0.6% | +2.2% |
+| turbo0v4 before | −25% | −56% | −68% |
+| turbo0v4 after | +1.4% | −0.8% | +0.7% |
+
+Validation: `TurboQuantGQAFlashTests` (4 new: the GQA kernel against the
+per-query-head kernel within 1e-4 for bf16 and 8-bit affine keys, every head
+split and nine lengths up to 20,000 tokens; cache decode across a buffer growth
+against exact attention; TurboQuant on Qwen 3.5's compiled segments against the
+unquantized cache), `TurboQuantIntegrationTests` (with the new determinism
+test), `TurboFlashAttention`, `TurboQuantKVCache`, `KV-cache configuration`,
+`CompiledDecodeWeightUpdateTests` and `Qwen35CompiledDecodeLifecycleTests`
+pass (35 XCTest and 44 Swift Testing cases); formatter-clean under the
+CI-pinned swift-format 603.0.0. `TurboQuantDecodeMicrobench` is an opt-in
+timing (`TEST_RUNNER_TURBOQUANT_DECODE_BENCH=1`).
+
+Upstream: not filed. The race fix stands alone and can go first. The benchmark
+README holds a draft PR description covering both commits; drop its race-fix
+paragraph if the fix is filed on its own. Drop each commit from the carry when
+its upstream PR merges.
+
 ## MTP head of an unindexed checkpoint (2026-09-30)
 
 The gitlink advances from `a3c1776` to `7d8e38e` on
@@ -206,8 +259,8 @@ disclosure line is the owner's to write.
 ## Capacity reservation carry (2026-09-19, #533)
 
 The #533 app branch advanced the gitlink from `51542c4` to `f177464` on
-`codex/533-cache-capacity-reservation`; the current pin (`7d8e38e` on
-`fix/mtp-head-unindexed-checkpoint`) carries that commit underneath the later
+`codex/533-cache-capacity-reservation`; the current pin (`f3307ff` on
+`perf/turboquant-gqa-decode`) carries that commit underneath the later
 #550 work. This was a fast-forward carry; the shared
 `pin-upstream-mlx-swift` branch and every historical tip remain unchanged. `f177464` adds `KVCache.reserveCapacity(_:)`, honored
 by simple and quantized attention caches and forwarded by CacheList. Allocation

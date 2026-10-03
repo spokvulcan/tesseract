@@ -1409,3 +1409,49 @@ was a null result: sequentialMap 1.09x and positional 0.73x of mapped on a
 61k-token chain, under the 2.0x gate, so production keeps `mappedIfSafe` and
 the arm selector stays harness-only.
 Do not run the loaded-model harness as part of automated verification.
+
+## TurboQuant KV measurement (#603)
+
+`--turboquant-bench` (`TurboQuantBenchRunner`) measures a live KV cache scheme
+against the unquantized cache on a loaded model, with the scheme the only
+change between arms. Per context it prefills once, snapshots the bf16 cache,
+and restores a copy for each pass. Quality is teacher-forced, one token per
+forward, against the unquantized arm's greedy stream: KL divergence and top-1
+agreement, with a re-chunked prefill as the noise floor. Speed runs the
+chunked Prefill Strategy route (`PrefillExecutor.makeIterator`) in reversed
+rounds. Memory reads the realized cache's bytes
+per token and the prefill and decode-phase peaks. The harness fails if a scheme
+leaves any attention layer unconverted, if step 0 (scored before the scheme
+engages) has nonzero KL, or if the unquantized speed rounds stop reproducing
+the reference stream. Run it in Release through `scripts/bench.sh` (pass the
+corpus as an absolute path) and summarize with `scripts/turboquant_summary.py`:
+
+```bash
+scripts/bench.sh quick --model qwen3.8-27b --turboquant-bench \
+  --bench-corpus "$PWD/docs/adr" --bench-contexts 8192,32768,65536 \
+  --bench-schemes fp16,turbo8v4,turbo0v4
+```
+
+The 2026-10-02 run on the 48 GB M3 Max
+([`benchmarks/turboquant/2026-10-02/README.md`](../benchmarks/turboquant/2026-10-02/README.md))
+passed the quality bar and failed the speed bar with the vendor as shipped:
+turbo8v4 decoded 51% slower than bf16 at 32K and 64% slower at 64K, with an
+unchanged run peak, and TurboQuant decode was not reproducible run to run (a
+data race in the vendor's value encoder). With the GQA decode kernels the
+vendor pin now carries (`docs/mlx-swift-lm-fork.md`, "TurboQuant GQA decode";
+the same README) both bars pass: decode within about 2% of bf16 at 8K–64K, and
+two decodes from one cache give the same tokens. The app harness takes about an
+hour; do not run it as part of automated verification.
+
+Run the kernel tests after any change to the vendor's TurboQuant kernels or
+cache. `TurboQuantDecodeMicrobench` in the same package is an opt-in per-layer
+timing (`TEST_RUNNER_TURBOQUANT_DECODE_BENCH=1`, with `-configuration Release
+ENABLE_TESTABILITY=YES`):
+
+```bash
+cd Vendor/mlx-swift-lm
+xcodebuild test -scheme mlx-swift-lm-Package -destination 'platform=macOS' \
+  -skipPackagePluginValidation \
+  -only-testing:MLXLMTests/TurboQuantGQAFlashTests \
+  -only-testing:MLXLMTests/TurboQuantIntegrationTests
+```
