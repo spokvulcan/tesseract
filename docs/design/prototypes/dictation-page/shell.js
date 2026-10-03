@@ -58,6 +58,9 @@ P.tesseractGlyph = (s = 15) => `<svg width="${s}" height="${s}" viewBox="0 0 20 
 /* ---------- the owner's words, and what Whisper hears (from the 2026-09-28 replay) ---------- */
 const T = (h, m) => ({ h, m });
 P.T = T;
+/* A word the live preview gets wrong and the final pass gets right (preview, final). */
+const PV = (pv, f) => ({ pv, f });
+P.PV = PV;
 P.WORDS = [
   { w: 'Claude', heard: 'cloud', kind: 'Name', from: 'memory', why: 'you talk to it in Terminal every day', uses: 212 },
   { w: 'Tesseract', heard: 'SRACT', alts: ['SRAX', 'TSRAC'], kind: 'Project', from: 'project', why: 'your project in ~/projects/tesseract', uses: 148 },
@@ -77,13 +80,14 @@ P.word = (w) => P.WORDS.find((x) => eqi(x.w, w));
 /* What you say next, per app. Strings are heard right; T(heard, meant) is a term Whisper may miss. */
 P.SCRIPTS = {
   terminal: [
-    ['Ask ', T('cloud', 'Claude'), ' why the ', T('SRACT', 'Tesseract'), ' server drops the first request'],
-    ['Then put the fix in ', T('cloud.md', 'CLAUDE.md'), ' and rebase the ', T('D flash two', 'DFlash2'), ' ', T('work tree', 'worktree')],
-    [T('Cloud', 'Claude'), ', run the ', T('SRAX', 'Tesseract'), ' tests again before you open ', T('APR', 'a PR')],
-    ['Good. Tell ', T('cloud', 'Claude'), ' to ship the ', T('D flash two', 'DFlash2'), ' build to ', T('test flight', 'TestFlight')],
+    ['Ask ', T('cloud', 'Claude'), ' why ', PV('this', 'the'), ' ', T('SRACT', 'Tesseract'), ' server drops the first request'],
+    [T('Cloud', 'Claude'), ', run the ', T('SRAX', 'Tesseract'), ' ', PV('test', 'tests'), ' again before you open ', T('APR', 'a PR')],
+    ['Then put the fix ', PV('and', 'in'), ' ', T('cloud.md', 'CLAUDE.md'), ' and rebase the ', T('D flash two', 'DFlash2'), ' ', T('work tree', 'worktree')],
+    [PV('Good tell', 'Good. Tell'), ' ', T('cloud', 'Claude'), ' to ship the ', T('D flash two', 'DFlash2'), ' build to ', T('test flight', 'TestFlight')],
   ],
   notes: [
     ['Low ', T('cloud', 'cloud'), ' this morning, so the drone test moves to Friday'],
+    ['If the ', T('cloud', 'cloud'), ' lifts by noon we fly the long route'],
     ['Ask ', T('whisper flow', 'Wispr Flow'), ' and ', T('Eleven Labs', 'ElevenLabs'), ' for team pricing'],
   ],
 };
@@ -111,7 +115,9 @@ const SEED_MEMORIES = [
 ];
 
 /* ---------- takes ---------- */
-const segsFrom = (line) => line.map((s) => (typeof s === 'string' ? { text: s } : { h: s.h, m: s.m, text: s.h, status: eqi(s.h, s.m) ? 'right' : 'wrong' }));
+const segsFrom = (line) => line.map((s) => (typeof s === 'string' ? { text: s }
+  : s.pv != null ? { text: s.f, pv: s.pv }
+  : { h: s.h, m: s.m, text: s.h, status: eqi(s.h, s.m) ? 'right' : 'wrong' }));
 P.segsFrom = segsFrom;
 P.isMistake = (s) => s.m != null && !eqi(s.text, s.m);
 P.makeTake = (app, line, at = new Date()) => {
@@ -130,6 +136,7 @@ P.tokens = (t) => {
   const out = []; let space = false;
   t.segs.forEach((s, i) => {
     if (s.h != null) { out.push({ seg: i, term: true, heard: s.h, text: s.text, glue: out.length > 0 && !space }); space = false; return; }
+    if (s.pv != null) { out.push({ seg: i, term: false, pv: s.pv, text: s.text, glue: out.length > 0 && !space }); space = false; return; }
     const re = /(\s+)|(\S+)/g; let m;
     while ((m = re.exec(s.text))) {
       if (m[1]) space = true;
@@ -201,8 +208,8 @@ const frame = (t) => {
 
 /* ---------- dictation ---------- */
 P.peekLine = (app = P.st.target) => { const s = P.SCRIPTS[app]; return s[P.st.lineIdx[app] % s.length]; };
-P.saidHTML = (line) => line.map((s) => (typeof s === 'string' ? P.esc(s) : eqi(s.h, s.m) ? P.esc(s.m) : `<b>${P.esc(s.m)}</b>`)).join('');
-P.saidText = (line) => line.map((s) => (typeof s === 'string' ? s : s.m)).join('');
+P.saidHTML = (line) => line.map((s) => (typeof s === 'string' ? P.esc(s) : s.pv != null ? P.esc(s.f) : eqi(s.h, s.m) ? P.esc(s.m) : `<b>${P.esc(s.m)}</b>`)).join('');
+P.saidText = (line) => line.map((s) => (typeof s === 'string' ? s : s.pv != null ? s.f : s.m)).join('');
 
 P.startTalk = () => {
   const st = P.st;
@@ -250,7 +257,7 @@ const finishTalk = async () => {
   $('#mb-tess').classList.remove('live');
   st.phase = 'processing';
   P.emit('processing', { take: t.take });
-  await P.wait(360);
+  await P.wait(P.active?.finalMs ?? 360);
   if (P.st !== st) return; // reset while transcribing
   const take = t.take;
   P.applyRules(take);
@@ -426,7 +433,7 @@ P.mount = (v) => {
   clearTimeout(P.st?.talk?.timer);
   lvOn = false; setTalkUI(false);
   P.active = v;
-  try { localStorage.setItem('dictation-proto-variant', v.id); } catch (e) { /* private window */ }
+  try { localStorage.setItem('dictation-proto-variant-r3', v.id); } catch (e) { /* private window */ }
   P.reset();
   $('#variant-css').textContent = v.css || '';
   $('#tess-content').innerHTML = ''; $('#tess-tools').innerHTML = ''; $('#overlay-layer').innerHTML = '';
@@ -501,7 +508,7 @@ P.boot = () => {
   tickClock(); setInterval(tickClock, 15000);
   requestAnimationFrame(frame);
   let want = location.hash.slice(1) || new URLSearchParams(location.search).get('variant');
-  if (!want) { try { want = localStorage.getItem('dictation-proto-variant'); } catch (e) { /* ignore */ } }
-  P.mount(P.variants.find((v) => v.id === want || String(v.num) === want) || P.variants[0]);
+  if (!want) { try { want = localStorage.getItem('dictation-proto-variant-r3'); } catch (e) { /* ignore */ } }
+  P.mount(P.variants.find((v) => v.id === want || String(v.num) === want) || P.variants.find((v) => v.id === 'catch') || P.variants[0]);
 };
 })();
