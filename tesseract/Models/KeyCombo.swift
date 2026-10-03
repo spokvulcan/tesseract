@@ -152,6 +152,9 @@ nonisolated struct KeyCombo: Codable, Equatable, Sendable {
     static let f5 = KeyCombo(keyCode: UInt16(kVK_F5))
     static let optionSpace = KeyCombo(keyCode: UInt16(kVK_Space), modifiers: .option)
     static let controlSpace = KeyCombo(keyCode: UInt16(kVK_Space), modifiers: .control)
+    /// ⌃⌥Space: the fix hotkey, which reopens the last take in the **Lens**.
+    static let controlOptionSpace = KeyCombo(
+        keyCode: UInt16(kVK_Space), modifiers: [.control, .option])
     static let functionSpace = KeyCombo(keyCode: UInt16(kVK_Space), modifiers: .function)
     static let optionShiftSpace = KeyCombo(
         keyCode: UInt16(kVK_Space), modifiers: [.option, .shift])

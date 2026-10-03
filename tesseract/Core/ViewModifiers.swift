@@ -93,6 +93,7 @@ extension View {
             .environment(container.transcriptionEngine)
             .environment(container.transcriptionHistory)
             .environment(container.correctionPairStore)
+            .environment(container.learnedWordStore)
             .environment(container.audioCaptureEngine)
     }
 

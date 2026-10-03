@@ -365,7 +365,7 @@ struct IslandOverlayView: View {
                     actions.flagLastTakeWrong()
                     dismissBeat()
                 }
-                affordance("pencil", label: "Edit in history") {
+                affordance("pencil", label: "Fix a word") {
                     actions.editLastTake()
                     dismissBeat()
                 }

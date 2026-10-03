@@ -12,7 +12,7 @@ import TesseractSpeech
 /// `resetToDefaults`) so a default has exactly one home; the 50-vs-20-GiB SSD
 /// budget drift becomes unrepresentable.
 ///
-/// Composite/derived members (`hotkey`, `ttsHotkey`, `agentHotkey`,
+/// Composite/derived members (`hotkey`, `ttsHotkey`, `agentHotkey`, `fixHotkey`,
 /// `ttsParameters`, `selectedLanguage`, the enum-over-raw pairs) stay computed
 /// over these primitives in the `SettingsManager` facade, so the catalogue only
 /// declares the primitives that actually own a key.
@@ -32,9 +32,15 @@ enum SettingsCatalogue {
     static let autoInsertText = Setting.bool("autoInsertText", default: true)
     static let restoreClipboard = Setting.bool("restoreClipboard", default: true)
     /// The dictation **Proofread Pass** (ADR-0034): the small co-resident
-    /// model polishes each transcription when the GPU is free. On by
-    /// default; the pass silently skips until its model is downloaded.
-    static let proofreadDictation = Setting.bool("proofreadDictation", default: true)
+    /// model polishes each transcription when the GPU is free. Opt-in since
+    /// PRD #612: in 1,000 takes it fixed 4 misheard words and changed the
+    /// meaning of 13, so **Learned Words** are the corrector now. When on,
+    /// the pass silently skips until its model is downloaded.
+    static let proofreadDictation = Setting.bool("proofreadDictation", default: false)
+    /// Marks the one-time switch-off of the Proofread Pass (PRD #612) as
+    /// done, or a choice made since, so a later opt-in is never undone.
+    static let proofreadDefaultOffApplied = Setting.bool(
+        "proofreadDefaultOffApplied", default: false)
     /// Exploration scaffolding (map #283): selects the live Overlay Variant;
     /// deleted when the redesign prunes to one winner.
     static let overlayVariantRaw = Setting.string("overlayVariant", default: "classic")
@@ -77,6 +83,12 @@ enum SettingsCatalogue {
         "appshotHotkeyKeyCode", default: Int(KeyCombo.doubleCommand.keyCode))
     static let appshotHotkeyModifiers = Setting.int(
         "appshotHotkeyModifiers", default: Int(KeyCombo.doubleCommand.modifiers))
+    /// The fix hotkey: reopens the last take in the **Lens** to fix a word
+    /// by typing the one meant (PRD #612).
+    static let fixHotkeyKeyCode = Setting.int(
+        "fixHotkeyKeyCode", default: Int(KeyCombo.controlOptionSpace.keyCode))
+    static let fixHotkeyModifiers = Setting.int(
+        "fixHotkeyModifiers", default: Int(KeyCombo.controlOptionSpace.modifiers))
 
     // MARK: - TTS
 

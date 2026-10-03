@@ -19,6 +19,11 @@
 //  drives this type through `start`/`stop`/`transcribeAndCommit`/`cancel` using the
 //  fakes that already sit *below* it.
 //
+//  **Learned Words** (PRD #612) apply here, after the regex cleanup and before the
+//  Proofread Pass, so every caller gains them: dictation, Voice Input, the capture
+//  and Jarvis panels and the voice session. A capture that never rose above
+//  silence is not transcribed at all.
+//
 
 import Foundation
 
@@ -54,6 +59,10 @@ final class VoiceCaptureSession {
         case tooShort
         /// The capture engine returned no audio at all.
         case noAudio
+        /// The capture's level never rose above silence. Not transcribed:
+        /// Whisper writes "Thank you." over silence, and WhisperKit 1.0.0
+        /// never computes the no-speech probability that would catch it.
+        case silent
     }
 
     /// One take's full text lineage, observed via `transcribeAndCommit`'s
@@ -63,12 +72,33 @@ final class VoiceCaptureSession {
     struct Take: Sendable {
         /// The recognizer's text before any cleanup.
         let rawASR: String
-        /// The regex post-processor's output — what the Proofread Pass saw.
+        /// The regex post-processor's output.
         let cleaned: String
+        /// `cleaned` after the **Learned Words** — what the Proofread Pass
+        /// saw. Equal to `cleaned` when nothing was caught.
+        let learned: String
+        /// What the Learned Words caught, positioned in `learned`.
+        let catches: [LearnedWordCatch]
         /// The Proofread Pass's verdict; `nil` when the pass was skipped.
         let verdict: ProofreadVerdict?
         /// What commits; `nil` for a rejected take.
         let committedText: String?
+        /// The app in front when the take started.
+        let app: TargetApp?
+
+        init(
+            rawASR: String, cleaned: String, learned: String? = nil,
+            catches: [LearnedWordCatch] = [], verdict: ProofreadVerdict?,
+            committedText: String?, app: TargetApp? = nil
+        ) {
+            self.rawASR = rawASR
+            self.cleaned = cleaned
+            self.learned = learned ?? cleaned
+            self.catches = catches
+            self.verdict = verdict
+            self.committedText = committedText
+            self.app = app
+        }
     }
 
     /// The outcome of ``transcribeAndCommit(_:language:proofread:commit:)``.
@@ -96,6 +126,17 @@ final class VoiceCaptureSession {
     private let transcriptionEngine: any Transcribing
     private let postProcessor = TranscriptionPostProcessor()
 
+    /// The **Learned Words**, applied to every take after the regex cleanup;
+    /// `nil` where a caller (or a test) doesn't exercise them.
+    private let learnedWords: (any LearnedWordApplying)?
+
+    /// The app in front, read when a take starts: the Learned Words' per-app
+    /// exceptions and the Lens key off it.
+    private let frontmostApp: @MainActor () -> TargetApp?
+
+    /// The app in front when the current take started.
+    private(set) var targetApp: TargetApp?
+
     /// The **Capture Dump** and its enablement, both caller-injected. The dump
     /// only ever sees captures that passed the minimum-duration guard — an
     /// accidental tap or an abandoned (cancelled) recording is not evidence.
@@ -120,12 +161,16 @@ final class VoiceCaptureSession {
         audioCapture: any AudioCapturing,
         transcriptionEngine: any Transcribing,
         captureDump: (any CaptureDumpStoring)? = nil,
-        isCaptureDumpEnabled: @escaping () -> Bool = { true }
+        isCaptureDumpEnabled: @escaping () -> Bool = { true },
+        learnedWords: (any LearnedWordApplying)? = nil,
+        frontmostApp: @escaping @MainActor () -> TargetApp? = { TargetApp.frontmost() }
     ) {
         self.audioCapture = audioCapture
         self.transcriptionEngine = transcriptionEngine
         self.captureDump = captureDump
         self.isCaptureDumpEnabled = isCaptureDumpEnabled
+        self.learnedWords = learnedWords
+        self.frontmostApp = frontmostApp
     }
 
     // MARK: - Interface
@@ -138,6 +183,7 @@ final class VoiceCaptureSession {
         operations.invalidate()
         do {
             try audioCapture.startCapture()
+            targetApp = frontmostApp()
             return .started
         } catch {
             return .captureFailed(error)
@@ -149,6 +195,9 @@ final class VoiceCaptureSession {
     func stop() -> StopResult {
         guard var audioData = audioCapture.stopCapture() else { return .noAudio }
         guard audioData.duration >= Self.minimumRecordingDuration else { return .tooShort }
+        // Not evidence either: a silent capture is neither transcribed nor
+        // dumped.
+        guard !CaptureLevel.isSilent(audioData) else { return .silent }
         var dumpFile: String?
         if let raw = audioData.raw {
             if let captureDump, isCaptureDumpEnabled() {
@@ -181,6 +230,7 @@ final class VoiceCaptureSession {
         commit: @escaping @MainActor (String, TimeInterval) async throws -> Void
     ) async -> Outcome {
         let ticket = operations.capture()
+        let app = targetApp
         let task = Task { () -> Outcome in
             do {
                 let result = try await transcriptionEngine.transcribe(audio, language: language)
@@ -192,11 +242,16 @@ final class VoiceCaptureSession {
                 let processedText = postProcessor.process(result.text)
                 guard !processedText.isEmpty else { return .empty }
 
-                var commitText = processedText
+                // The owner's words, as the owner's fixes taught them.
+                let learned =
+                    learnedWords?.apply(to: processedText, appBundleID: app?.bundleID)
+                    ?? .unchanged(processedText)
+
+                var commitText = learned.text
                 var edits: [WordEdit] = []
                 var verdict: ProofreadVerdict?
                 if let proofread {
-                    verdict = await proofread(processedText)
+                    verdict = await proofread(learned.text)
                     // The pass awaited — a cancel-and-restart during it means
                     // a newer operation owns the state.
                     guard ticket.isCurrent else { return .superseded }
@@ -208,8 +263,9 @@ final class VoiceCaptureSession {
                         onTake?(
                             Take(
                                 rawASR: result.text, cleaned: processedText,
-                                verdict: verdict, committedText: nil))
-                        return .rejected(raw: processedText, reason: reason)
+                                learned: learned.text, catches: learned.catches,
+                                verdict: verdict, committedText: nil, app: app))
+                        return .rejected(raw: learned.text, reason: reason)
                     case .unchanged, nil:
                         break
                     }
@@ -220,7 +276,8 @@ final class VoiceCaptureSession {
                 onTake?(
                     Take(
                         rawASR: result.text, cleaned: processedText,
-                        verdict: verdict, committedText: commitText))
+                        learned: learned.text, catches: learned.catches,
+                        verdict: verdict, committedText: commitText, app: app))
 
                 try await commit(commitText, audio.duration)
 
@@ -228,6 +285,13 @@ final class VoiceCaptureSession {
                 // during it means the newer operation owns the state — suppress the
                 // success the caller would otherwise present.
                 guard ticket.isCurrent else { return .superseded }
+                // Counted once the take is in, and only the catches that
+                // landed (the Proofread Pass may have rewritten one): a
+                // rejected, failed or superseded take caught nothing.
+                learnedWords?.recordCatches(
+                    commitText == learned.text
+                        ? learned.catches
+                        : LearnedWordMatcher.relocate(learned.catches, in: commitText))
                 return .committed(edits: edits)
             } catch is CancellationError {
                 return ticket.isCurrent ? .cancelled : .superseded

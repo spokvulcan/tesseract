@@ -1884,8 +1884,10 @@ _Avoid_: operation ID, token (unqualified), snapshot (the prefix-cache concept).
 **Voice Capture Session**:
 The one concrete module that owns the push-to-talk capture→transcribe→commit
 lifecycle — the **Operation Guard** ticket discipline, the microphone-busy guard, the
-minimum-duration and empty-text guards, post-processing, the in-flight transcription
-`Task`, and cancellation — behind a small value-returning interface
+minimum-duration and empty-text guards, the silent-capture skip (a capture whose level
+never rose above silence is not transcribed), post-processing, the **Learned Words**
+(applied after the regex cleanup and before the **Proofread Pass**), the in-flight
+transcription `Task`, and cancellation — behind a small value-returning interface
 (`start`/`stop`/`transcribeAndCommit`/`cancel`), delivering clean text to a
 caller-injected commit closure. Composed *directly* by both `DictationCoordinator` and
 **Voice Input**, which keep only their own state, errors, sounds, and commit. Distinct
@@ -1898,27 +1900,65 @@ _Avoid_: coordinator (it is composed by the coordinators, not one), capture engi
 The optional LLM polish stage between transcription and commit (ADR-0034): a second,
 small co-resident MLX model — its own, never the agent's — that fixes punctuation,
 capitalization, and misheard words, or rejects an unintelligible take outright.
-Strictly fail-open: disabled, model not downloaded, the LLM generating
-(skip-when-busy — it *reads* whether the **LLM Gate** is held, never waits on it),
-budget overrun, or any error all commit
-the raw text unchanged. Runs inside the **Voice Capture Session**, so dictation and
+Off by default and opt-in (ADR-0084): **Learned Words** are the corrector, and when
+on, the pass reads the text after them. Strictly fail-open: disabled, model not
+downloaded, the LLM generating (skip-when-busy — it *reads* whether the **LLM Gate**
+is held, never waits on it), budget overrun, or any error all commit the raw text
+unchanged. Runs inside the **Voice Capture Session**, so dictation and
 **Voice Input** both gain it; its word-level edits ride the commit for overlay
 narration, and a rejected take's raw text stays available for "insert raw anyway".
 _Avoid_: post-processing (the regex cleanup that always runs, pass or no pass),
 autocorrect, grammar check, second agent (it is a fixed-prompt pass, not an agent).
 
 **Correction Pair**:
-One dictation take's full text lineage — raw ASR, regex-cleaned, **Proofread
-Pass** output + verdict, committed text, the owner's correction — plus capture
-conditions and a Capture Dump audio reference; the local, bounded, exportable
-training-pair collection the flywheel feeds from day one. Every take is a
-*candidate*; an owner signal (a correction edit in the history, or a one-click
-wrong-flag from the overlay's lingering beat) makes it *gold* — evicted last,
-its audio exempt from the dump's ring eviction. Full editing lives in the
-history window; the overlay stays keyboard-free.
+One dictation take's full text lineage — raw ASR, regex-cleaned, after the
+**Learned Words**, **Proofread Pass** output + verdict, committed text, the owner's
+correction — plus capture conditions and a Capture Dump audio reference; the local,
+bounded, exportable training-pair collection the flywheel feeds from day one. Every
+take is a *candidate*; an owner signal (a word fixed in the **Lens**, recorded with
+the heard and meant words, how the take was reached and the app; a correction edit
+in the history; or a one-click wrong-flag from the overlay's lingering beat) makes
+it *gold* — evicted last, its audio exempt from the dump's ring eviction. The
+**Lens** takes the keyboard while a take is being fixed; full-text editing lives in
+the history window.
 _Avoid_: training data (unqualified — pairs are candidates until gold),
 feedback log, transcription history (the sibling store it links to by id),
 fine-tune corpus (the export's *consumer*, out of scope — see the map).
+
+**Learned Word**:
+One "heard → meant" replacement learned from the owner's fix in the **Lens**: the
+owner's spelling, every way it was heard (a heard form may be several words), the
+apps it is left alone in, its **Catch** count per day, and the **Correction Pair**
+it came from. The **Voice Capture Session** applies it to every take after the regex
+cleanup: whole words, any case, case fitted at a sentence start, skipped in an app
+it is left alone in. Learned on the first fix, unless the fix touches only ordinary
+words, only changes a word's ending, or does not sound like what was heard (a
+rewrite): those fix that take only. Fixing it back in an app leaves it alone there.
+Forget keeps the word, so Forget can be undone, and only a new fix learns it again
+(ADR-0084).
+_Avoid_: dictionary entry, custom vocabulary (a list the recognizer is biased
+toward, which is out of scope), replacement rule (unqualified), autocorrect,
+snippet.
+
+**Catch**:
+One application of a **Learned Word** to a take: the misheard words it replaced in
+that take's text. Counted per day once the take commits (a rejected, failed or
+superseded take caught nothing); a catch the owner fixes back in the **Lens** is
+taken back.
+_Avoid_: correction or fix (the owner's act; a catch is the app's), hit, match.
+
+**Lens**:
+The dictation card where a take is fixed: a glass panel at the bottom center of the
+screen that the fix hotkey (⌃⌥Space) opens on the last take. The owner types the
+word they meant; the Lens picks the words that sound like it (← → or a click pick by
+hand). A fix makes the take's **Correction Pair** gold, teaches a **Learned Word**
+when it is a mishearing, and goes back into the app while the pasted text is still
+the last thing typed there. It takes the keyboard only while a take is being fixed and gives focus
+back when done (ADR-0084). For now the recording overlay is still the **Overlay
+Variant**; the Lens becomes the one dictation overlay when it streams (PRD #612).
+_Avoid_: overlay (unqualified: the **Overlay Panel** hosts the recording overlay),
+editor, fix window, popup, history editor (the full-text editor in the history
+window).
 
 ### Voice session (Companion)
 
@@ -2420,7 +2460,8 @@ One live dictation-overlay design exploration (map #283): a hosted view over
 the shared **Overlay Feed** plus the **Overlay Placement** of the canvas it
 draws in, selected at runtime by a **Setting** and switchable live. Exploration
 scaffolding — the registry and its Setting are deleted when the redesign
-program prunes to one winner.
+program prunes to one winner. The winner is the **Lens** (Voice capture), which
+today only fixes a take and takes over recording when it streams (PRD #612).
 _Avoid_: theme, skin, style, prototype window (variants live in the real
 panel), a permanent plugin surface (it is scaffolding).
 

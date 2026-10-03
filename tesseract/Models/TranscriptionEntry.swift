@@ -7,7 +7,8 @@ import Foundation
 
 struct TranscriptionEntry: Identifiable, Codable, Sendable {
     let id: UUID
-    let text: String
+    /// What the take wrote; a fix in the **Lens** rewrites it.
+    var text: String
     let timestamp: Date
     let duration: TimeInterval
     let model: String

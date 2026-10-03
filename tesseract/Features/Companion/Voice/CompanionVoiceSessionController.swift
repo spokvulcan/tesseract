@@ -250,6 +250,8 @@ final class CompanionVoiceSessionController {
         switch capture.stop() {
         case .noAudio, .tooShort:
             return .takeUnusable(reason: "no-audio")
+        case .silent:
+            return .takeUnusable(reason: "silent")
         case .audio(let audio, _):
             let language = settings.language
             var proofread: (@MainActor (String) async -> ProofreadVerdict?)?
