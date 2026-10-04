@@ -385,6 +385,10 @@ nonisolated enum OpenAI {
 
     struct ModelListResponse: Codable, Sendable {
         var object: String = "list"
+        /// The app's marketing version, so benchmark clients can record
+        /// which build served them. Not part of the OpenAI schema; clients
+        /// that don't know it ignore it.
+        var server_version: String?
         var data: [ModelObject]
     }
 

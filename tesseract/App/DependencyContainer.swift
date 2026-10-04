@@ -1056,8 +1056,11 @@ final class DependencyContainer: ObservableObject {
                             state: isLoaded ? "loaded" : "available"
                         )
                     }
-                return (try? JSONEncoder().encode(OpenAI.ModelListResponse(data: models)))
-                    ?? Data("{}".utf8)
+                let version =
+                    Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
+                    as? String
+                let response = OpenAI.ModelListResponse(server_version: version, data: models)
+                return (try? JSONEncoder().encode(response)) ?? Data("{}".utf8)
             }
             try await writer.send(.jsonBody(data))
         }

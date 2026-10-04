@@ -485,7 +485,7 @@ CONTEXT.md → LLM gate.
 `CompletionHandler`) that drives the same `LLMActor` through the LLM gate. The
 public surface is `/health`, `/v1/models`, `/v1/chat/completions`, plus
 integration endpoints under `/integrations/opencode/`. `/v1/models` lists
-downloaded agent models only; `/v1/chat/completions` honors `request.model` for
+downloaded agent models only, with the app version as `server_version`; `/v1/chat/completions` honors `request.model` for
 downloaded in-catalog models, falls back to the selected agent model when the
 field is omitted, and returns OpenAI-shaped `model_not_found` for unknown or
 undownloaded IDs.
