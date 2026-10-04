@@ -92,6 +92,7 @@
 				Audio/AudioMeter.swift,
 				Audio/CaptureDumpStore.swift,
 				Audio/CaptureEngineLifecycle.swift,
+				Audio/CaptureLevel.swift,
 				Audio/SystemAudioDucking.swift,
 				Audio/VoiceProcessingDuckPolicy.swift,
 				DictationPerf.swift,
@@ -99,6 +100,7 @@
 				MLXCheckedEvaluation.swift,
 				Permissions/PermissionsManager.swift,
 				PreviewHelpers.swift,
+				TargetApp.swift,
 				ViewModifiers.swift,
 				VisualEffectView.swift,
 				VoiceCaptureSession.swift,
@@ -154,6 +156,7 @@
 			membershipExceptions = (
 				AudioData.swift,
 				AudioDevice.swift,
+				CheckBeforePasting.swift,
 				DictationError.swift,
 				KeyCombo.swift,
 				NavigationItem.swift,
