@@ -5,8 +5,9 @@
 //  The phone's Model Fetching adapter (#515): Hugging Face files over a
 //  background URLSession, so the voice goes on downloading with the screen
 //  locked, a dropped connection resumes mid-file, and a relaunched app
-//  rejoins the transfer in flight. Wi-Fi only unless the owner allows
-//  cellular. The download manager above the port is the Mac's.
+//  rejoins the transfer in flight, or takes the file it finished meanwhile.
+//  Wi-Fi only unless the owner allows cellular. The download manager above
+//  the port is the Mac's.
 //
 
 import CryptoKit
@@ -45,6 +46,12 @@ final class PhoneModelFetching: RangedModelFetching {
     /// called once the session has handed them all over.
     func handleEvents(completion: @escaping @Sendable () -> Void) {
         transfers.setEventsFinished(completion)
+    }
+
+    /// Forgets what interrupted and finished-while-away transfers left behind:
+    /// the files they were for are gone.
+    func discardLeftovers() {
+        transfers.discardLeftovers()
     }
 
     // MARK: - Model Fetching
@@ -137,10 +144,12 @@ final class PhoneModelFetching: RangedModelFetching {
     }
 }
 
-/// The background URLSession and its delegate. A transfer's destination
-/// rides in its task description, so a file finished while the app was
-/// gone still lands where it belongs; a failure's resume data is kept on
-/// disk, so the next try continues mid-file.
+/// The background URLSession and its delegate. A file finished while the
+/// app was gone waits on disk for the next fetch of the same bytes, which
+/// finishes it as any other (a ranged file's length, a trimmed file's
+/// header), so the model's folder never holds a file nobody finished. A
+/// failure's resume data is kept on disk too, so the next try continues
+/// mid-file.
 nonisolated final class BackgroundTransfers: NSObject, URLSessionDownloadDelegate,
     @unchecked Sendable
 {
@@ -175,11 +184,13 @@ nonisolated final class BackgroundTransfers: NSObject, URLSessionDownloadDelegat
         lock.withLock { eventsFinished = completion }
     }
 
-    /// Downloads `request` into `destination`: joining a transfer of the same
-    /// bytes already running, or continuing from resume data a failed one
-    /// left.
+    /// Downloads `request` into `destination`: taking the file a transfer of
+    /// the same bytes finished while the app was gone, joining one already
+    /// running, or continuing from resume data a failed one left.
     func download(_ request: URLRequest, to destination: URL) async throws {
         let key = Self.key(request)
+        lock.withLock { retries[key] = nil }
+        if try takeFinished(for: key, to: destination) { return }
         let running = await session.allTasks.first {
             $0.state == .running && $0.originalRequest.map(Self.key) == key
         }
@@ -221,8 +232,17 @@ nonisolated final class BackgroundTransfers: NSObject, URLSessionDownloadDelegat
             lock.withLock { failures[id] = URLError(.badServerResponse) }
             return
         }
-        guard let path = downloadTask.taskDescription else { return }
-        let destination = URL(fileURLWithPath: path)
+        // A fetch waiting for the file finishes it at its destination. With
+        // none waiting, the app was gone: the file waits for the next fetch.
+        let waited = lock.withLock { waiting[id] != nil }
+        let destination: URL
+        if waited, let path = downloadTask.taskDescription {
+            destination = URL(fileURLWithPath: path)
+        } else if !waited, let request = downloadTask.originalRequest {
+            destination = finishedURL(for: Self.key(request))
+        } else {
+            return
+        }
         do {
             try? FileManager.default.removeItem(at: destination)
             try FileManager.default.createDirectory(
@@ -270,6 +290,7 @@ nonisolated final class BackgroundTransfers: NSObject, URLSessionDownloadDelegat
             next.resume()
             return
         }
+        lock.withLock { retries[key] = nil }
         continuation?.resume(throwing: cancelled ? CancellationError() : error)
     }
 
@@ -289,8 +310,35 @@ nonisolated final class BackgroundTransfers: NSObject, URLSessionDownloadDelegat
     }
 
     private func resumeURL(for key: String) -> URL {
-        let digest = SHA256.hash(data: Data(key.utf8)).prefix(16).map { String(format: "%02x", $0) }
-        return resumeDirectory.appendingPathComponent(digest.joined() + ".resume")
+        resumeDirectory.appendingPathComponent(Self.digest(key) + ".resume")
+    }
+
+    /// Where a transfer of `key` that finished with no fetch waiting keeps
+    /// its file.
+    private func finishedURL(for key: String) -> URL {
+        resumeDirectory.appendingPathComponent(Self.digest(key) + ".finished")
+    }
+
+    private static func digest(_ key: String) -> String {
+        SHA256.hash(data: Data(key.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Moves the file a transfer of `key` finished while the app was gone to
+    /// `destination`, if there is one.
+    private func takeFinished(for key: String, to destination: URL) throws -> Bool {
+        let finished = finishedURL(for: key)
+        guard FileManager.default.fileExists(atPath: finished.path) else { return false }
+        try? FileManager.default.removeItem(at: destination)
+        try FileManager.default.moveItem(at: finished, to: destination)
+        try? FileManager.default.removeItem(at: resumeURL(for: key))
+        return true
+    }
+
+    /// Removes every transfer's resume data and finished file.
+    func discardLeftovers() {
+        let files = try? FileManager.default.contentsOfDirectory(
+            at: resumeDirectory, includingPropertiesForKeys: nil)
+        for file in files ?? [] { try? FileManager.default.removeItem(at: file) }
     }
 
     private func resumeData(for key: String) -> Data? {

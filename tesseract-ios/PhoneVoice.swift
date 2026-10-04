@@ -212,6 +212,7 @@ final class PhoneVoice {
         stopped = false
         setRequested(false)
         downloads.deleteModel(modelID: model.id)
+        fetching.discardLeftovers()
         for item
             in (try? FileManager.default.contentsOfDirectory(
                 at: Self.graphsDirectory, includingPropertiesForKeys: nil)) ?? []
