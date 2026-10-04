@@ -48,10 +48,13 @@ final class SpeechReader {
     @ObservationIgnored var liveText: (() -> String)?
     /// The text view's selection: Play reads a selection when there is one.
     @ObservationIgnored var selection: NSRange?
+    /// The text's language (a `TTSLanguage` raw value) when it is known, as
+    /// the phone's Library knows each text's; nil reads in the setting's.
+    @ObservationIgnored var language: String?
 
     @ObservationIgnored private let coordinator: SpeechCoordinator
     @ObservationIgnored private let readAlong: SpeechReadAlong
-    @ObservationIgnored private let settings: SettingsManager
+    @ObservationIgnored private let settings: any SpeechSettings
     @ObservationIgnored private let store: ReaderDocumentStore
     @ObservationIgnored private var session: ReadingSession?
     @ObservationIgnored private var saveTask: Task<Void, Never>?
@@ -59,7 +62,7 @@ final class SpeechReader {
     @ObservationIgnored private var lastSavedBookmark: Int
 
     init(
-        coordinator: SpeechCoordinator, readAlong: SpeechReadAlong, settings: SettingsManager,
+        coordinator: SpeechCoordinator, readAlong: SpeechReadAlong, settings: any SpeechSettings,
         store: ReaderDocumentStore = ReaderDocumentStore()
     ) {
         self.coordinator = coordinator
@@ -123,6 +126,16 @@ final class SpeechReader {
     /// progress bar, "Read from Here".
     func read(from offset: Int) {
         read(from: offset, in: currentText() as NSString)
+    }
+
+    /// A tap on the text at `offset`: reading jumps to the sentence there,
+    /// or, at rest, the bookmark moves to it.
+    func jump(to offset: Int) {
+        let text = (session?.text) ?? (currentText() as NSString)
+        guard text.length > 0 else { return }
+        let start = ReaderText.sentenceStart(
+            containing: min(max(offset, 0), text.length - 1), in: text)
+        if isReading { begin(text, from: start) } else { setBookmark(start) }
     }
 
     func togglePause() {
@@ -225,7 +238,8 @@ final class SpeechReader {
         isReading = true
         highlight = nil
         setBookmark(start)
-        coordinator.speakText(snapshot.substring(with: spoken), userInitiated: true)
+        coordinator.speakText(
+            snapshot.substring(with: spoken), userInitiated: true, language: language)
     }
 
     /// Maps the heard word onto the text, claiming the utterance first: it is

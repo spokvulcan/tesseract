@@ -41,6 +41,15 @@ nonisolated struct ReaderDocumentStore: Sendable {
         return (text, min(max(bookmark.offset, 0), bookmark.length))
     }
 
+    /// Where the saved bookmark sits and how long the text was when it was
+    /// saved, without reading the text: what a list of texts shows.
+    func loadBookmark() -> (offset: Int, length: Int)? {
+        guard let data = try? Data(contentsOf: bookmarkURL),
+            let bookmark = try? JSONDecoder().decode(Bookmark.self, from: data)
+        else { return nil }
+        return (min(max(bookmark.offset, 0), bookmark.length), bookmark.length)
+    }
+
     func save(text: String) {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try? text.write(to: textURL, atomically: true, encoding: .utf8)

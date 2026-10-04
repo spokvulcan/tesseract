@@ -391,6 +391,51 @@ The eagerness suite also holds the Model Session at a toy forward to verify
 cancellation and replacement before enqueue preserve the view's SSD intent;
 a busy Storage Activity Gate must not delay a pressure-triggered write-through.
 
+## The iPhone app
+
+`tesseract-ios` has no test target: the code it shares with the Mac is tested
+in `tesseractTests`, and no test runs on a device. The phone's shared rules have
+their own suites: `ReaderLibraryTests` (the **Library**: add, order, delete,
+each text's Bookmark and language, a relaunch), `PhoneSettingsTests` (the phone's
+Settings Facade over the shared Catalogue keys), `TTSLanguageTests` (a text's
+language among the voice's ten), and `SpeechReaderTests`' tap and language
+cases, and `TextIntakeTests` (a saved news page gives its article and not its
+menus, ads or comments; a PDF's lines join back into paragraphs; Markdown loses
+its marks; Safari's script results, plain text and a PDF from the share sheet;
+the **Library Inbox** handing texts to the Library), `PocketControlsTests` (a
+call stops the reading and it goes on from the heard sentence; lost headphones
+stop it; the lock screen's buttons play, pause and skip by sentence; a pause
+becomes a stop when the app leaves the screen), `ThermalPolicyTests` and
+`ReadingMeterTests` (each segment's real-time factor from the engine's
+diagnostics marks, and the report a TestFlight tester copies),
+`SpeedCheckTests` (a measured real-time factor in; the neural voice or the
+System Voice, and the speed menu's rates, out), `TrimmingModelFetchingTests`
+(the codec's decoder kept from a file that also holds its encoder: the header
+rewritten in place, MLX loading what is left, and the download manager
+fetching only those bytes over the in-memory peer) and `ModelCatalogTests`'
+phone entry. The package's
+`SystemVoiceSynthesizerTests` drive the **System Voice**
+adapter with a scripted renderer: resampling to 24 kHz, whole frames, and word
+marks turned into word starts that never run ahead of their audio, and its
+`VoiceHandoverTests` the switch between the neural voice and the System Voice,
+which lands on a segment boundary with the frames gapless across it, and a
+segment the neural voice fails: read by the System Voice when it failed before
+its audio, ending the utterance when it failed partway. The
+phone's own adapters (the background download, `PhoneVoice`) are checked on
+the device; on this Mac, `v2-listen --mode phone` runs the phone's speech stack
+(MLX on the CPU, the voice on the Neural Engine, its Voice Preparation twice and
+the Speed Check's render) on the 0.6B checkpoint, and prints the memory
+footprint iOS counts after each preparation and the reading. CI's
+`build-ios` job only builds it. Build it the same way before pushing a change
+to a shared folder (ARCHITECTURE.md → The iPhone app), so a Mac-only file that
+slipped into one fails here rather than in CI:
+
+```bash
+xcodebuild build -project tesseract.xcodeproj -scheme tesseract-ios \
+  -configuration Debug -destination 'generic/platform=iOS' \
+  -derivedDataPath DerivedData -skipPackagePluginValidation CODE_SIGNING_ALLOWED=NO
+```
+
 ## Live detokenization and stream parity
 
 `LiveStreamingDetokenizerTests` loads a tiny real BPE tokenizer through
@@ -1057,7 +1102,9 @@ approval requirement in the capture baseline still applies to #480.
     follows, the ADR-0072 Reference Take rules: the lead
     segment becomes the take, later segments and utterances continue it,
     a pinned voice round-trips, a cancelled retake keeps the old take,
-    schema-1 voices are rejected; `SegmenterTests` for the short lead
+    schema-1 voices are rejected; a Preset Voice takes no Reference Take and
+    an unknown one is refused when its session opens (ADR-0084);
+    `SegmenterTests` for the short lead
     segment; `ModelAvailabilityTests`: a missing checkpoint fails before any
     load; word starts shifted to the utterance's frames) and
     `Qwen3CheckpointTests` (the Voice Engine completeness rule, and
@@ -1090,6 +1137,17 @@ approval requirement in the capture baseline still applies to #480.
       overlapping generations render as if alone.
     - The Core ML conv stack (ADR-0075) matches MLX's. It is compiled for
       the CPU, so no Neural Engine is needed.
+    - The Neural Engine voice (ADR-0088, `Qwen3TTSNeuralTests`, also
+      compiled for the CPU): the talker's step gives MLX's logits, hidden
+      state and Alignment Head scores position by position, with its cache
+      in Core ML state and another session's steps in between changing
+      nothing; it refuses a position past its cache. The code predictor's
+      frame gives MLX's greedy codes and embedding sum, draws the best of the
+      top k plus the same Gumbel noise, never draws from outside the top k,
+      and a layer whose MLP product outgrows fp16 is found by measuring and
+      still matches. The host sampler keeps the talker's rules (no control
+      codes, EOS held back, the penalty, ties at the cut, the nucleus), and a
+      prepared voice renders, the same again for the same seed.
 
     MLX needs Metal, so run both suites through xcodebuild, from
     `Vendor/tesseract-speech`:
@@ -1129,6 +1187,19 @@ approval requirement in the capture baseline still applies to #480.
     the MLX ops on real data. A kernel change must still show identical codes
     and 0 mismatching calls.
   - `--mode neural`: builds and times the Neural Engine codec.
+  - `--mode neural-voice` (the 0.6B CustomVoice checkpoint, `--voice` a
+    speaker): prepares the talker and the code predictor on the Neural
+    Engine (placement, the precision MLX measured, the check against MLX),
+    then teacher-forced parity on `--golden` frames, the stages before the
+    first audio, time per call, and `--repeat` renders at consecutive seeds,
+    with `--mlx-renders` the same renders on MLX first. The 2026-10-03
+    numbers are in ADR-0088.
+- Neural Engine op placement (`ane-lab`, no weights): builds tiny ML
+  programs with the package's `MLProgramBuilder` and prints where Core ML's
+  compute plan puts each op on this machine, or with `--time` the latency of
+  weight-heavy stacks in each weight format. Build the `ane-lab` scheme with
+  xcodebuild, as for `v2-listen`; `ane-lab conv` runs the probes whose name
+  contains `conv`. ADR-0088's format choices come from it.
 - Vendor DFlash2 tests (`swift test --filter DFlash2` in `Vendor/mlx-swift-lm`):
   run with `--no-parallel`. Two of the parity tests load the 27B target each;
   in parallel they contend the single GPU until a Metal command buffer hits

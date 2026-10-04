@@ -2621,6 +2621,50 @@ _Avoid_: dismissal, close animation.
 
 ### Phone (ADR-0066, ADR-0084)
 
+**Library**:
+Every text the owner has added on the phone, newest first, each with its own
+**Bookmark** and the language it is read in. The Mac's **Reader** holds one
+text; the phone's Reader opens one text of the Library at a time, and keeps
+reading it while the owner browses the others.
+_Avoid_: documents, reading list, queue (nothing plays one text after another).
+
+**Library Inbox**:
+Where the share sheet's "Read in Tesseract" leaves a text for the **Library**:
+a folder the app and its extension share. The extension only drops texts
+there; the app takes them in, and opens the newest, when it next comes to the
+front.
+_Avoid_: share queue, pending imports.
+
+**Thermal Policy**:
+The rule from the phone's thermal state to what the voice does: nominal or
+fair, the neural voice reads; serious, the **System Voice** reads from the
+next segment until the phone is back to fair; critical, reading stops. The
+Reader says why each time. It changes the voice, not the pacing: reading
+ahead in bursts or just in time costs the same per second of audio.
+_Avoid_: heat throttling, cooldown mode.
+
+**System Voice**:
+The phone's own speech synthesizer, reading where the neural voice can't:
+while that voice downloads or is prepared, on a phone too slow for it, and
+while the phone cools down. It reads in the text's language and is never a
+voice identity: the chosen **Preset Voice** stays chosen while it reads.
+_Avoid_: fallback voice, backup voice, Apple voice.
+
+**Voice Preparation**:
+Turning the downloaded checkpoint into the Neural Engine graphs this phone
+runs: building and compiling them, checking them against the checkpoint, and
+the **Speed Check**. The first one takes minutes; it runs again only when the
+graphs or the checkpoint change, and every later launch only loads what it
+built, in seconds. The **System Voice** reads meanwhile.
+_Avoid_: installation, compilation, setup.
+
+**Speed Check**:
+The timed render at the end of **Voice Preparation** that says whether this
+phone's neural voice keeps up. A phone too slow for normal speed reads with the
+**System Voice** and says why; one that keeps up at some speeds but not all
+offers only those in the speed menu.
+_Avoid_: benchmark, performance test.
+
 **Device Tier**:
 The phone's sizing class, read once at launch from physical memory. It is the
 one answer to every "how much fits on this phone" question: context window,

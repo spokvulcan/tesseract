@@ -38,6 +38,12 @@ public struct TTSModelSpec: Sendable, Equatable, Codable {
             precision: precision, alignmentHead: .qwen3TTS17B)
     }
 
+    /// The iPhone's checkpoint (ADR-0084): 0.6B CustomVoice, whose nine
+    /// speakers are the Preset Voices, at the 8 bits it is published in.
+    public static let customVoice06B = TTSModelSpec(
+        repo: "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit", precision: .q8,
+        alignmentHead: .qwen3TTS06B)
+
     /// Fingerprint component for PinnedVoice compatibility checks: a take
     /// only conditions the checkpoint and precision that rendered it.
     public var fingerprint: String { "\(repo)#\(precision.rawValue)" }
@@ -72,10 +78,16 @@ public enum Voice: Sendable, Equatable {
     /// A designed voice with its Reference Take: survives sessions and
     /// relaunches.
     case pinned(PinnedVoice)
+    /// A Preset Voice: one of a CustomVoice checkpoint's own speakers, by the
+    /// checkpoint's name for it. Never designed, and it needs no Reference
+    /// Take: every segment renders from the speaker alone (ADR-0084). A
+    /// speaker the checkpoint doesn't have is refused when the session
+    /// opens.
+    case preset(speaker: String, language: String?)
 
     var description: String? {
         switch self {
-        case .standard: return nil
+        case .standard, .preset: return nil
         case .designed(let d, _): return d.isEmpty ? nil : d
         case .pinned(let p): return p.voiceDescription
         }
@@ -83,9 +95,15 @@ public enum Voice: Sendable, Equatable {
 
     var language: String? {
         switch self {
-        case .standard(let l), .designed(_, let l): return l
+        case .standard(let l), .designed(_, let l), .preset(_, let l): return l
         case .pinned(let p): return p.language
         }
+    }
+
+    /// A Preset Voice's speaker.
+    var speaker: String? {
+        if case .preset(let speaker, _) = self { return speaker }
+        return nil
     }
 }
 
@@ -250,6 +268,20 @@ public enum Readiness: Int, Sendable, Equatable, Comparable {
     }
 }
 
+/// A stage of preparing the phone's voice for the Neural Engine (ADR-0084),
+/// for its progress.
+public enum VoicePreparationPhase: Sendable, Equatable {
+    /// The checkpoint loads.
+    case loading
+    /// MLX measures the checkpoint: the first time only.
+    case measuring
+    /// One of the voice's graphs is built and compiled, or loaded as built
+    /// before: the codec, the talker, the code predictor.
+    case building(String)
+    /// The graphs are checked against MLX: the first time only.
+    case checking
+}
+
 /// No download phase: the engine only loads a checkpoint already on disk.
 /// Fetching it is the app's model download manager's job.
 public enum EnginePhase: Sendable, Equatable {
@@ -364,6 +396,8 @@ public enum SpeechEngineError: Error, Sendable, Equatable {
     case generationFailed(String)
     case sessionClosed
     case engineUnloaded
+    /// A Preset Voice the checkpoint has no speaker for.
+    case unknownVoice(String)
 }
 
 extension SpeechEngineError: LocalizedError {
@@ -379,6 +413,8 @@ extension SpeechEngineError: LocalizedError {
             return "The speech session is closed."
         case .engineUnloaded:
             return "The speech engine is unloaded."
+        case .unknownVoice(let speaker):
+            return "The voice model has no speaker named \(speaker)."
         }
     }
 }

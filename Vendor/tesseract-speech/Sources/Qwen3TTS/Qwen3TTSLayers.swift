@@ -159,6 +159,9 @@ final class Qwen3TTSMLP: Module {
     @ModuleInfo(key: "gate_proj") var gateProj: Linear?
     @ModuleInfo(key: "up_proj") var upProj: Linear?
     @ModuleInfo(key: "down_proj") var downProj: Linear
+    /// Sees each product `silu(gate) · up`, while the Neural Engine graphs
+    /// measure how large it grows (`NeuralPrecision`).
+    var productProbe: ((MLXArray) -> Void)?
 
     init(hiddenSize: Int, intermediateSize: Int, fused: Bool) {
         if fused {
@@ -171,11 +174,15 @@ final class Qwen3TTSMLP: Module {
     }
 
     func callAsFunction(_ x: MLXArray) -> MLXArray {
+        let product: MLXArray
         if let gateUpProj {
             let (gate, up) = gateUpProj(x).split(axis: -1)
-            return downProj(compiledSwiGLU(gate, up))
+            product = compiledSwiGLU(gate, up)
+        } else {
+            product = compiledSwiGLU(gateProj!(x), upProj!(x))
         }
-        return downProj(compiledSwiGLU(gateProj!(x), upProj!(x)))
+        productProbe?(product)
+        return downProj(product)
     }
 }
 

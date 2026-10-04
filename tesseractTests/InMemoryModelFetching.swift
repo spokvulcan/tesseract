@@ -44,7 +44,9 @@ final class InMemoryModelFetching: ModelFetching {
     /// Repos listed via `listFiles`, in order.
     private(set) var listedRepos: [String] = []
     /// Files fetched via `fetchFile`, in order, as "repo/path".
-    private(set) var fetchedFiles: [String] = []
+    fileprivate(set) var fetchedFiles: [String] = []
+    /// Ranged reads of a file's start (`RangedModelFetching`).
+    fileprivate(set) var prefixFetches = 0
 
     init(repos: [String: [ScriptedFile]] = [:]) {
         self.repos = repos
@@ -72,6 +74,33 @@ final class InMemoryModelFetching: ModelFetching {
         try FileManager.default.createDirectory(
             at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         try (file.contents ?? Data(count: file.size)).write(to: destination)
+    }
+}
+
+/// Ranged fetches, for `TrimmingModelFetching`: the scripted file's first
+/// bytes. `prefixFetches` counts the header reads.
+extension InMemoryModelFetching: RangedModelFetching {
+    func fetchPrefix(of path: String, from repo: String, length: Int) async throws -> Data {
+        prefixFetches += 1
+        return try scripted(path, in: repo).prefix(length)
+    }
+
+    func fetchFile(at path: String, from repo: String, to destination: URL, length: Int)
+        async throws
+    {
+        fetchedFiles.append("\(repo)/\(path) (first \(length) bytes)")
+        try FileManager.default.createDirectory(
+            at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try scripted(path, in: repo).prefix(length).write(to: destination)
+    }
+
+    private func scripted(_ path: String, in repo: String) throws -> Data {
+        guard let file = repos[repo]?.first(where: { $0.path == path }) else {
+            throw NSError(
+                domain: "InMemoryModelFetching", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Unscripted file \(repo)/\(path)"])
+        }
+        return file.contents ?? Data(count: file.size)
     }
 }
 

@@ -5,10 +5,11 @@ import Foundation
 // (Model.proto and MIL.proto, coremltools' `mlmodel/format`, BSD-3), its
 // weight blob file (MILBlob storage format v2) and the `.mlpackage` layout.
 //
-// It knows exactly what one fixed, static-shaped fp16 graph needs: tensor
-// inputs and outputs, `const` ops (immediate or blob-backed) and ordinary
-// ops whose output types the caller states. It is not a MIL compiler; Core
-// ML's own compiler validates and optimizes what it writes.
+// It knows what our fixed, static-shaped fp16 graphs need: tensor inputs and
+// outputs, states (Core ML 8), `const` ops (immediate or blob-backed), weights
+// stored as 8-bit blocks, and ordinary ops whose output types the caller
+// states. It is not a MIL compiler; Core ML's own compiler validates and
+// optimizes what it writes.
 
 // MARK: - Protobuf
 
@@ -62,6 +63,13 @@ struct ProtobufWriter {
         bytes(field, inner.data)
     }
 
+    /// A packed repeated float field.
+    mutating func packedFloats(_ field: Int, _ values: [Float]) {
+        var raw = Data(capacity: values.count * 4)
+        for v in values { withUnsafeBytes(of: v.bitPattern.littleEndian) { raw.append(contentsOf: $0) } }
+        bytes(field, raw)
+    }
+
     /// A `map<string, V>` entry.
     mutating func mapEntry(_ field: Int, key: String, _ value: (inout ProtobufWriter) -> Void) {
         message(field) { entry in
@@ -73,27 +81,54 @@ struct ProtobufWriter {
 
 // MARK: - MIL
 
-/// A tensor in a MIL program: its name and static type.
-struct MILVar {
-    let name: String
-    let type: MILType
+/// A tensor (or a state wrapping one) in a MIL program: its name and static type.
+package struct MILVar {
+    package let name: String
+    package let type: MILType
 }
 
-struct MILType: Equatable {
-    enum DataType: Int64 {
+package struct MILType: Equatable {
+    package enum DataType: Int64 {
         case bool = 1
         case string = 2
         case float16 = 10
         case float32 = 11
+        case int8 = 21
         case int32 = 23
+        case uint8 = 31
+        case uint4 = 35
     }
-    let dataType: DataType
-    let shape: [Int]
+    package let dataType: DataType
+    package let shape: [Int]
+    /// A state wrapping this tensor type (Core ML 8): an input the model reads
+    /// with `read_state` and writes with `write_state`, kept between calls.
+    package var isState = false
 
-    static func fp16(_ shape: [Int]) -> MILType { .init(dataType: .float16, shape: shape) }
+    package init(dataType: DataType, shape: [Int], isState: Bool = false) {
+        self.dataType = dataType
+        self.shape = shape
+        self.isState = isState
+    }
 
-    /// MIL.proto `ValueType` { tensorType { dataType rank dimensions } }.
+    package static func fp16(_ shape: [Int]) -> MILType { .init(dataType: .float16, shape: shape) }
+    package static func fp32(_ shape: [Int]) -> MILType { .init(dataType: .float32, shape: shape) }
+    package static func int32(_ shape: [Int]) -> MILType { .init(dataType: .int32, shape: shape) }
+    package static func bool(_ shape: [Int]) -> MILType { .init(dataType: .bool, shape: shape) }
+    /// An fp16 tensor state.
+    package static func state(_ shape: [Int]) -> MILType {
+        .init(dataType: .float16, shape: shape, isState: true)
+    }
+
+    /// The tensor a state wraps.
+    package var wrapped: MILType { .init(dataType: dataType, shape: shape) }
+
+    /// MIL.proto `ValueType` { tensorType { dataType rank dimensions } }, or
+    /// `stateType { wrappedType { tensorType … } }`.
     func write(_ w: inout ProtobufWriter) {
+        guard !isState else {
+            w.message(5) { state in state.message(1) { wrapped.write(&$0) } }
+            return
+        }
         w.message(1) { t in
             t.int(1, dataType.rawValue)
             t.int(2, Int64(shape.count))
@@ -106,14 +141,14 @@ struct MILType: Equatable {
 
 /// Builds one MIL function: typed inputs, ops in topological order, named
 /// outputs. Weights go to a `MILBlobWriter`.
-final class MILFunctionBuilder {
-    private(set) var inputs: [MILVar] = []
+package final class MILFunctionBuilder {
+    package private(set) var inputs: [MILVar] = []
     private var operations: [Data] = []
-    private(set) var outputs: [MILVar] = []
+    package private(set) var outputs: [MILVar] = []
     private var count = 0
-    let blobs: MILBlobWriter
+    package let blobs: MILBlobWriter
 
-    init(blobs: MILBlobWriter) {
+    package init(blobs: MILBlobWriter) {
         self.blobs = blobs
     }
 
@@ -122,13 +157,13 @@ final class MILFunctionBuilder {
         return "\(prefix)_\(count)"
     }
 
-    func input(_ name: String, _ type: MILType) -> MILVar {
+    package func input(_ name: String, _ type: MILType) -> MILVar {
         let v = MILVar(name: name, type: type)
         inputs.append(v)
         return v
     }
 
-    func output(_ v: MILVar) {
+    package func output(_ v: MILVar) {
         outputs.append(v)
     }
 
@@ -149,29 +184,29 @@ final class MILFunctionBuilder {
         return v
     }
 
-    func ints(_ values: [Int]) -> MILVar {
+    package func ints(_ values: [Int]) -> MILVar {
         let type = MILType(dataType: .int32, shape: [values.count])
         return const(type) {
             Self.immediateValue(&$0, type, field: 2) { $0.packed(1, values.map(Int64.init)) }
         }
     }
 
-    func int(_ value: Int) -> MILVar {
+    package func int(_ value: Int) -> MILVar {
         let type = MILType(dataType: .int32, shape: [])
         return const(type) { Self.immediateValue(&$0, type, field: 2) { $0.packed(1, [Int64(value)]) } }
     }
 
-    func bool(_ value: Bool) -> MILVar {
+    package func bool(_ value: Bool) -> MILVar {
         let type = MILType(dataType: .bool, shape: [])
         return const(type) { Self.immediateValue(&$0, type, field: 3) { $0.packed(1, [value ? 1 : 0]) } }
     }
 
-    func string(_ value: String) -> MILVar {
+    package func string(_ value: String) -> MILVar {
         const(MILType(dataType: .string, shape: [])) { Self.stringValue(value, &$0) }
     }
 
     /// An fp16 scalar, stored as its two bytes (how MIL writes fp16).
-    func half(_ value: Float) -> MILVar {
+    package func half(_ value: Float) -> MILVar {
         let type = MILType.fp16([])
         let bits = Float16(value).bitPattern
         return const(type) {
@@ -181,18 +216,78 @@ final class MILFunctionBuilder {
         }
     }
 
+    /// A small fp16 tensor written inline: positions' rotations, masks.
+    package func halves(_ values: [Float], shape: [Int]) -> MILVar {
+        precondition(values.count == shape.reduce(1, *), "\(values.count) values vs \(shape)")
+        let type = MILType.fp16(shape)
+        var raw = Data(capacity: values.count * 2)
+        for v in values {
+            let bits = Float16(v).bitPattern
+            raw.append(UInt8(bits & 0xFF))
+            raw.append(UInt8(bits >> 8))
+        }
+        return const(type) { Self.immediateValue(&$0, type, field: 7) { $0.bytes(1, raw) } }
+    }
+
     /// An fp16 tensor `shape` from the blob file: `values`' bytes.
-    func weight(_ values: MLXArray, shape: [Int]) -> MILVar {
+    package func weight(_ values: MLXArray, shape: [Int]) -> MILVar {
         precondition(values.size == shape.reduce(1, *), "weight size \(values.size) vs \(shape)")
         let offset = blobs.append(values)
-        let type = MILType.fp16(shape)
-        return const(type) { v in
+        return blobConst(MILType.fp16(shape), offset: offset)
+    }
+
+    /// A tensor of `type` whose bytes are at `offset` in the blob file.
+    package func blobConst(_ type: MILType, offset: UInt64) -> MILVar {
+        const(type) { v in
             v.message(2) { type.write(&$0) }
             v.message(5) { blob in
                 blob.string(1, "@model_path/weights/weight.bin")
                 blob.int(2, Int64(offset))
             }
         }
+    }
+
+    /// A weight kept as 8-bit blocks (Core ML 8's `constexpr_blockwise_shift_scale`):
+    /// `scale * (data - offset)` per block, fp16 out. `data` is `shape`'s
+    /// unsigned bytes; `scale` and `offset` are fp16 with `blocks` per row,
+    /// shaped like `data` with its last axis divided by the block size.
+    package func blockwiseWeight(
+        data: Data, scale: Data, offset: Data, shape: [Int], blockShape: [Int]
+    ) -> MILVar {
+        precondition(data.count == shape.reduce(1, *), "data \(data.count) vs \(shape)")
+        precondition(scale.count == blockShape.reduce(1, *) * 2 && offset.count == scale.count)
+        let q = blobConst(
+            MILType(dataType: .uint8, shape: shape), offset: blobs.append(bytes: data, type: .uint8))
+        let s = blobConst(.fp16(blockShape), offset: blobs.append(bytes: scale, type: .float16))
+        let o = blobConst(.fp16(blockShape), offset: blobs.append(bytes: offset, type: .float16))
+        return op(
+            "constexpr_blockwise_shift_scale", [("data", [q]), ("scale", [s]), ("offset", [o])],
+            .fp16(shape))
+    }
+
+    /// A palettized weight (Core ML 8's `constexpr_lut_to_dense`): `indices`,
+    /// one byte per value of `shape`, into fp16 tables of 256 values. `lutShape`
+    /// is `shape` divided into the groups that share a table, then 256, then
+    /// 1 (scalar entries).
+    package func palettizedWeight(
+        indices: Data, lut: Data, shape: [Int], lutShape: [Int]
+    ) -> MILVar {
+        precondition(indices.count == shape.reduce(1, *), "indices \(indices.count) vs \(shape)")
+        precondition(lut.count == lutShape.reduce(1, *) * 2, "lut \(lut.count) vs \(lutShape)")
+        let i = blobConst(
+            MILType(dataType: .uint8, shape: shape), offset: blobs.append(bytes: indices, type: .uint8))
+        let l = blobConst(.fp16(lutShape), offset: blobs.append(bytes: lut, type: .float16))
+        return op("constexpr_lut_to_dense", [("indices", [i]), ("lut", [l])], .fp16(shape))
+    }
+
+    /// An 8-bit weight with one fp16 scale per block and no offset
+    /// (`constexpr_blockwise_shift_scale`, signed data).
+    package func symmetricWeight(data: Data, scale: Data, shape: [Int], blockShape: [Int]) -> MILVar {
+        precondition(data.count == shape.reduce(1, *))
+        let q = blobConst(
+            MILType(dataType: .int8, shape: shape), offset: blobs.append(bytes: data, type: .int8))
+        let s = blobConst(.fp16(blockShape), offset: blobs.append(bytes: scale, type: .float16))
+        return op("constexpr_blockwise_shift_scale", [("data", [q]), ("scale", [s])], .fp16(shape))
     }
 
     /// `Value { type, immediateValue { tensor { <field>: payload } } }`, the
@@ -214,11 +309,23 @@ final class MILFunctionBuilder {
     /// An op `type(inputs…)` with one output of `outputType`. Each input
     /// binds one variable, or several for a variadic input (`values`).
     @discardableResult
-    func op(
+    package func op(
         _ type: String, _ inputs: [(String, [MILVar])], _ outputType: MILType,
         name: String? = nil
     ) -> MILVar {
-        let out = MILVar(name: name ?? fresh(type), type: outputType)
+        ops(type, inputs, [outputType], names: name.map { [$0] })[0]
+    }
+
+    /// An op with any number of outputs (`topk`'s values and indices; none
+    /// for `write_state`).
+    @discardableResult
+    package func ops(
+        _ type: String, _ inputs: [(String, [MILVar])], _ outputTypes: [MILType],
+        names: [String]? = nil
+    ) -> [MILVar] {
+        let outs = outputTypes.enumerated().map { i, t in
+            MILVar(name: names?[i] ?? fresh(type), type: t)
+        }
         var w = ProtobufWriter()
         w.string(1, type)
         for (name, vars) in inputs {
@@ -228,13 +335,15 @@ final class MILFunctionBuilder {
                 }
             }
         }
-        w.message(3) { o in
-            o.string(1, out.name)
-            o.message(2) { outputType.write(&$0) }
+        for out in outs {
+            w.message(3) { o in
+                o.string(1, out.name)
+                o.message(2) { out.type.write(&$0) }
+            }
         }
-        w.mapEntry(5, key: "name") { Self.stringValue(out.name, &$0) }
+        w.mapEntry(5, key: "name") { Self.stringValue(outs.first?.name ?? fresh(type), &$0) }
         operations.append(w.data)
-        return out
+        return outs
     }
 
     /// MIL.proto `Function` with one block specialization for `opset`.
@@ -261,13 +370,21 @@ final class MILFunctionBuilder {
 /// its metadata record. Each blob goes to the file as it comes, and the
 /// header at the end, so building holds one weight at a time; the first
 /// write error is thrown by `finish()`.
-final class MILBlobWriter {
+package final class MILBlobWriter {
+    /// MILBlob's storage types (`BlobDataType`).
+    package enum StorageType: UInt32 {
+        case float16 = 1
+        case float32 = 2
+        case uint8 = 3
+        case int8 = 4
+    }
+
     private let handle: FileHandle
     private var size: UInt64 = 64
     private var blobCount: UInt32 = 0
     private var error: Error?
 
-    init(url: URL) throws {
+    package init(url: URL) throws {
         guard FileManager.default.createFile(atPath: url.path, contents: Data(count: 64)) else {
             throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path])
         }
@@ -276,14 +393,18 @@ final class MILBlobWriter {
     }
 
     /// Appends an fp16 array's values; returns the offset to reference them by.
-    func append(_ values: MLXArray) -> UInt64 {
+    package func append(_ values: MLXArray) -> UInt64 {
         precondition(values.dtype == .float16)
-        let bytes = values.asData(access: .noCopyIfContiguous).data
+        return append(bytes: values.asData(access: .noCopyIfContiguous).data, type: .float16)
+    }
+
+    /// Appends raw values of `type`; returns the offset to reference them by.
+    package func append(bytes: Data, type: StorageType) -> UInt64 {
         let metadataOffset = size
         var record = Data(count: 64)
         record.withUnsafeMutableBytes { p in
             p.storeBytes(of: UInt32(0xDEAD_BEEF).littleEndian, toByteOffset: 0, as: UInt32.self)
-            p.storeBytes(of: UInt32(1).littleEndian, toByteOffset: 4, as: UInt32.self)  // Float16
+            p.storeBytes(of: type.rawValue.littleEndian, toByteOffset: 4, as: UInt32.self)
             p.storeBytes(of: UInt64(bytes.count).littleEndian, toByteOffset: 8, as: UInt64.self)
             p.storeBytes(of: (metadataOffset + 64).littleEndian, toByteOffset: 16, as: UInt64.self)
         }
@@ -297,7 +418,7 @@ final class MILBlobWriter {
     }
 
     /// Writes the header and closes the file.
-    func finish() throws {
+    package func finish() throws {
         defer { try? handle.close() }
         if let error { throw error }
         var header = Data(count: 64)
@@ -317,34 +438,55 @@ final class MILBlobWriter {
 
 // MARK: - Model and package
 
-enum MLProgramPackage {
-    /// Core ML 7 (iOS 17 / macOS 14): specification version 8, opset
-    /// `CoreML7`.
-    static let specificationVersion: Int64 = 8
-    static let opset = "CoreML7"
+package enum MLProgramPackage {
+    /// The Core ML release a program targets: its specification version and
+    /// MIL opset.
+    package enum Target {
+        /// Core ML 7 (iOS 17 / macOS 14): specification 8, opset `CoreML7`.
+        case coreML7
+        /// Core ML 8 (iOS 18 / macOS 15): specification 9, opset `CoreML8`.
+        /// States, blockwise weights and functions need it.
+        case coreML8
 
-    /// Model.proto: the description (fp16 multi-array features matching the
-    /// function's inputs and outputs) and the ML program with its one
-    /// function, `main`.
-    static func specification(
-        _ function: MILFunctionBuilder, metadata: [String: String]
+        var specificationVersion: Int64 { self == .coreML7 ? 8 : 9 }
+        var opset: String { self == .coreML7 ? "CoreML7" : "CoreML8" }
+    }
+
+    /// Model.proto for a program with one function, `main`.
+    package static func specification(
+        _ function: MILFunctionBuilder, metadata: [String: String], target: Target = .coreML7
     ) -> Data {
-        func feature(_ w: inout ProtobufWriter, _ field: Int, _ v: MILVar) {
-            w.message(field) { f in
-                f.string(1, v.name)
-                f.message(3) { type in
-                    type.message(5) { array in
-                        array.packed(1, v.type.shape.map(Int64.init))
-                        array.int(2, 65552)  // FLOAT16
+        specification(functions: [("main", function)], metadata: metadata, target: target)
+    }
+
+    /// Model.proto: the description (each function's features) and the ML
+    /// program. With one function the description is the classic one; with
+    /// several it lists them (Core ML 8), the first being the default.
+    package static func specification(
+        functions: [(name: String, builder: MILFunctionBuilder)], metadata: [String: String],
+        target: Target
+    ) -> Data {
+        precondition(!functions.isEmpty)
+        precondition(functions.count == 1 || target == .coreML8, "several functions need Core ML 8")
+        var model = ProtobufWriter()
+        model.int(1, target.specificationVersion)
+        model.message(2) { description in
+            if functions.count == 1 {
+                let f = functions[0].builder
+                for v in f.inputs where !v.type.isState { feature(&description, 1, v) }
+                for v in f.outputs { feature(&description, 10, v) }
+                for v in f.inputs where v.type.isState { feature(&description, 13, v) }
+            } else {
+                for (name, f) in functions {
+                    description.message(20) { fd in
+                        fd.string(1, name)
+                        for v in f.inputs where !v.type.isState { feature(&fd, 2, v) }
+                        for v in f.outputs { feature(&fd, 3, v) }
+                        for v in f.inputs where v.type.isState { feature(&fd, 6, v) }
                     }
                 }
+                description.string(21, functions[0].name)
             }
-        }
-        var model = ProtobufWriter()
-        model.int(1, specificationVersion)
-        model.message(2) { description in
-            for v in function.inputs { feature(&description, 1, v) }
-            for v in function.outputs { feature(&description, 10, v) }
             description.message(100) { meta in
                 for (key, value) in metadata.sorted(by: { $0.key < $1.key }) {
                     meta.message(100) { entry in
@@ -356,13 +498,44 @@ enum MLProgramPackage {
         }
         model.message(502) { program in
             program.int(1, 1)
-            program.mapEntry(2, key: "main") { function.writeFunction(&$0, opset: opset) }
+            for (name, f) in functions {
+                program.mapEntry(2, key: name) { f.writeFunction(&$0, opset: target.opset) }
+            }
         }
         return model.data
     }
 
+    /// A feature's description: a multi-array of the var's type, or a state
+    /// wrapping one.
+    private static func feature(_ w: inout ProtobufWriter, _ field: Int, _ v: MILVar) {
+        func array(_ a: inout ProtobufWriter) {
+            a.packed(1, v.type.shape.map(Int64.init))
+            a.int(2, arrayDataType(v.type.dataType))
+        }
+        w.message(field) { f in
+            f.string(1, v.name)
+            f.message(3) { type in
+                if v.type.isState {
+                    type.message(8) { state in state.message(1) { array(&$0) } }
+                } else {
+                    type.message(5) { array(&$0) }
+                }
+            }
+        }
+    }
+
+    /// FeatureTypes.proto `ArrayDataType`.
+    private static func arrayDataType(_ type: MILType.DataType) -> Int64 {
+        switch type {
+        case .float32: 65568
+        case .int32: 131104
+        case .int8: 131080
+        default: 65552  // FLOAT16
+        }
+    }
+
     /// The weight file of the `.mlpackage` at `url`, its directories made.
-    static func weightsURL(in url: URL) throws -> URL {
+    package static func weightsURL(in url: URL) throws -> URL {
         let weights = url.appendingPathComponent("Data/com.apple.CoreML/weights", isDirectory: true)
         try FileManager.default.createDirectory(at: weights, withIntermediateDirectories: true)
         return weights.appendingPathComponent("weight.bin")
@@ -370,7 +543,7 @@ enum MLProgramPackage {
 
     /// Completes the `.mlpackage` at `url`, whose weights are written
     /// (`weightsURL`): the specification and the manifest.
-    static func write(specification: Data, to url: URL) throws {
+    package static func write(specification: Data, to url: URL) throws {
         let root = url.appendingPathComponent("Data/com.apple.CoreML", isDirectory: true)
         try specification.write(to: root.appendingPathComponent("model.mlmodel"))
         let modelID = UUID().uuidString

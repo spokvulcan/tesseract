@@ -204,6 +204,16 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
     func resume() {
         guard scheduler.resume() else { return }
         pausedTime = nil
+        // Something outside the app can stop the engine under a pause (an
+        // iPhone's audio interruption); the player won't play on a stopped
+        // engine, so start it again first.
+        if let engine = audioEngine, !engine.isRunning {
+            do {
+                try engine.start()
+            } catch {
+                Log.speech.error("Failed to restart the audio engine: \(error)")
+            }
+        }
         if let node = playerNode {
             node.play()
             isPlaying = true

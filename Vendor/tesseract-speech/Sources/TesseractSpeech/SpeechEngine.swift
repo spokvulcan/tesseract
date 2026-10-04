@@ -146,6 +146,9 @@ public actor SpeechEngine {
             }
         }
         try await ensureLoaded()
+        if let speaker = voice.speaker, await !synthesizer.presetSpeakers().contains(speaker) {
+            throw SpeechEngineError.unknownVoice(speaker)
+        }
         try await mappingErrors {
             try await self.synthesizer.primeVoice(
                 description: voice.description, language: voice.language)
@@ -198,9 +201,11 @@ public actor SpeechEngine {
         await cancelActiveAndWait()
 
         // A session that has no take yet (or is retaking) keeps this
-        // utterance's first segment short: it becomes the Reference Take.
+        // utterance's first segment short: it becomes the Reference Take. A
+        // Preset Voice never takes one: the speaker is the voice.
         let capturesReference =
-            state.profile.reference == .pinned && (retake || state.reference == nil)
+            state.profile.reference == .pinned && state.voice.speaker == nil
+            && (retake || state.reference == nil)
         var segments = Segmenter.segment(
             text, leadTokens: capturesReference ? Segmenter.referenceLeadTokens : nil)
         if retake { segments = Array(segments.prefix(1)) }
@@ -276,7 +281,8 @@ public actor SpeechEngine {
                     parameters: parameters,
                     seed: seed,
                     reference: captures ? nil : reference,
-                    capturesReference: captures)
+                    capturesReference: captures,
+                    speaker: voice.speaker)
 
                 let startFrame = cumulativeFrames
                 let segmentIndex = segment.index

@@ -21,6 +21,17 @@ struct ModelCatalogTests {
 
     // MARK: - downloaded(in:)
 
+    /// The phone's voice is a catalog of its own (#515): the 0.6B CustomVoice
+    /// checkpoint the engine loads, judged by the engine's completeness rule,
+    /// and never on the Mac's Models page.
+    @Test func thePhonesVoiceIsTheCustomVoiceCheckpoint() {
+        let entry = ModelDefinition.phoneVoice
+        #expect(entry.repoID == TTSModelSpec.customVoice06B.repo)
+        #expect(entry.completeness == .qwen3TTSCheckpoint)
+        #expect(!ModelDefinition.all.contains { $0.id == entry.id })
+        #expect(ModelDefinition.phoneVoiceTrims["speech_tokenizer/model.safetensors"] == "decoder.")
+    }
+
     @Test func downloadedFiltersByCategoryAndDownloadedState() throws {
         let definitions = [
             agentDef(id: "agent-down"),

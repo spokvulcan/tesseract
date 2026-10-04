@@ -6,7 +6,8 @@
 #   2. Markdown links to local files resolve.
 #   3. `scripts/dev.sh <subcommand>` mentions name real subcommands.
 #   4. Test suites referenced via -only-testing: exist in tesseractTests/.
-#   5. Swift files named in ARCHITECTURE.md exist somewhere in the source tree.
+#   5. Swift files named in ARCHITECTURE.md exist somewhere in the source tree
+#      (the Mac app, the iPhone app and its share extension, the tests).
 #
 # No network, no build — runs in seconds, anywhere. Exits non-zero on drift.
 
@@ -18,7 +19,7 @@ cd "$ROOT"
 DOCS="README.md CLAUDE.md ARCHITECTURE.md DISTRIBUTION.md REVIEW.md docs/testing.md docs/agents/domain.md docs/agents/issue-tracker.md docs/agents/triage-labels.md"
 
 # Top-level dirs whose paths the docs are expected to reference accurately.
-KNOWN_DIRS="tesseract tesseractTests tesseractUITests scripts docs assets benchmarks AgentPackages Vendor .claude .agents .github"
+KNOWN_DIRS="tesseract tesseract-ios tesseract-share tesseractTests tesseractUITests scripts docs assets benchmarks AgentPackages Vendor .claude .agents .github"
 
 failures=0
 fail() {
@@ -101,7 +102,7 @@ done < <(grep -ohE -- '-only-testing:tesseractTests/[A-Za-z0-9_]+' docs/testing.
 
 # --- 5. Swift files named in ARCHITECTURE.md ------------------------------------
 while IFS= read -r f; do
-    if [ -z "$(find tesseract tesseractTests AgentPackages -name "$f" 2>/dev/null | head -1)" ]; then
+    if [ -z "$(find tesseract tesseract-ios tesseract-share tesseractTests AgentPackages -name "$f" 2>/dev/null | head -1)" ]; then
         fail "ARCHITECTURE.md" "names '$f' but no such file exists in the source tree"
     fi
 done < <(grep -ohE '[A-Za-z0-9_+]+\.swift' ARCHITECTURE.md | sort -u)

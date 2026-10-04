@@ -1110,3 +1110,7 @@ final class SettingsManager {
         }
     }
 }
+
+/// The Mac's speech settings: the read-aloud members the shared speech code
+/// reads through `SpeechSettings`.
+extension SettingsManager: SpeechSettings {}

@@ -15,6 +15,11 @@ import Qwen3TTS
 public actor Qwen3Synthesizer: SpeechSynthesizing {
     private let checkpointDirectory: @Sendable (TTSModelSpec) -> URL
     private let neuralEngineCache: URL?
+    /// The phone's voice (ADR-0084): the whole voice on the Neural Engine
+    /// once `prepareNeuralVoice` has prepared it, and MLX only ever on the
+    /// CPU, since iOS refuses GPU work from a backgrounded app.
+    private let neuralVoice: Bool
+    private var neuralVoiceReady = false
     private var model: Qwen3TTSModel?
     private var loadedSpec: TTSModelSpec?
     /// The loaded checkpoint's alignment head, when its words can be timed.
@@ -37,12 +42,16 @@ public actor Qwen3Synthesizer: SpeechSynthesizing {
     /// is ready, and wherever it can't run, the MLX conv stack decodes.
     /// Without one it stays on MLX, so nothing is written anywhere: the app
     /// passes a directory under its storage root (ADR-0073, ADR-0075).
+    /// With `neuralVoice` (the phone), nothing runs until
+    /// `prepareNeuralVoice` has moved the voice to the Neural Engine, and MLX
+    /// runs on the CPU: loading, the prompt, the codec's front end.
     public init(
         checkpointDirectory: @escaping @Sendable (TTSModelSpec) -> URL,
-        neuralEngineCache: URL? = nil
+        neuralEngineCache: URL? = nil, neuralVoice: Bool = false
     ) {
         self.checkpointDirectory = checkpointDirectory
         self.neuralEngineCache = neuralEngineCache
+        self.neuralVoice = neuralVoice
     }
 
     /// Where the Neural Engine codec is kept under a caches directory.
@@ -80,8 +89,15 @@ public actor Qwen3Synthesizer: SpeechSynthesizing {
         // tokenizer loads "fine" and then can't make sound.
         try await checkAvailable(spec)
         onPhase?(.loadingWeights)
-        let qwen = try await Qwen3TTSModel.fromModelDirectory(checkpointDirectory(spec))
+        let directory = checkpointDirectory(spec)
+        let qwen =
+            neuralVoice
+            ? try await Device.withDefaultDevice(.cpu) {
+                try await Qwen3TTSModel.fromModelDirectory(directory)
+            }
+            : try await Qwen3TTSModel.fromModelDirectory(directory)
         model = qwen
+        neuralVoiceReady = false
         loadedSpec = spec
         alignmentHead = spec.alignmentHead.map {
             Qwen3TTSAlignmentHead(layer: $0.layer, head: $0.head)
@@ -91,7 +107,8 @@ public actor Qwen3Synthesizer: SpeechSynthesizing {
     }
 
     public func warmUp() async throws {
-        guard let model, !warmed else { return }
+        // The phone's voice warms up as it is prepared, never on the GPU.
+        guard let model, !warmed, !neuralVoice else { return }
         // A tiny end-to-end generation compiles the talker's, the code
         // predictor's and the decoder's kernels, so the first real request
         // pays generation only (autopsy F2).
@@ -125,17 +142,94 @@ public actor Qwen3Synthesizer: SpeechSynthesizing {
         try model?.primeVoice(description)
     }
 
+    public func presetSpeakers() async -> [String] {
+        model?.presetSpeakers ?? []
+    }
+
     public func unload() async {
         neuralEngineTask?.cancel()
         await neuralEngineTask?.value
         neuralEngineTask = nil
         neuralEngineReport = nil
+        let loaded = model != nil
         model = nil
         loadedSpec = nil
         alignmentHead = nil
         warmed = false
+        neuralVoiceReady = false
+        // The phone's voice touches MLX only once it has loaded: where there
+        // is no Neural Engine to load it for (the simulator), MLX can't run.
+        guard !neuralVoice || loaded else { return }
         Memory.clearCache()
-        Stream.gpu.synchronize()
+        if !neuralVoice { Stream.gpu.synchronize() }
+    }
+
+    // MARK: - The phone's voice
+
+    /// Whether `prepareNeuralVoice` has finished.
+    public var isNeuralVoiceReady: Bool { neuralVoiceReady }
+
+    /// Prepares the voice for the Neural Engine (ADR-0084): loads `spec`'s
+    /// checkpoint if it isn't, then builds the codec's conv stack, the talker
+    /// and the code predictor from it into the Neural Engine cache (or loads
+    /// them, built before) and checks each against MLX the first time. Every
+    /// op must land on the Neural Engine, or it throws and the voice isn't
+    /// used. Returns what it found.
+    public func prepareNeuralVoice(
+        _ spec: TTSModelSpec, onPhase: (@Sendable (VoicePreparationPhase) -> Void)? = nil
+    ) async throws -> String {
+        guard neuralVoice, let cache = neuralEngineCache else {
+            throw SpeechEngineError.modelUnavailable("This synthesizer has no Neural Engine voice.")
+        }
+        onPhase?(.loading)
+        try await load(spec, onPhase: nil)
+        guard let model else { throw SpeechEngineError.engineUnloaded }
+        onPhase?(.building("codec"))
+        let codec = try await Device.withDefaultDevice(.cpu) {
+            try await model.prepareNeuralEngine(cacheDirectory: cache)
+        }
+        let voice = try await model.prepareNeuralVoice(
+            cacheDirectory: cache,
+            alignment: spec.alignmentHead.map { Qwen3TTSAlignmentHead(layer: $0.layer, head: $0.head) }
+        ) { phase in
+            switch phase {
+            case .measuring: onPhase?(.measuring)
+            case .building(let part): onPhase?(.building(part))
+            case .checking: onPhase?(.checking)
+            }
+        }
+        // The Neural Engine has its own copy now: the MLX one is dead weight
+        // on a phone.
+        model.releaseMLXVoice()
+        neuralVoiceReady = true
+        warmed = true
+        return "codec: \(codec); \(voice)"
+    }
+
+    /// Times one render of `text` in `speaker`'s voice on the prepared
+    /// voice: compute seconds per second of audio, and seconds to the first.
+    /// The **Speed Check**'s measurement.
+    public func timeRender(_ text: String, speaker: String, language: String?) async throws
+        -> (realTimeFactor: Double, firstAudio: Double)
+    {
+        guard neuralVoiceReady, let model else { throw SpeechEngineError.engineUnloaded }
+        let clock = ContinuousClock()
+        let start = clock.now
+        var first: Duration?
+        var samples = 0
+        for try await event in model.generateStream(
+            text: text, voice: speaker, language: language, sampling: Qwen3TTSSampling(),
+            seed: 1, streamingInterval: 0.4)
+        {
+            if case .audio(let audio) = event {
+                if first == nil { first = clock.now - start }
+                samples += audio.count
+            }
+        }
+        let seconds = (clock.now - start) / .seconds(1)
+        let audio = Double(samples) / Double(model.sampleRate)
+        guard audio > 0 else { throw SpeechEngineError.generationFailed("The voice made no sound.") }
+        return (seconds / audio, (first ?? .zero) / .seconds(1))
     }
 
     public func audioFormat() async -> AudioFormat? {
@@ -163,9 +257,11 @@ public actor Qwen3Synthesizer: SpeechSynthesizing {
                     }
                     let alignment = self.alignmentHead
 
+                    // A CustomVoice checkpoint reads a speaker where
+                    // VoiceDesign reads a description.
                     let modelStream = model.generateStream(
                         text: request.text,
-                        voice: request.voiceDescription,
+                        voice: request.speaker ?? request.voiceDescription,
                         language: request.language,
                         reference: request.reference.map {
                             Qwen3TTSReference(codeFrames: $0.codeFrames, text: $0.text)

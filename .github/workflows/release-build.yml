@@ -53,7 +53,7 @@ jobs:
             echo "Tagged commit is version-files-only; gating on its parent instead."
           fi
           echo "Gating release $TAG on CI for commit $SHA"
-          REQUIRED="build-release test lint"
+          REQUIRED="build-release build-ios test lint"
           DEADLINE=$(( $(date +%s) + 140*60 ))
           while true; do
             RUNS=$(gh api "repos/$REPO/commits/$SHA/check-runs" --paginate \

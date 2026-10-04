@@ -39,7 +39,7 @@ final class SpeechCoordinator {
     /// the Models page download instead of starting its own.
     private let voiceEngineStatus: @MainActor () -> ModelStatus
     private let playback: any AudioPlayback
-    private let settings: SettingsManager
+    private let settings: any SpeechSettings
     private let notchOverlay: (any WordHighlightSurface)?
     /// Each designed voice's Reference Take, kept across relaunches so the
     /// voice stays the same person (ADR-0072).
@@ -69,7 +69,7 @@ final class SpeechCoordinator {
         engine: SpeechEnginePresenter,
         voiceEngineStatus: @escaping @MainActor () -> ModelStatus,
         playback: any AudioPlayback = AudioPlaybackManager(),
-        settings: SettingsManager,
+        settings: any SpeechSettings,
         notchOverlay: (any WordHighlightSurface)? = nil,
         pinnedVoices: PinnedVoiceStore = PinnedVoiceStore()
     ) {
@@ -112,10 +112,13 @@ final class SpeechCoordinator {
     /// `userInitiated`: the user asked for this speech (a Speak button), so a
     /// missing Voice Engine sends them to the Models page. `retake`: speak
     /// only the opening as a new Reference Take (see `tryAnotherTake`).
+    /// `language`: the text's own (a `TTSLanguage` raw value), when the caller
+    /// knows it; otherwise the setting's.
     func speakText(
         _ text: String, showsOverlay: Bool = true,
         userInitiated: Bool = false,
         retake: Bool = false,
+        language: String? = nil,
         onSuccess: (@MainActor @Sendable () -> Void)? = nil
     ) {
         guard !text.isEmpty else { return }
@@ -132,7 +135,7 @@ final class SpeechCoordinator {
             guard await voiceEngineReady(userInitiated: userInitiated) else { return }
             await generateAndPlay(
                 text: text, showsOverlay: showsOverlay, userInitiated: userInitiated,
-                retake: retake)
+                retake: retake, language: language)
         }
     }
 
@@ -225,20 +228,20 @@ final class SpeechCoordinator {
 
     /// The per-request voice context derived from settings — the one home for
     /// the "empty voice description means no voice, never an empty prompt"
-    /// rule every generate path shares.
-    private var ttsVoiceContext: (voice: String?, language: String) {
+    /// rule every generate path shares. `language` overrides the setting's.
+    private func ttsVoiceContext(language: String? = nil) -> (voice: String?, language: String) {
         (
             settings.ttsVoiceDescription.isEmpty ? nil : settings.ttsVoiceDescription,
-            settings.ttsLanguage
+            language ?? settings.ttsLanguage
         )
     }
 
     /// The shared transient-error presentation: show the error, linger, then
-    /// auto-reset to idle unless cancelled. Reads the same linger constant
-    /// the dictation side single-sources, so the two families cannot drift.
+    /// auto-reset to idle unless cancelled. Lingers as long as dictation's
+    /// errors do (`ErrorAutoReset`).
     private func presentTransientError(_ message: String) async {
         state = .error(message)
-        try? await Task.sleep(for: VoiceCaptureSession.errorAutoResetDelay)
+        try? await Task.sleep(for: ErrorAutoReset.delay)
         if !Task.isCancelled { state = .idle }
     }
 
@@ -296,9 +299,10 @@ final class SpeechCoordinator {
     /// when the voice changes (the instruct prefix re-primes off the hot path).
     /// A voice with a stored Reference Take opens pinned to it; otherwise the
     /// session's first segment becomes its take.
-    private func openOrReuseSession() async throws -> SpeechSession {
-        let (voiceDescription, language) = ttsVoiceContext
-        let key = "\(voiceDescription ?? "")|\(language)"
+    private func openOrReuseSession(language: String? = nil) async throws -> SpeechSession {
+        let (voiceDescription, language) = ttsVoiceContext(language: language)
+        let preset = settings.presetVoice
+        let key = "\(preset ?? voiceDescription ?? "")|\(language)"
         if let session, sessionVoiceKey == key { return session }
 
         await session?.close()
@@ -309,11 +313,16 @@ final class SpeechCoordinator {
             engine.noteLoading("Loading voice model…")
         }
         do {
-            let pinned = pinnedVoices.voice(
-                description: voiceDescription, language: language,
-                model: ModelDefinition.textToSpeechModelSpec)
+            // A Preset Voice is the checkpoint's own speaker: nothing to pin.
+            let pinned =
+                preset == nil
+                ? pinnedVoices.voice(
+                    description: voiceDescription, language: language,
+                    model: ModelDefinition.textToSpeechModelSpec)
+                : nil
             let voice: Voice =
-                pinned.map { .pinned($0) }
+                preset.map { .preset(speaker: $0, language: language) }
+                ?? pinned.map { .pinned($0) }
                 ?? voiceDescription.map { .designed(description: $0, language: language) }
                 ?? .standard(language: language)
             let opened = try await engine.engine.session(.readAloud, voice: voice)
@@ -328,7 +337,8 @@ final class SpeechCoordinator {
     }
 
     private func generateAndPlay(
-        text: String, showsOverlay: Bool = true, userInitiated: Bool, retake: Bool = false
+        text: String, showsOverlay: Bool = true, userInitiated: Bool, retake: Bool = false,
+        language: String? = nil
     ) async {
         // One resolution for the whole utterance: nil means audio-only, and
         // every overlay touch below no-ops.
@@ -338,7 +348,7 @@ final class SpeechCoordinator {
             // stop(), and either can spend seconds loading the voice model, so
             // check after each. The opened session stays for the next request;
             // the dropped utterance stops its generation.
-            let session = try await openOrReuseSession()
+            let session = try await openOrReuseSession(language: language)
             try Task.checkCancellation()
             state = .generating(progress: "")
 

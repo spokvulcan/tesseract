@@ -198,7 +198,86 @@ tesseract/
     ├── NavigationItem.swift     # Sidebar routing enum
     ├── KeyCombo.swift
     └── ...
+
+tesseract-ios/                   # The iPhone app's own files (ADR-0066, ADR-0084)
+├── TesseractPhoneApp.swift      # Entry: the Library in a NavigationStack
+├── PhoneContainer.swift         # Composition root (pure wiring)
+├── PhoneReading.swift           # The Library's open texts: a Reader per text
+├── PhoneAudioSession.swift      # Spoken-audio session around the Mac's playback adapter
+├── PhoneIntake.swift            # Files opened in the app, and the Library Inbox taken in
+├── PhonePocket.swift            # Interruptions, routes, heat, lock-screen commands, Now Playing
+├── PhoneVoice.swift             # The neural voice: download, Voice Preparation, Speed Check, which voice reads
+├── PhoneModelFetching.swift     # Model Fetching over a background URLSession
+└── Views/                       # Library, Reader (UITextView on TextKit 2), transport, voices, settings
+
+tesseract-share/                 # "Read in Tesseract": the share extension
+├── ShareViewController.swift    # Reads what was shared, drops its text in the Library Inbox
+└── ExtensionPreprocessing.js    # Runs in Safari: hands over the page's HTML
 ```
+
+### The iPhone app
+
+`tesseract-ios` is a second app target in the same project. Release 1 reads
+text aloud (ADR-0084), so the target takes only the read-aloud code:
+
+- **Its own files** live in `tesseract-ios/`: views, adapters, the composition
+  root, and later its Info.plist and entitlements.
+- **Shared files** come from five folders of `tesseract/`, added to the target
+  as their own synchronized groups (the project's "Shared with tesseract-ios"
+  group): `Core`, `Features/Models`, `Features/Settings`, `Features/Speech` and
+  `Models`. A new file in one of them builds in both apps. A Mac-only file
+  there is excluded from `tesseract-ios` by name, in that group's exceptions
+  (File Inspector → Target Membership). Xcode can't exclude a whole folder, so
+  Mac-only code belongs in the Mac-only folders when it can.
+- **Everything else** in `tesseract/` (the app shell, `Platform/`, the agent,
+  server, companion and dictation) is Mac-only and never reaches the phone.
+- **No `#if os`.** Where shared code needs something only the Mac has, the
+  dependency moves behind a port the Mac adapts: the speech code reads its
+  settings through `SpeechSettings`, which the Mac's `SettingsManager`
+  conforms to, and the Settings Catalogue keeps its Mac-only entries in
+  `tesseract/Features/Settings/SettingsCatalogue+Mac.swift`.
+- **The speech package** (`Vendor/tesseract-speech`) builds for iOS. Its
+  second production synthesizer, `SystemVoiceSynthesizer`, puts the
+  **System Voice** (`AVSpeechSynthesizer`) behind the same port as the neural
+  voice, at its 24 kHz frames, so the coordinator, the Read-Along and the
+  Reader can't tell them apart.
+- **Shared logic for the phone lives in the shared folders**, so the Mac test
+  target covers it: the **Library** (`ReaderLibrary`), the phone's Settings
+  Facade (`PhoneSettings`), the **Preset Voices**, a text's language
+  (`TTSLanguage.detected`), and getting text in (`Features/Speech/Intake`:
+  a page's article through swift-readability, a PDF's text through PDFKit,
+  Markdown without its marks, the **Library Inbox**), and reading in the pocket
+  (`Features/Speech/Pocket`: `PocketControls`, which turns a call, lost
+  headphones, the lock screen's buttons or the app leaving the screen into
+  what the Reader does, and the **Thermal Policy**). Whatever stops the audio
+  from outside the app stops the reading at the heard sentence, and playing
+  again reads from it: a stream held paused in the background could not come
+  back once the system stopped its audio engine.
+- **The neural voice** (`PhoneVoice`): Qwen3-TTS 0.6B on the Neural Engine
+  (ADR-0084, ADR-0088). Its catalog entry (`ModelDefinition.phoneVoice`)
+  downloads through the Mac's download manager, over a second **Model
+  Fetching** adapter: a background URLSession that goes on with the screen
+  locked, resumes mid-file and rejoins a transfer after a relaunch (the app
+  delegate hands it the session's events), Wi-Fi only unless the owner
+  allows cellular. A trimming adapter in front of it keeps only the codec's
+  decoder from the file that also holds its encoder. **Voice Preparation**
+  then builds the graphs into Application Support (out of backups), the first
+  time in minutes and afterwards in seconds, and the **Speed Check** times a
+  render. The engine's synthesizer is a `VoiceHandover`: the neural voice for
+  each segment while it is ready, keeps up and the **Thermal Policy** allows
+  it, the **System Voice** otherwise. A segment the neural voice fails before
+  any of its audio is read by the System Voice, which reads on until the app
+  is next in front and the voice prepares again. The speed menu offers the
+  rates the Speed Check allows.
+- **The share extension** (`tesseract-share`, embedded in the app) builds the
+  `Intake` folder and nothing else of the app. In Safari its script hands over
+  the page's HTML, so the app never fetches a page. It never runs the voice:
+  it drops the text in the app group's **Library Inbox**, and the app takes
+  it in when it comes to the front.
+
+CI's `build-ios` job builds the target for any iOS device, unsigned; the
+release pipeline waits for it. The shared code's tests run in the Mac test
+target.
 
 ---
 
@@ -326,7 +405,16 @@ playback**):
   After warm-up it moves the codec's conv stack to the Neural Engine: a Core ML
   model the package builds from the checkpoint and keeps in the cache directory
   the app passes (under `StorageEnvironment.caches`). It stays on MLX where the
-  Neural Engine can't run it all (ADR-0074/0075). Each segment's words are
+  Neural Engine can't run it all (ADR-0074/0075). For the iPhone, the model
+  can move the talker and the code predictor there too
+  (`Qwen3TTSModel.prepareNeuralVoice`, ADR-0084/0088): two more Core ML
+  graphs the package writes (the talker one position per call with its KV
+  cache in Core ML state, the code predictor a whole frame per call with its
+  sampling inside), after which generation runs MLX only on the CPU, for the
+  prompt's embeddings and the codec's front end. A **Preset Voice**
+  (`Voice.preset`) is a CustomVoice checkpoint's own speaker: the engine
+  refuses one the checkpoint doesn't have and never takes a Reference Take
+  for it. Each segment's words are
   timed by the talker's own attention (ADR-0077): the model streams its
   Alignment Head's row for every frame, and the adapter's `WordTimer` turns the
   rows and the frames' loudness into word starts, which the stream carries as
