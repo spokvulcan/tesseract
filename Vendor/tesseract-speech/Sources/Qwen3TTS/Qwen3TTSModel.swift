@@ -18,27 +18,35 @@ public final class Qwen3TTSModel: @unchecked Sendable {
     let talker: Qwen3TTSTalker
     let codecDecoder: Qwen3TTSCodecDecoder
     let tokenizer: Tokenizers.Tokenizer
+    let textEmbedding: Qwen3TTSTextEmbedding
     let prompts: Qwen3TTSPromptBuilder
     /// The speech tokenizer directory, whose files key the Neural Engine
     /// codec's cache.
     let speechTokenizerDirectory: URL?
 
     /// The conv stack on the Neural Engine, once prepared; nil runs it in MLX.
-    private var neuralCodec: Qwen3TTSNeuralCodec?
+    var neuralCodec: Qwen3TTSNeuralCodec?
     var neuralCodecForBench: Qwen3TTSNeuralCodec? { lock.withLock { neuralCodec } }
-    private let neuralQueue = DispatchQueue(label: "qwen3tts.neural-codec", qos: .userInitiated)
+    let neuralQueue = DispatchQueue(label: "qwen3tts.neural-codec", qos: .userInitiated)
+    /// The talker and the code predictor on the Neural Engine, once
+    /// prepared: then generation runs there, and MLX only on the CPU
+    /// (`Qwen3TTSModel+NeuralVoice`).
+    var neuralVoice: Qwen3TTSNeuralVoice?
+    /// Their MLX weights are gone (`releaseMLXVoice`): only the Neural
+    /// Engine can generate.
+    var mlxVoiceReleased = false
 
     /// The instruct turn's KV for the last description used: every prompt
     /// opens with it, and under causal attention it reads the same whatever
     /// follows.
     private var voicePrefix: (description: String, state: [[MLXArray]])?
-    private let lock = NSLock()
+    let lock = NSLock()
     /// Held for as long as a generation or a priming uses the kept KV
     /// caches. A cancelled stream's generation runs on to the end of its
     /// frame after its consumer has gone and the engine has moved on; the
     /// next one waits for it here instead of rewinding caches it is still
     /// writing.
-    private let generationLock = NSLock()
+    let generationLock = NSLock()
 
     /// Working memory kept across the segments of an utterance: the talker's
     /// and the code predictor's KV caches, rewound for each generation
@@ -65,6 +73,7 @@ public final class Qwen3TTSModel: @unchecked Sendable {
         self.codecDecoder = codecDecoder
         self.tokenizer = tokenizer
         self.speechTokenizerDirectory = speechTokenizerDirectory
+        self.textEmbedding = textEmbedding
         self.prompts = try Qwen3TTSPromptBuilder(
             config: config, tokenizer: tokenizer, talker: talker, textEmbedding: textEmbedding)
     }
@@ -118,24 +127,37 @@ public final class Qwen3TTSModel: @unchecked Sendable {
     /// returns, and whenever it throws, generation uses MLX. Returns what
     /// the compute plan and the check found. `frames` is the chunk the
     /// Neural Engine decodes per call (at most 8: its width limit on M1–M3).
+    ///
+    /// A check that passed leaves a note beside the compiled model, so later
+    /// preparations of the same model skip it (it runs MLX's conv stack).
     @discardableResult
     public func prepareNeuralEngine(cacheDirectory: URL, frames: Int = 3) async throws -> String {
         precondition(frames >= 1 && frames <= 8)
-        let probe = try lock.withLock { neuralProbe } ?? makeNeuralProbe()
+        let source = sourceKey()
+        let checked = cacheDirectory.appendingPathComponent(
+            Qwen3TTSNeuralCodec.cacheKey(
+                config: codecDecoder.config, frames: frames, sourceKey: source) + ".checked")
         let (codec, placement) = try await Qwen3TTSNeuralCodec.load(
             decoder: codecDecoder, frames: frames, cacheDirectory: cacheDirectory,
-            sourceKey: sourceKey())
+            sourceKey: source)
+        if let note = try? String(contentsOf: checked, encoding: .utf8) {
+            lock.withLock { neuralCodec = codec }
+            return "\(placement); \(note) (checked before)"
+        }
+        let probe = try lock.withLock { neuralProbe } ?? makeNeuralProbe()
         let snr = try agreement(codec, probe)
         guard snr >= 35 else {
             throw AudioGenerationError.modelNotInitialized(
                 "The Neural Engine codec's audio differs from MLX's (\(String(format: "%.1f", snr)) dB).")
         }
+        let note = String(format: "%.1f dB against MLX", snr)
+        try? note.write(to: checked, atomically: true, encoding: .utf8)
         lock.withLock { neuralCodec = codec }
-        return "\(placement); \(String(format: "%.1f", snr)) dB against MLX"
+        return "\(placement); \(note)"
     }
 
     /// Back to the MLX conv stack.
-    private func disableNeuralEngine() {
+    func disableNeuralEngine() {
         lock.withLock { neuralCodec = nil }
     }
 
@@ -193,7 +215,7 @@ public final class Qwen3TTSModel: @unchecked Sendable {
     }
 
     /// `head`, when the talker has it.
-    private func validated(_ head: Qwen3TTSAlignmentHead?) -> Qwen3TTSAlignmentHead? {
+    func validated(_ head: Qwen3TTSAlignmentHead?) -> Qwen3TTSAlignmentHead? {
         guard let head, head.layer >= 0, head.layer < talker.model.layers.count, head.head >= 0,
             head.head < talkerConfig.numAttentionHeads
         else { return nil }
@@ -229,22 +251,25 @@ public final class Qwen3TTSModel: @unchecked Sendable {
         let task = Task { @Sendable [weak self] in
             guard let self else { return }
             do {
-                let built = try prompt(
-                    text: text, voice: voice, language: language, reference: reference,
-                    layout: layout)
-                let head = validated(alignment)
-                if head != nil {
-                    continuation.yield(
-                        .textTrack(
-                            Qwen3TTSTextTrack(
-                                referenceTokenCount: built.referenceTokenCount,
-                                characterOffsets: characterOffsets(of: built.targetTokens, in: text))))
+                let frames = try onVoiceDevice {
+                    let built = try prompt(
+                        text: text, voice: voice, language: language, reference: reference,
+                        layout: layout)
+                    let head = validated(alignment)
+                    if head != nil {
+                        continuation.yield(
+                            .textTrack(
+                                Qwen3TTSTextTrack(
+                                    referenceTokenCount: built.referenceTokenCount,
+                                    characterOffsets: characterOffsets(
+                                        of: built.targetTokens, in: text))))
+                    }
+                    return try run(
+                        prompt: built, voice: voice, sampling: sampling, seed: seed,
+                        chunkFrames: chunkFrames, alignment: head,
+                        onAudio: { continuation.yield(.audio($0)) },
+                        onAlignment: { continuation.yield(.alignment($0)) })
                 }
-                let frames = try run(
-                    prompt: built, voice: voice, sampling: sampling, seed: seed,
-                    chunkFrames: chunkFrames, alignment: head,
-                    onAudio: { continuation.yield(.audio($0)) },
-                    onAlignment: { continuation.yield(.alignment($0)) })
                 continuation.yield(.codeFrames(frames))
                 continuation.finish()
             } catch {
@@ -258,6 +283,8 @@ public final class Qwen3TTSModel: @unchecked Sendable {
     /// Builds and caches `description`'s instruct-turn KV, so the next
     /// generation in that voice starts after it.
     public func primeVoice(_ description: String?) throws {
+        // The Neural Engine talker keeps no prefix between generations.
+        guard lock.withLock({ neuralVoice }) == nil else { return }
         let instruct = isCustomVoice ? Self.parseCustomVoicePrompt(description)?.instruction : description
         guard let embed = try prompts.instruct(instruct), let description else { return }
         generationLock.lock()
@@ -310,18 +337,32 @@ public final class Qwen3TTSModel: @unchecked Sendable {
     /// With `neuralEngine`, also makes what `prepareNeuralEngine` checks a
     /// Neural Engine codec against, here on the GPU.
     public func warmUp(neuralEngine: Bool = false) throws {
-        let prompt = try prompts.plain(
-            text: ".", instruct: nil, language: "English", speaker: nil, layout: .interleaved)
-        _ = try run(
-            prompt: prompt, voice: nil, sampling: Qwen3TTSSampling(maxTokens: 3), seed: 0,
-            chunkFrames: 1, onAudio: { _ in })
+        try onVoiceDevice {
+            let prompt = try activePrompts.plain(
+                text: ".", instruct: nil, language: "English", speaker: nil, layout: .interleaved)
+            _ = try run(
+                prompt: prompt, voice: nil, sampling: Qwen3TTSSampling(maxTokens: 3), seed: 0,
+                chunkFrames: 1, onAudio: { _ in })
+        }
         if neuralEngine {
             let probe = try makeNeuralProbe()
             lock.withLock { neuralProbe = probe }
         }
     }
 
-    private var isCustomVoice: Bool { config.ttsModelType == "custom_voice" }
+    var isCustomVoice: Bool { config.ttsModelType == "custom_voice" }
+
+    /// The prompt builder generation uses: the Neural Engine voice's, once
+    /// prepared (its text projection suits MLX's CPU).
+    var activePrompts: Qwen3TTSPromptBuilder {
+        lock.withLock { neuralVoice }?.prompts ?? prompts
+    }
+
+    /// A CustomVoice checkpoint's speakers, by name, sorted; none for
+    /// VoiceDesign.
+    public var presetSpeakers: [String] {
+        isCustomVoice ? (talkerConfig.spkId?.keys.sorted() ?? []) : []
+    }
 
     func prompt(
         text: String, voice: String?, language: String?, reference: Qwen3TTSReference?,
@@ -329,6 +370,7 @@ public final class Qwen3TTSModel: @unchecked Sendable {
     ) throws -> Qwen3TTSPrompt {
         // CustomVoice reads `voice` as "speaker, instruction"; VoiceDesign's
         // is all description.
+        let prompts = activePrompts
         let customVoice = isCustomVoice ? Self.parseCustomVoicePrompt(voice) : nil
         let instruct = isCustomVoice ? customVoice?.instruction : voice
         if let reference {
@@ -390,6 +432,15 @@ public final class Qwen3TTSModel: @unchecked Sendable {
         onAudio: (@Sendable ([Float]) -> Void)?,
         onAlignment: (@Sendable ([Float]) -> Void)? = nil
     ) throws -> [[Int32]] {
+        if let neural = lock.withLock({ neuralVoice }) {
+            return try runNeural(
+                neural, prompt: prompt, sampling: sampling, seed: seed, chunkFrames: chunkFrames,
+                alignment: alignment, onAudio: onAudio, onAlignment: onAlignment)
+        }
+        guard !lock.withLock({ mlxVoiceReleased }) else {
+            throw AudioGenerationError.modelNotInitialized(
+                "The voice's MLX weights were released for the Neural Engine voice.")
+        }
         generationLock.lock()
         defer { generationLock.unlock() }
         let maxFrames = min(sampling.maxTokens, max(75, prompt.textTokenCount * 6))

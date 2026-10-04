@@ -24,14 +24,15 @@ final class ModelDownloadManager: ObservableObject {
 
     private let fetching: any ModelFetching
     private let storageRoot: URL
-    private let definitions: [ModelDefinition]
+    let definitions: [ModelDefinition]
 
     /// Per-id cache of the vision probe (`isVisionCapable`). Capability is
     /// intrinsic to a model's `config.json`, so a known answer is cached
     /// permanently; an undownloaded model is answered `false` *uncached* so a
     /// later download re-probes. The **Vision Capability Memo** — one home,
     /// shared by every caller. See `CONTEXT.md` → Model catalog.
-    private var visionCache: [String: Bool] = [:]
+    /// Read and written by `isVisionCapable` (ModelDownloadManager+Vision.swift).
+    var visionCache: [String: Bool] = [:]
 
     static let modelStorageURL: URL = {
         let url = URL.applicationSupportDirectory.appendingPathComponent(
@@ -48,7 +49,7 @@ final class ModelDownloadManager: ObservableObject {
     }()
 
     init(
-        fetching: any ModelFetching = HuggingFaceModelFetching(),
+        fetching: any ModelFetching,
         storageRoot: URL = ModelDownloadManager.modelStorageURL,
         definitions: [ModelDefinition] = ModelDefinition.all
     ) {
@@ -75,18 +76,6 @@ final class ModelDownloadManager: ObservableObject {
     /// defaulting to `.notDownloaded`. Not a catalog question.
     func status(for id: String) -> ModelStatus {
         statuses[id] ?? .notDownloaded
-    }
-
-    /// Whether a downloaded model can serve images — the memoized **Vision
-    /// Capability Memo**. Replaces the stranded `ModelVisionCapability` class.
-    func isVisionCapable(_ id: String) -> Bool {
-        if let cached = visionCache[id] { return cached }
-        guard isDownloaded(id), let directory = modelPath(for: id),
-            let definition = definitions.first(where: { $0.id == id })
-        else { return false }
-        let capable = ModelCatalog.isVisionCapable(definition: definition, directory: directory)
-        visionCache[id] = capable
-        return capable
     }
 
     // MARK: - Status

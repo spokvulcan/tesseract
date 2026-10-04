@@ -2,6 +2,7 @@
 // exercised through the public interface against scripted adapters.
 
 import Foundation
+import Synchronization
 import Testing
 @testable import TesseractSpeech
 
@@ -363,6 +364,46 @@ private let shortText = "Hello there, this is a short utterance."
         #expect(await session.exportPinnedVoice() == nil)
     }
 
+    /// A Preset Voice is the checkpoint's own speaker (ADR-0084): no
+    /// Reference Take is taken or continued, every segment names the
+    /// speaker and no description, and the utterance streams as any other.
+    @Test func aPresetVoiceNeedsNoReferenceTake() async throws {
+        let (engine, synth) = await makeEngine(script: .init(speakers: ["ryan", "serena"]))
+        let session = try await engine.session(
+            .readAloud, voice: .preset(speaker: "serena", language: "English"))
+        let utterance = try await session.speak(longText)
+        var frames = 0
+        for try await event in utterance.events {
+            if case .audio(let chunk) = event {
+                #expect(chunk.frames.lowerBound == frames, "gapless")
+                frames = chunk.frames.upperBound
+            }
+        }
+
+        let requests = await synth.requests
+        #expect(requests.count == utterance.segmentCount)
+        #expect(Segmenter.segment(longText, leadTokens: nil).count == utterance.segmentCount,
+            "no short lead segment for a take")
+        for request in requests {
+            #expect(request.speaker == "serena")
+            #expect(request.voiceDescription == nil)
+            #expect(request.language == "English")
+            #expect(request.reference == nil && !request.capturesReference)
+        }
+        #expect(await session.exportPinnedVoice() == nil)
+        #expect(await synth.primedVoices == [nil])
+    }
+
+    /// A speaker the checkpoint doesn't have is refused when the session
+    /// opens, not rendered in some other voice.
+    @Test func anUnknownPresetVoiceIsRefused() async throws {
+        let (engine, synth) = await makeEngine(script: .init(speakers: ["ryan"]))
+        await #expect(throws: SpeechEngineError.unknownVoice("nobody")) {
+            _ = try await engine.session(.readAloud, voice: .preset(speaker: "nobody", language: nil))
+        }
+        #expect(await synth.requests.isEmpty)
+    }
+
     @Test func mismatchedFingerprintIsRejected() async throws {
         let (engine, _) = await makeEngine()  // q8 engine
         let foreign = PinnedVoice(
@@ -600,3 +641,136 @@ private let shortText = "Hello there, this is a short utterance."
         #expect(resumed.count == 4 * Self.frame, "sound resets the run")
     }
 }
+
+// MARK: - The phone's two voices (ADR-0084)
+
+@Suite struct VoiceHandoverTests {
+
+    /// Each segment goes to the voice chosen as it starts: a change between
+    /// segments takes effect at the next one, and the utterance's frames run
+    /// on without a gap across it.
+    @Test func aChangeOfVoiceLandsOnASegmentBoundary() async throws {
+        let neural = ScriptedSynthesizer()
+        let system = ScriptedSynthesizer()
+        let choices = ChoiceScript([.fallback, .primary, .fallback])
+        let engine = SpeechEngine(
+            model: .customVoice06B,
+            synthesizer: VoiceHandover(
+                primary: neural, fallback: system, speakers: ["ryan"],
+                choose: { await choices.next() }))
+        let session = try await engine.session(
+            .readAloud, voice: .preset(speaker: "ryan", language: "English"))
+        let utterance = try await session.speak(longText)
+        var frames = 0
+        for try await event in utterance.events {
+            if case .audio(let chunk) = event {
+                #expect(chunk.frames.lowerBound == frames, "gapless across voices")
+                frames = chunk.frames.upperBound
+            }
+        }
+        // The second segment, and only it, in the neural voice.
+        #expect(utterance.segmentCount >= 2)
+        #expect(await neural.requests.count == 1)
+        #expect(await system.requests.count == utterance.segmentCount - 1)
+        #expect(await neural.requests.first?.speaker == "ryan")
+    }
+
+    /// The engine's loading and warming reach only the fallback: the primary
+    /// is the app's to prepare, and to keep through an unload.
+    @Test func theEngineLifecycleReachesOnlyTheFallback() async throws {
+        let neural = ScriptedSynthesizer()
+        let system = ScriptedSynthesizer()
+        let engine = SpeechEngine(
+            model: .customVoice06B,
+            synthesizer: VoiceHandover(
+                primary: neural, fallback: system, speakers: ["ryan"], choose: { .fallback }))
+        try await engine.prepare(.warm)
+        await engine.unload()
+        #expect(await system.loadCount == 1)
+        #expect(await system.unloadCount == 1)
+        #expect(await neural.loadCount == 0)
+        #expect(await neural.unloadCount == 0)
+    }
+
+    /// A segment the neural voice fails before any of its audio is read by
+    /// the fallback, and the app hears why: the reading goes on.
+    @Test func aSegmentThePrimaryFailsBeforeItsAudioIsReadByTheFallback() async throws {
+        let neural = ScriptedSynthesizer()
+        await neural.configure(.init(failOnSegmentIndex: 0))
+        let system = ScriptedSynthesizer()
+        let failures = Mutex(0)
+        let engine = SpeechEngine(
+            model: .customVoice06B,
+            synthesizer: VoiceHandover(
+                primary: neural, fallback: system, speakers: ["ryan"], choose: { .primary },
+                onPrimaryFailure: { _ in failures.withLock { $0 += 1 } }))
+        let session = try await engine.session(
+            .readAloud, voice: .preset(speaker: "ryan", language: "English"))
+        let utterance = try await session.speak(shortText)
+        var frames = 0
+        for try await event in utterance.events {
+            if case .audio(let chunk) = event { frames = chunk.frames.upperBound }
+        }
+        #expect(utterance.segmentCount == 1)
+        #expect(frames == 6, "the fallback's three chunks of two frames")
+        #expect(await system.requests.first?.text == neural.requests.first?.text)
+        #expect(failures.withLock { $0 } == 1)
+    }
+
+    /// A segment the neural voice fails partway can't be read again without
+    /// repeating words: its error ends the utterance.
+    @Test func aSegmentThePrimaryFailsPartwayEndsTheUtterance() async throws {
+        let neural = FailingAfterAudio()
+        let system = ScriptedSynthesizer()
+        let failures = Mutex(0)
+        let engine = SpeechEngine(
+            model: .customVoice06B,
+            synthesizer: VoiceHandover(
+                primary: neural, fallback: system, speakers: ["ryan"], choose: { .primary },
+                onPrimaryFailure: { _ in failures.withLock { $0 += 1 } }))
+        let session = try await engine.session(
+            .readAloud, voice: .preset(speaker: "ryan", language: "English"))
+        let utterance = try await session.speak(shortText)
+        await #expect(throws: (any Error).self) {
+            for try await _ in utterance.events {}
+        }
+        #expect(await system.requests.isEmpty)
+        #expect(failures.withLock { $0 } == 0)
+    }
+}
+
+/// A neural voice that fails after its first chunk of audio.
+private actor FailingAfterAudio: SpeechSynthesizing {
+    func checkAvailable(_ spec: TTSModelSpec) async throws {}
+    func load(_ spec: TTSModelSpec, onPhase: (@Sendable (EnginePhase) -> Void)?) async throws {}
+    func warmUp() async throws {}
+    func primeVoice(description: String?, language: String?) async throws {}
+    func unload() async {}
+    func audioFormat() async -> AudioFormat? {
+        AudioFormat(sampleRate: 24_000, samplesPerFrame: 1920)
+    }
+    func trimCaches() async {}
+
+    func synthesizeSegment(_ request: SegmentRequest) async
+        -> AsyncThrowingStream<SynthesisEvent, Error>
+    {
+        AsyncThrowingStream { continuation in
+            continuation.yield(.chunk([Float](repeating: 0.1, count: 1920 * 2)))
+            continuation.finish(throwing: SpeechEngineError.generationFailed("partway"))
+        }
+    }
+}
+
+/// Choices handed out in order, the last one repeating.
+private actor ChoiceScript {
+    private var choices: [VoiceHandover.Choice]
+
+    init(_ choices: [VoiceHandover.Choice]) {
+        self.choices = choices
+    }
+
+    func next() -> VoiceHandover.Choice {
+        choices.count > 1 ? choices.removeFirst() : choices[0]
+    }
+}
+

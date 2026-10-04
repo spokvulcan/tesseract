@@ -61,21 +61,27 @@ final class Qwen3TTSPromptBuilder {
     private let tokenizer: Tokenizer
     private let talker: Qwen3TTSTalker
     private let textEmbedding: Qwen3TTSTextEmbedding
+    /// Text embeddings to the talker's width: the talker's own projection,
+    /// unless the builder was given another.
+    private let project: (MLXArray) -> MLXArray
 
     /// TTS BOS/EOS/PAD on the text track, `[1, 1, D]` each.
     private let ttsBos: MLXArray
     private let ttsEos: MLXArray
     let ttsPad: MLXArray
 
+    /// `projection` stands in for the talker's text projection (the Neural
+    /// Engine path's dense copy, for MLX's CPU).
     init(
         config: Qwen3TTSModelConfig, tokenizer: Tokenizer, talker: Qwen3TTSTalker,
-        textEmbedding: Qwen3TTSTextEmbedding
+        textEmbedding: Qwen3TTSTextEmbedding, projection: ((MLXArray) -> MLXArray)? = nil
     ) throws {
         self.talkerConfig = config.talkerConfig ?? .defaults
         self.tokenizer = tokenizer
         self.talker = talker
         self.textEmbedding = textEmbedding
-        let special = talker.textProjection(
+        project = projection ?? { talker.textProjection($0) }
+        let special = project(
             try textEmbedding([
                 Int32(config.ttsBosTokenId), Int32(config.ttsEosTokenId),
                 Int32(config.ttsPadTokenId),
@@ -95,7 +101,7 @@ final class Qwen3TTSPromptBuilder {
     /// Text tokens on the text track: embedded, then projected to the
     /// talker's width.
     private func embedText(_ ids: [Int32]) throws -> MLXArray {
-        talker.textProjection(try textEmbedding(ids))
+        project(try textEmbedding(ids))
     }
 
     private func codec(_ ids: [Int]) -> MLXArray {

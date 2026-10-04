@@ -124,6 +124,27 @@ extension ModelDefinition {
     /// envelope; q6 peaks at 2.88 GB. q6 is the shipped default.
     static let textToSpeechModelSpec: TTSModelSpec = .voiceDesign17B(.q6)
 
+    /// The iPhone's voice (ADR-0084): Qwen3-TTS 0.6B CustomVoice, whose
+    /// speakers are the Preset Voices, prepared for the Neural Engine on the
+    /// phone. Its own catalog: the phone downloads nothing else.
+    static let phoneVoice = ModelDefinition(
+        id: "qwen3-tts-0.6b-customvoice",
+        displayName: "Neural Voice",
+        description: "Qwen3-TTS 0.6B, generated on the iPhone's Neural Engine.",
+        category: .textToSpeech,
+        source: .huggingFace(
+            repo: TTSModelSpec.customVoice06B.repo, requiredExtension: "safetensors"),
+        // The talker (1.29 GB), the codec's decoder (0.46 GB) and the
+        // tokenizer, from the hub listing on 2026-10-03.
+        sizeDescription: "1.8 GB",
+        dependencies: [],
+        completeness: .qwen3TTSCheckpoint)
+
+    /// Files the phone keeps only part of: the speech tokenizer's decoder,
+    /// not the encoder stored after it in the same file (225 MB that only
+    /// voice cloning reads). File path to the tensor-name prefix kept.
+    static let phoneVoiceTrims = ["speech_tokenizer/model.safetensors": "decoder."]
+
     /// Where the Voice Engine's voices come from. Its checkpoint is
     /// VoiceDesign, so a voice is a description the owner writes. The Speech
     /// page offers the voice designer only for a designed source.

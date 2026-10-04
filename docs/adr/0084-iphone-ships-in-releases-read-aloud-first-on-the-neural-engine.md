@@ -8,6 +8,8 @@
   checkpoint). ADR-0066 decision 3 stands.
 - Amends: ADR-0075 (on the phone, the talker and code predictor run on the
   Neural Engine too; the Mac is unchanged)
+- Extended by: ADR-0088 (how the talker and the code predictor run there:
+  the graphs, their weight format and measured precision, parity)
 - Relates to: [#515](https://github.com/spokvulcan/tesseract/issues/515)
   (release 1's PRD), ADR-0071 (first-party Qwen3-TTS), ADR-0074 (the parity
   method), ADR-0076 (the Reader), ADR-0077 (Word Timing)
@@ -192,6 +194,18 @@ when that buffer runs out, and a notification says why.
 - `Voice` gains the Preset Voice case.
 - Episode Origin, Device Tier, the Foreground Gate and the published LLM
   checkpoint wait for the release that needs them.
+
+## Amendment: the voice downloads from Hugging Face (2026-10-03, slice 4)
+
+#515 left slice 4 to choose between a second **Model Fetching** adapter and
+Apple-hosted asset packs. It took the adapter: a background URLSession over
+the Hugging Face files the Mac's catalog already uses, so the download goes
+on with the screen locked, resumes mid-file and rejoins its transfer after a
+relaunch, Wi-Fi only unless the owner allows cellular. Asset packs would need
+an App Store Connect upload from the owner for every checkpoint change, and a
+second path for development builds. The phone fetches only what it runs: the
+codec's decoder is the front of a file that also holds its encoder, so the
+phone fetches that range and rewrites the file's header (1.75 GB in all).
 
 ## Accepted costs
 

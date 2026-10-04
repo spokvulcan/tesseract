@@ -10,6 +10,8 @@ import Foundation
 public struct SegmentRequest: Sendable {
     public var text: String
     public var voiceDescription: String?
+    /// A Preset Voice's speaker, in place of a description (ADR-0084).
+    public var speaker: String?
     public var language: String?
     public var parameters: TTSParameters
     /// Resolved by the engine: `.entropy` becomes a fresh random value per
@@ -25,10 +27,12 @@ public struct SegmentRequest: Sendable {
     public init(
         text: String, voiceDescription: String?, language: String?,
         parameters: TTSParameters, seed: UInt64,
-        reference: ReferenceTake? = nil, capturesReference: Bool = false
+        reference: ReferenceTake? = nil, capturesReference: Bool = false,
+        speaker: String? = nil
     ) {
         self.text = text
         self.voiceDescription = voiceDescription
+        self.speaker = speaker
         self.language = language
         self.parameters = parameters
         self.seed = seed
@@ -86,6 +90,9 @@ public protocol SpeechSynthesizing: Sendable {
     func warmUp() async throws
     /// Precompute the instruct-prefix KV for a voice, off the hot path.
     func primeVoice(description: String?, language: String?) async throws
+    /// The loaded checkpoint's Preset Voices: its speakers, by name. Empty
+    /// for a checkpoint that has none.
+    func presetSpeakers() async -> [String]
     /// Deterministic release of weights, KV, caches; GPU-stream sync.
     func unload() async
     /// Available once loaded.
@@ -99,6 +106,10 @@ public protocol SpeechSynthesizing: Sendable {
     /// One buffer-pool trim (utterance end / teardown). Never touches the
     /// process-global cache limit (ADR-0039).
     func trimCaches() async
+}
+
+extension SpeechSynthesizing {
+    public func presetSpeakers() async -> [String] { [] }
 }
 
 // MARK: - Diagnostics tap (injected, default off — autopsy constraint 8)

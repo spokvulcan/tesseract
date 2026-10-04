@@ -66,6 +66,16 @@ let package = Package(
             dependencies: ["TesseractSpeech"],
             path: "Sources/Tools/v2-listen"
         ),
+        // Which MIL ops Core ML places on this machine's Neural Engine (NOT
+        // linked by the app): tiny programs, compiled and planned.
+        .executableTarget(
+            name: "ane-lab",
+            dependencies: [
+                "Qwen3TTS",
+                .product(name: "MLX", package: "mlx-swift"),
+            ],
+            path: "Sources/Tools/ane-lab"
+        ),
         // Model-level measurement harness (NOT linked by the app): memory at
         // each phase, per-component timings, and the golden code frames a
         // refactor is checked against. Real weights, below the engine.

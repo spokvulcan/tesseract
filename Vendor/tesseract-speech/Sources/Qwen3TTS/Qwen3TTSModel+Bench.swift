@@ -1,6 +1,8 @@
+import CoreML
 import Foundation
 @preconcurrency import MLX
 @preconcurrency import MLXLMCommon
+import MLXNN
 
 // Hooks for the qwen3-tts-bench tool: per-component timings with explicit
 // eval barriers, and teacher-forced logits. Not used by the engine.
@@ -244,5 +246,216 @@ extension Qwen3TTSCodecDecoder {
             start = end
         }
         return (samples, times)
+    }
+}
+
+extension Qwen3TTSModel {
+    /// The Neural Engine voice teacher-forced on `codeFrames`, against MLX:
+    /// the talker's logits before each frame, and the code predictor's for
+    /// groups 1...15 of each frame (through its forced variant, built into
+    /// `cacheDirectory`). Both sides get MLX's inputs: the prompt, each
+    /// frame's code embeddings, the talker's hidden state. Reports SNR, the
+    /// KL divergence of the draws (at 0.9 for the talker, over the codes it
+    /// may draw; at 0.5 for the code predictor), and how often the best code
+    /// agrees: ADR-0074's measures.
+    package func benchNeuralTeacherForced(
+        text: String, voice: String?, language: String?, codeFrames: [[Int32]],
+        cacheDirectory: URL
+    ) async throws -> String {
+        guard let neural = lock.withLock({ neuralVoice }) else { return "no neural voice" }
+        let (forced, _) = try await Qwen3TTSNeuralCodePredictor.load(
+            predictor: talker.codePredictor, topK: Qwen3TTSSampling.topK,
+            precision: neural.codePredictorPrecision, forced: true,
+            cacheDirectory: cacheDirectory, sourceKey: checkpointKey())
+
+        // MLX, with what the Neural Engine side is fed.
+        let prompt = try self.prompt(
+            text: text, voice: voice, language: language, reference: nil, layout: .interleaved)
+        let full = prompt.instruct.map { concatenated([$0, prompt.body], axis: 1) } ?? prompt.body
+        let cache = talker.makeCache(capacity: full.dim(1) + codeFrames.count + 1)
+        let codeCache = talker.codePredictor.makeCache()
+        var (logits, hidden) = talker.prefill(full, cache: cache)
+        var expectedTalker: [[Float]] = []
+        var expectedDetail: [[Float]] = []
+        var hiddens: [[Float16]] = []
+        var firstEmbeddings: [[Float16]] = []
+        var steps: [[Float16]] = []
+        for (t, frame) in codeFrames.enumerated() {
+            expectedTalker.append(logits.asType(.float32).asArray(Float.self))
+            hiddens.append(Self.rows(hidden)[0])
+            let codes = frame.map { MLXArray([$0]).reshaped(1, 1) }
+            let first = talker.embedCodec(codes[0])
+            firstEmbeddings.append(Self.rows(first)[0])
+            var groupLogits: [MLXArray] = []
+            let (_, sum) = talker.codePredictor.predict(
+                hidden: hidden, firstEmbedding: first, cache: codeCache
+            ) { group, logits in
+                groupLogits.append(logits)
+                return codes[group + 1]
+            }
+            expectedDetail.append(
+                concatenated(groupLogits, axis: 1).asType(.float32).asArray(Float.self))
+            let x = sum + prompt.text(forFrame: t)
+            steps.append(Self.rows(x)[0])
+            (logits, hidden) = talker(x, cache: cache)
+        }
+
+        func best(_ v: [Float]) -> Int { v.indices.max { v[$0] < v[$1] }! }
+        /// KL(MLX ‖ Neural Engine) of the draws at `temperature` over the
+        /// codes `allowed`, in nats.
+        func kl(_ expected: [Float], _ actual: [Float], temperature: Float, allowed: [Int]) -> Double {
+            func probabilities(_ logits: [Float]) -> [Double] {
+                let z = allowed.map { Double(logits[$0] / temperature) }
+                let top = z.max()!
+                let e = z.map { exp($0 - top) }
+                let sum = e.reduce(0, +)
+                return e.map { $0 / sum }
+            }
+            let (p, q) = (probabilities(expected), probabilities(actual))
+            return zip(p, q).reduce(0) { $0 + ($1.0 > 0 ? $1.0 * log($1.0 / max($1.1, 1e-30)) : 0) }
+        }
+
+        // The Neural Engine talker, step by step on the same inputs.
+        let session = try neural.talker.makeSession()
+        var step: Qwen3TTSNeuralTalker.Step?
+        for row in Self.rows(full) {
+            step = try row.withUnsafeBufferPointer { try neural.talker.step($0, session: session) }
+        }
+        let drawable = Array(0 ..< (talkerConfig.vocabSize - 1024)) + [talkerConfig.codecEosTokenId]
+        var talkerSNR: [Double] = []
+        var talkerKL: [Double] = []
+        var talkerAgree = 0
+        for t in codeFrames.indices {
+            guard let current = step else { break }
+            talkerSNR.append(Qwen3TTSNeuralCodec.snr(current.logits, expectedTalker[t]))
+            talkerKL.append(kl(expectedTalker[t], current.logits, temperature: 0.9, allowed: drawable))
+            if best(current.logits) == best(expectedTalker[t]) { talkerAgree += 1 }
+            if t + 1 < codeFrames.count {
+                step = try steps[t].withUnsafeBufferPointer {
+                    try neural.talker.step($0, session: session)
+                }
+            }
+        }
+
+        // The code predictor, forced through the same codes.
+        var detailSNR: [Double] = []
+        var detailKL: [Double] = []
+        var detailAgree = 0
+        let vocabulary = forced.vocabulary
+        let codes = Array(0 ..< vocabulary)
+        let hiddenArray = try MLMultiArray(
+            shape: [1, NSNumber(value: hiddens[0].count), 1, 1], dataType: .float16)
+        for (t, frame) in codeFrames.enumerated() {
+            hiddens[t].withUnsafeBufferPointer { hiddenArray.copy(from: $0) }
+            let actual = try firstEmbeddings[t].withUnsafeBufferPointer {
+                try forced.logits(hidden: hiddenArray, code0: $0, codes: Array(frame.dropFirst()))
+            }
+            for g in 0 ..< forced.passes {
+                let range = (g * vocabulary) ..< ((g + 1) * vocabulary)
+                let a = Array(actual[range])
+                let e = Array(expectedDetail[t][range])
+                detailSNR.append(Qwen3TTSNeuralCodec.snr(a, e))
+                detailKL.append(kl(e, a, temperature: 0.5, allowed: codes))
+                if best(a) == best(e) { detailAgree += 1 }
+            }
+        }
+        func summary(_ snr: [Double], _ kl: [Double], agree: Int) -> String {
+            let (s, k) = (snr.sorted(), kl.sorted())
+            return String(
+                format: "%.1f dB mean (p10 %.1f), KL %.1e mean (p90 %.1e), best code %d/%d",
+                snr.reduce(0, +) / Double(snr.count), s[s.count / 10],
+                kl.reduce(0, +) / Double(kl.count), k[k.count * 9 / 10], agree, snr.count)
+        }
+        return "talker \(summary(talkerSNR, talkerKL, agree: talkerAgree)); "
+            + "code predictor \(summary(detailSNR, detailKL, agree: detailAgree))"
+    }
+
+    /// Seconds per Neural Engine talker step, over `steps` steps after a
+    /// short prompt, and per code-predictor frame (drawn at 0.5).
+    package func benchNeuralCalls(steps: Int) throws -> (talker: [Double], codePredictor: [Double]) {
+        guard let neural = lock.withLock({ neuralVoice }) else { return ([], []) }
+        func now() -> UInt64 { DispatchTime.now().uptimeNanoseconds }
+        let session = try neural.talker.makeSession()
+        var random = NeuralRandom(seed: 3)
+        var x = [Float16](repeating: 0, count: talkerConfig.hiddenSize)
+        var talkerTimes: [Double] = []
+        var predictorTimes: [Double] = []
+        for _ in 0 ..< min(steps, neural.talker.contextLength) {
+            for i in x.indices { x[i] = Float16(random.uniform() - 0.5) }
+            let t0 = now()
+            let step = try x.withUnsafeBufferPointer { try neural.talker.step($0, session: session) }
+            let t1 = now()
+            _ = try neural.withCodecRow(Int(random.next() % 2048)) {
+                try neural.codePredictor.frame(
+                    hidden: step.hidden, code0: $0, temperature: 0.5, random: &random)
+            }
+            let t2 = now()
+            talkerTimes.append(Double(t1 - t0) / 1e9)
+            predictorTimes.append(Double(t2 - t1) / 1e9)
+        }
+        return (talkerTimes, predictorTimes)
+    }
+}
+
+extension Qwen3TTSModel {
+    /// The Neural Engine path's stages up to its first audio, timed one by
+    /// one, as `runNeural` runs them (MLX on the CPU): the prompt, its rows,
+    /// the prefill steps, three frames, the codec's front end and the
+    /// Neural Engine codec's first chunk.
+    package func benchNeuralFirstAudio(text: String, voice: String?) throws -> [(String, Double)] {
+        guard let neural = lock.withLock({ neuralVoice }) else { return [] }
+        func now() -> UInt64 { DispatchTime.now().uptimeNanoseconds }
+        var stages: [(String, Double)] = []
+        var t = now()
+        func lap(_ name: String) {
+            let next = now()
+            stages.append((name, Double(next - t) / 1e9))
+            t = next
+        }
+        return try Device.withDefaultDevice(.cpu) {
+            let prompt = try self.prompt(
+                text: text, voice: voice, language: nil, reference: nil, layout: .interleaved)
+            eval(prompt.body)
+            if let trailing = prompt.trailingText { eval(trailing) }
+            lap("prompt (\(prompt.textTokenCount) text tokens)")
+            let promptRows = (prompt.instruct.map(Self.rows) ?? []) + Self.rows(prompt.body)
+            let trailing = prompt.trailingText.map(Self.rows) ?? []
+            lap("rows")
+            let session = try neural.talker.makeSession()
+            var step: Qwen3TTSNeuralTalker.Step?
+            for row in promptRows {
+                step = try row.withUnsafeBufferPointer { try neural.talker.step($0, session: session) }
+            }
+            lap("prefill (\(promptRows.count) steps)")
+            var random = NeuralRandom(seed: 1)
+            var sampler = Qwen3TTSHostTalkerSampler(
+                sampling: Qwen3TTSSampling(), vocabSize: talkerConfig.vocabSize,
+                eosTokenID: talkerConfig.codecEosTokenId)
+            var frames: [[Int32]] = []
+            for frame in 0 ..< 3 {
+                let current = step!
+                let first = sampler(current.logits, frame: frame, random: &random)
+                let (rest, sum) = try neural.withCodecRow(first) {
+                    try neural.codePredictor.frame(
+                        hidden: current.hidden, code0: $0, temperature: 0.5, random: &random)
+                }
+                frames.append([Int32(first)] + rest)
+                let embeddings = sum.floats()
+                let text = trailing[min(frame, trailing.count - 1)]
+                let x = (0 ..< text.count).map { Float16(embeddings[$0] + Float(text[$0])) }
+                step = try x.withUnsafeBufferPointer { try neural.talker.step($0, session: session) }
+            }
+            lap("3 frames")
+            var decoder = codecDecoder.makeStream()
+            let codes = MLXArray(frames.flatMap { $0 }).reshaped(1, 3, -1)
+            let latent = codecDecoder.latent(codes, stream: &decoder).asType(.float16)
+                .asArray(Float16.self)
+            lap("codec front end")
+            if let codec = lock.withLock({ neuralCodec }) {
+                _ = try codec.decode(latent: latent, stream: try codec.makeStream())
+                lap("Neural Engine codec chunk")
+            }
+            return stages
+        }
     }
 }

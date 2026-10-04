@@ -20,6 +20,13 @@
 		E0A5AC022F50B000003C1B55 /* AgentPackages in Resources */ = {isa = PBXBuildFile; fileRef = E0A5AC012F50B000003C1B55 /* AgentPackages */; };
 		E0C655422F2EA000003C1B55 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = E0C655412F2EA000003C1B55 /* WhisperKit */; };
 		E0C655502F3BA000003C1B55 /* HuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = E0C655512F3BA000003C1B55 /* HuggingFace */; };
+		1A5E00012FA000000000000C /* TesseractSpeech in Frameworks */ = {isa = PBXBuildFile; productRef = 1A5E00012FA000000000000B /* TesseractSpeech */; };
+		1A5E593F5B4D7EBE658E2D0A /* SwiftSoup in Frameworks */ = {isa = PBXBuildFile; productRef = 1A5E126A54A671F78A48B296 /* SwiftSoup */; };
+		1A5E46D2295A8E0D176823E3 /* SwiftSoup in Frameworks */ = {isa = PBXBuildFile; productRef = 1A5E01DE491438BF198413F7 /* SwiftSoup */; };
+		1A5EA10B8E9839275785689C /* SwiftReadability in Frameworks */ = {isa = PBXBuildFile; productRef = 1A5E5D9AF0CAAB3D7D6584EC /* SwiftReadability */; };
+		1A5E00012FA000000000010C /* TesseractShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 1A5E00012FA0000000000101 /* TesseractShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		1A5E04461081738519549618 /* SwiftReadability in Frameworks */ = {isa = PBXBuildFile; productRef = 1A5EEB506BE097FE1AE9B940 /* SwiftReadability */; };
+		1A5ECFA17AD2FC4A24355419 /* SwiftSoup in Frameworks */ = {isa = PBXBuildFile; productRef = 1A5E522AB163F594422DD27D /* SwiftSoup */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -37,13 +44,36 @@
 			remoteGlobalIDString = E0C6548F2F2E946A003C1B55;
 			remoteInfo = tesseract;
 		};
+		1A5E00012FA000000000010D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E0C654882F2E946A003C1B55 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 1A5E00012FA0000000000104;
+			remoteInfo = "tesseract-share";
+		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		1A5E00012FA000000000010B /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				1A5E00012FA000000000010C /* TesseractShare.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		E0A5AC012F50B000003C1B55 /* AgentPackages */ = {isa = PBXFileReference; lastKnownFileType = folder; path = AgentPackages; sourceTree = "<group>"; };
 		E0C654902F2E946A003C1B55 /* tesseract.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = tesseract.app; path = "Tesseract Agent.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		E0C6549F2F2E946B003C1B55 /* tesseractTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = tesseractTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		E0C654A92F2E946B003C1B55 /* tesseractUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = tesseractUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		1A5E00012FA0000000000001 /* Tesseract.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Tesseract.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		1A5E00012FA0000000000101 /* TesseractShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TesseractShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -53,6 +83,103 @@
 				Info.plist,
 			);
 			target = E0C6548F2F2E946A003C1B55 /* tesseract */;
+		};
+		1A5E00012FA0000000000021 /* Exceptions for "Core" folder in "tesseract-ios" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Audio/AudioCaptureEngine.swift,
+				Audio/AudioDeviceManager.swift,
+				Audio/AudioMeter.swift,
+				Audio/CaptureDumpStore.swift,
+				Audio/CaptureEngineLifecycle.swift,
+				Audio/CaptureLevel.swift,
+				Audio/SystemAudioDucking.swift,
+				Audio/VoiceProcessingDuckPolicy.swift,
+				DictationPerf.swift,
+				JSONValueAccessors.swift,
+				MLXCheckedEvaluation.swift,
+				Permissions/PermissionsManager.swift,
+				PreviewHelpers.swift,
+				TargetApp.swift,
+				ViewModifiers.swift,
+				VisualEffectView.swift,
+				VoiceCaptureSession.swift,
+			);
+			target = 1A5E00012FA0000000000004 /* tesseract-ios */;
+		};
+		1A5E00012FA0000000000023 /* Exceptions for "Features/Models" folder in "tesseract-ios" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				HuggingFaceModelFetching.swift,
+				"ModelCatalog+Vision.swift",
+				"ModelDownloadManager+Vision.swift",
+				ModelsActionBar.swift,
+				ModelsPageView.swift,
+				RetiredCheckpoints.swift,
+			);
+			target = 1A5E00012FA0000000000004 /* tesseract-ios */;
+		};
+		1A5E00012FA0000000000025 /* Exceptions for "Features/Settings" folder in "tesseract-ios" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				AudioLevelMeter.swift,
+				LanguagePickerView.swift,
+				Panes/AgentSettingsPane.swift,
+				Panes/CompanionSettingsPane.swift,
+				Panes/DictationSettingsPane.swift,
+				Panes/GeneralSettingsPane.swift,
+				Panes/HotkeysSettingsPane.swift,
+				Panes/SpeechSettingsPane.swift,
+				"SettingsCatalogue+Mac.swift",
+				SettingsManager.swift,
+				SettingsWindowView.swift,
+				TranslateLanguageDefault.swift,
+			);
+			target = 1A5E00012FA0000000000004 /* tesseract-ios */;
+		};
+		1A5E00012FA0000000000027 /* Exceptions for "Features/Speech" folder in "tesseract-ios" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Overlay/CaptionLayout.swift,
+				Overlay/DynamicIslandShape.swift,
+				Overlay/SpeechOverlayView.swift,
+				Reader/ReaderTextView.swift,
+				Views/ReaderControlBar.swift,
+				Views/ReaderDisplaySettings.swift,
+				Views/SpeechContentView.swift,
+				Voices/VoicesSheet.swift,
+			);
+			target = 1A5E00012FA0000000000004 /* tesseract-ios */;
+		};
+		1A5E00012FA0000000000029 /* Exceptions for "Models" folder in "tesseract-ios" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				AudioData.swift,
+				AudioDevice.swift,
+				CheckBeforePasting.swift,
+				DictationError.swift,
+				KeyCombo.swift,
+				NavigationItem.swift,
+				SamplingPreset.swift,
+				SupportedLanguage.swift,
+				TranscriptionEntry.swift,
+				TranscriptionResult.swift,
+			);
+			target = 1A5E00012FA0000000000004 /* tesseract-ios */;
+		};
+		1A5E00012FA000000000010F /* Exceptions for "tesseract-ios" folder in "tesseract-ios" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 1A5E00012FA0000000000004 /* tesseract-ios */;
+		};
+		1A5E00012FA0000000000110 /* Exceptions for "tesseract-share" folder in "tesseract-share" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 1A5E00012FA0000000000104 /* tesseract-share */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -75,6 +202,73 @@
 			path = tesseractUITests;
 			sourceTree = "<group>";
 		};
+		1A5E00012FA0000000000002 /* tesseract-ios */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				1A5E00012FA000000000010F /* Exceptions for "tesseract-ios" folder in "tesseract-ios" target */,
+			);
+			path = "tesseract-ios";
+			sourceTree = "<group>";
+		};
+		1A5E00012FA0000000000020 /* Core */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				1A5E00012FA0000000000021 /* Exceptions for "Core" folder in "tesseract-ios" target */,
+			);
+			name = Core;
+			path = tesseract/Core;
+			sourceTree = "<group>";
+		};
+		1A5E00012FA0000000000022 /* Features/Models */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				1A5E00012FA0000000000023 /* Exceptions for "Features/Models" folder in "tesseract-ios" target */,
+			);
+			name = Models;
+			path = tesseract/Features/Models;
+			sourceTree = "<group>";
+		};
+		1A5E00012FA0000000000024 /* Features/Settings */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				1A5E00012FA0000000000025 /* Exceptions for "Features/Settings" folder in "tesseract-ios" target */,
+			);
+			name = Settings;
+			path = tesseract/Features/Settings;
+			sourceTree = "<group>";
+		};
+		1A5E00012FA0000000000026 /* Features/Speech */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				1A5E00012FA0000000000027 /* Exceptions for "Features/Speech" folder in "tesseract-ios" target */,
+			);
+			name = Speech;
+			path = tesseract/Features/Speech;
+			sourceTree = "<group>";
+		};
+		1A5E00012FA0000000000028 /* Models */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				1A5E00012FA0000000000029 /* Exceptions for "Models" folder in "tesseract-ios" target */,
+			);
+			name = Models;
+			path = tesseract/Models;
+			sourceTree = "<group>";
+		};
+		1A5E00012FA0000000000102 /* tesseract-share */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				1A5E00012FA0000000000110 /* Exceptions for "tesseract-share" folder in "tesseract-share" target */,
+			);
+			path = "tesseract-share";
+			sourceTree = "<group>";
+		};
+		1A5E00012FA0000000000103 /* Features/Speech/Intake */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			name = "Features/Speech/Intake";
+			path = tesseract/Features/Speech/Intake;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -82,6 +276,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1A5E593F5B4D7EBE658E2D0A /* SwiftSoup in Frameworks */,
 				E0C655422F2EA000003C1B55 /* WhisperKit in Frameworks */,
 				E0C655502F3BA000003C1B55 /* HuggingFace in Frameworks */,
 				E0A111002F41A000003C1B55 /* MLXLLM in Frameworks */,
@@ -111,6 +306,25 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		1A5E00012FA0000000000006 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1A5EA10B8E9839275785689C /* SwiftReadability in Frameworks */,
+				1A5E46D2295A8E0D176823E3 /* SwiftSoup in Frameworks */,
+				1A5E00012FA000000000000C /* TesseractSpeech in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1A5E00012FA0000000000106 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1A5ECFA17AD2FC4A24355419 /* SwiftSoup in Frameworks */,
+				1A5E04461081738519549618 /* SwiftReadability in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -121,6 +335,9 @@
 				E0C654922F2E946A003C1B55 /* tesseract */,
 				E0C654A22F2E946B003C1B55 /* tesseractTests */,
 				E0C654AC2F2E946B003C1B55 /* tesseractUITests */,
+				1A5E00012FA0000000000002 /* tesseract-ios */,
+				1A5E00012FA0000000000102 /* tesseract-share */,
+				1A5E00012FA0000000000040 /* Shared with tesseract-ios */,
 				E0C654912F2E946A003C1B55 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -131,8 +348,23 @@
 				E0C654902F2E946A003C1B55 /* tesseract.app */,
 				E0C6549F2F2E946B003C1B55 /* tesseractTests.xctest */,
 				E0C654A92F2E946B003C1B55 /* tesseractUITests.xctest */,
+				1A5E00012FA0000000000001 /* Tesseract.app */,
+				1A5E00012FA0000000000101 /* TesseractShare.appex */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		1A5E00012FA0000000000040 /* Shared with tesseract-ios */ = {
+			isa = PBXGroup;
+			children = (
+				1A5E00012FA0000000000020 /* Core */,
+				1A5E00012FA0000000000022 /* Features/Models */,
+				1A5E00012FA0000000000024 /* Features/Settings */,
+				1A5E00012FA0000000000026 /* Features/Speech */,
+				1A5E00012FA0000000000028 /* Models */,
+				1A5E00012FA0000000000103 /* Features/Speech/Intake */,
+			);
+			name = "Shared with tesseract-ios";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -155,6 +387,7 @@
 			);
 			name = tesseract;
 			packageProductDependencies = (
+				1A5E126A54A671F78A48B296 /* SwiftSoup */,
 				E0C655412F2EA000003C1B55 /* WhisperKit */,
 				E0C655512F3BA000003C1B55 /* HuggingFace */,
 				E0A111012F41A000003C1B55 /* MLXLLM */,
@@ -214,6 +447,63 @@
 			productReference = E0C654A92F2E946B003C1B55 /* tesseractUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		1A5E00012FA0000000000004 /* tesseract-ios */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1A5E00012FA000000000000A /* Build configuration list for PBXNativeTarget "tesseract-ios" */;
+			buildPhases = (
+				1A5E00012FA0000000000005 /* Sources */,
+				1A5E00012FA0000000000006 /* Frameworks */,
+				1A5E00012FA0000000000007 /* Resources */,
+				1A5E00012FA000000000010B /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				1A5E00012FA000000000010E /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				1A5E00012FA0000000000020 /* Core */,
+				1A5E00012FA0000000000022 /* Features/Models */,
+				1A5E00012FA0000000000024 /* Features/Settings */,
+				1A5E00012FA0000000000026 /* Features/Speech */,
+				1A5E00012FA0000000000028 /* Models */,
+				1A5E00012FA0000000000002 /* tesseract-ios */,
+			);
+			name = "tesseract-ios";
+			packageProductDependencies = (
+				1A5E5D9AF0CAAB3D7D6584EC /* SwiftReadability */,
+				1A5E01DE491438BF198413F7 /* SwiftSoup */,
+				1A5E00012FA000000000000B /* TesseractSpeech */,
+			);
+			productName = "tesseract-ios";
+			productReference = 1A5E00012FA0000000000001 /* Tesseract.app */;
+			productType = "com.apple.product-type.application";
+		};
+		1A5E00012FA0000000000104 /* tesseract-share */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1A5E00012FA000000000010A /* Build configuration list for PBXNativeTarget "tesseract-share" */;
+			buildPhases = (
+				1A5E00012FA0000000000105 /* Sources */,
+				1A5E00012FA0000000000106 /* Frameworks */,
+				1A5E00012FA0000000000107 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				1A5E00012FA0000000000102 /* tesseract-share */,
+				1A5E00012FA0000000000103 /* Features/Speech/Intake */,
+			);
+			name = "tesseract-share";
+			packageProductDependencies = (
+				1A5E522AB163F594422DD27D /* SwiftSoup */,
+				1A5EEB506BE097FE1AE9B940 /* SwiftReadability */,
+			);
+			productName = "tesseract-share";
+			productReference = 1A5E00012FA0000000000101 /* TesseractShare.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -234,6 +524,12 @@
 					E0C654A82F2E946B003C1B55 = {
 						CreatedOnToolsVersion = 26.2;
 						TestTargetID = E0C6548F2F2E946A003C1B55;
+					};
+					1A5E00012FA0000000000004 = {
+						CreatedOnToolsVersion = 27.0;
+					};
+					1A5E00012FA0000000000104 = {
+						CreatedOnToolsVersion = 27.0;
 					};
 				};
 			};
@@ -256,6 +552,7 @@
 				A8F92BD32F80A000003C1B55 /* XCRemoteSwiftPackageReference "Demark" */,
 				E07E1A012F80B000003C1B55 /* XCLocalSwiftPackageReference "Vendor/tesseract-highlight" */,
 				E07E1A112F80B000003C1B55 /* XCLocalSwiftPackageReference "Vendor/tesseract-speech" */,
+				1A5E00012FA0000000000050 /* XCRemoteSwiftPackageReference "SwiftSoup" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E0C654912F2E946A003C1B55 /* Products */;
@@ -265,6 +562,8 @@
 				E0C6548F2F2E946A003C1B55 /* tesseract */,
 				E0C6549E2F2E946B003C1B55 /* tesseractTests */,
 				E0C654A82F2E946B003C1B55 /* tesseractUITests */,
+				1A5E00012FA0000000000004 /* tesseract-ios */,
+				1A5E00012FA0000000000104 /* tesseract-share */,
 			);
 		};
 /* End PBXProject section */
@@ -286,6 +585,20 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		E0C654A72F2E946B003C1B55 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1A5E00012FA0000000000007 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1A5E00012FA0000000000107 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -316,6 +629,20 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		1A5E00012FA0000000000005 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1A5E00012FA0000000000105 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -328,6 +655,11 @@
 			isa = PBXTargetDependency;
 			target = E0C6548F2F2E946A003C1B55 /* tesseract */;
 			targetProxy = E0C654AA2F2E946B003C1B55 /* PBXContainerItemProxy */;
+		};
+		1A5E00012FA000000000010E /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 1A5E00012FA0000000000104 /* tesseract-share */;
+			targetProxy = 1A5E00012FA000000000010D /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -656,6 +988,158 @@
 			};
 			name = Release;
 		};
+		1A5E00012FA0000000000008 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "tesseract-ios/tesseract-ios.entitlements";
+				INFOPLIST_FILE = "tesseract-ios/Info.plist";
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 5RBTC2MNY8;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Tesseract;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				OTHER_SWIFT_FLAGS = "$(inherited) -enable-actor-data-race-checks";
+				PRODUCT_BUNDLE_IDENTIFIER = app.tesseract.agent;
+				PRODUCT_NAME = Tesseract;
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.2;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		1A5E00012FA0000000000009 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "tesseract-ios/tesseract-ios.entitlements";
+				INFOPLIST_FILE = "tesseract-ios/Info.plist";
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 5RBTC2MNY8;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Tesseract;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = app.tesseract.agent;
+				PRODUCT_NAME = Tesseract;
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.2;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		1A5E00012FA0000000000108 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = "tesseract-share/tesseract-share.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 5RBTC2MNY8;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "tesseract-share/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Read in Tesseract";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				OTHER_SWIFT_FLAGS = "$(inherited) -enable-actor-data-race-checks";
+				PRODUCT_BUNDLE_IDENTIFIER = app.tesseract.agent.share;
+				PRODUCT_NAME = TesseractShare;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.2;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		1A5E00012FA0000000000109 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = "tesseract-share/tesseract-share.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 5RBTC2MNY8;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "tesseract-share/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Read in Tesseract";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = app.tesseract.agent.share;
+				PRODUCT_NAME = TesseractShare;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.2;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -691,6 +1175,24 @@
 			buildConfigurations = (
 				E0C654BA2F2E946B003C1B55 /* Debug */,
 				E0C654BB2F2E946B003C1B55 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		1A5E00012FA000000000000A /* Build configuration list for PBXNativeTarget "tesseract-ios" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1A5E00012FA0000000000008 /* Debug */,
+				1A5E00012FA0000000000009 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		1A5E00012FA000000000010A /* Build configuration list for PBXNativeTarget "tesseract-share" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1A5E00012FA0000000000108 /* Debug */,
+				1A5E00012FA0000000000109 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -761,6 +1263,14 @@
 				minimumVersion = 0.8.1;
 			};
 		};
+		1A5E00012FA0000000000050 /* XCRemoteSwiftPackageReference "SwiftSoup" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/scinfu/SwiftSoup.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.11.3;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -823,6 +1333,36 @@
 			isa = XCSwiftPackageProductDependency;
 			package = E0C655522F3BA000003C1B55 /* XCRemoteSwiftPackageReference "swift-huggingface" */;
 			productName = HuggingFace;
+		};
+		1A5E00012FA000000000000B /* TesseractSpeech */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E07E1A112F80B000003C1B55 /* XCLocalSwiftPackageReference "Vendor/tesseract-speech" */;
+			productName = TesseractSpeech;
+		};
+		1A5E126A54A671F78A48B296 /* SwiftSoup */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 1A5E00012FA0000000000050 /* XCRemoteSwiftPackageReference "SwiftSoup" */;
+			productName = SwiftSoup;
+		};
+		1A5E01DE491438BF198413F7 /* SwiftSoup */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 1A5E00012FA0000000000050 /* XCRemoteSwiftPackageReference "SwiftSoup" */;
+			productName = SwiftSoup;
+		};
+		1A5E5D9AF0CAAB3D7D6584EC /* SwiftReadability */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA6841922F80A000003C1B55 /* XCRemoteSwiftPackageReference "swift-readability" */;
+			productName = SwiftReadability;
+		};
+		1A5EEB506BE097FE1AE9B940 /* SwiftReadability */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA6841922F80A000003C1B55 /* XCRemoteSwiftPackageReference "swift-readability" */;
+			productName = SwiftReadability;
+		};
+		1A5E522AB163F594422DD27D /* SwiftSoup */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 1A5E00012FA0000000000050 /* XCRemoteSwiftPackageReference "SwiftSoup" */;
+			productName = SwiftSoup;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

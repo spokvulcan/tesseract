@@ -24,6 +24,16 @@
 //              replaces, teacher-forced and sampled; mismatches to --out.
 //   prefill  — prompt prefills as one graph and a layer at a time: time,
 //              and what each new length leaves in MLX's pool.
+//   neural-voice — the talker and the code predictor on the Neural Engine
+//              (ADR-0084): build or load them (--context N positions),
+//              placement and the check against MLX, teacher-forced parity on
+//              --golden frames, time per call and to first audio, then
+//              --repeat renders of each prompt at seeds --seed, --seed + 1, …
+//              with the whole voice on the Neural Engine, and with
+//              --mlx-renders the same renders on MLX first (WAVs to
+//              --wav-dir, as ane-<prompt>-<seed> and mlx-<prompt>-<seed>;
+//              --only NAME renders that prompt alone).
+//              --voice picks a CustomVoice speaker.
 //
 // Build with xcodebuild (scheme qwen3-tts-bench) so MLX's metallib lands next
 // to the binary.
@@ -46,6 +56,10 @@ struct Args {
     var chunk = 5
     var hold: Double = 0
     var golden: String?
+    var voice: String?
+    var context = 512
+    var mlxRenders = false
+    var only: String?
 }
 
 func parseArgs() -> Args {
@@ -66,6 +80,10 @@ func parseArgs() -> Args {
         case "--chunk": a.chunk = Int(next(flag))!
         case "--hold": a.hold = Double(next(flag))!
         case "--golden": a.golden = next(flag)
+        case "--voice": a.voice = next(flag)
+        case "--context": a.context = Int(next(flag))!
+        case "--mlx-renders": a.mlxRenders = true
+        case "--only": a.only = next(flag)
         default: fatalError("unknown flag \(flag)")
         }
     }
@@ -143,7 +161,11 @@ func probe(_ label: String) -> MemorySample {
 
 // MARK: - Fixtures
 
-let voice = "A calm, warm female narrator with a clear, steady tone."
+// Line by line, so a long run can be followed in its log.
+setvbuf(stdout, nil, _IOLBF, 0)
+
+let args = parseArgs()
+let voice = args.voice ?? "A calm, warm female narrator with a clear, steady tone."
 
 /// Fixed prompts for golden files: a short companion line, a medium
 /// sentence pair, and a long paragraph that runs past the decoder's
@@ -270,7 +292,6 @@ func stats(_ xs: [Double]) -> String {
 
 // MARK: - Main
 
-let args = parseArgs()
 let checkpoint = URL(fileURLWithPath: args.checkpoint, isDirectory: true)
 
 probe("start")
@@ -429,6 +450,55 @@ case "neural":
     }
     probe("after neural generations")
 
+case "neural-voice":
+    let cache = URL(fileURLWithPath: args.out ?? NSTemporaryDirectory())
+        .appendingPathComponent("ane-cache", isDirectory: true)
+    let seeds = (0 ..< args.repeatCount).map { args.seed + UInt64($0) }
+    /// Every prompt at every seed, on whatever the model runs now.
+    func renders(_ label: String) async throws {
+        for seed in seeds {
+            for (name, text) in prompts where args.only.map({ $0 == name }) ?? true {
+                let (record, samples) = try await render(model, text: text, reference: nil, seed: seed)
+                print(record.summary("\(label) \(name) seed \(seed)"))
+                try saveWav(samples, "\(label)-\(name)-\(seed)", sampleRate: model.sampleRate, in: args.wavDir)
+            }
+        }
+    }
+    if args.mlxRenders { try await renders("mlx") }
+    var t0 = now()
+    let report = try await model.prepareNeuralVoice(
+        cacheDirectory: cache, contextLength: args.context,
+        alignment: Qwen3TTSAlignmentHead(layer: 6, head: 5))
+    print(String(format: "neural voice ready in %.2f s: %@", seconds(since: t0), report))
+    probe("neural voice loaded")
+    t0 = now()
+    let codec = try await model.prepareNeuralEngine(cacheDirectory: cache, frames: args.chunk)
+    print(String(format: "neural codec ready in %.2f s: %@", seconds(since: t0), codec))
+    if args.golden != nil {
+        let records = try loadGolden(args.golden, for: "neural-voice")
+        for name in ["short", "medium", "long"] {
+            guard let record = records.first(where: { $0.name == name }) else { continue }
+            let parity = try await model.benchNeuralTeacherForced(
+                text: goldenInput(name, records).text, voice: voice,
+                language: nil, codeFrames: record.codeFrames, cacheDirectory: cache)
+            print("teacher-forced \(name) (\(record.frames) frames): \(parity)")
+        }
+    }
+    for (name, text) in prompts {
+        for attempt in 0 ..< 2 {
+            let stages = try model.benchNeuralFirstAudio(text: text, voice: voice)
+            print("first audio \(name) #\(attempt): " + stages.map {
+                String(format: "%@ %.0f ms", $0.0 as NSString, $0.1 * 1e3)
+            }.joined(separator: ", "))
+        }
+    }
+    let calls = try model.benchNeuralCalls(steps: 100)
+    print("talker step:          \(stats(Array(calls.talker.dropFirst(5))))")
+    print("code predictor frame: \(stats(Array(calls.codePredictor.dropFirst(5))))")
+    probe("after neural calls")
+    try await renders("ane")
+    probe("after neural voice generations")
+
 case "kernels":
     // The fused kernels against the MLX ops they replace: same seed, codes
     // compared, time per frame.
@@ -526,7 +596,7 @@ if args.hold > 0 {
     try await Task.sleep(nanoseconds: UInt64(args.hold * 1e9))
 }
 
-if let out = args.out, !["generate", "trace", "trace-unfused", "neural", "decode", "audit", "prefill"].contains(args.mode) {
+if let out = args.out, !["generate", "trace", "trace-unfused", "neural", "neural-voice", "decode", "audit", "prefill"].contains(args.mode) {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     try encoder.encode(["memory": memorySamples]).write(to: URL(fileURLWithPath: out))

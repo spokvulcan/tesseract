@@ -175,7 +175,7 @@ final class AgentVoiceInputController {
 
         voiceErrorResetTask?.cancel()
         voiceErrorResetTask = Task {
-            try? await Task.sleep(for: VoiceCaptureSession.errorAutoResetDelay)
+            try? await Task.sleep(for: ErrorAutoReset.delay)
             if case .error = voiceState {
                 voiceState = .idle
             }
