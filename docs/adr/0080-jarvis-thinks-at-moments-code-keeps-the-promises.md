@@ -189,3 +189,32 @@ skipped because the Mac was on battery (at 85%). What changed:
   macOS delivered is recorded once, read back from Notification Center on the
   tick. A reply's model label is the model selected at that turn.
 - Moments take their turn at the LLM Gate (ADR-0081) and compact inside it.
+
+## Amendments (2026-10-04, Today as steps)
+
+The owner found Today hard to read: one column of sections at the same weight
+(the day, Anytime, Capture, Waiting on You, the Inbox), a long paragraph of
+Jarvis's in secondary text at the top, empty sections taking room, and
+nothing that said what to do now. What changed:
+
+- **The Now Card tops Today**: the step the day is on, with one-click offers
+  that move it on (Done, Start now, "Do it at 16:30", Tomorrow, Plan my day,
+  Wrap up the day). Code builds it from the Timeline (`NowCardBuilder`, a
+  decision table pinned by `NowCardTests`), so it is there the moment Today
+  opens. Jarvis's latest card line rides on it while it is fresh, and Waiting
+  on You and the Evening Wrap-up's leftovers moved onto it, so each thing is
+  said once.
+- **The day is steps on one Day Line**: a table (time, task, Area, length) on
+  a wide page and a list shaped for a phone below 640 pt. The phone list is a
+  starting point for the Companion's phone UX (ADR-0084, release 4); the
+  Companion itself stays Mac-only.
+- **Offers, not searches**: an Inbox item offers a concrete slot ("At 16:30",
+  clear of the Now Card's offer and of the items above it) or Tomorrow, in
+  place of "Find a time", which did nothing once the day was full.
+- **One field, the Today composer**: the agent composer simplified (its glass,
+  notice slot and action row, design-language §1) to Add task (⌘↩, Capture
+  with no model), a hold-to-talk mic and send. Capture's own box is gone. The
+  latest agenda change confirms itself in the notice slot, with an undo.
+- `TodayGalleryTests` renders Today over fixture days at three widths;
+  `TEST_RUNNER_TODAY_GALLERY_DIR` writes the renders as PNGs, for judging the
+  page by eye.

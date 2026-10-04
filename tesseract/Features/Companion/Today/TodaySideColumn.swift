@@ -2,161 +2,92 @@
 //  TodaySideColumn.swift
 //  tesseract
 //
-//  Today's side column: Capture, Waiting on you, the Inbox (with "Find a
-//  time") and "Jarvis noticed". At narrow widths it stacks below the
-//  Timeline.
+//  Today's side column: the Inbox, each item with the slot Jarvis offers
+//  for it (a free half hour today, clear of his other offers, or tomorrow),
+//  and "Jarvis noticed". On a narrower page it stacks below the day.
 //
 
 import SwiftUI
 
 struct TodaySideColumn: View {
-    @Environment(Agenda.self) private var agenda
-    @Environment(CompanionRuntime.self) private var runtime
-    let now: Date
+    let facts: DayFacts
+    let isEvening: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: TodayLayout.rhythm) {
-            CaptureBox()
-            section("Waiting on you") {
-                WaitingOnYou(now: now)
-            }
-            InboxSection(now: now)
+            InboxSection(facts: facts, isEvening: isEvening)
             JarvisNoticed()
         }
     }
 
-    private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content)
-        -> some View
-    {
-        VStack(alignment: .leading, spacing: TodayLayout.rowSpacing) {
-            Text(title).fontWeight(.semibold)
-            content()
+    /// Undated captures in the Inbox. One that has a slot in today's plan
+    /// has left the Inbox for the day's steps.
+    @MainActor
+    static func inbox(agenda: Agenda, plan: [Placement]) -> [AgendaReminder] {
+        let inboxID = agenda.inbox?.id
+        let planned = Set(plan.map(\.reminderID))
+        return agenda.snapshot.open.filter {
+            $0.due == nil && $0.listID == inboxID && !planned.contains($0.id)
         }
-    }
-}
-
-private struct CaptureBox: View {
-    @Environment(CaptureService.self) private var capture
-    @State private var text = ""
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: TodayLayout.rowSpacing) {
-            Text("Capture").fontWeight(.semibold)
-            TextField("Remind me to…", text: $text)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit(submit)
-            if let outcome = capture.lastOutcome {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(outcome.line)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 0)
-                    if case .added = outcome {
-                        Button("Undo") { Task { await capture.undoLast() } }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(Color.accentColor)
-                            .focusable(false)
-                    }
-                }
-            }
-        }
-    }
-
-    private func submit() {
-        let captured = text
-        text = ""
-        Task { await capture.capture(captured, source: "today") }
     }
 }
 
 private struct InboxSection: View {
     @Environment(Agenda.self) private var agenda
     @Environment(CompanionRuntime.self) private var runtime
-    let now: Date
+    let facts: DayFacts
+    let isEvening: Bool
+
+    /// The most the column lists; Reminders holds the rest.
+    private static let shown = 12
 
     var body: some View {
-        let inboxID = agenda.inbox?.id
-        let items = agenda.snapshot.open.filter { $0.due == nil && $0.listID == inboxID }
+        let items = TodaySideColumn.inbox(agenda: agenda, plan: runtime.state.plan)
+        let shown = Array(items.prefix(Self.shown))
+        let slots = InboxSlot.suggest(for: shown.map(\.id), facts: facts, evening: isEvening)
+        let actions = TodayActions(agenda: agenda, runtime: runtime)
         VStack(alignment: .leading, spacing: TodayLayout.rowSpacing) {
-            Text("Inbox").fontWeight(.semibold)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text("Inbox").fontWeight(.semibold)
+                if !items.isEmpty {
+                    Text("\(items.count)").foregroundStyle(.secondary).monospacedDigit()
+                }
+            }
             if items.isEmpty {
                 Text("Inbox is clear.").foregroundStyle(.secondary)
             }
-            ForEach(items.prefix(12)) { reminder in
+            ForEach(shown) { reminder in
+                let slot = slots[reminder.id] ?? .tomorrow
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(reminder.title).lineLimit(2)
-                    Spacer(minLength: 4)
-                    if runtime.state.plan.contains(where: { $0.reminderID == reminder.id }) {
-                        Text("Planned").foregroundStyle(.secondary)
-                    } else {
-                        Button("Find a time") { findTime(for: reminder) }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(Color.accentColor)
-                            .focusable(false)
-                    }
-                }
-            }
-            if items.count > 12 {
-                Text("…and \(items.count - 12) more in Reminders.").foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func findTime(for reminder: AgendaReminder) {
-        let facts = DayFacts(
-            snapshot: agenda.snapshot, areas: agenda.areas, inboxListID: agenda.inbox?.id,
-            now: now, mustDoID: runtime.state.mustDoID, plan: runtime.state.plan)
-        let minutes = 30
-        guard let start = TimelineBuilder.firstFreeSlot(minutes: minutes, facts: facts) else {
-            return
-        }
-        runtime.act(.place(reminderID: reminder.id, start: start, minutes: minutes))
-    }
-}
-
-/// Coding agents that wait on the owner, and what the day's open cards say
-/// needs them.
-private struct WaitingOnYou: View {
-    @Environment(CompanionRuntime.self) private var runtime
-    let now: Date
-
-    var body: some View {
-        let agents = runtime.state.agentsWaiting(now: now)
-        let cards = runtime.state.openCards.compactMap { card -> (String, [WaitingItem])? in
-            switch card.body {
-            case .breakpoint(let breakpoint):
-                let items = breakpoint.needsYou.filter { $0.kind != .agent }
-                return items.isEmpty ? nil : (card.id, items)
-            case .triage(let triage):
-                return triage.raise.isEmpty ? nil : (card.id, triage.raise)
-            case .morningPlan, .eveningWrapUp, .reflection:
-                return nil
-            }
-        }
-        VStack(alignment: .leading, spacing: TodayLayout.rowSpacing) {
-            if agents.isEmpty && cards.isEmpty {
-                Text("Nothing waiting on you.").foregroundStyle(.secondary)
-            }
-            ForEach(agents) { agent in
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(agent.title).fontWeight(.medium).lineLimit(1)
-                        Text(agent.kind == .waiting ? agent.message : "Finished: \(agent.message)")
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                    }
-                    Spacer(minLength: 6)
-                    Button("Handled") { runtime.act(.agentHandled(agentID: agent.id)) }
+                    Spacer(minLength: 8)
+                    Button(title(of: slot)) { actions.take(slot, for: reminder.id) }
                         .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.accentColor)
                         .focusable(false)
+                        .help(help(for: slot))
                 }
+                .padding(.vertical, 2)
             }
-            ForEach(cards, id: \.0) { cardID, items in
-                ForEach(items) { item in
-                    WaitingItemRow(cardID: cardID, item: item)
-                }
+            if items.count > Self.shown {
+                Text("…and \(items.count - Self.shown) more in Reminders.")
+                    .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    private func title(of slot: InboxSlot) -> String {
+        switch slot {
+        case .today(let start): "At \(AgendaTime.clock(start))"
+        case .tomorrow: "Tomorrow"
+        }
+    }
+
+    private func help(for slot: InboxSlot) -> String {
+        switch slot {
+        case .today(let start):
+            "Give it half an hour today at \(AgendaTime.clock(start)), the next free slot"
+        case .tomorrow: "Make it due tomorrow; tomorrow's plan finds it a time"
         }
     }
 }
