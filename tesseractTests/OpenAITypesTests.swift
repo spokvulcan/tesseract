@@ -606,6 +606,13 @@ struct OpenAITypesTests {
         #expect(decoded.data[0].state == "loaded")
     }
 
+    @Test func encodesServerVersionAtTopLevel() throws {
+        let response = OpenAI.ModelListResponse(server_version: "1.17.0", data: [])
+        let data = try JSONEncoder().encode(response)
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(json["server_version"] as? String == "1.17.0")
+    }
+
     @Test func encodesEmptyModelList() throws {
         let response = OpenAI.ModelListResponse(data: [])
         let data = try JSONEncoder().encode(response)
