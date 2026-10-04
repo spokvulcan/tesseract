@@ -85,7 +85,8 @@ extension View {
             .environmentObject(container.permissionsManager)
     }
 
-    /// Dictation feature: coordinator, transcription engine/history, audio capture.
+    /// Dictation feature: coordinator, transcription engine/history, audio
+    /// capture, and the **Lens** for fixing a take from the Dictation page.
     @MainActor
     func injectDictationDependencies(from container: DependencyContainer) -> some View {
         self
@@ -93,7 +94,13 @@ extension View {
             .environment(container.transcriptionEngine)
             .environment(container.transcriptionHistory)
             .environment(container.correctionPairStore)
+            .environment(container.learnedWordStore)
             .environment(container.audioCaptureEngine)
+            .environment(
+                \.fixInLens,
+                FixInLensAction { [weak container] take in
+                    container?.dictationLens.openFromPage(take) ?? false
+                })
     }
 
     /// Speech/TTS feature: coordinator and engine presenter.

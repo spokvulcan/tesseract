@@ -55,14 +55,16 @@ final class AgentVoiceInputController {
         transcriptionEngine: (any Transcribing)? = nil,
         settings: SettingsManager? = nil,
         proofreadPass: ProofreadPass? = nil,
-        captureDump: (any CaptureDumpStoring)? = nil
+        captureDump: (any CaptureDumpStoring)? = nil,
+        learnedWords: (any LearnedWordApplying)? = nil
     ) {
         if let audioCapture, let transcriptionEngine {
             self.session = VoiceCaptureSession(
                 audioCapture: audioCapture,
                 transcriptionEngine: transcriptionEngine,
                 captureDump: captureDump,
-                isCaptureDumpEnabled: { settings?.captureDumpEnabled ?? true }
+                isCaptureDumpEnabled: { settings?.captureDumpEnabled ?? true },
+                learnedWords: learnedWords
             )
         } else {
             self.session = nil
@@ -110,6 +112,8 @@ final class AgentVoiceInputController {
         switch session.stop() {
         case .noAudio, .tooShort:
             setVoiceError("Recording too short")
+        case .silent:
+            setVoiceError("Didn't hear anything")
         case .audio(let audioData, _):
             voiceState = .transcribing
             Log.agent.info(

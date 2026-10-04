@@ -44,31 +44,48 @@ struct DictationFeedTests {
         #expect(!DictationFeed.Phase.error(.noSpeechDetected).isActive)
     }
 
-    // MARK: - Live Partial (ticket #291)
+    // MARK: - Live Preview (PRD #612)
+
+    private func preview(_ text: String) -> LivePreview {
+        LivePreview(text: text, catches: [], confirmedTokens: 0)
+    }
 
     @Test
-    func partialIsRecordingScopedAndClearsOnPhaseExit() {
+    func previewIsRecordingScopedAndClearsOnPhaseExit() {
         let feed = DictationFeed()
 
         // Writes outside `.recording` are dropped — a decode resolving after
-        // the key release cannot resurrect a caption.
-        feed.setPartial("hello")
-        #expect(feed.partial == nil)
+        // the key release cannot resurrect a preview.
+        feed.setPreview(preview("hello"))
+        #expect(feed.preview == nil)
 
         feed.setPhase(.recording)
-        feed.setPartial("hello")
-        #expect(feed.partial == "hello")
+        feed.setPreview(preview("hello"))
+        #expect(feed.preview?.text == "hello")
 
-        // Revisions replace wholesale; clearing mid-recording is allowed
-        // (streaming became unavailable).
-        feed.setPartial("hello world")
-        #expect(feed.partial == "hello world")
-        feed.setPartial(nil)
-        #expect(feed.partial == nil)
+        // Revisions replace wholesale; clearing mid-recording is allowed.
+        feed.setPreview(preview("hello world"))
+        #expect(feed.preview?.text == "hello world")
+        feed.setPreview(nil)
+        #expect(feed.preview == nil)
 
-        feed.setPartial("hello again")
+        feed.setPreview(preview("hello again"))
         feed.setPhase(.processing)
-        #expect(feed.partial == nil)
+        #expect(feed.preview == nil)
+    }
+
+    @Test
+    func aNewTakeStartsNotHeld() {
+        let feed = DictationFeed()
+        feed.setPhase(.recording)
+        feed.setHeld(true)
+        #expect(feed.isHeld)
+        feed.setPhase(.processing)
+        // Held through processing: the take waits in the Lens.
+        #expect(feed.isHeld)
+        feed.setPhase(.idle)
+        feed.setPhase(.recording)
+        #expect(!feed.isHeld)
     }
 
     // MARK: - Beats

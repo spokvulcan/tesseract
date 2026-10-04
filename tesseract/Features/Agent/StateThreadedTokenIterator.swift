@@ -17,7 +17,10 @@ import MLXLMCommon
 /// `ModelContainer.perform` / the generation task it hands off to.
 nonisolated struct StateThreadedTokenIterator: TokenIteratorProtocol {
     private let model: any LanguageModel
-    private var cache: [any KVCache]
+    /// The array decode advances. The whole-prompt form may replace its
+    /// attention entries with a KV Scheme's after prefill, so a caller that
+    /// keeps the final cache reads it here.
+    private(set) var cache: [any KVCache]
     private(set) var state: LMOutput.State?
     /// Resolved once through the ``GenerationLogitProcessor`` seam; exposed
     /// read-only so wiring tests can assert this path attached the app
@@ -74,6 +77,12 @@ nonisolated struct StateThreadedTokenIterator: TokenIteratorProtocol {
     /// `prepare` (state nil ⇒ from zero) so an image-bearing prompt
     /// that failed cache keying is still prefilled in bounded `[heads, chunk,
     /// L]` windows instead of the crash-prone single `[heads, L, L]` allocation.
+    ///
+    /// The prefill runs here, so the **KV Scheme** conversion does too
+    /// (ADR-0083, amended): once the whole prompt is in the cache, before the
+    /// first decode step, the attention entries convert to
+    /// `parameters.kvScheme`. `kvBits` is not applied (ADR-0007). Read the
+    /// converted array from `cache`.
     init(
         preparing input: LMInput,
         model: any LanguageModel,
@@ -107,6 +116,9 @@ nonisolated struct StateThreadedTokenIterator: TokenIteratorProtocol {
             y = .init(tokens: convertToToken(logits: result.logits))
             asyncEval(y.tokens)
         }
+        maybeQuantizeKVCache(
+            cache: &self.cache, kvBits: nil, quantizedKVStart: parameters.quantizedKVStart,
+            kvScheme: parameters.kvScheme)
         promptPrefillTime = Date.timeIntervalSinceReferenceDate - started
     }
 
@@ -119,8 +131,8 @@ nonisolated struct StateThreadedTokenIterator: TokenIteratorProtocol {
     }
 
     /// One forward with the threaded state — mirrors upstream's `step`, minus
-    /// the per-step cache quantization (the cache-aware path quantizes once
-    /// before the iterator so the array it retains stays the live final cache).
+    /// the per-step cache quantization (the cache-aware path quantizes once,
+    /// before the iterator or at the end of the whole-prompt form's prefill).
     private mutating func step(previous: LMInput.Text) -> MLXArray {
         let input = previous.tokens.ndim >= 2 ? previous : previous[text: .newAxis]
         let result = model(input, cache: cache.isEmpty ? nil : cache, state: state)

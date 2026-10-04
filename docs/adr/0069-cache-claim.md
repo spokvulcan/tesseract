@@ -245,3 +245,74 @@ memory was 9.8 GiB.
   model-free evidence above.
 
 Whether the memory readings above main are noise is the owner's call.
+
+## Amendment 2026-10-03: a restore that yields no cache runs the turn cold
+
+A planned restore can end with no cache. The check-out answers copy, or finds
+nothing to check out, and the copy fails: `HybridCacheSnapshot.restore` throws
+when it cannot rebuild a layer (corrupt or truncated persisted data, or a
+Prefix-View Checkpoint whose Backing Leaf is missing or no longer fits it), and
+the restore verb treats that as a cache miss. Until now only the cache was
+the miss. Plan application still sliced the input to the suffix, kept the
+restore offset as the execution base along with the warm checkpoint filter,
+and prefilled the suffix into a new, empty cache. The model saw the suffix
+alone, at positions from zero, and answered without the conversation.
+Checkpoints captured on the way were labelled at the restore offset plus their
+position in the suffix. Admission checks only that an offset lies inside the
+path, so those snapshots could be admitted and restored by later requests. The
+fault was found by reading the code, not in a recording.
+
+1. **A restore that yields no cache re-plans the turn cold.** The Prefill
+   Planner's cold plan replaces the warm one. It is the rule `plan` already
+   answers with when nothing is restorable (`PrefillPlanner.coldPlan`), not a
+   second one. The whole prompt prefills from zero with execution base 0, the
+   cold checkpoint filter and transient boundaries apply, and an image-bearing
+   Cache Key Space takes the cold image route anchored at zero. The turn's
+   maximum advance is re-priced from zero, since its cache grows from empty.
+2. **The Speculation Plan is kept.** It was decided before the check-out with
+   a restored prefix, so it is DFlash2 or nothing, and DFlash2 serves a cold
+   turn as it serves a warm one. Asking again with nothing restored could
+   engage MTP, whose single unchunked prefill captures no checkpoints and no
+   boundary snapshots, on the one turn that has to recapture what failed to
+   restore. A fallback turn engages no arm its plan did not, and its
+   `restoring` phase has already reported that plan.
+3. **The wire strings stay.** `restoreMode` still reads `failedCopy`
+   (decision 8). One new detail field says the turn fell back:
+   `restoreFallback=cold` on the `lookup` event and on the `restored` phase of
+   `requestMemory`, written only on such a turn, so every other line stays
+   byte-identical. A fallback turn reports `skippedPrefillTokens=0`, and its
+   handle reports no cached tokens.
+4. **The snapshot that failed is dropped.** Left in the tree, it would make
+   every request that resolves to it pay the same failed restore and run cold,
+   and checkpoint planning would keep counting it as stored, so a lost system
+   checkpoint would never be captured again. The fallback turn drops it on the
+   MainActor (`PrefixCacheManager.dropUnrestorableSnapshot`), but only while
+   the node at its path still holds that very body and no Leaf Lease holds it.
+   The RAM body always goes. A `RestoreError` means a layer's class or
+   metaState cannot be rebuilt, and the SSD copy holds the same bytes, so its
+   backing is deleted before its ref is discarded, and a chain-prefix point
+   the body was composed through is cleared. Any other failure, such as a view
+   whose Backing Leaf no longer fits it, keeps the SSD copy for the next hit to
+   hydrate. After a drop the turn plans its checkpoints again against the
+   settled tree before it takes the cold plan, so a checkpoint the drop took
+   is captured anew on the same turn. The turn logs
+   `skip stage=restore reason=unrestorable-snapshot` with the offset, the
+   checkpoint type, what went (`drop=body`, `bodyAndSSDCopy`, `notFound` or
+   `leased`) and the error. The Speculative Canonical Prefill and the Leaf
+   Store's boundary route restore stored snapshots too; they still only log a
+   failure, and the next foreground request that resolves to the snapshot
+   drops it.
+
+`ServerCompletionRestoreFallbackTests` runs keyed requests through the Server
+Completion fixture with the toy session's `restore` made to throw. A text-only
+turn restored by copy and a restore planned below a new image each check that
+the turn fed the whole prompt from position zero into a new cache, that every
+checkpoint it captured carries the offset its cache held, and that every body
+the cache holds afterwards reads back the path it is stored under; the text
+case also checks that the next turn restores what the fallback turn stored. A
+thinking-off direct-leaf turn with a resident MTP drafter that traps if
+engaged checks that the fallback keeps its Speculation Plan. A failed restore
+of a system checkpoint checks that the body is gone, that the same turn
+captures a new one and that the next request restores it; with an SSD tier
+behind it, a `RestoreError` also removes the old copy from the manifest and
+any other error keeps it.

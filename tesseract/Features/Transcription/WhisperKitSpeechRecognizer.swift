@@ -27,13 +27,29 @@ actor WhisperKitSpeechRecognizer: SpeechRecognizer {
             logger.debug("Model folder contents: \(contents)")
         }
 
-        // Compute units stay on WhisperKit's defaults: mel on GPU, encoder and
-        // decoder on the Neural Engine. The ANE encoder is what WhisperKit is
-        // architected for, and it keeps ASR off the GPU that the MLX LLM owns —
-        // dictation doesn't contend with agent/server generation.
+        // The audio encoder runs on the GPU; mel stays on the GPU and the text
+        // decoder on the Neural Engine (WhisperKit's defaults). Measured on an
+        // M3 Max over 100 real takes, in sections 1.6 and 1.7 of
+        // docs/research/2026-10-03-dictation-streaming.md:
+        // - On the Neural Engine every decode spends about 1.1 s in the encoder
+        //   whatever the audio length (it always encodes a 30 s window); on the
+        //   GPU 0.4 s, after a one-time shader compile of about 4 s during the
+        //   load (with `prewarm`), not during a take.
+        // - The full pass lands 0.65 s after release instead of 1.29 s, with the
+        //   same text within run-to-run noise, and the Live Preview runs about
+        //   1 s behind the voice instead of 2 s.
+        // - The cost lands on a generation running at the same time: the 27B
+        //   model slows from 21.8 to 14.8 tokens/s while Whisper decodes (about
+        //   15% over a take), and dictation is still faster on the GPU than on
+        //   the Neural Engine with the LLM busy.
+        // Models share memory, not turns (ADR-0081); the Lens streams and the
+        // paste stays a full pass (ADR-0086). If the slowdown matters, the
+        // fallback is a second encoder on the Neural Engine while the LLM Gate
+        // is held, for about 1.2 GB more memory.
         // Load from bundled model path - use the exact folder containing model files
         let config = WhisperKitConfig(
             modelFolder: modelPath.path,
+            computeOptions: ModelComputeOptions(audioEncoderCompute: .cpuAndGPU),
             verbose: false,
             prewarm: true,
             load: true,
@@ -113,7 +129,8 @@ actor WhisperKitSpeechRecognizer: SpeechRecognizer {
     }
 
     // Cooperative cancellation arrives via `Task` cancellation propagating
-    // into the suspended `transcribe` — WhisperKit checks it between decode
-    // windows, so an in-flight transcription stops at the next window
-    // boundary. That is the port's one cancellation channel.
+    // into the suspended `transcribe`. WhisperKit checks it before the mel,
+    // before the encoder and before every decoder step, so an in-flight
+    // transcription stops within the encoder pass already running. That is
+    // the port's one cancellation channel.
 }

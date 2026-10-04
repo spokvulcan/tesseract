@@ -58,6 +58,29 @@ struct SettingsCatalogueTests {
     }
 
     @Test
+    func proofreadPassIsOffAndFixHotkeyIsControlOptionSpaceByDefault() {
+        // PRD #612: the Proofread Pass is opt-in (Learned Words are the
+        // corrector), and ⌃⌥Space reopens the last take in the Lens.
+        let store = InMemorySettingsStore()
+        #expect(SettingsCatalogue.proofreadDictation.load(from: store) == false)
+        let settings = SettingsManager(store: store)
+        #expect(settings.proofreadDictation == false)
+        #expect(settings.fixHotkey == .controlOptionSpace)
+        #expect(settings.fixHotkey.displayString == "⌃⌥Space")
+    }
+
+    @Test
+    func checkBeforePastingDefaultsToWhenShiftTapped() {
+        // PRD #612: by default a take waits in the Lens only when ⇧ was
+        // tapped while talking.
+        let store = InMemorySettingsStore()
+        #expect(SettingsCatalogue.checkBeforePastingRaw.key == "checkBeforePasting")
+        #expect(SettingsCatalogue.checkBeforePastingRaw.load(from: store) == "whenShiftTapped")
+        let settings = SettingsManager(store: store)
+        #expect(settings.checkBeforePasting == .whenShiftTapped)
+    }
+
+    @Test
     func captureSettingsRoundTripThroughTheStore() {
         // Voice Processing has no setting anymore — it is the standard capture
         // mode (PRD #188); the Capture Dump toggle is what remains.

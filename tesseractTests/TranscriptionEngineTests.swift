@@ -127,7 +127,7 @@ struct TranscriptionEngineTests {
         }
     }
 
-    // MARK: - Live Partial lane (ticket #291)
+    // MARK: - Live Preview lane (PRD #612, after the Live Partial of #291)
 
     @Test
     func partialLaneDecodesWhenIdleAndNeverLoadsOrOccupiesTheFacade() async throws {
@@ -138,16 +138,49 @@ struct TranscriptionEngineTests {
                 text: "partial words", segments: [], language: "en", processingTime: 0))
         let engine = TranscriptionEngine(makeRecognizer: { recognizer })
 
-        // No model yet: skip silently — the pump must never trigger a load.
-        #expect(await engine.transcribePartial(sampleAudio(), language: "auto") == nil)
+        // No model yet: skip silently. The pump must never trigger a load.
+        let beforeLoad = await engine.transcribePartial(sampleAudio(), language: "auto")
+        #expect(beforeLoad == nil)
         #expect(await recognizer.loadCount == 0)
 
         try await engine.loadModel(from: bundle)
-        let text = await engine.transcribePartial(sampleAudio(), language: "auto")
-        #expect(text == "partial words")
+        let result = await engine.transcribePartial(sampleAudio(), language: "auto")
+        #expect(result?.text == "partial words")
         // Partials never touch the observable UI state or the final's slot.
         #expect(!engine.isTranscribing)
         #expect(await recognizer.recordedLanguages == [nil])
+    }
+
+    @Test
+    func partialLaneReturnsTheRecognizersSegmentsRelativeToTheAudioPassed() async throws {
+        let bundle = try makeFakeModelBundle()
+        defer { try? FileManager.default.removeItem(at: bundle) }
+        let first = ScriptedSpeechRecognizer.result([(" Hello", 0, 0.6)])
+        let second = ScriptedSpeechRecognizer.result([
+            (" Hello", 0, 0.6), (" there,", 0.6, 1.1), (" world.", 1.3, 2.0),
+        ])
+        let recognizer = ScriptedSpeechRecognizer([first, second])
+        let engine = TranscriptionEngine(makeRecognizer: { recognizer })
+        try await engine.loadModel(from: bundle)
+
+        let a = await engine.transcribePartial(sampleAudio(duration: 0.8), language: "en")
+        let b = await engine.transcribePartial(sampleAudio(duration: 2.1), language: "en")
+        // The script is exhausted: its last entry repeats.
+        let c = await engine.transcribePartial(sampleAudio(duration: 1.4), language: "en")
+
+        #expect(a?.text == "Hello")
+        #expect(a?.segments.map(\.text) == [" Hello"])
+        #expect(b?.text == "Hello there, world.")
+        #expect(b?.segments.map(\.text) == [" Hello", " there,", " world."])
+        // The engine passes the recognizer's times through, untouched: they
+        // are relative to the audio given, and rebasing is the caller's job.
+        #expect(b?.segments.map(\.startTime) == [0, 0.6, 1.3])
+        #expect(b?.segments.map(\.endTime) == [0.6, 1.1, 2.0])
+        #expect(c?.segments.count == 3)
+        #expect(await recognizer.transcribeCount == 3)
+        #expect(await recognizer.audioDurations == [0.8, 2.1, 1.4])
+        #expect(await recognizer.recordedLanguages == ["en", "en", "en"])
+        #expect(!engine.isTranscribing)
     }
 
     @Test
@@ -168,16 +201,49 @@ struct TranscriptionEngineTests {
         }
         #expect(await recognizer.transcribeCount == 1)
 
-        // A second partial skips — the lane is single-in-flight.
-        #expect(await engine.transcribePartial(audio, language: "auto") == nil)
+        // A second partial skips: the lane is single-in-flight.
+        let skipped = await engine.transcribePartial(audio, language: "auto")
+        #expect(skipped == nil)
 
         // The final's arrival cancels the hung partial: the partial resolves
         // nil instead of making the release path wait out its decode.
         await recognizer.setLatency(nil)
         let final = Task { try await engine.transcribe(audio, language: "auto") }
-        #expect(await partial.value == nil)
+        let cancelled = await partial.value
+        #expect(cancelled == nil)
         #expect(await recognizer.transcribeWasInterrupted)
         _ = try await final.value
+    }
+
+    @Test
+    func cancellingThePartialsCallerCancelsTheDecodeAndFreesTheLane() async throws {
+        let bundle = try makeFakeModelBundle()
+        defer { try? FileManager.default.removeItem(at: bundle) }
+        let recognizer = ScriptedSpeechRecognizer(
+            [ScriptedSpeechRecognizer.result([(" first", 0, 0.5)])], latency: .seconds(60))
+        let engine = TranscriptionEngine(makeRecognizer: { recognizer })
+        try await engine.loadModel(from: bundle)
+
+        // The preview pump stops (a release, a cancelled take) while a decode
+        // is in flight: the decode is cancelled at the recognizer, not left to
+        // run, and the caller gets nil.
+        let audio = sampleAudio()
+        let partial = Task { await engine.transcribePartial(audio, language: "auto") }
+        var n = 0
+        while await recognizer.inFlightCount < 1, n < 100_000 {
+            n += 1
+            await Task.yield()
+        }
+        partial.cancel()
+        let cancelled = await partial.value
+        #expect(cancelled == nil)
+        #expect(await recognizer.interruptedCount == 1)
+
+        // The slot is free again: the next preview decodes.
+        await recognizer.setLatency(nil)
+        let next = await engine.transcribePartial(audio, language: "auto")
+        #expect(next?.text == "first")
+        #expect(await recognizer.transcribeCount == 2)
     }
 
     // MARK: - Tracer: load + transcribe across the seam

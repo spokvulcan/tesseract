@@ -15,6 +15,9 @@ struct HotkeyRegistration {
     let onUp: (() -> Void)?
     /// A one-key hotkey was spoiled: another key joined while it was held.
     var onCancel: (() -> Void)?
+    /// Shift was tapped while this hotkey was held (`ModifierTapDetector`):
+    /// the dictation hotkey's "keep this take in the Lens".
+    var onShiftTap: (() -> Void)?
 }
 
 @MainActor
@@ -24,9 +27,23 @@ final class HotkeyManager: ObservableObject {
     /// former `currentHotkey`/`onHotkeyDown` mirror was a second source of
     /// truth for the press that starts everything).
     static let dictationHotkeyID = "dictation"
+    /// The fix registration's id (⌃⌥Space by default): reopens the last take
+    /// in the **Lens** to fix a word.
+    static let fixLastTakeHotkeyID = "fixLastTake"
 
     @Published private(set) var isListening = false
     @Published private(set) var isUsingEventTap = false
+
+    /// The owner's key presses and clicks, counted from both delivery
+    /// paths: every key-down that is not Tesseract's own
+    /// (`SyntheticKeyEvents`), not an auto-repeat and not a hotkey's own key,
+    /// and every mouse-button press (a click can move the caret or select
+    /// text). A fix put back in an app (`InAppReplacer`) compares it across
+    /// the fix, so it never selects or backspaces over text the owner typed,
+    /// or moved away from, since the paste. Input into Tesseract's own
+    /// windows counts too; the caller allows for it. Deliberately not
+    /// `@Published`: it changes on every keystroke system-wide.
+    private(set) var inputCount = 0
 
     /// The dictation registration's current combo — the gate read App
     /// Bindings uses to skip no-op re-binds. Falls back to the default combo
@@ -42,8 +59,17 @@ final class HotkeyManager: ObservableObject {
             singleModifierDetectors = registrations.compactMapValues {
                 ModifierKeyDetector(combo: $0.combo)
             }
+            shiftTapIDs = registrations.values.filter { $0.onShiftTap != nil }.map(\.id).sorted()
         }
     }
+
+    /// The registrations that want a Shift tap while held, prebuilt like
+    /// `bindingsSnapshot` so the hot path never filters `registrations`.
+    private var shiftTapIDs: [String] = []
+
+    /// The one Shift-tap detector, fed from both delivery paths while any
+    /// registration wants taps.
+    private var shiftTapDetector = ModifierTapDetector()
 
     /// One detector per one-key registration (`combo.isSingleModifier`), fed
     /// from both delivery paths.
@@ -70,6 +96,9 @@ final class HotkeyManager: ObservableObject {
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+    /// The listen-only tap that counts clicks (`inputCount`).
+    private var clickTap: CFMachPort?
+    private var clickRunLoopSource: CFRunLoopSource?
 
     // Fallback monitors for when Accessibility permission is denied
     private var globalMonitor: Any?
@@ -87,10 +116,11 @@ final class HotkeyManager: ObservableObject {
 
     func registerHotkey(
         id: String, combo: KeyCombo, onDown: @escaping () -> Void, onUp: (() -> Void)? = nil,
-        onCancel: (() -> Void)? = nil
+        onCancel: (() -> Void)? = nil, onShiftTap: (() -> Void)? = nil
     ) {
         registrations[id] = HotkeyRegistration(
-            id: id, combo: combo, onDown: onDown, onUp: onUp, onCancel: onCancel)
+            id: id, combo: combo, onDown: onDown, onUp: onUp, onCancel: onCancel,
+            onShiftTap: onShiftTap)
     }
 
     func unregisterHotkey(id: String) {
@@ -101,7 +131,8 @@ final class HotkeyManager: ObservableObject {
     func updateRegisteredHotkey(id: String, combo: KeyCombo) {
         guard var reg = registrations[id] else { return }
         reg = HotkeyRegistration(
-            id: id, combo: combo, onDown: reg.onDown, onUp: reg.onUp, onCancel: reg.onCancel)
+            id: id, combo: combo, onDown: reg.onDown, onUp: reg.onUp, onCancel: reg.onCancel,
+            onShiftTap: reg.onShiftTap)
         registrations[id] = reg
         matcher.forget(id: id)
     }
@@ -129,6 +160,7 @@ final class HotkeyManager: ObservableObject {
         isListening = false
         matcher.reset()
         for id in singleModifierDetectors.keys { singleModifierDetectors[id]?.reset() }
+        shiftTapDetector.reset()
         isUsingEventTap = false
     }
 
@@ -160,8 +192,17 @@ final class HotkeyManager: ObservableObject {
                     return Unmanaged.passUnretained(event)
                 }
 
+                // Tesseract's own keys (a paste, a copy, a fix's backspaces)
+                // are not the owner typing: never a hotkey, never counted.
+                if SyntheticKeyEvents.isOurs(event) {
+                    return Unmanaged.passUnretained(event)
+                }
+
                 let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
                 let flags = event.flags
+                let isRepeat =
+                    type == .keyDown
+                    && event.getIntegerValueField(.keyboardEventAutorepeat) != 0
 
                 // Convert CGEventFlags to NSEvent.ModifierFlags
                 var modifiers: NSEvent.ModifierFlags = []
@@ -176,21 +217,24 @@ final class HotkeyManager: ObservableObject {
                 case .flagsChanged:
                     manager.handleDoubleCommandFlags(rawFlags: flags.rawValue)
                     manager.handleSingleModifierFlags(keyCode: keyCode, rawFlags: flags.rawValue)
+                    manager.handleShiftTapFlags(keyCode: keyCode, rawFlags: flags.rawValue)
                     kind = .flagsChanged
                 case .keyUp:
                     kind = .keyUp
                 default:
                     manager.handleSingleModifierKeyDown()
+                    manager.handleShiftTapKeyDown(isRepeat: isRepeat)
                     kind = .keyDown
                 }
 
                 let verdict = manager.matcher.handle(
-                    kind, keyCode: keyCode, modifiers: modifiers,
+                    kind, keyCode: keyCode, modifiers: modifiers, isRepeat: isRepeat,
                     bindings: manager.bindingsSnapshot)
 
                 // Deliver on the next main-queue turn so the tap callback
                 // stays fast; the matcher state is already settled.
                 manager.deliver(verdict.fires, deferred: true)
+                manager.countKeyDown(kind, isRepeat: isRepeat, verdict: verdict)
 
                 // Suppress matched key events (flagsChanged always passes).
                 if verdict.suppressKeyEvent {
@@ -219,7 +263,38 @@ final class HotkeyManager: ObservableObject {
         CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
         CGEvent.tapEnable(tap: eventTap, enable: true)
 
+        startClickTap()
         isUsingEventTap = true
+    }
+
+    /// Clicks count as the owner's input (they can move the caret), seen by
+    /// a second, listen-only tap: unlike the key tap it never holds an
+    /// event, so a busy main thread can never delay a click.
+    private func startClickTap() {
+        let mask =
+            (1 << CGEventType.leftMouseDown.rawValue) | (1 << CGEventType.rightMouseDown.rawValue)
+            | (1 << CGEventType.otherMouseDown.rawValue)
+        clickTap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .tailAppendEventTap,
+            options: .listenOnly,
+            eventsOfInterest: CGEventMask(mask),
+            callback: { _, type, event, refcon -> Unmanaged<CGEvent>? in
+                guard let refcon else { return Unmanaged.passUnretained(event) }
+                let manager = Unmanaged<HotkeyManager>.fromOpaque(refcon).takeUnretainedValue()
+                if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                    if let tap = manager.clickTap { CGEvent.tapEnable(tap: tap, enable: true) }
+                } else {
+                    manager.inputCount &+= 1
+                }
+                return Unmanaged.passUnretained(event)
+            },
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        )
+        guard let clickTap else { return }
+        clickRunLoopSource = CFMachPortCreateRunLoopSource(nil, clickTap, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), clickRunLoopSource, .commonModes)
+        CGEvent.tapEnable(tap: clickTap, enable: true)
     }
 
     private func stopEventTap() {
@@ -227,6 +302,15 @@ final class HotkeyManager: ObservableObject {
             CGEvent.tapEnable(tap: eventTap, enable: false)
             CFMachPortInvalidate(eventTap)
             self.eventTap = nil
+        }
+        if let clickTap {
+            CGEvent.tapEnable(tap: clickTap, enable: false)
+            CFMachPortInvalidate(clickTap)
+            self.clickTap = nil
+        }
+        if let clickRunLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), clickRunLoopSource, .commonModes)
+            self.clickRunLoopSource = nil
         }
 
         if let runLoopSource = runLoopSource {
@@ -240,7 +324,9 @@ final class HotkeyManager: ObservableObject {
     private func startNSEventMonitors() {
         // Global monitor for when app is not focused
         globalMonitor = NSEvent.addGlobalMonitorForEvents(
-            matching: [.keyDown, .keyUp, .flagsChanged]
+            matching: [
+                .keyDown, .keyUp, .flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown,
+            ]
         ) { [weak self] event in
             Task { @MainActor in
                 self?.handleKeyEvent(event)
@@ -249,7 +335,9 @@ final class HotkeyManager: ObservableObject {
 
         // Local monitor for when app is focused
         localMonitor = NSEvent.addLocalMonitorForEvents(
-            matching: [.keyDown, .keyUp, .flagsChanged]
+            matching: [
+                .keyDown, .keyUp, .flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown,
+            ]
         ) { [weak self] event in
             Task { @MainActor in
                 self?.handleKeyEvent(event)
@@ -273,26 +361,50 @@ final class HotkeyManager: ObservableObject {
     }
 
     private func handleKeyEvent(_ event: NSEvent) {
+        // Tesseract's own keys are not the owner typing (see the tap).
+        if let cgEvent = event.cgEvent, SyntheticKeyEvents.isOurs(cgEvent) { return }
+        // A click is input, and nothing else (see the tap).
+        if [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type) {
+            inputCount &+= 1
+            return
+        }
+
         let kind: HotkeyMatcher.EventKind
+        // `isARepeat` raises for anything but a key event; read it only there.
+        var isRepeat = false
         switch event.type {
         case .flagsChanged:
-            handleDoubleCommandFlags(rawFlags: UInt64(event.modifierFlags.rawValue))
-            handleSingleModifierFlags(
-                keyCode: event.keyCode, rawFlags: UInt64(event.modifierFlags.rawValue))
+            let rawFlags = UInt64(event.modifierFlags.rawValue)
+            handleDoubleCommandFlags(rawFlags: rawFlags)
+            handleSingleModifierFlags(keyCode: event.keyCode, rawFlags: rawFlags)
+            handleShiftTapFlags(keyCode: event.keyCode, rawFlags: rawFlags)
             kind = .flagsChanged
         case .keyUp:
             kind = .keyUp
         default:
+            isRepeat = event.isARepeat
             handleSingleModifierKeyDown()
+            handleShiftTapKeyDown(isRepeat: isRepeat)
             kind = .keyDown
         }
 
         let verdict = matcher.handle(
-            kind, keyCode: event.keyCode, modifiers: event.modifierFlags,
+            kind, keyCode: event.keyCode, modifiers: event.modifierFlags, isRepeat: isRepeat,
             bindings: bindingsSnapshot)
 
         // Monitors cannot suppress events; deliver synchronously.
         deliver(verdict.fires, deferred: false)
+        countKeyDown(kind, isRepeat: isRepeat, verdict: verdict)
+    }
+
+    /// Shared by both delivery paths: one more key the owner pressed, unless
+    /// it repeated or was a hotkey's own key. The fallback cannot suppress a
+    /// hotkey's key, but it is not counted there either, so both paths agree.
+    private func countKeyDown(
+        _ kind: HotkeyMatcher.EventKind, isRepeat: Bool, verdict: HotkeyMatcher.Verdict
+    ) {
+        guard kind == .keyDown, !isRepeat, !verdict.suppressKeyEvent else { return }
+        inputCount &+= 1
     }
 
     /// Deliver matcher fires to their registrations, looking each one up at
@@ -365,6 +477,30 @@ final class HotkeyManager: ObservableObject {
             case .cancel: reg.onCancel?()
             }
         }
+    }
+
+    // MARK: - Shift Tap
+
+    /// Shared by both delivery paths: feed one `flagsChanged` event to the
+    /// Shift-tap detector and, on a tap, deliver it on the next main-queue
+    /// turn to every registration that wants taps and is held right now
+    /// (before this event reaches the matcher, so a release in the same
+    /// event still counts the tap; its `onUp` is queued after the tap).
+    private func handleShiftTapFlags(keyCode: UInt16, rawFlags: UInt64) {
+        guard !shiftTapIDs.isEmpty,
+            shiftTapDetector.flagsChanged(keyCode: keyCode, rawFlags: rawFlags)
+        else { return }
+        for id in shiftTapIDs where matcher.pressed.contains(id) {
+            DispatchQueue.main.async { [weak self] in
+                self?.registrations[id]?.onShiftTap?()
+            }
+        }
+    }
+
+    /// A key pressed while Shift is down makes it a shifted key, not a tap.
+    private func handleShiftTapKeyDown(isRepeat: Bool) {
+        guard !shiftTapIDs.isEmpty else { return }
+        shiftTapDetector.keyDown(isRepeat: isRepeat)
     }
 
     // MARK: - Permission Handling

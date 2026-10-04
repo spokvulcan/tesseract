@@ -63,7 +63,8 @@ final class CorrectionPairStore {
         saveToDisk()
     }
 
-    /// The overlay's one-click "that was wrong". Idempotent.
+    /// "That was wrong": "Insert anyway" on a take the Proofread Pass
+    /// rejected. Idempotent.
     func flagWrong(_ id: UUID) {
         guard let index = pairs.firstIndex(where: { $0.id == id }) else { return }
         guard !pairs[index].flaggedWrong else { return }
@@ -71,11 +72,13 @@ final class CorrectionPairStore {
         saveToDisk()
     }
 
-    /// Stores the owner's corrected text — the gold half of the pair. An
-    /// empty or whitespace-only correction clears it (back to candidate).
-    func setCorrection(_ correction: String, for id: UUID) {
+    /// Records one word the owner fixed in the **Lens** (PRD #612) and the
+    /// take's text after it: the pair turns gold, and `correction` holds the
+    /// whole corrected take, the gold half of the training pair.
+    func recordFix(_ fix: CorrectionPair.Fix, correctedText: String, for id: UUID) {
         guard let index = pairs.firstIndex(where: { $0.id == id }) else { return }
-        let trimmed = correction.trimmingCharacters(in: .whitespacesAndNewlines)
+        pairs[index].fixes.append(fix)
+        let trimmed = correctedText.trimmingCharacters(in: .whitespacesAndNewlines)
         pairs[index].correction = trimmed.isEmpty ? nil : trimmed
         saveToDisk()
     }

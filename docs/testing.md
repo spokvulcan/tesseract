@@ -69,6 +69,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/LeafLeaseTests \
   -only-testing:tesseractTests/CacheClaimTests \
   -only-testing:tesseractTests/ServerCompletionExitMatrixTests \
+  -only-testing:tesseractTests/ServerCompletionRestoreFallbackTests \
   -only-testing:tesseractTests/TokenRadixTreeTests \
   -only-testing:tesseractTests/StablePrefixDetectorTests \
   -only-testing:tesseractTests/PrefixCacheManagerTests \
@@ -116,6 +117,64 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/SpeechCoordinatorTests \
   -only-testing:tesseractTests/AudioPlaybackTests \
   -only-testing:tesseractTests/StreamingSchedulerTests
+
+# Dictation and Learned Words (ADR-0085/0086; quit the app first, its capture
+# engine starves test hosts): the Voice Capture Session (Learned Words after the
+# regex cleanup, the silent-capture skip, every caller), the regex cleanup, the
+# Correction Pair store and the gold mark a fix gives, the sounds-alike key, take
+# tokens, matching and the Learned Word store (exceptions per app, ordinary words
+# not learned, Forget and Undo), the fix (target by sound on real mishearings,
+# what a fix teaches, several fixes in one take), the Live Preview (the
+# confirmation rule, decoding from the last confirmed segment over a scripted
+# recognizer, release cancelling the preview), ⇧ holding a take and the Check
+# Before Pasting setting, the Lens state (listening, landing, a held take pasted
+# or kept), putting a fix back in the app, the hotkeys, and paste. The repo has
+# no snapshot suites: the Lens views are covered by LensViewRenderTests, which
+# hosts each state the way the panel does (as MainWindowPageTests hosts the
+# pages) and checks it fits the card, with no pixel comparison;
+# TEST_RUNNER_LENS_RENDER_DIR=<dir> also writes a PNG of each state to look at.
+# The Catch Record (the Dictation page, PRD #612): CatchRecordTests pins the
+# page's model (the week's catches and fixes per day, a tile per Learned Word
+# still known, today's takes and how each opens in the Lens, the sentence and
+# the marked words); DictationPageTests opens the page (empty, and with Learned
+# Words, fixes and today's takes) and its History sheet with the app's wiring,
+# as MainWindowPageTests does, so a missing dependency crashes on that case;
+# TranscriptionHistoryTests pins entries keeping their catches and app across
+# a reload (older entries load without them) and a fix rewriting an entry's
+# text and catches (its app kept); and LensControllerTests also opens a take
+# from the page (refused while a take is recorded; a held or after-paste take
+# open in the Lens kept with its fixes; a page fix to the last take carrying
+# into the ⌃⌥Space reopen; cancelling one never making it the last take).
+xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
+  -skipPackagePluginValidation \
+  -only-testing:tesseractTests/DictationCoordinatorTests \
+  -only-testing:tesseractTests/VoiceCaptureSessionTests \
+  -only-testing:tesseractTests/CorrectionPairStoreTests \
+  -only-testing:tesseractTests/TranscriptionPostProcessorTests \
+  -only-testing:tesseractTests/TranscriptionEngineTests \
+  -only-testing:tesseractTests/DictationFeedTests \
+  -only-testing:tesseractTests/LivePreviewAssemblerTests \
+  -only-testing:tesseractTests/LensSettleTests \
+  -only-testing:tesseractTests/HotkeyMatcherTests \
+  -only-testing:tesseractTests/TextInjectorTests \
+  -only-testing:tesseractTests/AgentVoiceInputControllerTests \
+  -only-testing:tesseractTests/SoundAlikeTests \
+  -only-testing:tesseractTests/TakeTextTests \
+  -only-testing:tesseractTests/LearnedWordMatcherTests \
+  -only-testing:tesseractTests/LearnedWordStoreTests \
+  -only-testing:tesseractTests/LensFixTests \
+  -only-testing:tesseractTests/LensModelTests \
+  -only-testing:tesseractTests/LensControllerTests \
+  -only-testing:tesseractTests/LensViewRenderTests \
+  -only-testing:tesseractTests/CatchRecordTests \
+  -only-testing:tesseractTests/DictationPageTests \
+  -only-testing:tesseractTests/TranscriptionHistoryTests \
+  -only-testing:tesseractTests/CaptureLevelTests \
+  -only-testing:tesseractTests/InAppReplacerTests \
+  -only-testing:tesseractTests/InAppEditTests \
+  -only-testing:tesseractTests/ModifierTapDetectorTests \
+  -only-testing:tesseractTests/SettingsCatalogueTests \
+  -only-testing:tesseractTests/SettingsManagerTests
 
 # Speech page (ADR-0076/0077): the Reader over the real coordinator and
 # engine, the Read-Along clock and its word timing, text geometry, the
@@ -165,11 +224,14 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # refinement, the plan made before the sit-down, Breakpoints, Triage — only
 # people, never during a game —, agents, the Night Reflection, card actions,
 # delivered nudges), banner sources and game detection, the Agenda tools over
-# the in-memory store (delete_event included), capture and the one-key hotkey,
+# the in-memory store (delete_event included), the completion the EventKit
+# store hands its Reminders fetch (nonisolated, delivered off the main thread;
+# no store is touched), capture and the one-key hotkey,
 # the Timeline, cards and prompts, the Day Thread's store, the seen ledger, the
 # Delivery Ladder and governor, the Claude Code merge, the Profile and recall
-# (fixture conversation files), the trace, and the prefix-cache contract (a
-# byte-identical system prompt; the Now Tag on every user message):
+# (fixture conversation files), the trace, the voice overlay's placements, and
+# the prefix-cache contract (a byte-identical system prompt; the Now Tag on
+# every user message):
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
   -skipPackagePluginValidation \
   -only-testing:tesseractTests/DayEngineNudgeTests \
@@ -182,6 +244,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/NightReflectionTests \
   -only-testing:tesseractTests/DayStateStoreTests \
   -only-testing:tesseractTests/AgendaToolsTests \
+  -only-testing:tesseractTests/EventKitAgendaStoreTests \
   -only-testing:tesseractTests/AgendaTimeTests \
   -only-testing:tesseractTests/CaptureParserTests \
   -only-testing:tesseractTests/NudgePlannerTests \
@@ -198,7 +261,8 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/DayKeyTests \
   -only-testing:tesseractTests/NowTagTests \
   -only-testing:tesseractTests/SystemPromptAssemblerTests \
-  -only-testing:tesseractTests/RetiredCompanionDataTests
+  -only-testing:tesseractTests/RetiredCompanionDataTests \
+  -only-testing:tesseractTests/OverlayPlacementTests
 
 # The LLM Gate (ADR-0081) and the menu's Models section: one LLM generation at
 # a time (FIFO, handoff, cancellation), the runs and the proofreader that read
@@ -743,7 +807,7 @@ component facts. A periodic sample during a stall preserves its phase.
 | `activeMlxBytes`, `cachedMlxBytes` | Live MLX allocations versus reusable allocator buffers. |
 | `processFootprintBytes`, `processResidentBytes`, `processCompressedBytes`, `systemSwapUsedBytes` | Process footprint versus residency/compression and system-wide swap. Failed OS queries omit the affected fields. |
 | `processLifetimePeakMlxBytes`, `sampledRequestPeakActiveMlxBytes`, `sampledRequestPeakFootprintBytes` | The allocator's historical high-water mark versus maxima actually observed during this request. No process-global peak reset is performed. |
-| `restoring` → `restored` | Snapshot size, current restore mode (`cold`, `copy`, `failedCopy`), and the resulting cache's attention/recurrent array sizes. |
+| `restoring` → `restored` | Snapshot size, current restore mode (`cold`, `copy`, `failedCopy`), and the resulting cache's attention/recurrent array sizes. `restoreFallback=cold` marks a planned restore that yielded no cache, after which the turn ran cold. |
 | `prefilling` → `dflashPreparing` → `prefilled` | Ordinary suffix prefill versus DFlash2's iterator preparation; loaded draft weight bytes, engagement, prompt length, and checkpoint array bytes. |
 | `capturingLeaf` → `preparingPayload` → `admittingLeaf` | Capture copy versus handoff, request cache count after capture, actual SSD payload mode/bytes, and admission overhead. |
 | `recordingRequest` → `finishingStream` → `releasingRequest` → `finished` | Post-generation bookkeeping, stream delivery boundary, and registry/pin release. `outcome` includes successful, cancelled, failed, and failed/cancelled-start exits. |
@@ -1230,6 +1294,23 @@ for its drive on the HTTP and agent-chat paths. The compaction retune's toy
 decodes are in `ServerCompletionKeyedSequencingTests`, and the SSD restore
 harness expects the loaded leaf to be handed off with no restore call.
 
+`ServerCompletionRestoreFallbackTests` covers a planned restore that yields no
+cache (ADR-0069's 2026-10-03 amendment). An armed `ToyRestoreFault` makes the
+toy session's next `restore` throw, `Injected` by default or a given error
+such as `HybridCacheSnapshot.RestoreError`, and records the body it failed on.
+A text-only turn restored by copy and a restore planned below a new image must
+then both run cold: the whole prompt fed from position zero into a new cache,
+each captured checkpoint labelled with the offset its cache held
+(`ModelVerbRecorder.captures` records both), and every body left in the cache
+reading back the path it is stored under
+(`PrefixCacheAdmin.residentSnapshotsForTesting`; the toy writes each fed id
+into its K/V row). A resident MTP drafter that traps if engaged
+(`Speculation.inactiveMTP`) checks that the fallback keeps its Speculation
+Plan. The failed snapshot is dropped: a system checkpoint that failed is gone
+after the turn, recaptured on the same turn, and restored by the next request;
+over an SSD tier a `RestoreError` also removes its old copy from the manifest,
+and any other error keeps it.
+
 `CacheClaimMemoryEvidenceTests` measures the MLX peak around one step at a time
 on synthetic caches: check-in before extraction, a refused check-in, the
 check-out's only allocation, per-layer compaction, and an SSD hit handed off.
@@ -1556,7 +1637,9 @@ compressed cache (`TEST_RUNNER_TURBOQUANT_DECODE_BENCH_CHUNKS=64,512,1024`).
 App side: `TurboQuantSnapshotTests` (capture, restore, move, prefix views,
 the Stored Form, the SSD round trip), `SpeculationPlanTests` (a scheme keeps
 DFlash2 and refuses MTP), `RequestFactsTests` and `SnapshotManifestTests`
-(the scheme in the partition key, digest and meta).
+(the scheme in the partition key, digest and meta),
+`ServerCompletionUnkeyedSequencingTests` (an Unkeyed Completion decodes over
+the scheme's layers after both the text and the anchored vision prefill).
 
 Loaded-model checks: `scripts/dflash2-bench.sh --bench-kv-scheme turbo8v4`
 runs both arms in the scheme (prompts from `--bench-prompt-file`), and

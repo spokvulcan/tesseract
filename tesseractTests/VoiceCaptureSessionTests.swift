@@ -655,4 +655,135 @@ struct VoiceCaptureSessionTests {
         }
         #expect(recorder.commits.isEmpty)
     }
+
+    // MARK: - Learned Words (PRD #612)
+
+    private static let notes = TargetApp(bundleID: "com.apple.Notes", name: "Notes", pid: 42)
+
+    private func makeLearnedWords() -> LearnedWordStore {
+        LearnedWordStore(
+            directory: FileManager.default.temporaryDirectory
+                .appendingPathComponent("session-learned-\(UUID().uuidString)", isDirectory: true))
+    }
+
+    /// Runs one take through a session that knows the given Learned Words.
+    private func runLearned(
+        engineText: String, words: LearnedWordStore, proofread: ProofreadStub? = nil,
+        app: TargetApp? = notes
+    ) async -> (VoiceCaptureSession.Outcome, [VoiceCaptureSession.Take], CommitRecorder) {
+        let engine = ControllableTranscribing(
+            result: TranscriptionResult(
+                text: engineText, segments: [], language: "en", processingTime: 0))
+        let session = VoiceCaptureSession(
+            audioCapture: FakeAudioCapture(cannedAudio: makeAudio()), transcriptionEngine: engine,
+            learnedWords: words, frontmostApp: { app })
+        _ = session.start()
+        _ = session.stop()
+        let recorder = CommitRecorder()
+        var takes: [VoiceCaptureSession.Take] = []
+        var pass: (@MainActor (String) async -> ProofreadVerdict?)?
+        if let proofread {
+            pass = { await proofread.proofread($0) }
+        }
+        let task = Task {
+            await session.transcribeAndCommit(
+                makeAudio(), language: "en",
+                proofread: pass,
+                onTake: { takes.append($0) }
+            ) { text, duration in
+                try await recorder.commit(text, duration)
+            }
+        }
+        while !engine.isAwaiting { await Task.yield() }
+        engine.completeWithSuccess()
+        return (await task.value, takes, recorder)
+    }
+
+    /// Learned Words apply after the regex cleanup, so the take commits the
+    /// owner's spelling, and the take carries both texts and the catches.
+    @Test func learnedWordsApplyAfterTheCleanupAndBeforeTheCommit() async throws {
+        let words = makeLearnedWords()
+        words.learn(heard: "sract", meant: "Tesseract")
+        let (outcome, takes, recorder) = await runLearned(
+            engineText: "run the  SRACT tests", words: words)
+
+        guard case .committed = outcome else {
+            Issue.record("expected .committed, got \(outcome)")
+            return
+        }
+        #expect(recorder.commits.first?.text == "Run the Tesseract tests")
+        let take = try #require(takes.first)
+        #expect(take.cleaned == "Run the SRACT tests")
+        #expect(take.learned == "Run the Tesseract tests")
+        #expect(take.catches.map(\.heard) == ["SRACT"])
+        #expect(take.app == Self.notes)
+    }
+
+    /// A catch counts once the take is in, and only then.
+    @Test func catchesCountWhenTheTakeCommits() async throws {
+        let words = makeLearnedWords()
+        let id = try #require(words.learn(heard: "cloud", meant: "Claude")?.wordID)
+        _ = await runLearned(engineText: "ask cloud", words: words)
+        #expect(words.word(withID: id)?.totalCatches == 1)
+
+        let stub = ProofreadStub()
+        stub.verdict = .rejected(reason: "mumbling")
+        _ = await runLearned(engineText: "ask cloud", words: words, proofread: stub)
+        #expect(words.word(withID: id)?.totalCatches == 1)
+    }
+
+    /// The Proofread Pass, when on, reads the text with the owner's words.
+    @Test func theProofreadPassSeesTheLearnedText() async throws {
+        let words = makeLearnedWords()
+        words.learn(heard: "cloud", meant: "Claude")
+        let stub = ProofreadStub()
+        stub.verdict = nil
+        _ = await runLearned(engineText: "ask cloud", words: words, proofread: stub)
+        #expect(stub.seenTexts == ["Ask Claude"])
+    }
+
+    /// A word left alone in the take's app does not apply there.
+    @Test func aWordLeftAloneInTheAppIsSkipped() async throws {
+        let words = makeLearnedWords()
+        let id = try #require(words.learn(heard: "cloud", meant: "Claude")?.wordID)
+        words.leaveAlone(id, in: LearnedWord.App(bundleID: "com.apple.Notes", name: "Notes"))
+
+        let (_, takes, recorder) = await runLearned(engineText: "the cloud lifts", words: words)
+        #expect(recorder.commits.first?.text == "The cloud lifts")
+        #expect(takes.first?.catches.isEmpty == true)
+    }
+
+    /// The take's app is the one in front when it started.
+    @Test func startRemembersTheAppInFront() {
+        let session = VoiceCaptureSession(
+            audioCapture: FakeAudioCapture(cannedAudio: makeAudio()),
+            transcriptionEngine: ControllableTranscribing(), frontmostApp: { Self.notes })
+        #expect(session.targetApp == nil)
+        _ = session.start()
+        #expect(session.targetApp == Self.notes)
+    }
+
+    // MARK: - Silent captures (PRD #612)
+
+    /// A capture that never rose above silence is neither transcribed nor
+    /// dumped: Whisper writes "Thank you." over silence.
+    @Test func stopRejectsASilentCaptureWithoutDumpingIt() {
+        let silence = AudioData(
+            samples: [Float](repeating: 0.0001, count: 16_000), sampleRate: 16_000, duration: 1.0,
+            raw: makeRaw())
+        let capture = FakeAudioCapture(cannedAudio: silence)
+        let dump = FakeCaptureDump()
+        let session = VoiceCaptureSession(
+            audioCapture: capture, transcriptionEngine: ControllableTranscribing(),
+            captureDump: dump)
+        _ = session.start()
+
+        let result = session.stop()
+
+        guard case .silent = result else {
+            Issue.record("expected .silent, got \(result)")
+            return
+        }
+        #expect(dump.saved.isEmpty)
+    }
 }

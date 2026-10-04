@@ -1,8 +1,9 @@
 import AppKit
 import SwiftUI
 
-// Mirrors GlobalOverlayHUD's proofreading → committed-beat switch inside
-// OverlayPanel's borderless non-activating NSPanel.
+// Mirrors the retired classic pill's (GlobalOverlayHUD) proofreading →
+// committed-beat switch inside the retired OverlayPanel's borderless
+// non-activating NSPanel.
 let args = CommandLine.arguments
 func flag(_ f: String) -> Bool { args.contains(f) }
 

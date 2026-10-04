@@ -65,11 +65,23 @@ final class SettingsManager {
     }
 
     var proofreadDictation: Bool {
-        didSet { SettingsCatalogue.proofreadDictation.write(proofreadDictation, to: store) }
+        didSet {
+            SettingsCatalogue.proofreadDictation.write(proofreadDictation, to: store)
+            // A choice made now is never undone by the one-time switch-off.
+            SettingsCatalogue.proofreadDefaultOffApplied.write(true, to: store)
+        }
     }
 
-    var overlayVariantRaw: String {
-        didSet { SettingsCatalogue.overlayVariantRaw.write(overlayVariantRaw, to: store) }
+    /// The **check-before-pasting** setting (``CheckBeforePasting``). Read
+    /// when a take finishes, so a change applies to the next take. Stored
+    /// raw so an unrecognized value degrades to `.whenShiftTapped`.
+    var checkBeforePastingRaw: String {
+        didSet { SettingsCatalogue.checkBeforePastingRaw.write(checkBeforePastingRaw, to: store) }
+    }
+
+    var checkBeforePasting: CheckBeforePasting {
+        get { CheckBeforePasting(rawValue: checkBeforePastingRaw) ?? .whenShiftTapped }
+        set { checkBeforePastingRaw = newValue.rawValue }
     }
 
     var samplingPresetRaw: String {
@@ -217,6 +229,30 @@ final class SettingsManager {
         set {
             appshotHotkeyKeyCode = Int(newValue.keyCode)
             appshotHotkeyModifiers = Int(newValue.modifiers)
+        }
+    }
+
+    // MARK: - Fix Hotkey
+
+    var fixHotkeyKeyCode: Int {
+        didSet { SettingsCatalogue.fixHotkeyKeyCode.write(fixHotkeyKeyCode, to: store) }
+    }
+
+    var fixHotkeyModifiers: Int {
+        didSet { SettingsCatalogue.fixHotkeyModifiers.write(fixHotkeyModifiers, to: store) }
+    }
+
+    /// Reopens the last take in the **Lens** to fix a word (⌃⌥Space by default).
+    var fixHotkey: KeyCombo {
+        get {
+            KeyCombo(
+                keyCode: UInt16(fixHotkeyKeyCode),
+                modifiers: NSEvent.ModifierFlags(rawValue: UInt(fixHotkeyModifiers))
+            )
+        }
+        set {
+            fixHotkeyKeyCode = Int(newValue.keyCode)
+            fixHotkeyModifiers = Int(newValue.modifiers)
         }
     }
 
@@ -738,8 +774,18 @@ final class SettingsManager {
         self.showInMenuBar = SettingsCatalogue.showInMenuBar.load(from: store)
         self.autoInsertText = SettingsCatalogue.autoInsertText.load(from: store)
         self.restoreClipboard = SettingsCatalogue.restoreClipboard.load(from: store)
+        // One-time migration (PRD #612): the Proofread Pass used to be on by
+        // default, and Reset to Defaults wrote that `true` down. A stored
+        // `true` from before is turned off once; a choice made since (the
+        // toggle writes the marker too) stands.
+        if !SettingsCatalogue.proofreadDefaultOffApplied.load(from: store),
+            SettingsCatalogue.proofreadDictation.load(from: store)
+        {
+            SettingsCatalogue.proofreadDictation.write(false, to: store)
+            SettingsCatalogue.proofreadDefaultOffApplied.write(true, to: store)
+        }
         self.proofreadDictation = SettingsCatalogue.proofreadDictation.load(from: store)
-        self.overlayVariantRaw = SettingsCatalogue.overlayVariantRaw.load(from: store)
+        self.checkBeforePastingRaw = SettingsCatalogue.checkBeforePastingRaw.load(from: store)
         self.samplingPresetRaw = SettingsCatalogue.samplingPresetRaw.load(from: store)
         self.selectedMicrophoneUID = SettingsCatalogue.selectedMicrophoneUID.load(from: store)
         self.captureDumpEnabled = SettingsCatalogue.captureDumpEnabled.load(from: store)
@@ -754,6 +800,8 @@ final class SettingsManager {
         self.agentHotkeyModifiers = SettingsCatalogue.agentHotkeyModifiers.load(from: store)
         self.appshotHotkeyKeyCode = SettingsCatalogue.appshotHotkeyKeyCode.load(from: store)
         self.appshotHotkeyModifiers = SettingsCatalogue.appshotHotkeyModifiers.load(from: store)
+        self.fixHotkeyKeyCode = SettingsCatalogue.fixHotkeyKeyCode.load(from: store)
+        self.fixHotkeyModifiers = SettingsCatalogue.fixHotkeyModifiers.load(from: store)
         self.ttsTemperature = SettingsCatalogue.ttsTemperature.load(from: store)
         self.ttsTopP = SettingsCatalogue.ttsTopP.load(from: store)
         self.ttsRepetitionPenalty = SettingsCatalogue.ttsRepetitionPenalty.load(from: store)
@@ -914,6 +962,7 @@ final class SettingsManager {
         autoInsertText = SettingsCatalogue.autoInsertText.default
         restoreClipboard = SettingsCatalogue.restoreClipboard.default
         proofreadDictation = SettingsCatalogue.proofreadDictation.default
+        checkBeforePastingRaw = SettingsCatalogue.checkBeforePastingRaw.default
         selectedMicrophoneUID = SettingsCatalogue.selectedMicrophoneUID.default
         captureDumpEnabled = SettingsCatalogue.captureDumpEnabled.default
         language = SettingsCatalogue.language.default
@@ -928,6 +977,8 @@ final class SettingsManager {
         agentHotkeyModifiers = SettingsCatalogue.agentHotkeyModifiers.default
         appshotHotkeyKeyCode = SettingsCatalogue.appshotHotkeyKeyCode.default
         appshotHotkeyModifiers = SettingsCatalogue.appshotHotkeyModifiers.default
+        fixHotkeyKeyCode = SettingsCatalogue.fixHotkeyKeyCode.default
+        fixHotkeyModifiers = SettingsCatalogue.fixHotkeyModifiers.default
         ttsTemperature = SettingsCatalogue.ttsTemperature.default
         ttsTopP = SettingsCatalogue.ttsTopP.default
         ttsRepetitionPenalty = SettingsCatalogue.ttsRepetitionPenalty.default
@@ -975,7 +1026,6 @@ final class SettingsManager {
         kvCacheCompressionRaw = SettingsCatalogue.kvCacheCompressionRaw.default
         showSkillPills = SettingsCatalogue.showSkillPills.default
         translateTargetLanguage = SettingsCatalogue.translateTargetLanguage.default
-        overlayVariantRaw = SettingsCatalogue.overlayVariantRaw.default
         samplingPresetRaw = SettingsCatalogue.samplingPresetRaw.default
         agentReasoningEffortRaw = SettingsCatalogue.agentReasoningEffortRaw.default
         isServerEnabled = SettingsCatalogue.isServerEnabled.default

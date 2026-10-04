@@ -121,8 +121,10 @@ nonisolated protocol ModelSession {
     ) -> StateThreadedTokenIterator
 
     /// Construct the whole-prompt decode iterator (the **Unkeyed
-    /// Completion**'s form): its init runs the model `prepare` — or the
-    /// injected override, e.g. the windowed vision continuation from zero.
+    /// Completion**'s form): its init runs the model `prepare` (or the
+    /// injected override, e.g. the windowed vision continuation from zero),
+    /// then converts to the parameters' KV Scheme. The iterator's `cache` is
+    /// the array it decodes over.
     func makePreparingDecodeIterator(
         _ input: LMInput,
         cache: [any KVCache],

@@ -12,7 +12,7 @@ import TesseractSpeech
 /// `resetToDefaults`) so a default has exactly one home; the 50-vs-20-GiB SSD
 /// budget drift becomes unrepresentable.
 ///
-/// Composite/derived members (`hotkey`, `ttsHotkey`, `agentHotkey`,
+/// Composite/derived members (`hotkey`, `ttsHotkey`, `agentHotkey`, `fixHotkey`,
 /// `ttsParameters`, `selectedLanguage`, the enum-over-raw pairs) stay computed
 /// over these primitives in the `SettingsManager` facade, so the catalogue only
 /// declares the primitives that actually own a key.

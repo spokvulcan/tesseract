@@ -2,6 +2,12 @@
 //  TranscriptionHistoryView.swift
 //  tesseract
 //
+//  The full take history (PRD #612): a timeline grouped by day, shown in the
+//  History sheet the Dictation page opens from its toolbar. The page itself
+//  keeps only today's takes. A row marks what the **Learned Words** caught;
+//  its context menu opens the take in the **Lens** to fix a word, copies it
+//  or deletes it. Fixing happens only in the Lens, never here.
+//
 
 import SwiftUI
 
@@ -19,27 +25,73 @@ private enum TimelineLayout {
     }
 }
 
+// MARK: - History sheet
+
+/// Every take the history keeps, opened from the Dictation page's toolbar.
+/// Content layer only, no glass (design language §1).
+struct TranscriptionHistorySheet: View {
+    @Environment(TranscriptionHistory.self) private var history
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            if history.flattenedItems.isEmpty {
+                HistoryEmptyState()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                // The inline view is the scroll view's direct content, so its
+                // LazyVStack stays lazy over a long history.
+                ScrollView {
+                    TranscriptionHistoryInlineView()
+                        .frame(maxWidth: Theme.Layout.contentMaxWidth)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, DictationPageStyle.rhythm)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+        }
+        .frame(minWidth: 520, idealWidth: 640, minHeight: 420, idealHeight: 640)
+    }
+
+    private var header: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text("History")
+                .font(.system(size: DictationPageStyle.bodySize, weight: .semibold))
+            if !history.entries.isEmpty {
+                Text(takeCount)
+                    .font(.system(size: DictationPageStyle.bodySize))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            Spacer()
+            Button("Done") { dismiss() }
+                .keyboardShortcut(.cancelAction)
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, DictationPageStyle.rhythm)
+    }
+
+    private var takeCount: String {
+        let count = history.entries.count
+        return count == 1 ? "1 take" : "\(count) takes"
+    }
+}
+
 // MARK: - Inline History View (no ScrollView, for embedding in parent ScrollView)
 
+/// The history timeline without a scroll view of its own: the parent scrolls
+/// it. Reads the history, the **Correction Pairs** and the settings from the
+/// environment.
 struct TranscriptionHistoryInlineView: View {
-    var history: TranscriptionHistory
-    /// The entry whose **Correction Pair** detail is open (raw / polished /
-    /// correction, ticket #289). One at a time — the detail is an editor,
-    /// not a comparison table. Owned by the page so the overlay "edit"
-    /// affordance's reveal can drive it deterministically.
-    @Binding var expandedEntryID: UUID?
-    @Environment(SettingsManager.self) private var settings
+    @Environment(TranscriptionHistory.self) private var history
     @Environment(CorrectionPairStore.self) private var pairs
 
     var body: some View {
         if history.flattenedItems.isEmpty {
-            ContentUnavailableView(
-                "No transcriptions yet",
-                systemImage: "waveform",
-                description: Text(
-                    "Press \(settings.hotkey.displayString) to start dictating in any app.")
-            )
-            .padding(.vertical, DictationPageStyle.rhythm)
+            HistoryEmptyState()
+                .padding(.vertical, DictationPageStyle.rhythm)
         } else {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(history.flattenedItems) { item in
@@ -52,21 +104,7 @@ struct TranscriptionHistoryInlineView: View {
                             pair: entry.pairID.flatMap { pairs.pair(withID: $0) },
                             isFirst: isFirst,
                             isLast: isLast,
-                            isExpanded: expandedEntryID == entry.id,
-                            onDelete: { history.delete(entry) },
-                            onToggleExpand: {
-                                expandedEntryID = expandedEntryID == entry.id ? nil : entry.id
-                            },
-                            onSaveCorrection: { text in
-                                if let pairID = entry.pairID {
-                                    pairs.setCorrection(text, for: pairID)
-                                }
-                            },
-                            onFlagWrong: {
-                                if let pairID = entry.pairID {
-                                    pairs.flagWrong(pairID)
-                                }
-                            }
+                            onDelete: { history.delete(entry) }
                         )
                     }
                 }
@@ -74,6 +112,21 @@ struct TranscriptionHistoryInlineView: View {
             .padding(.horizontal, 4)
             .accessibilityLabel("Transcription history, \(history.entries.count) items")
         }
+    }
+}
+
+// MARK: - Empty state
+
+private struct HistoryEmptyState: View {
+    @Environment(SettingsManager.self) private var settings
+
+    var body: some View {
+        ContentUnavailableView(
+            "No transcriptions yet",
+            systemImage: "waveform",
+            description: Text(
+                "Press \(settings.hotkey.displayString) to start dictating in any app.")
+        )
     }
 }
 
@@ -99,25 +152,41 @@ struct HistorySectionHeader: View, Equatable {
 
 struct TimelineEntryRow: View {
     let entry: TranscriptionEntry
-    /// The entry's **Correction Pair** (nil for pre-flywheel entries): the
-    /// take's text lineage, edited right here — full editing lives in the
-    /// history, never the overlay (ticket #289).
+    /// The entry's **Correction Pair** (nil for entries predating the
+    /// flywheel, ticket #289). Its glyphs say the take was flagged wrong or
+    /// fixed; the fixing itself happens in the **Lens**.
     let pair: CorrectionPair?
     let isFirst: Bool
     let isLast: Bool
-    let isExpanded: Bool
     let onDelete: () -> Void
-    let onToggleExpand: () -> Void
-    let onSaveCorrection: (String) -> Void
-    let onFlagWrong: () -> Void
 
+    @Environment(\.fixInLens) private var fixInLens
     @State private var isHovered = false
-    @State private var correctionDraft = ""
 
     // Use cached formatter from TranscriptionHistory
     private var timeString: String {
         TranscriptionHistory.formattedTime(for: entry.timestamp)
     }
+
+    private var accessibilityText: String {
+        let seconds = String(format: "%.1f", entry.duration)
+        return "\(entry.text), recorded at \(timeString), duration \(seconds) seconds"
+    }
+
+    /// What the glyphs and the marked words show, for VoiceOver (the label
+    /// replaces the combined children's).
+    private var accessibilityState: String {
+        var parts: [String] = []
+        if let pair, pair.flaggedWrong { parts.append("flagged wrong") }
+        if let pair, pair.correction != nil || !pair.fixes.isEmpty { parts.append("fixed") }
+        let caught = CaughtText.help(for: entry.catches)
+        if !caught.isEmpty { parts.append(caught) }
+        return parts.joined(separator: ", ")
+    }
+
+    /// A take is fixed through its Correction Pair; entries from before the
+    /// pairs have none, so nothing could keep their fix.
+    private var canFix: Bool { entry.pairID != nil }
 
     var body: some View {
         HStack(alignment: .top, spacing: TimelineLayout.timeToConnectorSpacing) {
@@ -134,9 +203,9 @@ struct TimelineEntryRow: View {
 
             // Content
             VStack(alignment: .leading, spacing: 6) {
-                Text(entry.text)
-                    .font(.system(size: DictationPageStyle.bodySize))
-                    .foregroundStyle(.primary)
+                // The row takes no click (fixing is in the context menu), so
+                // its text stays selectable.
+                CaughtText(text: entry.text, catches: entry.catches)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -154,22 +223,13 @@ struct TimelineEntryRow: View {
                                 .foregroundStyle(.orange)
                                 .accessibilityLabel("Flagged wrong")
                         }
-                        if pair.correction != nil {
+                        if pair.correction != nil || !pair.fixes.isEmpty {
                             Image(systemName: "pencil")
                                 .font(.system(size: 10))
                                 .foregroundStyle(.secondary)
-                                .accessibilityLabel("Has a correction")
+                                .accessibilityLabel("Fixed")
                         }
                     }
-                }
-
-                if isExpanded, let pair {
-                    CorrectionDetailView(
-                        pair: pair,
-                        draft: $correctionDraft,
-                        onSave: { onSaveCorrection(correctionDraft) },
-                        onFlagWrong: onFlagWrong
-                    )
                 }
             }
             .padding(.vertical, 6)
@@ -186,34 +246,29 @@ struct TimelineEntryRow: View {
         .contextMenu {
             actionMenuItems
         }
-        .onChange(of: isExpanded, initial: true) { _, expanded in
-            if expanded {
-                correctionDraft = pair?.correction ?? pair?.committed ?? entry.text
-            }
-        }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(
-            "\(entry.text), recorded at \(timeString), duration \(String(format: "%.1f", entry.duration)) seconds"
-        )
-        .accessibilityHint("Use the context menu to copy, correct, or delete")
+        .accessibilityLabel(accessibilityText)
+        .accessibilityValue(accessibilityState)
+        .accessibilityHint(
+            canFix
+                ? "Use the context menu to copy, fix a word, or delete"
+                : "Use the context menu to copy or delete")
     }
 
     @ViewBuilder
     private var actionMenuItems: some View {
+        if canFix {
+            Button {
+                fixAWord()
+            } label: {
+                Label("Fix a Word…", systemImage: "pencil")
+            }
+        }
+
         Button {
             copyEntry()
         } label: {
             Label("Copy", systemImage: "doc.on.doc")
-        }
-
-        if pair != nil {
-            Button {
-                onToggleExpand()
-            } label: {
-                Label(
-                    isExpanded ? "Hide Details" : "Edit Correction",
-                    systemImage: isExpanded ? "chevron.up" : "pencil")
-            }
         }
 
         Button(role: .destructive) {
@@ -223,76 +278,17 @@ struct TimelineEntryRow: View {
         }
     }
 
+    /// Opens the take in the Lens; it refuses while a take is being
+    /// recorded or a fix is being put back in an app.
+    private func fixAWord() {
+        if !fixInLens(entry.lensTake) {
+            NSSound.beep()
+        }
+    }
+
     private func copyEntry() {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(entry.text, forType: .string)
-    }
-}
-
-// MARK: - Correction detail (the pair editor)
-
-/// The take's text lineage, side by side, with the correction editor — the
-/// **Correction Pair**'s gold half is written here (ticket #289).
-private struct CorrectionDetailView: View {
-    let pair: CorrectionPair
-    @Binding var draft: String
-    let onSave: () -> Void
-    let onFlagWrong: () -> Void
-
-    private var hasUnsavedEdit: Bool {
-        draft.trimmingCharacters(in: .whitespacesAndNewlines)
-            != (pair.correction ?? pair.committed ?? "")
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            lineageLine("Raw", pair.rawASR)
-            if pair.cleaned != pair.rawASR {
-                lineageLine("Cleaned", pair.cleaned)
-            }
-            if let proofread = pair.proofread {
-                lineageLine("Polished", proofread)
-            }
-            if let reason = pair.rejectReason {
-                lineageLine("Rejected", reason)
-            }
-
-            HStack(alignment: .center, spacing: 6) {
-                TextField("Correction", text: $draft, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: DictationPageStyle.bodySize))
-                    .lineLimit(1...4)
-                Button("Save") { onSave() }
-                    .disabled(!hasUnsavedEdit)
-            }
-
-            Button {
-                onFlagWrong()
-            } label: {
-                Label(
-                    pair.flaggedWrong ? "Flagged wrong" : "Flag as wrong",
-                    systemImage: pair.flaggedWrong ? "flag.fill" : "flag")
-            }
-            .buttonStyle(.plain)
-            .font(.system(size: DictationPageStyle.bodySize))
-            .foregroundStyle(pair.flaggedWrong ? Color.orange : Color.secondary)
-            .disabled(pair.flaggedWrong)
-        }
-        .padding(.top, 4)
-    }
-
-    private func lineageLine(_ label: String, _ text: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(label)
-                .font(.system(size: DictationPageStyle.bodySize, weight: .medium))
-                .foregroundStyle(.tertiary)
-                .frame(width: 64, alignment: .trailing)
-            Text(text)
-                .font(.system(size: DictationPageStyle.bodySize))
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-        }
     }
 }
 

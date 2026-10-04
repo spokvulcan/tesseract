@@ -16,7 +16,7 @@ import Observation
 /// **Voice Input** (`AgentVoiceInputController`), the agent composer leaf,
 /// which composes the same session for its own presentation.
 ///
-/// The coordinator is the feed's sole phase/beat writer; overlay variants and
+/// The coordinator is the feed's sole phase/beat writer; the Lens and
 /// the in-window dictation views read the feed, never the coordinator's
 /// internals.
 @Observable @MainActor
@@ -25,9 +25,12 @@ final class DictationCoordinator {
     private(set) var lastTranscription: String = ""
 
     /// The raw text of the last take the **Proofread Pass** rejected — kept
-    /// so "insert raw anyway" (an overlay affordance, or this API directly)
-    /// can still deliver the user's words.
+    /// so "Insert anyway" (the Lens's button, or this API directly) can
+    /// still deliver the user's words.
     private(set) var lastRejectedRaw: String?
+    /// What the Learned Words caught in that raw text: counted, and marked
+    /// in the Lens, if it is inserted anyway.
+    private var lastRejectedCatches: [LearnedWordCatch] = []
 
     /// The current lifecycle phase — a read-through to the feed, kept as the
     /// coordinator's public state surface for the in-window views and tests.
@@ -38,11 +41,19 @@ final class DictationCoordinator {
     private let history: any TranscriptionStoring
     private let settings: SettingsManager
 
-    /// Retained for the **Live Partial** pump (ticket #291) — mid-capture
+    /// Retained for the **Live Preview** pump (PRD #612) — mid-capture
     /// snapshots and the partial decode lane. The capture/transcribe
     /// *lifecycle* still belongs to the session; the pump only reads.
     private let audioCapture: any AudioCapturing
     private let transcriptionEngine: any Transcribing
+
+    /// The app in front now: read again at the paste, where a fix goes back.
+    private let frontmostApp: @MainActor () -> TargetApp?
+    /// Held for "insert raw anyway", which commits outside the session, and
+    /// for the Live Preview, where Learned Words flip as they arrive.
+    private let learnedWords: (any LearnedWordApplying)?
+    /// The preview reads like the take will: the same regex cleanup.
+    private let postProcessor = TranscriptionPostProcessor()
 
     /// The **Proofread Pass**, injected by the composition root; `nil` in
     /// tests that don't exercise it. The coordinator wraps it so the feed
@@ -50,36 +61,33 @@ final class DictationCoordinator {
     private let proofreadPass: ProofreadPass?
 
     /// The **Correction Pair** store (ticket #289); `nil` in tests that don't
-    /// exercise the flywheel. Every take is recorded as a candidate; the
-    /// overlay affordances and the history editor turn candidates gold.
+    /// exercise the flywheel. Every take is recorded as a candidate; a fix in
+    /// the Lens turns it gold.
     private let pairs: CorrectionPairStore?
 
-    /// The pair of the last take that surfaced a beat — what the overlay's
-    /// flag/edit affordances target while the beat lingers.
+    /// The pair of the last take that surfaced a beat — what "insert raw
+    /// anyway" marks gold.
     private(set) var lastTakePairID: UUID?
 
-    /// The overlay "edit" affordance's window hook: summon the main window
-    /// onto the dictation page. Set by the app delegate (window management
-    /// is its turf); the coordinator only decides *when*.
-    var onOpenDictationHistory: (@MainActor () -> Void)?
+    /// Every committed take, handed to the **Lens** (PRD #612) the moment it
+    /// lands, so ⌃⌥Space can reopen it. Called right after the paste, before
+    /// anything else can type into the app.
+    var onTakeCommitted: (@MainActor (DictatedTake) -> Void)?
 
     /// The maximum-recording-duration auto-stop. Caller-owned: it finalizes a stuck
     /// recording, which is a dictation-presentation concern, not part of the shared
     /// capture lifecycle.
     private var recordingTask: Task<Void, Never>?
 
-    /// Whether the live Overlay Variant consumes the feed's partial signal.
-    /// Set by the composition root (which knows the selected variant); the
-    /// coordinator reads a policy, never the variant — the pipeline stays
-    /// variant-blind. Default off: no pump, zero cost, baselines untouched.
-    var isLivePartialsEnabled: @MainActor () -> Bool = { false }
-
-    /// The **Live Partial** pump (ticket #291) and its staleness epoch. The
+    /// The **Live Preview** pump (PRD #612) and its staleness epoch. The
     /// epoch guards a decode that resolves after its take ended against
-    /// captioning the *next* take (the feed's phase guard alone can't tell
+    /// previewing the *next* take (the feed's phase guard alone can't tell
     /// two recordings apart).
-    private var partialTask: Task<Void, Never>?
-    private var partialEpoch: UInt64 = 0
+    private var previewTask: Task<Void, Never>?
+    private var previewEpoch: UInt64 = 0
+
+    /// ⇧ was tapped while this take was recorded: it waits in the Lens.
+    private var holdRequested = false
 
     /// A hotkey press that arrived while a previous capture was still
     /// `.processing`. Push-to-talk must never swallow a press: the intent is
@@ -97,13 +105,19 @@ final class DictationCoordinator {
         feed: DictationFeed,
         proofreadPass: ProofreadPass? = nil,
         captureDump: (any CaptureDumpStoring)? = nil,
-        pairs: CorrectionPairStore? = nil
+        pairs: CorrectionPairStore? = nil,
+        learnedWords: (any LearnedWordApplying)? = nil,
+        frontmostApp: @escaping @MainActor () -> TargetApp? = { TargetApp.frontmost() }
     ) {
+        self.frontmostApp = frontmostApp
+        self.learnedWords = learnedWords
         self.session = VoiceCaptureSession(
             audioCapture: audioCapture,
             transcriptionEngine: transcriptionEngine,
             captureDump: captureDump,
-            isCaptureDumpEnabled: { settings.captureDumpEnabled }
+            isCaptureDumpEnabled: { settings.captureDumpEnabled },
+            learnedWords: learnedWords,
+            frontmostApp: frontmostApp
         )
         self.textInjector = textInjector
         self.history = history
@@ -123,7 +137,7 @@ final class DictationCoordinator {
             DictationPerf.markPress()
             startRecording()
         case .error:
-            // An error pill is feedback, never a gate: the press *is* the retry,
+            // An error line is feedback, never a gate: the press *is* the retry,
             // so recording starts immediately instead of waiting out the
             // error auto-reset.
             DictationPerf.markPress()
@@ -162,7 +176,7 @@ final class DictationCoordinator {
         startPending = false
         recordingTask?.cancel()
         recordingTask = nil
-        stopPartialPump()
+        stopPreviewPump()
         session.cancel()
         feed.setPhase(.idle)
         feed.emit(.cancelled)
@@ -174,10 +188,12 @@ final class DictationCoordinator {
         // Note (audit #285 item 6): the `.recording` emission lands *after*
         // the synchronous engine start below, but reordering would gain
         // nothing — emission and `AVAudioEngine.start()` complete inside one
-        // main-actor job, so the pill's first frame can't precede either.
+        // main-actor job, so the Lens's first frame can't precede either.
         // DictationPerf's press→visible measures the whole job.
         switch session.start() {
         case .started:
+            holdRequested = false
+            feed.setTargetApp(session.targetApp)
             feed.setPhase(.recording)
 
             // Start the maximum-duration timeout task.
@@ -194,7 +210,7 @@ final class DictationCoordinator {
                 playSound(.startRecording)
             }
 
-            startPartialPump()
+            startPreviewPump()
         case .micBusy:
             handleError(.microphoneBusy)
         case .captureFailed(let error):
@@ -206,74 +222,99 @@ final class DictationCoordinator {
         }
     }
 
-    // MARK: - Live Partial pump (ticket #291)
+    // MARK: - Live Preview (PRD #612)
 
-    /// How much trailing audio a partial decode sees. Capping the window
-    /// bounds the decode (and the worst-case delay a just-released final pays
-    /// waiting out a partial's cancellation) regardless of take length; the
-    /// caption shows the tail anyway.
-    private static let partialWindowSeconds: TimeInterval = 12
-    /// No decode before this much audio exists — sub-second snippets return
-    /// noise, and the first words deserve one clean pass.
-    private static let partialMinimumAudio: TimeInterval = 0.6
     /// The pause between a decode landing and the next snapshot. Cadence is
     /// self-pacing: a slow decode simply stretches its own cycle.
-    private static let partialInterval: Duration = .milliseconds(300)
+    private static let previewInterval: Duration = .milliseconds(300)
 
-    private func startPartialPump() {
-        guard isLivePartialsEnabled() else { return }
-        partialEpoch &+= 1
-        let epoch = partialEpoch
-        partialTask = Task { [weak self] in
+    /// Decodes the take while it is recorded, from the end of its last
+    /// confirmed segment, and publishes what Whisper heard with the Learned
+    /// Words applied (shown, not counted). Release cancels the decode in
+    /// flight; the paste is always the full pass.
+    private func startPreviewPump() {
+        previewEpoch &+= 1
+        let epoch = previewEpoch
+        let app = session.targetApp
+        previewTask = Task { [weak self] in
+            var assembler = LivePreviewAssembler()
             while !Task.isCancelled {
-                guard let self, self.partialEpoch == epoch, self.state == .recording
+                guard let self, self.previewEpoch == epoch, self.state == .recording
                 else { return }
-                if let snapshot = self.audioCapture.captureSnapshot(),
-                    snapshot.duration >= Self.partialMinimumAudio
+                if let tail = self.audioCapture.captureSnapshot(from: assembler.confirmedEnd),
+                    let window = assembler.window(ofTail: tail)
                 {
                     let decodeStart = DispatchTime.now()
-                    let text = await self.transcriptionEngine.transcribePartial(
-                        Self.trailingWindow(of: snapshot), language: self.settings.language)
+                    let result = await self.transcriptionEngine.transcribePartial(
+                        window, language: self.settings.language)
                     // The decode awaited: this take may have ended (and another
-                    // begun) meanwhile — a stale caption is worse than none.
-                    guard !Task.isCancelled, self.partialEpoch == epoch,
+                    // begun) meanwhile — a stale preview is worse than none.
+                    guard !Task.isCancelled, self.previewEpoch == epoch,
                         self.state == .recording
                     else { return }
-                    if let text, !text.isEmpty {
+                    if let result {
                         DictationPerf.record(
-                            span: "partial", ms: DictationPerf.msSince(decodeStart))
-                        self.feed.setPartial(text)
+                            span: "preview", ms: DictationPerf.msSince(decodeStart))
+                        assembler.fold(result, windowDuration: window.duration)
+                        self.feed.setPreview(self.preview(of: assembler, app: app))
                     }
                 }
-                try? await Task.sleep(for: Self.partialInterval)
+                try? await Task.sleep(for: Self.previewInterval)
             }
         }
     }
 
-    private func stopPartialPump() {
-        partialEpoch &+= 1
-        partialTask?.cancel()
-        partialTask = nil
-        feed.setPartial(nil)
+    private func stopPreviewPump() {
+        previewEpoch &+= 1
+        previewTask?.cancel()
+        previewTask = nil
+        feed.setPreview(nil)
     }
 
-    /// The trailing `partialWindowSeconds` of a snapshot (whole snapshot when
-    /// shorter). `raw` stays nil — a partial is never Capture Dump evidence.
-    private static func trailingWindow(of audio: AudioData) -> AudioData {
-        let maxSamples = Int(audio.sampleRate * partialWindowSeconds)
-        guard audio.samples.count > maxSamples else { return audio }
-        return AudioData(
-            samples: Array(audio.samples.suffix(maxSamples)),
-            sampleRate: audio.sampleRate,
-            duration: partialWindowSeconds,
-            raw: nil
-        )
+    /// The preview as the take will read: the regex cleanup, then the
+    /// Learned Words (so a learned word flips the moment it is heard).
+    private func preview(of assembler: LivePreviewAssembler, app: TargetApp?) -> LivePreview? {
+        let cleaned = postProcessor.process(assembler.rawText)
+        guard !cleaned.isEmpty else { return nil }
+        let learned =
+            learnedWords?.apply(to: cleaned, appBundleID: app?.bundleID) ?? .unchanged(cleaned)
+        // The confirmed words are the preview's leading words that match the
+        // confirmed text on its own (cleaned the same way): where the two
+        // cleanups differ at the boundary, the word counts as provisional.
+        let confirmed = postProcessor.process(assembler.confirmed)
+        let confirmedText =
+            learnedWords?.apply(to: confirmed, appBundleID: app?.bundleID).text ?? confirmed
+        let confirmedWords = zip(TakeText.tokens(confirmedText), TakeText.tokens(learned.text))
+            .prefix { $0.bare == $1.bare }.count
+        return LivePreview(
+            text: learned.text, catches: learned.catches, confirmedTokens: confirmedWords)
+    }
+
+    // MARK: - Holding a take (PRD #612)
+
+    /// ⇧ tapped while recording: the take waits in the Lens instead of
+    /// pasting; a second tap lets it paste again. Ignored when the setting
+    /// says never or always.
+    func shiftTapped() {
+        guard state == .recording, settings.checkBeforePasting == .whenShiftTapped else { return }
+        holdRequested.toggle()
+        feed.setHeld(holdRequested)
+    }
+
+    /// Whether this take waits in the Lens rather than pasting.
+    private var holdsTake: Bool {
+        guard settings.autoInsertText else { return false }
+        switch settings.checkBeforePasting {
+        case .always: return true
+        case .never: return false
+        case .whenShiftTapped: return holdRequested
+        }
     }
 
     private func stopRecordingAndProcess() {
         recordingTask?.cancel()
         recordingTask = nil
-        stopPartialPump()
+        stopPreviewPump()
 
         DictationPerf.markRelease()
         let stopStart = DispatchTime.now()
@@ -286,6 +327,12 @@ final class DictationCoordinator {
         case .tooShort:
             handleError(.recordingTooShort)
             DictationPerf.markResolved("error(tooShort)")
+        case .silent:
+            // Nothing was said: no transcription, so no "Thank you." pasted
+            // out of silence.
+            handleError(.noSpeechDetected)
+            feed.emit(.empty)
+            DictationPerf.markResolved("error(silent)")
         case .audio(let audioData, let dumpFile):
             process(audioData, dumpFile: dumpFile)
         }
@@ -301,7 +348,7 @@ final class DictationCoordinator {
             var committedDuration: TimeInterval = 0
 
             // The proofread wrapper narrates the phase around the pass, so
-            // variants can show "polishing" — the session stays feed-blind.
+            // the Lens can show "finishing" — the session stays feed-blind.
             var proofread: (@MainActor (String) async -> ProofreadVerdict?)?
             if let pass = proofreadPass {
                 proofread = { [feed] text in
@@ -322,12 +369,14 @@ final class DictationCoordinator {
             // link to it). Every take is a candidate — the flywheel collects
             // from day one; flags and edits turn candidates gold.
             var recordedPairID: UUID?
-            var onTake: (@MainActor (VoiceCaptureSession.Take) -> Void)?
-            if let pairs {
-                onTake = { [settings] take in
+            var observedTake: VoiceCaptureSession.Take?
+            let onTake: @MainActor (VoiceCaptureSession.Take) -> Void = { [settings, pairs] take in
+                observedTake = take
+                if let pairs {
                     let pair = CorrectionPair(
                         rawASR: take.rawASR,
                         cleaned: take.cleaned,
+                        learned: take.catches.isEmpty ? nil : take.learned,
                         proofread: {
                             if case .corrected(let text, _) = take.verdict { return text }
                             return nil
@@ -358,22 +407,35 @@ final class DictationCoordinator {
             ) { [self] text, duration in
                 lastTranscription = text
                 committedDuration = duration
+                let catches = Self.catches(of: observedTake, committed: text)
 
                 history.add(
                     text: text,
                     duration: duration,
                     model: ModelDefinition.withID(settings.selectedSpeechToTextModelID)?.displayName
                         ?? settings.selectedSpeechToTextModelID,
-                    pairID: recordedPairID
+                    pairID: recordedPairID,
+                    catches: catches,
+                    app: Self.historyApp(observedTake?.app)
                 )
 
-                if settings.autoInsertText {
+                // A held take waits in the Lens: it pastes from there.
+                let held = holdsTake
+                let pastes = settings.autoInsertText && !held
+                if pastes {
                     textInjector.restoreClipboard = settings.restoreClipboard
                     let injectStart = DispatchTime.now()
                     try await textInjector.inject(text + " ")
                     DictationPerf.record(
                         span: "inject", ms: DictationPerf.msSince(injectStart))
                 }
+                // Straight after the paste, before another key can reach the
+                // app: the Lens anchors "still the last thing typed" here.
+                onTakeCommitted?(
+                    DictatedTake(
+                        pairID: recordedPairID, text: text, catches: catches,
+                        app: observedTake?.app, pasted: pastes,
+                        pastedInto: pastes ? frontmostApp() : nil, held: held))
             }
             DictationPerf.record(span: "session", ms: DictationPerf.msSince(sessionStart))
 
@@ -395,6 +457,7 @@ final class DictationCoordinator {
                 // phase returns to idle — no error gate. The beat carries the
                 // raw text for "insert raw anyway".
                 lastRejectedRaw = raw
+                lastRejectedCatches = observedTake?.catches ?? []
                 lastTakePairID = recordedPairID
                 feed.setPhase(.idle)
                 feed.emit(.rejected(raw: raw, reason: reason))
@@ -435,14 +498,28 @@ final class DictationCoordinator {
         if let lastTakePairID {
             pairs?.flagWrong(lastTakePairID)
         }
+        // The raw text is now the last take: ⌃⌥Space must reopen it, and a
+        // fix must measure against what this paste typed, not the take before.
+        let catches = lastRejectedCatches
+        lastRejectedCatches = []
         history.add(
             text: raw,
             duration: 0,
             model: ModelDefinition.withID(settings.selectedSpeechToTextModelID)?.displayName
                 ?? settings.selectedSpeechToTextModelID,
-            pairID: lastTakePairID
+            pairID: lastTakePairID,
+            catches: catches,
+            app: Self.historyApp(session.targetApp)
         )
-        guard settings.autoInsertText else { return }
+        let take = DictatedTake(
+            pairID: lastTakePairID, text: raw, catches: catches, app: session.targetApp,
+            pasted: settings.autoInsertText,
+            pastedInto: settings.autoInsertText ? frontmostApp() : nil)
+        guard settings.autoInsertText else {
+            learnedWords?.recordCatches(catches)
+            onTakeCommitted?(take)
+            return
+        }
         textInjector.restoreClipboard = settings.restoreClipboard
         Task {
             // Surface a failed injection: the loan can refuse to borrow the
@@ -450,6 +527,8 @@ final class DictationCoordinator {
             // and a silent no-op here reads as the button doing nothing.
             do {
                 try await textInjector.inject(raw + " ")
+                learnedWords?.recordCatches(catches)
+                onTakeCommitted?(take)
             } catch let error as DictationError {
                 handleError(error)
             } catch {
@@ -458,21 +537,20 @@ final class DictationCoordinator {
         }
     }
 
-    /// The overlay's one-click "that was wrong" on the lingering beat. No
-    /// focus steal, no window — it marks the pair gold (protecting its
-    /// Capture Dump audio) and nothing else.
-    func flagLastTakeWrong() {
-        guard let lastTakePairID else { return }
-        pairs?.flagWrong(lastTakePairID)
+    /// The take's catches, positioned in the committed text (the Proofread
+    /// Pass may have rewritten it after the Learned Words ran).
+    private static func catches(
+        of take: VoiceCaptureSession.Take?, committed text: String
+    ) -> [LearnedWordCatch] {
+        guard let take, !take.catches.isEmpty else { return [] }
+        return take.learned == text
+            ? take.catches : LearnedWordMatcher.relocate(take.catches, in: text)
     }
 
-    /// The overlay's "edit" on the lingering beat: reveal the take's entry in
-    /// the history (full editing lives there — the overlay stays
-    /// keyboard-free) and summon the window via the delegate hook.
-    func editLastTake() {
-        guard let lastTakePairID else { return }
-        history.requestFocus(pairID: lastTakePairID)
-        onOpenDictationHistory?()
+    /// The app as the history keeps it (no pid: it is stale by the time the
+    /// Dictation page opens the take).
+    private static func historyApp(_ app: TargetApp?) -> TranscriptionEntry.App? {
+        app.map { TranscriptionEntry.App(bundleID: $0.bundleID, name: $0.name) }
     }
 
     private static func pairVerdict(
@@ -489,7 +567,7 @@ final class DictationCoordinator {
     /// Honors a hotkey press that arrived mid-`.processing`: the key is still
     /// held (release clears the flag), so recording starts now. An error the
     /// resolution just raised does not gate — same rule as a press on an idle
-    /// error pill, and the new recording replaces it.
+    /// error line, and the new recording replaces it.
     private func drainPendingStart() {
         guard startPending else { return }
         startPending = false
@@ -517,7 +595,7 @@ final class DictationCoordinator {
 
     /// Preloaded once: `NSSound(named:)` loads from disk on first use, and the
     /// start-recording play sits on the same main-actor job that precedes the
-    /// pill's state emission — a per-press load would delay the pill.
+    /// Lens's state emission — a per-press load would delay the Lens.
     private let sounds: [SystemSound: NSSound] = [
         SystemSound.startRecording: NSSound(named: "Tink"),
         SystemSound.success: NSSound(named: "Purr"),

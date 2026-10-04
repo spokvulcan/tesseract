@@ -67,7 +67,8 @@ precision, or TurboQuant (`turbo8v4`: 8-bit affine keys, `turbo0v4`: bf16 keys,
 both with 4-bit values). The KV Cache Compression setting picks it for a model
 that supports it (Qwen3.8-27B). It is a request fact and part of cache partition
 identity (ADR-0083): the prompt prefills unquantized, the cache converts after
-prefill (inside DFlash2's iterator on a speculative turn), and the turn's leaf
+prefill (inside the iterator on a DFlash2 turn and on an **Unkeyed
+Completion**, where the iterator runs the prefill), and the turn's leaf
 stores compressed layers that only a request of the same scheme restores.
 _Avoid_: kvBits (the unrelated affine quantization the product never sets), KV
 quantization (ambiguous between the two).
@@ -583,13 +584,96 @@ _Avoid_: orphaned model, legacy download (both suggest the user chose it).
 
 ### Prefill orchestration
 
+_The Prefill Plan entry and the terms after it name the design ADR-0087
+proposes. Until it is built, plan application still derives the shape, the
+Capture Schedule, the split and the Maximum Advance inline._
+
 **Prefill Plan**:
-The pre-prefill decision value for one HTTP prefix-cache generation — the restore
-decision (cold vs suffix-prefill), the suffix-filtered checkpoint offsets, the
-transient boundary offsets, and the stable-prefix offset. It carries offsets only,
-never snapshots or the token array.
+Everything one keyed request's prefill does that is decidable before the
+**Cache Claim** check-out, decided by the Prefill Planner as one value: its
+**Cache Opening**, the **Image Span** and **Text Tail** it forwards, where the
+**Position Anchor** is seeded, its **Capture Schedule**, its **Decode
+Handover** and its **Maximum Advance** (ADR-0087). It carries offsets, ranges
+and enums only, never snapshots, token arrays or the Speculation Plan's
+drafters; plan application carries it out inline and re-derives none of it.
 _Avoid_: prefill config; generation params (a separate notion); checkpoint plan
-(one field inside the Prefill Plan, not the whole value).
+(an input the plan filters, not the plan); the stable-prefix offset as one of
+its fields (it reaches the plan only through the checkpoint plan); restore
+point (a **Chain-Prefix Restore** term).
+
+**Cache Opening**:
+How a keyed request's cache opens before its prefill: cold, from a fresh
+cache; restore, where the **Cache Claim** is asked for the resolved snapshot
+and a restore that yields no cache falls back to the planner's cold prefill
+(ADR-0069 amendment); or whole prompt, where the Speculation Plan's iterator
+prefills the whole prompt into a fresh cache.
+_Avoid_: restore mode (what the restore turned out to be, an execution
+report); opening, unqualified (the Companion's **Day Opening**); restore
+shape (the five shapes are products of the opening and the forward).
+
+**Minimum Warm Offset**:
+The end of a request's last image run in its **Cache Key Space**, or zero for
+a text-only request. Below it a prefill must forward an **Image Span**; at or
+past it the remainder is text, and no checkpoint below it is captured.
+_Avoid_: image prefix end (true only of a cold span); warm offset clamp; warm
+as in **Warm Body** (here it means the first offset a restore can continue
+from as text, not a compressed tier).
+
+**Image Span**:
+The key-space range an image-bearing prefill forwards through the anchored
+vision continuation: from the restore offset, or zero, to the **Minimum Warm
+Offset**. It carries only the images whose runs fall inside it and skips the
+pixel rows of the images already cached.
+_Avoid_: image prefix (only the cold span); vision prefix; restore point (a
+**Chain-Prefix Restore** term).
+
+**Text Tail**:
+The text a prefill forwards after any **Image Span**: from the restore offset
+(zero when cold), or from the **Minimum Warm Offset** after a span, to the end
+of the prompt. The app's chunked prefill runs all of it, or only up to the
+split under a speculative **Decode Handover**. Its start is the one offset
+checkpoints are based at, the split counts from and salvage measures its
+progress from.
+_Avoid_: execution base offset (plan application's local, which ADR-0087
+replaces); prefill base offset (the cached-token count, which differs after a
+span); suffix, unqualified; the tail (in ADR-0059 and ADR-0079, the
+speculative iterator's own prefill from the split).
+
+**Capture Schedule**:
+The checkpoints one prefill captures: the planned checkpoints past what is
+cached and at or past the **Minimum Warm Offset**, plus the prefill's
+**Transient Boundaries**, a planned type winning at a shared offset. The
+chunked prefill also cuts its chunks at these offsets.
+_Avoid_: checkpoint plan (the resolution-side input it filters); capture map
+(its executor form).
+
+**Transient Boundary**:
+A **Prefix-View Checkpoint** captured at the end of the last message or the
+last user message, to synthesize this turn's leaf or seed a **Speculative
+Canonical Prefill**. Of the two boundary offsets, a prefill captures the ones
+past what is cached, at or past the **Minimum Warm Offset**, inside the
+prompt and off every planned checkpoint; a text-only request under a
+**Preserve-Thinking Render** captures none.
+_Avoid_: boundary checkpoint (a telemetry field); boundary helper, helper
+checkpoint (the older name in ADR-0019, ADR-0064 and ADR-0068, and today's
+local); planned checkpoint.
+
+**Decode Handover**:
+Where a prefill hands the prompt to the decode iterator: autoregressive, where
+the app prefills the whole **Text Tail** and the standard iterator decodes from
+its last token; or speculative at a split, where the app's capturing prefill
+runs to the split and the **Speculation Plan**'s iterator prefills the rest.
+Any generation path can name its own.
+_Avoid_: decode route, speculation route (route belongs to the **Prefill
+Strategy** and the **Completion Route**); decode handoff (handoff is the
+**Leaf Handoff**'s word for moving a leaf between owners).
+
+**Maximum Advance**:
+How far one turn may grow its cache past what it restored: its new prompt
+tokens, plus the output ceiling, plus the speculative allowance; unbounded
+without a ceiling. The **Cache Claim** judges check-out eligibility against
+it, and the **Active-Inference Reserve** prices the turn's growth at it.
+_Avoid_: max tokens (output only); LeafCheckout.maximumAdvance (retired).
 
 **Prefill Strategy**:
 The chunked-vs-single-shot route for one raw-generation prompt (the agent chat
@@ -772,8 +856,10 @@ generation pipeline.
 **Completion Phase Map**:
 The six named phases of one cache-aware **Server Completion** (ADR-0033):
 **Request Keying** (conversation → the identities later phases key on, or the
-**Unkeyed Completion** degrade), resolution + plan (the Prefill Planner),
-plan application (inline by decision — the deletion test fails), the stream
+**Unkeyed Completion** degrade), resolution + plan (the Prefill Planner;
+under ADR-0087, proposed, it decides the whole **Prefill Plan**), plan
+application (inline by decision; under ADR-0087 it only carries the plan
+out), the stream
 drive (the Managed Generation Driver, shared with the agent), the leaf store,
 and trace accumulation. Phases are implementation structure inside the
 module's seam — the dispatcher's interface is unchanged — and each phase
@@ -781,7 +867,8 @@ returns values; the completion module owns effects, except a leaf's: the leaf
 store decides which leaf, and its **Leaf Admission** stores it (ADR-0078).
 _Avoid_: pipeline stages (the Generation* family owns "stream" vocabulary);
 new entry points (ADR-0015's seam is untouched); extracting plan application
-(recorded shallow — see ADR-0033).
+(recorded shallow — see ADR-0033); shape logic in plan application (the
+inline derivation ADR-0087 removes).
 
 **Keyed Request**:
 What **Request Keying** yields for a request it can key: its identities (the
@@ -1176,7 +1263,7 @@ the **Read-Along**; a recording test peer makes the segment-boundary switch
 assertable. In engine v2 its switch timing comes from **Segment Script**
 ground truth, not playback bookkeeping.
 _Avoid_: notch overlay / TTSNotchPanelController (retired adapter, not the seam),
-highlight view, **Overlay Panel** (the separate dictation HUD surface).
+highlight view, the **Lens** (the separate dictation overlay).
 
 ### Speech page (ADR-0076)
 
@@ -1202,7 +1289,7 @@ It shows one continuous feed of the reading: the heard line on top, the next
 below, the column moving up a line as the voice reaches it; text is never
 swapped in place (ADR-0077). In its automatic scope it hides while the Speech
 page is in front. Replaced the TTS notch.
-_Avoid_: notch, TTS notch panel (retired), **Overlay Panel** (the dictation HUD),
+_Avoid_: notch, TTS notch panel (retired), the **Lens** (the dictation overlay),
 pages (its retired two-line pages).
 
 **Voice Source**:
@@ -1884,8 +1971,10 @@ _Avoid_: operation ID, token (unqualified), snapshot (the prefix-cache concept).
 **Voice Capture Session**:
 The one concrete module that owns the push-to-talk capture→transcribe→commit
 lifecycle — the **Operation Guard** ticket discipline, the microphone-busy guard, the
-minimum-duration and empty-text guards, post-processing, the in-flight transcription
-`Task`, and cancellation — behind a small value-returning interface
+minimum-duration and empty-text guards, the silent-capture skip (a capture whose level
+never rose above silence is not transcribed), post-processing, the **Learned Words**
+(applied after the regex cleanup and before the **Proofread Pass**), the in-flight
+transcription `Task`, and cancellation — behind a small value-returning interface
 (`start`/`stop`/`transcribeAndCommit`/`cancel`), delivering clean text to a
 caller-injected commit closure. Composed *directly* by both `DictationCoordinator` and
 **Voice Input**, which keep only their own state, errors, sounds, and commit. Distinct
@@ -1898,27 +1987,104 @@ _Avoid_: coordinator (it is composed by the coordinators, not one), capture engi
 The optional LLM polish stage between transcription and commit (ADR-0034): a second,
 small co-resident MLX model — its own, never the agent's — that fixes punctuation,
 capitalization, and misheard words, or rejects an unintelligible take outright.
-Strictly fail-open: disabled, model not downloaded, the LLM generating
-(skip-when-busy — it *reads* whether the **LLM Gate** is held, never waits on it),
-budget overrun, or any error all commit
-the raw text unchanged. Runs inside the **Voice Capture Session**, so dictation and
-**Voice Input** both gain it; its word-level edits ride the commit for overlay
-narration, and a rejected take's raw text stays available for "insert raw anyway".
+Off by default and opt-in (ADR-0085): **Learned Words** are the corrector, and when
+on, the pass reads the text after them. Strictly fail-open: disabled, model not
+downloaded, the LLM generating (skip-when-busy — it *reads* whether the **LLM Gate**
+is held, never waits on it), budget overrun, or any error all commit the raw text
+unchanged. Runs inside the **Voice Capture Session**, so dictation and
+**Voice Input** both gain it; its word-level edits ride the commit, and a rejected
+take's raw text stays available for the **Lens**'s "Insert anyway".
 _Avoid_: post-processing (the regex cleanup that always runs, pass or no pass),
 autocorrect, grammar check, second agent (it is a fixed-prompt pass, not an agent).
 
 **Correction Pair**:
-One dictation take's full text lineage — raw ASR, regex-cleaned, **Proofread
-Pass** output + verdict, committed text, the owner's correction — plus capture
-conditions and a Capture Dump audio reference; the local, bounded, exportable
-training-pair collection the flywheel feeds from day one. Every take is a
-*candidate*; an owner signal (a correction edit in the history, or a one-click
-wrong-flag from the overlay's lingering beat) makes it *gold* — evicted last,
-its audio exempt from the dump's ring eviction. Full editing lives in the
-history window; the overlay stays keyboard-free.
+One dictation take's full text lineage — raw ASR, regex-cleaned, after the
+**Learned Words**, **Proofread Pass** output + verdict, committed text, the owner's
+correction — plus capture conditions and a Capture Dump audio reference; the local,
+bounded, exportable training-pair collection the flywheel feeds from day one. Every
+take is a *candidate*; an owner signal makes it *gold*: evicted last, its audio
+exempt from the dump's ring eviction. The signals are a word fixed in the **Lens**
+(in a **Held Take**, after the paste, or from the **Catch Record**), recorded with
+the heard and meant words, how the take was reached and the app; "Insert anyway" on
+a take the **Proofread Pass** rejected; and, on older pairs, a correction or
+wrong-flag saved in the history before its editor was retired. Fixing a take
+happens only in the **Lens**; nothing edits a pair's text by hand.
 _Avoid_: training data (unqualified — pairs are candidates until gold),
 feedback log, transcription history (the sibling store it links to by id),
 fine-tune corpus (the export's *consumer*, out of scope — see the map).
+
+**Learned Word**:
+One "heard → meant" replacement learned from the owner's fix in the **Lens**: the
+owner's spelling, every way it was heard (a heard form may be several words), the
+apps it is left alone in, its **Catch** count per day, and the **Correction Pair**
+it came from. The **Voice Capture Session** applies it to every take after the regex
+cleanup: whole words, any case, case fitted at a sentence start, skipped in an app
+it is left alone in. Learned on the first fix, unless the fix touches only ordinary
+words, only changes a word's ending, or does not sound like what was heard (a
+rewrite): those fix that take only. Fixing it back in an app leaves it alone there.
+Forget (on its tile in the **Catch Record**) keeps the word, so Forget can be
+undone, and only a new fix learns it again (ADR-0085).
+_Avoid_: dictionary entry, custom vocabulary (a list the recognizer is biased
+toward, which is out of scope), replacement rule (unqualified), autocorrect,
+snippet.
+
+**Catch**:
+One application of a **Learned Word** to a take: the misheard words it replaced in
+that take's text. Counted per day once the take commits (a rejected, failed or
+superseded take caught nothing, and a catch shown in the **Live Preview** is not
+counted); a catch the owner fixes back in the **Lens** is taken back. The **Catch
+Record** counts them per day.
+_Avoid_: correction or fix (the owner's act; a catch is the app's), hit, match.
+
+**Lens**:
+The one dictation overlay: a glass card at the bottom center of the screen that
+shows a take while it is recorded (the **Live Preview**), while it finishes, as it
+lands (the words the preview had wrong settle into place), while it waits as a
+**Held Take**, and while it is fixed. The fix hotkey (⌃⌥Space) reopens the last
+take, and the **Catch Record** opens one of today's takes, or any take in its
+history; the owner types the word they meant, and the Lens picks the words that
+sound like it (← → or a click pick by hand). A fix makes the take's **Correction
+Pair** gold, teaches a **Learned Word** when it is a mishearing, and goes back into
+the app while the pasted text is still the last thing typed there (a take opened
+from the Catch Record is not pasted back). It never takes focus while listening:
+it takes the keyboard only while a take waits or is being fixed, and gives focus
+back when done (ADR-0085, ADR-0086).
+_Avoid_: overlay (unqualified), pill, HUD, Overlay Variant and Overlay Panel (both
+retired: the Lens replaced the variant registry, its Setting and the pill's
+fixed-frame panel), editor, fix window, popup, history editor (the history's
+full-text pair editor, retired with the **Catch Record**: the Lens is the one
+place a take is fixed).
+
+**Live Preview**:
+What the **Lens** shows while a take is recorded: the same Whisper model's decodes
+of the take so far, read the way the take will be (the regex cleanup and the
+**Learned Words**, so a learned word flips as it is heard), as confirmed words and
+a provisional tail that the next decode rewrites. Only ever shown: what pastes is
+the full pass over the whole take after release (ADR-0086). Succeeds the Live
+Partial signal (#291).
+_Avoid_: Live Partial (the retired trailing-window signal), partial, caption,
+streamed transcript (streamed text is never pasted), interim result.
+
+**Held Take**:
+A take that waits in the **Lens** instead of pasting: committed (history,
+**Correction Pair**, **Catches**) but pasted only when the owner presses ↩, with
+any fixes. Esc or clicking away keeps it unpasted, and the fix hotkey brings it
+back. The Check Before Pasting setting decides which takes are held: one where the
+owner tapped ⇧ while talking (the default), every take, or none (ADR-0086).
+_Avoid_: waiting take (the Lens's state, not the take), pending paste, draft,
+queued take.
+
+**Catch Record**:
+The Dictation page, showing the **Learned Words** at work: one sentence and a
+seven-day chart of this week's **Catches** and the owner's fixes; one tile per
+Learned Word (every way it was heard, the fix that taught it as before and after,
+the apps it is left alone in), each with Forget and Undo; and today's takes,
+each one click from a fix in the **Lens**. A forgotten word leaves the tiles, the
+chart and the sentence; today's takes still show what it caught. The full
+transcription history stays one toolbar button away, beside
+recording and the **Correction Pair** export (PRD #612).
+_Avoid_: dashboard, stats, Dictation history (the history is behind the toolbar,
+not the page), word list.
 
 ### Voice session (Companion)
 
@@ -2211,9 +2377,12 @@ background prefill).
 What one request runs speculatively, decided once from the request's facts (text-only
 input, KV quantization and **KV Scheme**, temperature, prompt length, whether a prefix is restored,
 which leaf the turn stores): the arm, the advance allowance its rounds add to the
-turn's maximum advance, and where the app's prefill hands over to the iterator. The
+turn's **Maximum Advance**, and where the app's prefill hands over to the iterator. The
 **Server Completion** and the **Raw Generation Start** read the same plan; no plan
-means ordinary decoding.
+means ordinary decoding. Under ADR-0087 (proposed) the Prefill Planner asks for it
+once on the keyed path and the **Prefill Plan** carries its answer, the arm and split
+in the **Decode Handover** and the allowance in the **Maximum Advance**; plan
+application reads neither.
 _Avoid_: engagement policy or predicate (the retired per-arm rules); speculative arm
 (the plan's arm, not the plan).
 
@@ -2257,7 +2426,7 @@ while the most recent leaf store — on the partition the next lane runs on — 
 capture by copy (the `leafStore` source `live` or `boundary`; a `handoff` moved the
 objects, a `copy` restore's source body is already counted in the tree), plus a
 growth allowance — that leaf's
-bytes per token times the turn's maximum advance, the quantity **Leaf Handoff**'s
+bytes per token times the turn's **Maximum Advance**, the quantity **Leaf Handoff**'s
 check-out eligibility judges `isTrimmable(after:)` against (ADR-0064). The bootstrap constant stands until the first
 observation and stands in for the growth of an unbounded turn. A pure value the
 leaf admission feeds; the `budgetMeasure` event reports its inputs and per-lane
@@ -2384,45 +2553,25 @@ _Avoid_: writing a global alpha, tuner→manager callbacks or weak back-referenc
 
 ### Overlay presentation
 
-**Overlay Panel**:
-The transparent, click-through global `NSPanel` that floats above all apps and
-hosts the live **Overlay Variant**'s view — a dumb, fixed-frame canvas that is
-created once, stays permanently ordered front, and never resizes, fades, or
-reacts to dictation state itself: all visibility and motion belong to the
-hosted SwiftUI content. Takes its **Overlay Placement** at construction and
-swaps hosted content on demand; the **Speech Overlay** is a separate panel,
-not an Overlay Panel.
-_Avoid_: overlay controller / manager, HUD window, generic NSPanel wrapper,
-show/hide or animated-frame panel APIs (retired — SwiftUI owns all motion),
-config-flag panel, the **Speech Overlay** (a separate, interactive surface), the
-full-screen border overlay (retired — a legacy MVP exploration).
-
 **Overlay Placement**:
-Where an **Overlay Panel**'s fixed canvas sits for a given **Screen Geometry**,
-expressed as a state-free pure value an **Overlay Variant** brings along with
-its hosted view. One preset exists — pill.
+Where a floating panel's fixed canvas sits for a given **Screen Geometry**: a
+state-free pure value, so the canvas never moves or resizes with what it shows.
+The Companion's voice overlay concepts bring one along; the **Lens** places its own
+glass panel, and the pill's placement went with the pill.
 _Avoid_: layout strategy, frame provider, per-state frames or resize-animation
 flags (retired — the canvas is fixed), overlay style (the retired
 pill-vs-border user **Setting**).
 
 **Overlay Feed**:
-The one variant-agnostic surface of dictation signals every **Overlay Variant**
-renders from: typed lifecycle phases, typed errors, terminal outcome beats
-carrying the committed text, and the audio meter (level + spectrum). The
-dictation coordinator is its sole phase/beat writer; the capture engine's meter
-stream drives its meter. Variants consume the feed and nothing else, so the
-dictation pipeline never learns which variant is live.
+The one surface of dictation signals the **Lens** renders from: typed lifecycle
+phases, typed errors, terminal outcome beats carrying the committed text, the
+**Live Preview** while recording, the take's app, whether ⇧ held the take, and the
+audio meter (level + spectrum). The dictation coordinator writes everything but the
+meter, which the capture engine's meter stream drives. The Lens follows the feed
+itself, so the dictation pipeline never learns what draws it.
 _Avoid_: overlay state / OverlayState (retired push-model object), view model,
-pre-flattened error strings, per-variant state surfaces.
-
-**Overlay Variant**:
-One live dictation-overlay design exploration (map #283): a hosted view over
-the shared **Overlay Feed** plus the **Overlay Placement** of the canvas it
-draws in, selected at runtime by a **Setting** and switchable live. Exploration
-scaffolding — the registry and its Setting are deleted when the redesign
-program prunes to one winner.
-_Avoid_: theme, skin, style, prototype window (variants live in the real
-panel), a permanent plugin surface (it is scaffolding).
+pre-flattened error strings, per-variant state surfaces (retired with the Overlay
+Variants).
 
 **Screen Geometry**:
 The plain screen rectangles — full frame and visible frame — that an **Overlay
@@ -2530,8 +2679,8 @@ class; per-setting device checks (the tier answers them all, once).
 
 **App Bindings**:
 The module owning the app's launch sequence and every long-lived runtime subscription
-that carries a rule (model auto-load and hot-swap, lazy-reload guards, server and
-overlay-style reactions, hotkey rebinding, the single dictation-state fan-out) — the
+that carries a rule (model auto-load and hot-swap, lazy-reload guards, server
+reactions, hotkey rebinding, the single dictation-state fan-out) — the
 launch-time mirror of the teardown-owning termination coordinator. Distinct from the
 composition root, which stays pure wiring with no behaviour.
 _Avoid_: app glue (pre-carve working name), setup() behaviour, launch coordinator,

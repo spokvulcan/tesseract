@@ -19,13 +19,17 @@ import Foundation
 
 // `nonisolated` so actor adapters conform off the main actor (the build uses
 // MainActor-by-default isolation, which would otherwise infer `@MainActor` here
-// and force the recognizer onto the main actor — defeating the whole point of an
-// actor-backed, `Sendable` model port raced inside a `withThrowingTaskGroup`).
+// and force the recognizer onto the main actor, defeating the whole point of an
+// actor-backed, `Sendable` model port raced against a timeout in an unstructured
+// task).
 nonisolated protocol SpeechRecognizer: Sendable {
     /// Loads the recognition model from a local `.mlmodelc` folder URL.
     func load(modelPath: URL) async throws
 
     /// Transcribes the given audio. `language` is `nil` for auto-detect.
+    /// Segment times are seconds from the start of `audioData`, so a caller
+    /// that passes a slice of a take (the Live Preview decoding from the end
+    /// of its confirmed text) rebases them itself.
     ///
     /// Cancellation is `Task` cancellation propagating into this call — the
     /// port's one cancellation channel (the former separate `cancel()`

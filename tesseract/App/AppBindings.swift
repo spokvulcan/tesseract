@@ -20,10 +20,6 @@ final class AppBindings {
         /// Tracked read of the dictation feed's phase. Read inside an
         /// `Observations` closure, so the rule re-fires on every phase change.
         let dictationState: @MainActor () -> DictationFeed.Phase
-        /// Tracked read of the feed's terminal beat — drives the overlay
-        /// affordance window (the panel is clickable only while a beat's
-        /// affordances linger, ticket #289).
-        let dictationBeat: @MainActor () -> DictationFeed.Beat?
         /// Tracked read of the speech coordinator's state — feeds the menu
         /// bar's status glyph (the speaking animation).
         let speechState: @MainActor () -> SpeechState
@@ -46,7 +42,6 @@ final class AppBindings {
 
         init(
             dictationState: @escaping @MainActor () -> DictationFeed.Phase,
-            dictationBeat: @escaping @MainActor () -> DictationFeed.Beat? = { nil },
             speechState: @escaping @MainActor () -> SpeechState,
             currentDictationHotkey: @escaping @MainActor () -> KeyCombo,
             isLLMSlotLoaded: @escaping @MainActor () -> Bool,
@@ -55,7 +50,6 @@ final class AppBindings {
             modelDownloadStatuses: AnyPublisher<[String: ModelStatus], Never>
         ) {
             self.dictationState = dictationState
-            self.dictationBeat = dictationBeat
             self.speechState = speechState
             self.currentDictationHotkey = currentDictationHotkey
             self.isLLMSlotLoaded = isLLMSlotLoaded
@@ -66,18 +60,6 @@ final class AppBindings {
     }
 
     struct Effects {
-        /// Creates the overlay panel (contentless; the variant rule's initial
-        /// emission installs the hosted view).
-        let setUpOverlayPanel: @MainActor () -> Void
-        /// Installs the Overlay Variant selected by the setting (view +
-        /// placement) into the panel.
-        let setOverlayVariant: @MainActor (String) -> Void
-        /// Z-order hygiene: re-asserts the always-front panel when dictation
-        /// becomes active (something may have ordered above it since launch).
-        let reassertOverlayFront: @MainActor () -> Void
-        /// Flips the overlay panel between click-through (resting) and
-        /// interactive (while a beat's affordances linger, ticket #289).
-        let setOverlayInteractive: @MainActor (Bool) -> Void
         let pushDictationStateToMenuBar: @MainActor (DictationFeed.Phase) -> Void
         let pushSpeechStateToMenuBar: @MainActor (SpeechState) -> Void
         /// Builds the capture engine (incl. its Voice Processing configuration)
@@ -94,6 +76,8 @@ final class AppBindings {
         let updateAppshotHotkey: @MainActor (KeyCombo) -> Void
         /// Re-binds the capture hotkey (a thought into Reminders from any app).
         let updateCaptureHotkey: @MainActor (KeyCombo) -> Void
+        /// Re-binds the fix hotkey (reopens the last take in the **Lens**).
+        let updateFixHotkey: @MainActor (KeyCombo) -> Void
         let startHTTPServer: @MainActor () async -> Void
         let stopHTTPServer: @MainActor () -> Void
         let updateHTTPServerPort: @MainActor (UInt16) async -> Void
@@ -107,10 +91,6 @@ final class AppBindings {
         let startSpeechSurfaces: @MainActor () -> Void
 
         init(
-            setUpOverlayPanel: @escaping @MainActor () -> Void,
-            setOverlayVariant: @escaping @MainActor (String) -> Void,
-            reassertOverlayFront: @escaping @MainActor () -> Void,
-            setOverlayInteractive: @escaping @MainActor (Bool) -> Void = { _ in },
             pushDictationStateToMenuBar: @escaping @MainActor (DictationFeed.Phase) -> Void,
             pushSpeechStateToMenuBar: @escaping @MainActor (SpeechState) -> Void,
             prewarmAudioCapture: @escaping @MainActor () -> Void = {},
@@ -120,6 +100,7 @@ final class AppBindings {
             updateAgentHotkey: @escaping @MainActor (KeyCombo) -> Void,
             updateAppshotHotkey: @escaping @MainActor (KeyCombo) -> Void,
             updateCaptureHotkey: @escaping @MainActor (KeyCombo) -> Void = { _ in },
+            updateFixHotkey: @escaping @MainActor (KeyCombo) -> Void = { _ in },
             startHTTPServer: @escaping @MainActor () async -> Void,
             stopHTTPServer: @escaping @MainActor () -> Void,
             updateHTTPServerPort: @escaping @MainActor (UInt16) async -> Void,
@@ -127,10 +108,6 @@ final class AppBindings {
             loadWhisperModel: @escaping @MainActor (URL) async -> Void,
             startSpeechSurfaces: @escaping @MainActor () -> Void = {}
         ) {
-            self.setUpOverlayPanel = setUpOverlayPanel
-            self.setOverlayVariant = setOverlayVariant
-            self.reassertOverlayFront = reassertOverlayFront
-            self.setOverlayInteractive = setOverlayInteractive
             self.pushDictationStateToMenuBar = pushDictationStateToMenuBar
             self.pushSpeechStateToMenuBar = pushSpeechStateToMenuBar
             self.prewarmAudioCapture = prewarmAudioCapture
@@ -140,6 +117,7 @@ final class AppBindings {
             self.updateAgentHotkey = updateAgentHotkey
             self.updateAppshotHotkey = updateAppshotHotkey
             self.updateCaptureHotkey = updateCaptureHotkey
+            self.updateFixHotkey = updateFixHotkey
             self.startHTTPServer = startHTTPServer
             self.stopHTTPServer = stopHTTPServer
             self.updateHTTPServerPort = updateHTTPServerPort
@@ -154,8 +132,6 @@ final class AppBindings {
     private let effects: Effects
     private var observationTasks: [Task<Void, Never>] = []
     private var cancellables = Set<AnyCancellable>()
-    /// Reverts the overlay to click-through after the affordance window.
-    private var overlayInteractivityRevert: Task<Void, Never>?
     private var whisperLoadTask: Task<Void, Never>?
     private var whisperLoadInFlightPath: URL?
     private var lastSelectedSpeechModelStatus: ModelStatus?
@@ -171,7 +147,6 @@ final class AppBindings {
         guard !hasStarted else { return }
         hasStarted = true
 
-        effects.setUpOverlayPanel()
         effects.startSpeechSurfaces()
 
         installSubscriptions()
@@ -206,8 +181,6 @@ final class AppBindings {
         }
         observationTasks = []
         cancellables = []
-        overlayInteractivityRevert?.cancel()
-        overlayInteractivityRevert = nil
         whisperLoadTask?.cancel()
         whisperLoadTask = nil
     }
@@ -330,45 +303,13 @@ final class AppBindings {
             })
 
         // The single dictation-phase subscription: the menu bar mirrors every
-        // emission, and any non-idle phase re-asserts the overlay panel's
-        // z-order (the variant view renders the phase by observing the feed
-        // directly — no push). A live phase also ends any affordance window:
-        // an active pill must never intercept clicks.
+        // emission. The Lens renders the phase by observing the feed itself,
+        // so nothing here pushes to it.
         observationTasks.append(
             Task { [weak self] in
                 guard let self else { return }
                 for await state in Observations({ self.inputs.dictationState() }) {
                     self.effects.pushDictationStateToMenuBar(state)
-                    if state != .idle {
-                        self.effects.reassertOverlayFront()
-                        self.endOverlayAffordanceWindow()
-                    }
-                }
-            })
-
-        // The overlay affordance window (ticket #289): a committed/rejected
-        // beat makes the panel clickable while the variant's affordances
-        // linger, then it reverts to click-through — the resting state of an
-        // invisible always-front panel. The grace past the shared linger
-        // covers the pill's own fade-out.
-        observationTasks.append(
-            Task { [weak self] in
-                guard let self else { return }
-                for await beat in Observations({ self.inputs.dictationBeat() }) {
-                    guard let beat else { continue }
-                    switch beat.outcome {
-                    case .committed, .rejected:
-                        self.effects.setOverlayInteractive(true)
-                        self.overlayInteractivityRevert?.cancel()
-                        self.overlayInteractivityRevert = Task { [weak self] in
-                            try? await Task.sleep(
-                                for: DictationFeed.affordanceLinger + .milliseconds(300))
-                            guard !Task.isCancelled else { return }
-                            self?.effects.setOverlayInteractive(false)
-                        }
-                    case .empty, .cancelled, .superseded:
-                        break
-                    }
                 }
             })
 
@@ -379,16 +320,6 @@ final class AppBindings {
                 guard let self else { return }
                 for await state in Observations({ self.inputs.speechState() }) {
                     self.effects.pushSpeechStateToMenuBar(state)
-                }
-            })
-
-        // Keep the live Overlay Variant matched to the setting. The initial
-        // emission installs the launch variant's view into the panel.
-        observationTasks.append(
-            Task { [weak self] in
-                guard let self else { return }
-                for await variantID in Observations({ self.settings.overlayVariantRaw }) {
-                    self.effects.setOverlayVariant(variantID)
                 }
             })
 
@@ -409,14 +340,9 @@ final class AppBindings {
         installAuxiliaryHotkeySubscriptions()
     }
 
-    private func endOverlayAffordanceWindow() {
-        overlayInteractivityRevert?.cancel()
-        overlayInteractivityRevert = nil
-        effects.setOverlayInteractive(false)
-    }
-
-    /// The TTS / agent / appshot hotkey re-binds — same shape as the dictation
-    /// hotkey subscription, minus its unchanged-combo launch guard.
+    /// The TTS, agent, appshot, capture and fix hotkey re-binds: same shape as
+    /// the dictation hotkey subscription, minus its unchanged-combo launch
+    /// guard.
     private func installAuxiliaryHotkeySubscriptions() {
         observationTasks.append(
             Task { [weak self] in
@@ -444,6 +370,13 @@ final class AppBindings {
                 guard let self else { return }
                 for await hotkey in Observations({ self.settings.captureHotkey }) {
                     self.effects.updateCaptureHotkey(hotkey)
+                }
+            })
+        observationTasks.append(
+            Task { [weak self] in
+                guard let self else { return }
+                for await hotkey in Observations({ self.settings.fixHotkey }) {
+                    self.effects.updateFixHotkey(hotkey)
                 }
             })
     }

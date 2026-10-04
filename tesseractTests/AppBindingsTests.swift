@@ -18,32 +18,32 @@ import Testing
 @MainActor
 struct AppBindingsTests {
 
+    /// The speech surfaces start before any subscription is installed, so
+    /// speech from the hotkey shows before the Speech page is ever opened.
     @Test
-    func startSetsUpTheOverlayPanelFirst() {
+    func startStartsTheSpeechSurfacesFirst() {
         let h = makeHarness()
         defer { h.bindings.stop() }
 
         h.bindings.start()
 
-        #expect(h.recorder.events.first == "setUpOverlayPanel")
+        #expect(h.recorder.events.first == "startSpeechSurfaces")
     }
 
     @Test
-    func dictationPhaseReachesTheMenuBarAndNonIdleReassertsTheOverlay() async {
+    func dictationPhaseReachesTheMenuBar() async {
         let h = makeHarness()
         defer { h.bindings.stop() }
 
         h.bindings.start()
 
-        // The initial (idle) emission reaches the menu bar once — and idle
-        // never re-asserts the overlay's z-order.
+        // The initial (idle) emission reaches the menu bar once.
         #expect(
             await waitUntil {
                 h.recorder.events(withPrefix: "pushDictationState") == [
                     "pushDictationStateToMenuBar(idle)"
                 ]
             })
-        #expect(h.recorder.events(withPrefix: "reassertOverlayFront").isEmpty)
 
         h.driver.dictationState = .recording
 
@@ -54,54 +54,6 @@ struct AppBindingsTests {
                     "pushDictationStateToMenuBar(recording)",
                 ]
             })
-        #expect(
-            await waitUntil {
-                h.recorder.events(withPrefix: "reassertOverlayFront") == ["reassertOverlayFront"]
-            })
-    }
-
-    /// The overlay affordance window (ticket #289): a committed/rejected beat
-    /// makes the panel clickable; a live phase ends the window immediately
-    /// (the timed revert is wall-clock and covered by the phase path here).
-    @Test
-    func terminalBeatOpensTheAffordanceWindowAndALivePhaseEndsIt() async {
-        let h = makeHarness()
-        defer { h.bindings.stop() }
-
-        h.bindings.start()
-
-        h.driver.dictationBeat = DictationFeed.Beat(
-            id: 1, outcome: .committed(text: "hello", duration: 1.0, edits: []))
-
-        #expect(
-            await waitUntil {
-                h.recorder.events(withPrefix: "setOverlayInteractive")
-                    == ["setOverlayInteractive(true)"]
-            })
-
-        h.driver.dictationState = .recording
-
-        #expect(
-            await waitUntil {
-                h.recorder.events(withPrefix: "setOverlayInteractive")
-                    == ["setOverlayInteractive(true)", "setOverlayInteractive(false)"]
-            })
-    }
-
-    /// Non-terminal beats (cancelled, superseded, empty) never open the window.
-    @Test
-    func nonAffordanceBeatsNeverOpenTheWindow() async {
-        let h = makeHarness()
-        defer { h.bindings.stop() }
-
-        h.bindings.start()
-
-        h.driver.dictationBeat = DictationFeed.Beat(id: 1, outcome: .cancelled)
-        h.driver.dictationBeat = DictationFeed.Beat(id: 2, outcome: .superseded)
-        h.driver.dictationBeat = DictationFeed.Beat(id: 3, outcome: .empty)
-
-        for _ in 0..<200 { await Task.yield() }
-        #expect(h.recorder.events(withPrefix: "setOverlayInteractive").isEmpty)
     }
 
     @Test
@@ -125,33 +77,6 @@ struct AppBindingsTests {
                 h.recorder.events(withPrefix: "pushSpeechState") == [
                     "pushSpeechStateToMenuBar(idle)",
                     "pushSpeechStateToMenuBar(playing)",
-                ]
-            })
-    }
-
-    @Test
-    func overlayVariantIsInstalledAtLaunchAndFollowsTheSetting() async {
-        let h = makeHarness()
-        defer { h.bindings.stop() }
-
-        h.bindings.start()
-
-        // The initial emission installs the persisted variant — this is what
-        // puts the launch variant's view into the contentless panel.
-        #expect(
-            await waitUntil {
-                h.recorder.events(withPrefix: "setOverlayVariant") == [
-                    "setOverlayVariant(classic)"
-                ]
-            })
-
-        h.settings.overlayVariantRaw = "prototype-b"
-
-        #expect(
-            await waitUntil {
-                h.recorder.events(withPrefix: "setOverlayVariant") == [
-                    "setOverlayVariant(classic)",
-                    "setOverlayVariant(prototype-b)",
                 ]
             })
     }
@@ -230,6 +155,23 @@ struct AppBindingsTests {
             await waitUntil {
                 h.recorder.events(withPrefix: "updateCaptureHotkey").last
                     == "updateCaptureHotkey(\(combo.displayString))"
+            })
+    }
+
+    @Test
+    func fixHotkeyChangeReBindsItsRegistration() async {
+        let h = makeHarness()
+        defer { h.bindings.stop() }
+
+        h.bindings.start()
+
+        let combo = KeyCombo(keyCode: 3, modifiers: [.control, .option])
+        h.settings.fixHotkey = combo
+
+        #expect(
+            await waitUntil {
+                h.recorder.events(withPrefix: "updateFixHotkey").last
+                    == "updateFixHotkey(\(combo.displayString))"
             })
     }
 
@@ -514,7 +456,7 @@ struct AppBindingsTests {
 
         h.settings.isServerEnabled = true
         h.driver.dictationState = .recording
-        h.settings.overlayVariantRaw = "prototype-b"
+        h.settings.fixHotkey = KeyCombo(keyCode: 3, modifiers: [.control, .option])
         h.statuses.send([ModelDefinition.defaultSpeechToTextModelID: .downloaded(sizeOnDisk: 1)])
 
         for _ in 0..<200 { await Task.yield() }
@@ -541,7 +483,6 @@ private final class EffectRecorder {
 @Observable @MainActor
 private final class InputDriver {
     var dictationState: DictationFeed.Phase = .idle
-    var dictationBeat: DictationFeed.Beat?
     var speechState: SpeechState = .idle
     var currentDictationHotkey: KeyCombo = .optionSpace
     var isLLMSlotLoaded = false
@@ -590,7 +531,6 @@ private func makeHarness(
         settings: settings,
         inputs: .init(
             dictationState: { driver.dictationState },
-            dictationBeat: { driver.dictationBeat },
             speechState: { driver.speechState },
             currentDictationHotkey: { driver.currentDictationHotkey },
             isLLMSlotLoaded: { driver.isLLMSlotLoaded },
@@ -599,10 +539,6 @@ private func makeHarness(
             modelDownloadStatuses: statuses.eraseToAnyPublisher()
         ),
         effects: .init(
-            setUpOverlayPanel: { recorder("setUpOverlayPanel") },
-            setOverlayVariant: { recorder("setOverlayVariant(\($0))") },
-            reassertOverlayFront: { recorder("reassertOverlayFront") },
-            setOverlayInteractive: { recorder("setOverlayInteractive(\($0))") },
             pushDictationStateToMenuBar: { recorder("pushDictationStateToMenuBar(\($0))") },
             pushSpeechStateToMenuBar: { recorder("pushSpeechStateToMenuBar(\($0))") },
             updateDictationHotkey: { recorder("updateDictationHotkey(\($0.displayString))") },
@@ -610,6 +546,7 @@ private func makeHarness(
             updateAgentHotkey: { recorder("updateAgentHotkey(\($0.displayString))") },
             updateAppshotHotkey: { recorder("updateAppshotHotkey(\($0.displayString))") },
             updateCaptureHotkey: { recorder("updateCaptureHotkey(\($0.displayString))") },
+            updateFixHotkey: { recorder("updateFixHotkey(\($0.displayString))") },
             startHTTPServer: { recorder("startHTTPServer") },
             stopHTTPServer: { recorder("stopHTTPServer") },
             updateHTTPServerPort: { recorder("updateHTTPServerPort(\($0))") },
@@ -617,7 +554,8 @@ private func makeHarness(
             loadWhisperModel: { url in
                 if let loadWhisperModel { await loadWhisperModel(url) }
                 recorder("loadWhisperModel(\(url.path))")
-            }
+            },
+            startSpeechSurfaces: { recorder("startSpeechSurfaces") }
         )
     )
     return Harness(

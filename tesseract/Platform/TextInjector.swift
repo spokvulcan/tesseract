@@ -482,22 +482,9 @@ final class TextInjector: ObservableObject, TextInjecting {
 
     // MARK: - Key Simulation
 
+    /// Cmd+V, marked as Tesseract's own (`SyntheticKeyEvents`) so the hotkey
+    /// manager never counts it as the owner typing.
     static func postSyntheticPaste() {
-        let source = CGEventSource(stateID: .hidSystemState)
-
-        // Virtual key code for 'V'
-        let vKeyCode: CGKeyCode = CGKeyCode(kVK_ANSI_V)
-
-        // Key down: Cmd+V
-        if let keyDown = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: true) {
-            keyDown.flags = .maskCommand
-            keyDown.post(tap: .cghidEventTap)
-        }
-
-        // Key up: Cmd+V
-        if let keyUp = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: false) {
-            keyUp.flags = .maskCommand
-            keyUp.post(tap: .cghidEventTap)
-        }
+        SyntheticKeyEvents.post(keyCode: CGKeyCode(kVK_ANSI_V), flags: .maskCommand)
     }
 }

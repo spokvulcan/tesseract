@@ -6,8 +6,9 @@
 import SwiftUI
 
 /// The Dictation pane (#213): microphone, dictation model, transcription
-/// language, duration, the after-transcription behavior, and the recent
-/// recordings diagnostics store.
+/// language, duration, whether a take waits in the Lens before it pastes,
+/// the after-transcription behavior, and the recent recordings diagnostics
+/// store.
 struct DictationSettingsPane: View {
     @Environment(SettingsManager.self) private var settings
     @EnvironmentObject private var container: DependencyContainer
@@ -80,6 +81,17 @@ struct DictationSettingsPane: View {
             }
 
             Section {
+                Picker("Check Before Pasting", selection: $settings.checkBeforePasting) {
+                    ForEach(CheckBeforePasting.allCases) { option in
+                        Text(option.displayName).tag(option)
+                    }
+                }
+                .pickerStyle(.segmented)
+            } footer: {
+                Text(checkBeforePastingHelp)
+            }
+
+            Section {
                 Toggle("Automatically Insert Text", isOn: $settings.autoInsertText)
                 Toggle("Restore Clipboard Contents", isOn: $settings.restoreClipboard)
                     .disabled(!settings.autoInsertText)
@@ -87,17 +99,22 @@ struct DictationSettingsPane: View {
             } header: {
                 Text("After Transcription")
             } footer: {
-                if settings.proofreadDictation
-                    && !container.modelDownloadManager.isDownloaded(
-                        ModelDefinition.defaultProofreadModelID)
-                {
+                VStack(alignment: .leading, spacing: 4) {
                     Text(
-                        "Types the transcription into the frontmost app, then puts whatever was on the clipboard back. Proofreading needs the Dictation Proofreader model — download it from the Models page."
+                        "Types the transcription into the frontmost app, then puts whatever was on the clipboard back."
                     )
-                } else {
-                    Text(
-                        "Types the transcription into the frontmost app, then puts whatever was on the clipboard back. Proofreading polishes punctuation and misheard words with a small local model when the system is idle."
-                    )
+                    if settings.proofreadDictation
+                        && !container.modelDownloadManager.isDownloaded(
+                            ModelDefinition.defaultProofreadModelID)
+                    {
+                        Text(
+                            "Proofreading needs the Dictation Proofreader model: download it from the Models page."
+                        )
+                    } else {
+                        Text(
+                            "Proofreading rewrites each take with a small local model and can change what you meant, so it is off by default. Fix a misheard word with \(settings.fixHotkey.displayString) instead, and it becomes a Learned Word."
+                        )
+                    }
                 }
             }
 
@@ -121,5 +138,16 @@ struct DictationSettingsPane: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private var checkBeforePastingHelp: String {
+        switch settings.checkBeforePasting {
+        case .whenShiftTapped:
+            "Tap ⇧ while you talk and the take waits in the Lens until you press ↩, so you can fix a word before it lands."
+        case .always:
+            "Every take waits in the Lens until you press ↩, so you can fix a word before it lands."
+        case .never:
+            "Every take pastes when you let go. Fix a word afterwards with \(settings.fixHotkey.displayString)."
+        }
     }
 }

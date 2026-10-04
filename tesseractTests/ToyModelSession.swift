@@ -465,11 +465,28 @@ nonisolated enum ModelVerb: String, Equatable, Sendable {
 /// Thread-safe verb log: verbs land from the session's isolation, assertions
 /// read from the test's.
 nonisolated final class ModelVerbRecorder: @unchecked Sendable {
+    /// One snapshot a `prefill` or `captureSnapshot` verb returned: the
+    /// offset it is labelled with, and the offset its cache actually held.
+    /// The two agree for every capture the request path may admit.
+    struct Capture: Equatable, Sendable {
+        let label: Int
+        let cacheOffset: Int?
+    }
+
     private let lock = NSLock()
     private var _verbs: [ModelVerb] = []
     private var _prefillCapacities: [Int] = []
+    private var _captures: [Capture] = []
 
     var prefillCapacities: [Int] { lock.withLock { _prefillCapacities } }
+    var captures: [Capture] { lock.withLock { _captures } }
+
+    func recordCaptures(_ snapshots: [HybridCacheSnapshot]) {
+        let captures = snapshots.map {
+            Capture(label: $0.tokenOffset, cacheOffset: $0.layers.first?.offset)
+        }
+        lock.withLock { _captures += captures }
+    }
 
     func recordPrefillCapacity(_ cache: [any KVCache]) {
         let capacity = cache.first?.innerState().first?.dim(2) ?? 0
@@ -507,12 +524,44 @@ nonisolated final class ToyPrefillFault: @unchecked Sendable {
     }
 }
 
+/// A one-shot failure of the toy session's `restore` verb. Armed, the next
+/// restore throws after it is recorded — the shape of a stored snapshot
+/// `HybridCacheSnapshot.restore` cannot rebuild (a corrupt persisted layer,
+/// a view whose Backing Leaf no longer fits), which the request path must
+/// treat as a cache miss.
+nonisolated final class ToyRestoreFault: @unchecked Sendable {
+    struct Injected: Error {}
+
+    private let lock = NSLock()
+    private var armed: (any Error)?
+    private var _failedBodyIDs: [UUID] = []
+
+    /// The bodies a fired fault failed to restore, in order.
+    var failedBodyIDs: [UUID] { lock.withLock { _failedBodyIDs } }
+
+    /// Fail the next restore with `error`: `Injected` by default, or the
+    /// `HybridCacheSnapshot.RestoreError` a corrupt persisted layer raises.
+    func arm(throwing error: any Error = Injected()) {
+        lock.withLock { armed = error }
+    }
+
+    func fireIfArmed(restoring snapshot: HybridCacheSnapshot) throws {
+        let error: (any Error)? = lock.withLock {
+            defer { armed = nil }
+            if armed != nil { _failedBodyIDs.append(snapshot.bodyID) }
+            return armed
+        }
+        if let error { throw error }
+    }
+}
+
 /// Decorator over the real verb implementations: records each verb, then
 /// forwards to `ContextBackedModelSession` — nothing is reimplemented.
 nonisolated struct RecordingModelSession: ModelSession {
     let base: any ModelSession
     let recorder: ModelVerbRecorder
     var prefillFault: ToyPrefillFault?
+    var restoreFault: ToyRestoreFault?
     /// Forces the LLM-class `producesFlatTextTokens` answer over the toy
     /// context — the shape of a vision-family checkpoint the VLM factory
     /// rejected, silently loaded as a text-only instance. No toy model class
@@ -559,6 +608,7 @@ nonisolated struct RecordingModelSession: ModelSession {
 
     func restore(_ snapshot: HybridCacheSnapshot) throws -> [any KVCache] {
         recorder.record(.restore)
+        try restoreFault?.fireIfArmed(restoring: snapshot)
         return try base.restore(snapshot)
     }
 
@@ -566,6 +616,7 @@ nonisolated struct RecordingModelSession: ModelSession {
         _ snapshot: HybridCacheSnapshot, backingLeaf: HybridCacheSnapshot?
     ) throws -> [any KVCache] {
         recorder.record(.restore)
+        try restoreFault?.fireIfArmed(restoring: snapshot)
         return try base.restore(snapshot, backingLeaf: backingLeaf)
     }
 
@@ -598,6 +649,7 @@ nonisolated struct RecordingModelSession: ModelSession {
             storedForm: storedForm
         )
         recorder.recordPrefillCapacity(cache)
+        recorder.recordCaptures(output.snapshots)
         return output
     }
 
@@ -662,8 +714,10 @@ nonisolated struct RecordingModelSession: ModelSession {
         storedForm: KVScheme?
     ) -> HybridCacheSnapshot? {
         recorder.record(.captureSnapshot)
-        return base.captureSnapshot(
+        let snapshot = base.captureSnapshot(
             cache: cache, offset: offset, type: type, storedForm: storedForm)
+        recorder.recordCaptures(snapshot.map { [$0] } ?? [])
+        return snapshot
     }
 }
 
@@ -686,6 +740,8 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
     let speculation: Speculation
     /// Fails the next `prefill` verb once armed; `nil` never fails.
     let prefillFault: ToyPrefillFault?
+    /// Fails the next `restore` verb once armed; `nil` never fails.
+    let restoreFault: ToyRestoreFault?
 
     init(
         model: ToyLanguageModel,
@@ -696,12 +752,14 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
         reportsFlatTextTokens: Bool = false,
         anchorsVision: Bool = false,
         speculation: Speculation = .none,
-        prefillFault: ToyPrefillFault? = nil
+        prefillFault: ToyPrefillFault? = nil,
+        restoreFault: ToyRestoreFault? = nil
     ) {
         self.reportsFlatTextTokens = reportsFlatTextTokens
         self.anchorsVision = anchorsVision
         self.speculation = speculation
         self.prefillFault = prefillFault
+        self.restoreFault = restoreFault
         self.container = ModelContainer(
             context: ModelContext(
                 configuration: configuration,
@@ -721,6 +779,7 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
         let anchorsVision = self.anchorsVision
         let speculation = self.speculation
         let prefillFault = self.prefillFault
+        let restoreFault = self.restoreFault
         return try await container.perform(nonSendable: payload) { context, payload in
             try await ModelSessionScope.$isInside.withValue(true) {
                 try await body(
@@ -728,6 +787,7 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
                         base: ContextBackedModelSession(context: context, speculation: speculation),
                         recorder: recorder,
                         prefillFault: prefillFault,
+                        restoreFault: restoreFault,
                         producesFlatTextTokensOverride: reportsFlatTextTokens ? true : nil,
                         anchoredVisionPrepareOverride: anchorsVision
                             ? Self.toyAnchoredVisionPrepare(context) : nil

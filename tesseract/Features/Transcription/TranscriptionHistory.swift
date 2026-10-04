@@ -75,22 +75,21 @@ private enum DateFormatters {
 
 @MainActor
 protocol TranscriptionStoring: AnyObject {
-    func add(text: String, duration: TimeInterval, model: String, pairID: UUID?)
+    /// Adds a committed take with what the **Learned Words** caught in it
+    /// and the app it went to (PRD #612).
+    func add(
+        text: String, duration: TimeInterval, model: String, pairID: UUID?,
+        catches: [LearnedWordCatch], app: TranscriptionEntry.App?)
     func copyLatestToPasteboard()
-    /// Asks the history surface to reveal (and offer editing on) the entry
-    /// linked to a **Correction Pair** — the overlay "edit" affordance's hook.
-    func requestFocus(pairID: UUID)
+    /// Rewrites the entry linked to a **Correction Pair** after a fix in the
+    /// **Lens** (PRD #612), with its catches where they now stand.
+    func replaceText(forPairID pairID: UUID, with text: String, catches: [LearnedWordCatch])
 }
 
 @MainActor
 @Observable
 final class TranscriptionHistory: TranscriptionStoring {
     private(set) var entries: [TranscriptionEntry] = []
-
-    /// A transient reveal request (the overlay "edit" affordance): the
-    /// history view scrolls to this entry and opens its correction editor,
-    /// then clears the request. Never persisted.
-    var focusEntryID: UUID?
 
     /// Flattened list of items for efficient lazy rendering.
     /// Updated only when entries change.
@@ -99,10 +98,15 @@ final class TranscriptionHistory: TranscriptionStoring {
     private let maxEntries: Int
     private let storageURL: URL
 
-    init(maxEntries: Int = 100) {
+    /// - Parameters:
+    ///   - directory: storage directory; defaults to the app-support home.
+    ///     Injectable for tests.
+    init(directory: URL? = nil, maxEntries: Int = 100) {
         self.maxEntries = maxEntries
 
-        let appDirectory = StorageEnvironment.applicationSupport
+        let appDirectory =
+            directory
+            ?? StorageEnvironment.applicationSupport
             .appendingPathComponent("Tesseract Agent", isDirectory: true)
 
         // Create directory if needed
@@ -127,19 +131,31 @@ final class TranscriptionHistory: TranscriptionStoring {
         updateFlattenedItems()
     }
 
-    func add(text: String, duration: TimeInterval, model: String, pairID: UUID?) {
+    func add(
+        text: String, duration: TimeInterval, model: String, pairID: UUID?,
+        catches: [LearnedWordCatch] = [], app: TranscriptionEntry.App? = nil
+    ) {
         let entry = TranscriptionEntry(
             text: text,
             duration: duration,
             model: model,
-            pairID: pairID
+            pairID: pairID,
+            catches: catches,
+            app: app
         )
         add(entry)
     }
 
-    func requestFocus(pairID: UUID) {
-        guard let entry = entries.first(where: { $0.pairID == pairID }) else { return }
-        focusEntryID = entry.id
+    func replaceText(
+        forPairID pairID: UUID, with text: String, catches: [LearnedWordCatch]
+    ) {
+        guard let index = entries.firstIndex(where: { $0.pairID == pairID }),
+            entries[index].text != text || entries[index].catches != catches
+        else { return }
+        entries[index].text = text
+        entries[index].catches = catches
+        saveToDisk()
+        updateFlattenedItems()
     }
 
     func delete(_ entry: TranscriptionEntry) {

@@ -1309,7 +1309,9 @@ extension TokenRadixTree {
         return result.droppedCheckpointType == nil ? nil : result
     }
 
-    private func exactNode(tokens: [Int]) -> RadixTreeNode? {
+    /// The node at exactly `tokens`, or `nil` when the path ends inside an
+    /// edge or leaves the tree.
+    func exactNode(tokens: [Int]) -> RadixTreeNode? {
         var current = root
         var offset = 0
         while offset < tokens.count {
