@@ -235,7 +235,7 @@ text aloud (ADR-0084), so the target takes only the read-aloud code:
   dependency moves behind a port the Mac adapts: the speech code reads its
   settings through `SpeechSettings`, which the Mac's `SettingsManager`
   conforms to, and the Settings Catalogue keeps its Mac-only entries in
-  `SettingsCatalogue+Mac.swift`.
+  `tesseract/Features/Settings/SettingsCatalogue+Mac.swift`.
 - **The speech package** (`Vendor/tesseract-speech`) builds for iOS. Its
   second production synthesizer, `SystemVoiceSynthesizer`, puts the
   **System Voice** (`AVSpeechSynthesizer`) behind the same port as the neural

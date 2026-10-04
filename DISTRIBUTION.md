@@ -178,7 +178,7 @@ In the repo already:
   E174.1).
 - `ITSAppUsesNonExemptEncryption = NO` in `tesseract-ios/Info.plist`: the app's only
   network use is the voice download over HTTPS.
-- The icon (`tesseract-ios/Assets.xcassets/AppIcon`), made from the Mac's.
+- The icon (`tesseract-ios/Assets.xcassets/AppIcon.appiconset`), made from the Mac's.
 - Diagnostics a tester copies from Settings: device, iOS version, the last
   reading's real-time factor and thermal state, and which voice read.
 
