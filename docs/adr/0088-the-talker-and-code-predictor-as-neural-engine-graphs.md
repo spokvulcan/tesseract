@@ -1,4 +1,4 @@
-# ADR-0085: The talker and the code predictor run as Neural Engine graphs we write, int8 with measured fp16 outliers
+# ADR-0088: The talker and the code predictor run as Neural Engine graphs we write, int8 with measured fp16 outliers
 
 - Status: Accepted on the Mac (2026-10-03); the iPhone 16 Pro Max check is
   slice 3's remaining half of #515

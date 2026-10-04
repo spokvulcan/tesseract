@@ -65,7 +65,7 @@ struct NeuralVoiceManifest: Codable {
 
 extension Qwen3TTSModel {
     /// Moves the talker and the code predictor to the Neural Engine
-    /// (ADR-0084, ADR-0085). MLX first runs a short probe on the CPU, which
+    /// (ADR-0084, ADR-0088). MLX first runs a short probe on the CPU, which
     /// measures how large each layer's MLP product grows (`NeuralPrecision`);
     /// then their Core ML models are built from this checkpoint with that
     /// precision (or loaded, built before, from `cacheDirectory`), every op

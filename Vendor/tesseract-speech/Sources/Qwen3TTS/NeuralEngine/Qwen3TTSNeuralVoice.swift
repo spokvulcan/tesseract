@@ -3,7 +3,7 @@ import CoreML
 import Foundation
 @preconcurrency import MLX
 
-// The talker and the code predictor on the Neural Engine (ADR-0084, 0085): the
+// The talker and the code predictor on the Neural Engine (ADR-0084, 0088): the
 // Core ML models `Qwen3TTSNeuralGraphs` writes, built from the checkpoint on
 // this machine and cached, and what drives them from Swift.
 

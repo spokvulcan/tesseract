@@ -254,7 +254,7 @@ text aloud (ADR-0084), so the target takes only the read-aloud code:
   again reads from it: a stream held paused in the background could not come
   back once the system stopped its audio engine.
 - **The neural voice** (`PhoneVoice`): Qwen3-TTS 0.6B on the Neural Engine
-  (ADR-0084, ADR-0085). Its catalog entry (`ModelDefinition.phoneVoice`)
+  (ADR-0084, ADR-0088). Its catalog entry (`ModelDefinition.phoneVoice`)
   downloads through the Mac's download manager, over a second **Model
   Fetching** adapter: a background URLSession that goes on with the screen
   locked, resumes mid-file and rejoins a transfer after a relaunch (the app
@@ -407,7 +407,7 @@ playback**):
   the app passes (under `StorageEnvironment.caches`). It stays on MLX where the
   Neural Engine can't run it all (ADR-0074/0075). For the iPhone, the model
   can move the talker and the code predictor there too
-  (`Qwen3TTSModel.prepareNeuralVoice`, ADR-0084/0085): two more Core ML
+  (`Qwen3TTSModel.prepareNeuralVoice`, ADR-0084/0088): two more Core ML
   graphs the package writes (the talker one position per call with its KV
   cache in Core ML state, the code predictor a whole frame per call with its
   sampling inside), after which generation runs MLX only on the CPU, for the

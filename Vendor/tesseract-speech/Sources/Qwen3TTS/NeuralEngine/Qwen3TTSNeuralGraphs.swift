@@ -2,7 +2,7 @@ import Foundation
 @preconcurrency import MLX
 import MLXNN
 
-// The talker and the code predictor as Neural Engine graphs (ADR-0084, 0085).
+// The talker and the code predictor as Neural Engine graphs (ADR-0084, 0088).
 //
 // Both are Qwen3 decoder stacks, written in the Neural Engine's layout:
 // activations `[1, channels, 1, positions]`, every projection a 1×1 conv,

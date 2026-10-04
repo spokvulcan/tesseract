@@ -8,7 +8,7 @@
   checkpoint). ADR-0066 decision 3 stands.
 - Amends: ADR-0075 (on the phone, the talker and code predictor run on the
   Neural Engine too; the Mac is unchanged)
-- Extended by: ADR-0085 (how the talker and the code predictor run there:
+- Extended by: ADR-0088 (how the talker and the code predictor run there:
   the graphs, their weight format and measured precision, parity)
 - Relates to: [#515](https://github.com/spokvulcan/tesseract/issues/515)
   (release 1's PRD), ADR-0071 (first-party Qwen3-TTS), ADR-0074 (the parity

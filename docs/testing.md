@@ -1137,7 +1137,7 @@ approval requirement in the capture baseline still applies to #480.
       overlapping generations render as if alone.
     - The Core ML conv stack (ADR-0075) matches MLX's. It is compiled for
       the CPU, so no Neural Engine is needed.
-    - The Neural Engine voice (ADR-0085, `Qwen3TTSNeuralTests`, also
+    - The Neural Engine voice (ADR-0088, `Qwen3TTSNeuralTests`, also
       compiled for the CPU): the talker's step gives MLX's logits, hidden
       state and Alignment Head scores position by position, with its cache
       in Core ML state and another session's steps in between changing
@@ -1193,13 +1193,13 @@ approval requirement in the capture baseline still applies to #480.
     then teacher-forced parity on `--golden` frames, the stages before the
     first audio, time per call, and `--repeat` renders at consecutive seeds,
     with `--mlx-renders` the same renders on MLX first. The 2026-10-03
-    numbers are in ADR-0085.
+    numbers are in ADR-0088.
 - Neural Engine op placement (`ane-lab`, no weights): builds tiny ML
   programs with the package's `MLProgramBuilder` and prints where Core ML's
   compute plan puts each op on this machine, or with `--time` the latency of
   weight-heavy stacks in each weight format. Build the `ane-lab` scheme with
   xcodebuild, as for `v2-listen`; `ane-lab conv` runs the probes whose name
-  contains `conv`. ADR-0085's format choices come from it.
+  contains `conv`. ADR-0088's format choices come from it.
 - Vendor DFlash2 tests (`swift test --filter DFlash2` in `Vendor/mlx-swift-lm`):
   run with `--no-parallel`. Two of the parity tests load the 27B target each;
   in parallel they contend the single GPU until a Metal command buffer hits
