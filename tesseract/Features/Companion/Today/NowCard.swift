@@ -7,8 +7,8 @@
 //  Today opens and never waits on the model: the meeting they're in, the
 //  task whose slot is now, a task that slid and the next free slot for it,
 //  free time and what fits in it, what's next, and once the day is done,
-//  tomorrow's first commitments. Jarvis proposes; the owner says yes in one
-//  click. Pure: the day's facts in, a card out.
+//  how tomorrow starts. Jarvis proposes; the owner says yes in one click.
+//  Pure: the day's facts in, a card out.
 //
 
 import Foundation
@@ -213,11 +213,26 @@ nonisolated enum NowCardBuilder {
                 headline: "A clear day.",
                 detail: "Add a task with + below, or ask Jarvis to plan with you.", actions: [])
         }
-        let tomorrow = facts.tomorrowEvents.prefix(3).map { "\(clock($0.start)) \($0.title)" }
         return NowCard(
-            headline: "All done for today.",
-            detail: tomorrow.isEmpty ? nil : "Tomorrow: " + tomorrow.joined(separator: " · ") + ".",
+            headline: "All done for today.", detail: lookAhead(timeline.tomorrow, clock: clock),
             actions: [])
+    }
+
+    /// How tomorrow begins: its first step, steps below on the Day Line.
+    private static func lookAhead(_ tomorrow: TomorrowTimeline, clock: (Date) -> String)
+        -> String
+    {
+        if let first = tomorrow.rows.first {
+            return "Next: \(title(of: first)), tomorrow at \(clock(first.start))."
+        }
+        if !tomorrow.allDayEvents.isEmpty {
+            return "Tomorrow: " + tomorrow.allDayEvents.map(\.title).joined(separator: ", ") + "."
+        }
+        let tasks = tomorrow.anytime.filter { !$0.isDone }.count
+        if tasks > 0 {
+            return "Tomorrow has \(tasks) task\(tasks == 1 ? "" : "s"), none at a set time."
+        }
+        return "Nothing on tomorrow yet."
     }
 
     private static func title(of row: TimelineRow) -> String {

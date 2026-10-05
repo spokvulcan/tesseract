@@ -4,8 +4,8 @@
 //
 //  Today, rendered with the app's wiring over fixture days (an in-memory
 //  Agenda and a saved day state, ADR-0073): the morning after the plan, a
-//  busy midday with a slid task and things waiting, and an evening with the
-//  day done. Each renders at a wide, a regular and a phone width, so every
+//  busy midday with a slid task and things waiting, an evening with the day
+//  done, and the same night past midnight, still that day until 04:00. Each renders at a wide, a regular and a phone width, so every
 //  layout's body runs. With TODAY_GALLERY_DIR set (TEST_RUNNER_TODAY_GALLERY_DIR
 //  through xcodebuild), each render is also written there as a PNG, in dark
 //  and light, for judging the page by eye.
@@ -81,6 +81,7 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
     case morning
     case midday
     case evening
+    case night
 
     var testDescription: String { rawValue }
 
@@ -94,6 +95,7 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
         case .morning: Self.at(8, 20)
         case .midday: Self.at(14, 10)
         case .evening: Self.at(22, 1)
+        case .night: Self.at(0, 40, day: 5)
         }
     }
 
@@ -166,7 +168,7 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
                 Self.reminder("izaro", "Izaro voice lines (PoE)", list: "inbox"),
                 Self.reminder("chain", "Order a new bike chain", list: "inbox"),
             ]
-        case .evening:
+        case .evening, .night:
             return [
                 Self.reminder(
                     "duolingo", "Пройти урок у Duolingo 💚", list: "duolingo",
@@ -179,6 +181,10 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
                     doneAt: Self.at(13)),
                 Self.reminder("izaro", "Izaro voice lines (PoE)", list: "inbox"),
                 Self.reminder("moto", "Розпечатати це мото", list: "inbox"),
+                Self.reminder(
+                    "bins", "Put the bins out", list: "life", due: Self.at(7, 30, day: 5),
+                    timed: true),
+                Self.reminder("invoice", "Send the invoice", list: "work", due: Self.at(0, day: 5)),
             ]
         }
     }
@@ -192,6 +198,10 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
             Self.event(
                 "class", "Class", Self.at(16, day: 5), Self.at(17, 30, day: 5),
                 calendar: "personal"),
+            AgendaEvent(
+                id: "birthday", title: "Mom's birthday", start: Self.at(0, day: 5),
+                end: Self.at(0, day: 6), isAllDay: true, calendarID: "personal",
+                calendarTitle: "Personal", colorHex: "#30D158"),
         ]
         switch self {
         case .morning:
@@ -214,7 +224,7 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
                     "c", "Climbing", Self.at(18, 30), Self.at(20), calendar: "personal",
                     location: "Boulderhalle"),
             ] + tomorrow
-        case .evening:
+        case .evening, .night:
             return tomorrow
         }
     }
@@ -286,7 +296,7 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
                                     app: "Mail", lines: ["Your order shipped", "Weekly digest"])
                             ]))),
             ]
-        case .evening:
+        case .evening, .night:
             state.morningPlanAt = Self.at(9)
             state.eveningWrapUpAt = Self.at(21)
             state.nightReflectionAt = Self.at(21, 50)

@@ -218,3 +218,24 @@ nothing that said what to do now. What changed:
 - `TodayGalleryTests` renders Today over fixture days at three widths;
   `TEST_RUNNER_TODAY_GALLERY_DIR` writes the renders as PNGs, for judging the
   page by eye.
+
+## Amendments (2026-10-05, tomorrow on the Day Line)
+
+The owner found the days disconnected: at night the steps stopped at the Now
+line and tomorrow was one sentence on the Now Card. What changed:
+
+- **The Day Line runs on into tomorrow.** After today's steps and its Anytime
+  tasks, a day break ("Tomorrow · Monday, 5 October") and tomorrow's
+  all-day events, timed events, tasks due at a time and Anytime tasks, on the
+  same line (`TomorrowTimeline`). Tomorrow is not planned yet, so it shows no
+  free time. A task moved to tomorrow lands there in sight; a task due
+  tomorrow and done early stays there, out of today's count.
+- **A done day says how tomorrow starts** ("Next: Work, tomorrow at
+  09:00.") instead of listing its first three events.
+- **Today is the owner's day.** `DayFacts` and the Agenda's snapshot follow
+  the Day Key: until 04:00 the page and the moments keep the day that is
+  ending (its steps, its done count, the snapshot's events from that day's
+  start), and tomorrow is the next date. Before, the page jumped to the new
+  date at midnight while the Day Thread and the day's cards stayed on the
+  old one, and a wrap-up after midnight read the new date's tasks as its
+  leftovers.

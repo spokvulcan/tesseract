@@ -1774,11 +1774,14 @@ or a card — that code and the OS keep without the model.
 **Today**:
 The app's home and first main-window page: the date and "N of M done" over a
 progress bar, the Now Card, then the day as steps: the Timeline (events and
-tasks in time order, free gaps, a Now line) on one **Day Line**, walked up to
-now and ahead after it. A wide page draws the steps as a table (time, task,
-Area, length) with the Inbox and "Jarvis noticed" (Fact Proposals) beside
-them; a narrower one puts those below, and a phone-width one draws the steps
-as a list. The **Today composer** at the bottom (the agent composer
+tasks in time order, free gaps, a Now line, then the Anytime tasks) on one
+**Day Line**, walked up to now and ahead after it. The line runs on past the
+**day break** into tomorrow (its events, all-day events and the tasks due
+then), so what comes next is always in sight. Today is the owner's day: until
+04:00 (the Day Key) it keeps the day that is ending. A wide page draws the
+steps as a table (time, task, Area, length) with the Inbox and "Jarvis
+noticed" (Fact Proposals) beside them; a narrower one puts those below, and a
+phone-width one draws the steps as a list. The **Today composer** at the bottom (the agent composer
 simplified) asks Jarvis, adds a task through Capture or takes a held-to-talk
 question, and its notice slot shows the latest agenda change with an undo.
 Its Chat mode shows the Day Thread.
@@ -1787,7 +1790,7 @@ _Avoid_: dashboard, Mission Control (retired), home screen (unqualified).
 **Now Card**:
 The top of Today: the step the day is on (the meeting under way, the task
 whose slot is now, a task that slid, free time and what fits in it, the next
-step, what's left, or a done day and tomorrow's first events) with one-click
+step, what's left, or a done day and how tomorrow starts) with one-click
 offers that move it on (Done, Start now, "Do it at 16:30", Tomorrow, Plan my
 day, Wrap up the day). Code builds it from the Timeline, so it never waits on
 the model; Jarvis's latest card line rides along while fresh (a plan for four

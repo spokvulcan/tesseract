@@ -4,9 +4,10 @@
 //
 //  Today: the app's home. At the top the Now Card says where the day is and
 //  offers the step that moves it on. Below it the day runs as steps on one
-//  Day Line, a table on a wide page and a list shaped for a phone on a
-//  narrow one, with the Inbox and "Jarvis noticed" beside it (below it when
-//  narrow). One field at the bottom, the Today composer, asks Jarvis or
+//  Day Line, on into tomorrow, a table on a wide page and a list shaped for
+//  a phone on a narrow one, with the Inbox and "Jarvis noticed" beside it
+//  (below it when narrow). Until 04:00 the page keeps the day that is
+//  ending (DayKey). One field at the bottom, the Today composer, asks Jarvis or
 //  adds a task, and confirms every change made from here, with an undo. The
 //  Chat mode shows the Day Thread.
 //
@@ -17,6 +18,7 @@
 import SwiftUI
 
 struct TodayView: View {
+    @Environment(Agenda.self) private var agenda
     @Environment(CompanionRuntime.self) private var runtime
     @Environment(DayThread.self) private var thread
 
@@ -67,7 +69,10 @@ struct TodayView: View {
             guard fixedNow == nil else { return }
             // Tick on the minute, so the Now line and card read the clock.
             while !Task.isCancelled {
+                let day = DayKey(for: now)
                 now = Date()
+                // A new day at 04:00: fetch its tomorrow.
+                if DayKey(for: now) != day { await agenda.refresh() }
                 let intoMinute = now.timeIntervalSinceReferenceDate.truncatingRemainder(
                     dividingBy: 60)
                 try? await Task.sleep(for: .seconds(60 - intoMinute))
@@ -178,7 +183,7 @@ private struct TodayDayPage: View {
                     HStack(alignment: .top, spacing: TodayLayout.columnGap) {
                         day(card: card, facts: facts, timeline: timeline)
                         TodaySideColumn(facts: offerFacts, isEvening: isEvening)
-                            .frame(width: TodayLayout.sideWidth)
+                            .frame(width: TodayLayout.sideWidth, alignment: .leading)
                     }
                 } else {
                     day(card: card, facts: facts, timeline: timeline)
@@ -218,8 +223,12 @@ private struct TodayHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-                Text(now.formatted(.dateTime.weekday(.wide).day().month(.wide)))
-                    .fontWeight(.semibold)
+                // The owner's day: until 04:00, the one that is ending.
+                Text(
+                    (DayKey(for: now).date() ?? now).formatted(
+                        .dateTime.weekday(.wide).day().month(.wide))
+                )
+                .fontWeight(.semibold)
                 Spacer()
                 if timeline.totalCount > 0 {
                     Text("\(timeline.doneCount) of \(timeline.totalCount) done")

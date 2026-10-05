@@ -5,8 +5,8 @@
 //  The Now Card from the Timeline's fixture day: the meeting the owner is
 //  in, the task whose slot is now, a task that slid and the slot offered for
 //  it, free time and what fits in it, the next step, what's left, a done
-//  day and tomorrow, and the plan and wrap-up offers. Also the Inbox's slot
-//  offer and how long a card's line stays fresh.
+//  day and how tomorrow starts, and the plan and wrap-up offers. Also the
+//  Inbox's slot offer and how long a card's line stays fresh.
 //
 
 import Foundation
@@ -144,7 +144,16 @@ struct NowCardTests {
             ])
         let card = Self.card(facts)
         #expect(card.headline == "All done for today.")
-        #expect(card.detail == "Tomorrow: 09:00 Work.")
+        #expect(card.detail == "Next: Work, tomorrow at 09:00.")
+        // Past midnight it is still the same day, and tomorrow still starts with work.
+        var night = facts
+        night.now = Self.local(31, 0, 40)
+        #expect(Self.card(night).headline == "All done for today.")
+        #expect(Self.card(night).detail == "Next: Work, tomorrow at 09:00.")
+        // With nothing on tomorrow, it says so.
+        var free = facts
+        free.events = [TimelineBuilderTests.standup]
+        #expect(Self.card(free).detail == "Nothing on tomorrow yet.")
     }
 
     @Test func aClearDayInvitesACapture() {

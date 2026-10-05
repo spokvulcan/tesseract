@@ -350,11 +350,10 @@ private struct LeftoverRow: View {
     @ViewBuilder private var choices: some View {
         choice("Tomorrow", .tomorrow)
         Menu("Another day") {
+            // From the owner's today: until 04:00, the day that is ending.
+            let today = DayKey(for: Date()).date() ?? Calendar.current.startOfDay(for: Date())
             ForEach(2..<8, id: \.self) { offset in
-                let day =
-                    Calendar.current.date(
-                        byAdding: .day, value: offset,
-                        to: Calendar.current.startOfDay(for: Date())) ?? Date()
+                let day = Calendar.current.date(byAdding: .day, value: offset, to: today) ?? today
                 Button(day.formatted(.dateTime.weekday(.wide).day().month())) {
                     runtime.act(
                         .leftoverOn(cardID: cardID, reminderID: leftover.reminderID, day: day))

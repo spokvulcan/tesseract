@@ -6,8 +6,9 @@
 //  a narrow one shows a list shaped for a phone. One Day Line runs down the
 //  schedule, walked up to the Now line and ahead after it, with each step's
 //  marker on it: a check for a task, the calendar's color for an event, the
-//  accent ring for now. Anytime tasks follow, off the line, because they
-//  have no time. Row actions live in context menus (design-language §2).
+//  accent ring for now. The day's Anytime tasks close it; then the line runs
+//  on past the day break into tomorrow, so what comes next is always in
+//  sight. Row actions live in context menus (design-language §2).
 //
 
 import SwiftUI
@@ -17,45 +18,134 @@ struct DaySteps: View {
     let style: TodayLayout.StepStyle
 
     var body: some View {
-        let rows = timeline.rows
-        let nowIndex = rows.firstIndex { $0.kind == .now } ?? rows.count
+        let steps = Self.steps(timeline)
+        let nowIndex = steps.firstIndex { $0.kind == .now } ?? steps.count
+        let nowStart = timeline.rows.first { $0.kind == .now }?.start
+        // The line runs from the day's first timed step to tomorrow's last.
+        let first = steps.firstIndex(where: \.isOnLine)
+        let last = steps.lastIndex(where: \.isOnLine)
         VStack(alignment: .leading, spacing: 0) {
             if style == .table {
                 ColumnHeader()
             }
-            ForEach(timeline.allDayEvents) { event in
-                EventStep(event: event, isPast: false, isAllDay: true, style: style, line: nil)
-            }
-            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-                let line = DayLine(
-                    above: index == 0 ? nil : index <= nowIndex ? .walked : .ahead,
-                    below: index == rows.count - 1 ? nil : index < nowIndex ? .walked : .ahead)
-                switch row.kind {
-                case .event(let event):
+            ForEach(Array(steps.enumerated()), id: \.element.id) { index, step in
+                let line: DayLine? =
+                    if let first, let last, step.isOnLine, index >= first, index <= last {
+                        DayLine(
+                            above: index == first ? nil : index <= nowIndex ? .walked : .ahead,
+                            below: index == last ? nil : index < nowIndex ? .walked : .ahead)
+                    } else {
+                        nil
+                    }
+                switch step.kind {
+                case .allDay(let event, _):
+                    EventStep(event: event, isPast: false, isAllDay: true, style: style, line: line)
+                case .event(let event, let isPast):
                     EventStep(
-                        event: event, isPast: row.isPast, isAllDay: false, style: style, line: line)
-                case .task(let task):
-                    TaskStep(task: task, style: style, line: line)
-                case .free(let minutes):
+                        event: event, isPast: isPast, isAllDay: false, style: style, line: line)
+                case .task(let task, let isTomorrow):
+                    TaskStep(task: task, isTomorrow: isTomorrow, style: style, line: line)
+                case .free(let start, let minutes):
                     // Free time from now on needs no time: the Now line has it.
                     FreeStep(
-                        start: row.start, minutes: minutes,
-                        showsTime: nowIndex == rows.count || row.start != rows[nowIndex].start,
+                        start: start, minutes: minutes, showsTime: start != nowStart,
                         style: style, line: line)
                 case .now:
-                    NowStep(time: row.start, style: style, line: line)
-                }
-            }
-            if !timeline.anytime.isEmpty {
-                Text("Anytime today")
-                    .fontWeight(.semibold)
-                    .padding(.top, TodayLayout.rhythm)
-                    .padding(.bottom, 4)
-                ForEach(timeline.anytime) { task in
-                    TaskStep(task: task, style: style, line: nil)
+                    NowStep(time: nowStart ?? Date(), style: style, line: line)
+                case .heading(let title):
+                    HeadingStep(title: title, line: line)
+                case .dayBreak(let date):
+                    DayBreakStep(date: date, style: style, line: line)
+                case .nothingTomorrow:
+                    StepRow(line: nil, highlights: false) {
+                        Color.clear
+                    } cells: {
+                        StepCells(style: style, time: nil) {
+                            Text("Nothing on tomorrow yet.").foregroundStyle(.secondary)
+                        }
+                    }
                 }
             }
         }
+    }
+
+    /// The two days as one run of steps: today's all-day events, its
+    /// timeline and its Anytime tasks, the day break, then tomorrow the
+    /// same way.
+    static func steps(_ timeline: TodayTimeline) -> [Step] {
+        var steps = timeline.allDayEvents.map {
+            Step(id: "allday-\($0.id)", kind: .allDay($0, isTomorrow: false))
+        }
+        for row in timeline.rows {
+            steps.append(Step(row: row, isTomorrow: false))
+        }
+        if !timeline.anytime.isEmpty {
+            steps.append(Step(id: "anytime-today", kind: .heading("Anytime today")))
+            steps += timeline.anytime.map {
+                Step(id: "task-\($0.id)", kind: .task($0, isTomorrow: false))
+            }
+        }
+        let tomorrow = timeline.tomorrow
+        steps.append(Step(id: "day-break", kind: .dayBreak(tomorrow.date)))
+        steps += tomorrow.allDayEvents.map {
+            Step(id: "tomorrow-allday-\($0.id)", kind: .allDay($0, isTomorrow: true))
+        }
+        for row in tomorrow.rows {
+            steps.append(Step(row: row, isTomorrow: true))
+        }
+        if !tomorrow.anytime.isEmpty {
+            steps.append(Step(id: "anytime-tomorrow", kind: .heading("Anytime tomorrow")))
+            steps += tomorrow.anytime.map {
+                Step(id: "tomorrow-task-\($0.id)", kind: .task($0, isTomorrow: true))
+            }
+        }
+        if tomorrow.isEmpty {
+            steps.append(Step(id: "nothing-tomorrow", kind: .nothingTomorrow))
+        }
+        return steps
+    }
+
+    /// One row of the two days.
+    struct Step: Identifiable, Equatable {
+        enum Kind: Equatable {
+            case allDay(AgendaEvent, isTomorrow: Bool)
+            case event(AgendaEvent, isPast: Bool)
+            case task(TimelineTask, isTomorrow: Bool)
+            case free(start: Date, minutes: Int)
+            case now
+            /// "Anytime today", "Anytime tomorrow".
+            case heading(String)
+            /// Where today hands over to tomorrow (at midnight).
+            case dayBreak(Date)
+            case nothingTomorrow
+        }
+
+        let id: String
+        let kind: Kind
+
+        /// Today's all-day events sit above the line, which starts at the
+        /// day's first timed step; the note under an empty tomorrow sits
+        /// below it.
+        var isOnLine: Bool {
+            switch kind {
+            case .allDay(_, let isTomorrow): isTomorrow
+            case .nothingTomorrow: false
+            default: true
+            }
+        }
+    }
+}
+
+extension DaySteps.Step {
+    init(row: TimelineRow, isTomorrow: Bool) {
+        let kind: Kind =
+            switch row.kind {
+            case .event(let event): .event(event, isPast: row.isPast)
+            case .task(let task): .task(task, isTomorrow: isTomorrow)
+            case .free(let minutes): .free(start: row.start, minutes: minutes)
+            case .now: .now
+            }
+        self.init(id: (isTomorrow ? "tomorrow-" : "") + row.id, kind: kind)
     }
 }
 
@@ -77,10 +167,11 @@ private struct DayLineSegments: View {
     let line: DayLine?
     /// Free time has no marker: the line runs straight through.
     var straight = false
+    var topSpace: CGFloat = 0
 
     var body: some View {
         VStack(spacing: 0) {
-            segment(line?.above).frame(height: TodayLayout.markerTop)
+            segment(line?.above).frame(height: topSpace + TodayLayout.markerTop)
             Group {
                 if straight { segment(line?.above) } else { Color.clear }
             }
@@ -104,6 +195,10 @@ private struct DayLineSegments: View {
 private struct StepRow<Marker: View, Cells: View>: View {
     let line: DayLine?
     var straight = false
+    /// Room above the row, with the line running through it: a heading or
+    /// the day break opens a group.
+    var topSpace: CGFloat = 0
+    var highlights = true
     @ViewBuilder let marker: Marker
     @ViewBuilder let cells: Cells
     @State private var hovering = false
@@ -117,11 +212,14 @@ private struct StepRow<Marker: View, Cells: View>: View {
                 .padding(.vertical, TodayLayout.rowPadding)
                 .padding(.trailing, 8)
         }
+        .padding(.top, topSpace)
         .background(alignment: .leading) {
-            if line != nil { DayLineSegments(line: line, straight: straight) }
+            if line != nil {
+                DayLineSegments(line: line, straight: straight, topSpace: topSpace)
+            }
         }
         .background(
-            .quaternary.opacity(hovering ? 0.5 : 0),
+            .quaternary.opacity(highlights && hovering ? 0.5 : 0),
             in: RoundedRectangle(cornerRadius: Theme.Radius.small)
         )
         .contentShape(Rectangle())
@@ -265,6 +363,8 @@ private struct TaskStep: View {
     @Environment(Agenda.self) private var agenda
     @Environment(CompanionRuntime.self) private var runtime
     let task: TimelineTask
+    /// Due tomorrow: today's must-do and plan are not its own.
+    var isTomorrow = false
     let style: TodayLayout.StepStyle
     let line: DayLine?
 
@@ -310,18 +410,26 @@ private struct TaskStep: View {
             Button(task.isDone ? "Mark as Not Done" : "Mark as Done") {
                 actions.setDone(task.id, !task.isDone)
             }
-            if task.isMustDo {
-                Button("Clear Must-Do") { runtime.act(.setMustDo(reminderID: nil)) }
-            } else if !task.isDone {
-                Button("Make This the Must-Do") { runtime.act(.setMustDo(reminderID: task.id)) }
-            }
-            if task.isPlanned {
-                Button("Remove from Today's Plan") {
-                    runtime.act(.removeFromPlan(reminderID: task.id))
+            if isTomorrow {
+                if !task.isDone {
+                    Button("Move to Today") { actions.moveToToday(task.id) }
                 }
-            }
-            if !task.isDone {
-                Button("Move to Tomorrow") { actions.moveToTomorrow(task.id) }
+            } else {
+                if task.isMustDo {
+                    Button("Clear Must-Do") { runtime.act(.setMustDo(reminderID: nil)) }
+                } else if !task.isDone {
+                    Button("Make This the Must-Do") {
+                        runtime.act(.setMustDo(reminderID: task.id))
+                    }
+                }
+                if task.isPlanned {
+                    Button("Remove from Today's Plan") {
+                        runtime.act(.removeFromPlan(reminderID: task.id))
+                    }
+                }
+                if !task.isDone {
+                    Button("Move to Tomorrow") { actions.moveToTomorrow(task.id) }
+                }
             }
         }
     }
@@ -368,6 +476,55 @@ private struct FreeStep: View {
             }
             .foregroundStyle(.tertiary)
         }
+    }
+}
+
+/// A group's name on the line: "Anytime today", "Anytime tomorrow".
+private struct HeadingStep: View {
+    let title: String
+    let line: DayLine?
+
+    var body: some View {
+        StepRow(line: line, straight: true, topSpace: 8, highlights: false) {
+            Color.clear
+        } cells: {
+            Text(title)
+                .fontWeight(.semibold)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// Where today hands over to tomorrow. The line runs on through it, so the
+/// evening reads straight into the next day.
+private struct DayBreakStep: View {
+    let date: Date
+    let style: TodayLayout.StepStyle
+    let line: DayLine?
+
+    var body: some View {
+        StepRow(line: line, topSpace: TodayLayout.rhythm, highlights: false) {
+            Circle()
+                .strokeBorder(.secondary, lineWidth: 2)
+                .frame(width: 12, height: 12)
+        } cells: {
+            HStack(alignment: .firstTextBaseline, spacing: TodayLayout.cellSpacing) {
+                Text("Tomorrow")
+                    .fontWeight(.semibold)
+                    .frame(
+                        width: style == .table ? TodayLayout.timeWidth : nil, alignment: .leading)
+                HStack(spacing: 8) {
+                    Text(date.formatted(.dateTime.weekday(.wide).day().month(.wide)))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                    Rectangle().fill(.quaternary).frame(height: 1)
+                }
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
     }
 }
 
@@ -433,6 +590,16 @@ struct TodayActions {
         Task {
             _ = try? await agenda.updateReminder(
                 id: id, due: .set(tomorrow, hasTime: false), source: "today")
+        }
+    }
+
+    /// Due on the owner's today, at no set time: off tomorrow and into
+    /// today's Anytime tasks.
+    func moveToToday(_ id: String) {
+        guard let today = DayKey(for: Date()).date() else { return }
+        Task {
+            _ = try? await agenda.updateReminder(
+                id: id, due: .set(today, hasTime: false), source: "today")
         }
     }
 

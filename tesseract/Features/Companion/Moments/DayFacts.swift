@@ -5,7 +5,9 @@
 //  The facts a moment is asked about and its card is checked against: the
 //  events and tasks of the day, as plain values. The same facts write the
 //  request, validate the reply (a card may only name ids it was shown) and
-//  build the fallback card when the model fails.
+//  build the fallback card when the model fails. "Today" is the owner's day,
+//  which rolls over at 04:00 (DayKey): after midnight the small hours still
+//  belong to the day that is ending.
 //
 
 import Foundation
@@ -17,6 +19,8 @@ nonisolated struct DayFacts: Sendable, Equatable {
     var events: [AgendaEvent]
     /// Open reminders due today or earlier.
     var dueOrOverdue: [AgendaReminder]
+    /// Open reminders due tomorrow.
+    var dueTomorrow: [AgendaReminder]
     /// Open reminders with no date (Inbox and Areas).
     var undated: [AgendaReminder]
     /// Completed today.
@@ -29,14 +33,15 @@ nonisolated struct DayFacts: Sendable, Equatable {
 
     init(
         now: Date, calendar: Calendar = .current, events: [AgendaEvent] = [],
-        dueOrOverdue: [AgendaReminder] = [], undated: [AgendaReminder] = [],
-        doneToday: [AgendaReminder] = [], areas: [Area] = [], inboxListID: String? = nil,
-        mustDoID: String? = nil, plan: [Placement] = []
+        dueOrOverdue: [AgendaReminder] = [], dueTomorrow: [AgendaReminder] = [],
+        undated: [AgendaReminder] = [], doneToday: [AgendaReminder] = [], areas: [Area] = [],
+        inboxListID: String? = nil, mustDoID: String? = nil, plan: [Placement] = []
     ) {
         self.now = now
         self.calendar = calendar
         self.events = events
         self.dueOrOverdue = dueOrOverdue
+        self.dueTomorrow = dueTomorrow
         self.undated = undated
         self.doneToday = doneToday
         self.areas = areas
@@ -50,32 +55,48 @@ nonisolated struct DayFacts: Sendable, Equatable {
         snapshot: AgendaSnapshot, areas: [Area], inboxListID: String?, now: Date,
         calendar: Calendar = .current, mustDoID: String? = nil, plan: [Placement] = []
     ) {
-        let endOfToday =
-            calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)) ?? now
+        let startOfToday = Self.startOfDay(for: now, calendar: calendar)
+        let endOfToday = calendar.date(byAdding: .day, value: 1, to: startOfToday) ?? now
+        let endOfTomorrow = calendar.date(byAdding: .day, value: 1, to: endOfToday) ?? endOfToday
         self.init(
             now: now, calendar: calendar, events: snapshot.events,
             dueOrOverdue: snapshot.open.filter { ($0.due ?? .distantFuture) < endOfToday },
+            dueTomorrow: snapshot.open.filter { reminder in
+                guard let due = reminder.due else { return false }
+                return due >= endOfToday && due < endOfTomorrow
+            },
             undated: snapshot.open.filter { $0.due == nil },
             doneToday: snapshot.doneToday, areas: areas, inboxListID: inboxListID,
             mustDoID: mustDoID, plan: plan)
     }
 
-    var startOfToday: Date { calendar.startOfDay(for: now) }
+    /// Midnight on the owner's day: before 04:00, the previous date's.
+    static func startOfDay(for now: Date, calendar: Calendar) -> Date {
+        DayKey(for: now, calendar: calendar).date(calendar: calendar)
+            ?? calendar.startOfDay(for: now)
+    }
+
+    var startOfToday: Date { Self.startOfDay(for: now, calendar: calendar) }
     var endOfToday: Date { calendar.date(byAdding: .day, value: 1, to: startOfToday) ?? now }
+    var endOfTomorrow: Date {
+        calendar.date(byAdding: .day, value: 1, to: endOfToday) ?? endOfToday
+    }
 
     /// Timed events still ahead today.
     var remainingEventsToday: [AgendaEvent] {
-        events.filter { !$0.isAllDay && $0.end > now && $0.start < endOfToday }
+        let end = endOfToday
+        return events.filter { !$0.isAllDay && $0.end > now && $0.start < end }
     }
 
     /// Today's timed events, past ones included.
     var eventsToday: [AgendaEvent] {
-        events.filter { !$0.isAllDay && $0.start < endOfToday && $0.end > startOfToday }
+        let (start, end) = (startOfToday, endOfToday)
+        return events.filter { !$0.isAllDay && $0.start < end && $0.end > start }
     }
 
     var tomorrowEvents: [AgendaEvent] {
-        let end = calendar.date(byAdding: .day, value: 1, to: endOfToday) ?? endOfToday
-        return events.filter { !$0.isAllDay && $0.start >= endOfToday && $0.start < end }
+        let (start, end) = (endOfToday, endOfTomorrow)
+        return events.filter { !$0.isAllDay && $0.start >= start && $0.start < end }
     }
 
     /// Every open task a card may name.

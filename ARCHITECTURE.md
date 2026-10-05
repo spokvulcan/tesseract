@@ -149,7 +149,7 @@ tesseract/
 │   │   ├── Moments/                   # Moments, cards, prompts, card parsing, fallbacks
 │   │   ├── Thread/                    # Day Thread: one conversation per day on its own agent
 │   │   ├── Loop/                      # Companion runtime: gather → decide → perform, day state
-│   │   ├── Today/                     # The Today page: the Now Card, the day's steps
+│   │   ├── Today/                     # The Today page: the Now Card, today's and tomorrow's steps
 │   │   ├── Delivery/                  # Jarvis panel, banners and nudges, glyph state
 │   │   ├── Perception/                # Notification Center watcher, seen ledger, owner rules
 │   │   ├── CodingAgents/              # Agent signals, Claude Code hooks (Config Merge)
