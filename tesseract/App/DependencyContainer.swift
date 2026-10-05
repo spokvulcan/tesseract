@@ -237,6 +237,15 @@ final class DependencyContainer: ObservableObject {
         captureDump: captureDumpStore,
         learnedWords: learnedWordStore
     )
+    /// Today's composer's own push-to-talk.
+    lazy var todayVoiceInput = AgentVoiceInputController(
+        audioCapture: audioCaptureEngine,
+        transcriptionEngine: transcriptionEngine,
+        settings: settingsManager,
+        proofreadPass: proofreadPass,
+        captureDump: captureDumpStore,
+        learnedWords: learnedWordStore
+    )
     /// The floating card rung: the Breakpoint card in a Siri-style glass panel.
     lazy var jarvisPanel: JarvisPanelController = JarvisPanelController(
         thread: dayThread, voice: panelVoiceInput,

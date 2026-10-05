@@ -224,10 +224,16 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # refinement, the plan made before the sit-down, Breakpoints, Triage — only
 # people, never during a game —, agents, the Night Reflection, card actions,
 # delivered nudges), banner sources and game detection, the Agenda tools over
-# the in-memory store (delete_event included), the completion the EventKit
+# the in-memory store (delete_event included) and its snapshot past midnight
+# (still the day that is ending until 04:00), the completion the EventKit
 # store hands its Reminders fetch (nonisolated, delivered off the main thread;
 # no store is touched), capture and the one-key hotkey,
-# the Timeline, cards and prompts, the Day Thread's store, the seen ledger, the
+# the Timeline (tomorrow after today, and the small hours past midnight), the
+# Now Card (its decision table, the Inbox's slot offers, how
+# long a card's line stays fresh), Today rendered with the app's wiring over
+# fixture days at a wide, a regular and a phone width
+# (TEST_RUNNER_TODAY_GALLERY_DIR=<dir> also writes each render there as a PNG,
+# dark and light), cards and prompts, the Day Thread's store, the seen ledger, the
 # Delivery Ladder and governor, the Claude Code merge, the Profile and recall
 # (fixture conversation files), the trace, the voice overlay's placements, and
 # the prefix-cache contract (a byte-identical system prompt; the Now Tag on
@@ -249,6 +255,8 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/CaptureParserTests \
   -only-testing:tesseractTests/NudgePlannerTests \
   -only-testing:tesseractTests/TimelineBuilderTests \
+  -only-testing:tesseractTests/NowCardTests \
+  -only-testing:tesseractTests/TodayGalleryTests \
   -only-testing:tesseractTests/CardParserTests \
   -only-testing:tesseractTests/MomentPromptsTests \
   -only-testing:tesseractTests/DayThreadTests \

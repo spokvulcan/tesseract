@@ -207,6 +207,33 @@ struct AgendaToolsTests {
         #expect(listing.contains("Areas: Reminders, Work, Health · Inbox: Reminders"))
     }
 
+    @Test func pastMidnightTheSnapshotStillHoldsTheDayThatIsEnding() async {
+        // 00:40 on 1 October: until 04:00 the owner's day is still 30 September.
+        let night = Self.local(31, 0, 40)
+        func event(_ id: String, _ start: Date) -> AgendaEvent {
+            AgendaEvent(
+                id: id, title: id, start: start, end: start.addingTimeInterval(3600),
+                calendarID: "home", calendarTitle: "Home")
+        }
+        func done(_ id: String, at: Date) -> AgendaReminder {
+            AgendaReminder(
+                id: id, title: id, listID: "inbox", listTitle: "Reminders", isCompleted: true,
+                completedAt: at)
+        }
+        let store = InMemoryAgendaStore(
+            lists: [AgendaList(id: "inbox", title: "Reminders", isDefault: true)],
+            reminders: [done("evening", at: Self.local(30, 23, 30)), done("late", at: night)],
+            events: [
+                event("dinner", Self.local(30, 20, 0)), event("work", Self.local(31, 9, 0)),
+                event("friday", Self.local(32, 9, 0)),
+            ],
+            now: { night })
+        let agenda = Agenda(store: store, trace: scratchTrace(), now: { night })
+        await agenda.refresh()
+        #expect(agenda.snapshot.events.map(\.id) == ["dinner", "work"])
+        #expect(Set(agenda.snapshot.doneToday.map(\.id)) == ["evening", "late"])
+    }
+
     @Test func withoutAccessTheToolSaysHowToAllowIt() async throws {
         let f = fixture(access: .none)
         do {

@@ -61,6 +61,9 @@ same PR:
   the field exists from the first layout (the macOS 27.0 focus freeze).
 - Capture panel (`CapturePanelController` over `GlassPanel`): the capture
   hotkey's bar near the top of the screen, same construction.
+- Today composer (`TodayComposer`): the agent composer's glass, notice slot
+  and action row, simplified to the day's three controls (Add task, the
+  hold-to-talk mic, send), floating over Today's content like the agent's.
 - Lens (`LensController` over `GlassPanel`, ADR-0085, ADR-0086): the one
   dictation overlay, a card at the bottom center of the screen that streams
   the take while it is recorded, shows it as it lands, holds it when ⇧ was

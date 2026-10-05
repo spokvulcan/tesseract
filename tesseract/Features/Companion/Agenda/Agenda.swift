@@ -114,14 +114,19 @@ final class Agenda {
     /// Reload the snapshot from the store.
     func refresh() async {
         let now = now()
-        let startOfToday = calendar.startOfDay(for: now)
+        // The owner's day rolls over at 04:00 (DayKey): after midnight, today
+        // is still the day that is ending, and what is done in the small
+        // hours counts for it.
+        let day = DayKey(for: now, calendar: calendar)
+        let startOfToday = day.date(calendar: calendar) ?? calendar.startOfDay(for: now)
         let endOfTomorrow =
             calendar.date(byAdding: .day, value: 2, to: startOfToday)
             ?? now.addingTimeInterval(172_800)
         let endOfToday = calendar.date(byAdding: .day, value: 1, to: startOfToday) ?? now
         let events = store.events(from: startOfToday, to: endOfTomorrow)
         let open = await store.openReminders()
-        let done = await store.completedReminders(from: startOfToday, to: endOfToday)
+        let done = await store.completedReminders(
+            from: startOfToday, to: day.end(calendar: calendar) ?? endOfToday)
         snapshot = AgendaSnapshot(
             takenAt: now, access: store.access, events: events, open: open, doneToday: done,
             lists: store.reminderLists(), calendars: store.eventCalendars())

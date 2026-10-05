@@ -114,6 +114,102 @@ struct TimelineBuilderTests {
         let facts = Self.facts(now: Self.local(30, 10, 7))
         #expect(TimelineBuilder.firstFreeSlot(minutes: 30, facts: facts) == Self.local(30, 10, 15))
     }
+
+    // MARK: Tomorrow
+
+    static let work = AgendaEvent(
+        id: "W", title: "Work", start: local(31, 9), end: local(31, 13), calendarID: "c",
+        calendarTitle: "Work")
+    static let birthday = AgendaEvent(
+        id: "B", title: "Mom's birthday", start: local(31, 0), end: local(32, 0), isAllDay: true,
+        calendarID: "c", calendarTitle: "Family")
+    static let bins = AgendaReminder(
+        id: "bins", title: "Put the bins out", listID: "life", listTitle: "Life",
+        due: local(31, 7, 30), dueHasTime: true)
+    static let invoice = AgendaReminder(
+        id: "invoice", title: "Send the invoice", listID: "work", listTitle: "Work",
+        due: local(31, 0))
+
+    /// The fixture day with tomorrow on it: work, a birthday, the bins at
+    /// 07:30 and the invoice at no set time.
+    static func twoDays(now: Date) -> DayFacts {
+        var facts = facts(now: now)
+        facts.events += [work, birthday]
+        facts.dueTomorrow = [invoice, bins]
+        return facts
+    }
+
+    @Test func tomorrowFollowsWithItsEventsAndTasks() {
+        let tomorrow = TimelineBuilder.build(facts: Self.twoDays(now: Self.local(30, 10, 30)))
+            .tomorrow
+        #expect(tomorrow.date == Self.local(31, 0))
+        let rows = tomorrow.rows.map { row -> String in
+            switch row.kind {
+            case .event(let event): event.title
+            case .task(let task): task.reminder.title
+            case .free, .now: "?"
+            }
+        }
+        // Not planned yet: no free time and no Now line.
+        #expect(rows == ["Put the bins out", "Work"])
+        #expect(tomorrow.anytime.map(\.reminder.title) == ["Send the invoice"])
+        #expect(tomorrow.allDayEvents.map(\.title) == ["Mom's birthday"])
+    }
+
+    @Test func aTaskDueTomorrowAndDoneEarlyStaysWithTomorrow() {
+        var facts = Self.twoDays(now: Self.local(30, 20))
+        facts.dueTomorrow = [Self.bins]
+        var invoice = Self.invoice
+        invoice.isCompleted = true
+        invoice.completedAt = Self.local(30, 19)
+        facts.doneToday.append(invoice)
+        let timeline = TimelineBuilder.build(facts: facts)
+        #expect(timeline.tomorrow.anytime.map(\.id) == ["invoice"])
+        #expect(timeline.tomorrow.anytime.first?.isDone == true)
+        // Today's count is today's: dentist, rent and the mail done this morning.
+        #expect(!timeline.anytime.contains { $0.id == "invoice" })
+        #expect(timeline.totalCount == 3)
+        #expect(timeline.doneCount == 1)
+    }
+
+    @Test func untilFourTheSmallHoursStillBelongToTheDayThatIsEnding() {
+        let facts = Self.twoDays(now: Self.local(31, 0, 40))
+        #expect(facts.startOfToday == Self.local(30, 0))
+        let timeline = TimelineBuilder.build(facts: facts)
+        let today = timeline.rows.map { row -> String in
+            switch row.kind {
+            case .event(let event): event.title
+            case .task(let task): task.reminder.title
+            case .free: "free"
+            case .now: "now"
+            }
+        }
+        // The 30th's day, past its end: no free time left, the Now line last.
+        #expect(today == ["Standup", "Call the dentist", "1:1", "now"])
+        #expect(timeline.tomorrow.date == Self.local(31, 0))
+        #expect(timeline.tomorrow.rows.count == 2)
+    }
+
+    @Test func theSnapshotSplitsTasksIntoTodayTomorrowAndUndated() {
+        let snapshot = AgendaSnapshot(
+            takenAt: Self.local(31, 0, 40), access: .full, events: [],
+            open: [
+                AgendaReminder(
+                    id: "rent", title: "Pay rent", listID: "life", listTitle: "Life",
+                    due: Self.local(30, 0)),
+                Self.invoice, Self.bins,
+                AgendaReminder(
+                    id: "later", title: "Book flights", listID: "life", listTitle: "Life",
+                    due: Self.local(32, 0)),
+                AgendaReminder(id: "gym", title: "Gym", listID: "health", listTitle: "Health"),
+            ], doneToday: [], lists: [], calendars: [])
+        // At 00:40 the 31st is still tomorrow: the day rolls over at 04:00.
+        let facts = DayFacts(
+            snapshot: snapshot, areas: [], inboxListID: nil, now: Self.local(31, 0, 40))
+        #expect(facts.dueOrOverdue.map(\.id) == ["rent"])
+        #expect(facts.dueTomorrow.map(\.id) == ["invoice", "bins"])
+        #expect(facts.undated.map(\.id) == ["gym"])
+    }
 }
 
 struct CardParserTests {

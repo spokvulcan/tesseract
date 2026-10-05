@@ -144,6 +144,11 @@ extension View {
             .environment(container.settingsManager)
             .environment(container.agentEngine)
             .environment(container.composerDraft)
+            // Today's composer: its own push-to-talk, and what tells it a
+            // speech model is there to use.
+            .environment(container.todayVoiceInput)
+            .environment(container.transcriptionEngine)
+            .environmentObject(container.modelDownloadManager)
     }
 
     /// Model management and inference arbitration.

@@ -1772,12 +1772,32 @@ artifact — a reminder, a calendar event, a Nudge, an owner rule, a Profile fac
 or a card — that code and the OS keep without the model.
 
 **Today**:
-The app's home and first main-window page: the owner's day in the Timeline
-layout (events and tasks in time order, free gaps, a Now line), a header with
-Jarvis's line, "N of M done" and the Must-do, the day's cards on top, and a side
-column with Capture, Waiting on You, the Inbox and "Jarvis noticed" (Fact
-Proposals). Its Chat mode shows the Day Thread.
+The app's home and first main-window page: the date and "N of M done" over a
+progress bar, the Now Card, then the day as steps: the Timeline (events and
+tasks in time order, free gaps, a Now line, then the Anytime tasks) on one
+**Day Line**, walked up to now and ahead after it. The line runs on past the
+**day break** into tomorrow (its events, all-day events and the tasks due
+then), so what comes next is always in sight. Today is the owner's day: until
+04:00 (the Day Key) it keeps the day that is ending. A wide page draws the
+steps as a table (time, task, Area, length) with the Inbox and "Jarvis
+noticed" (Fact Proposals) beside them; a narrower one puts those below, and a
+phone-width one draws the steps as a list. The **Today composer** at the bottom (the agent composer
+simplified) asks Jarvis, adds a task through Capture or takes a held-to-talk
+question, and its notice slot shows the latest agenda change with an undo.
+Its Chat mode shows the Day Thread.
 _Avoid_: dashboard, Mission Control (retired), home screen (unqualified).
+
+**Now Card**:
+The top of Today: the step the day is on (the meeting under way, the task
+whose slot is now, a task that slid, free time and what fits in it, the next
+step, what's left, or a done day and how tomorrow starts) with one-click
+offers that move it on (Done, Start now, "Do it at 16:30", Tomorrow, Plan my
+day, Wrap up the day). Code builds it from the Timeline, so it never waits on
+the model; Jarvis's latest card line rides along while fresh (a plan for four
+hours, a welcome back for one, the evening's cards until the day ends), and
+everything Waiting on You and the evening's leftovers sit on it, each said
+once.
+_Avoid_: hero, focus card, "the card" (unqualified: each Moment makes a card).
 
 **Agenda**:
 Apple Reminders and Calendar as Tesseract reads and writes them: one port with
@@ -1792,12 +1812,15 @@ stored as a Reminders list and mapped once in Settings.
 _Avoid_: project, category, domain.
 
 **Inbox**:
-The Reminders list where captures without a home land, undated. "Find a time"
-places an Inbox item into the day's next free slot.
+The Reminders list where captures without a home land, undated. On Today each
+item carries an offer: a free half hour today, clear of the Now Card's offer
+and the items above it ("At 16:30"), or Tomorrow (due tomorrow, for the next
+Morning Plan to place) once today has no room or it is evening.
 
 **Capture**:
 Typed or spoken words turned into a reminder without a model: the capture
-hotkey's panel and Today's Capture box both go through one door and the
+hotkey's panel, the + in the Jarvis Panel's field and the Today composer's
+Add task (⌘↩) all go through one door and the
 deterministic capture parser ("call the dentist tomorrow at 10", "after the
 1:1", "#health"). The hotkey is one key — Right ⌥ alone by default: tap to type,
 hold to speak; another key pressed with it cancels, so ⌥-typing works as usual.
@@ -1913,8 +1936,8 @@ talking to Jarvis, apply first.
 _Avoid_: Notification Hub, Event (both retired).
 
 **Waiting on You**:
-People, coding agents and missed notifications that need the owner, in Today's
-side column; a waiting agent also shows on the glyph.
+People, coding agents and missed notifications that need the owner, under
+"Needs you" on Today's Now Card; a waiting agent also shows on the glyph.
 
 **Delivery Ladder**:
 How a card reaches the owner, decided by code: the glyph for anything waiting,
