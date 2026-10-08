@@ -4839,4 +4839,121 @@ Remaining identity hazards, none observed on the fixtures:
   spans. A span fixed per generation would close this, at the cost of
   changing the chain path after a crossing.
 - TurboQuant caches (turbo8v4, the app's default) still verify leaves with
-  their key at the leaf's slot. The same patch fits their verify kernel.
+  their key at the leaf's slot. The same patch fits their verify kernel
+  (G12 applies it).
+
+### G12 — turbo8v4: leaves read their own key at their depth, and the tree code leaves the main loop
+
+G11 fixed the leaf rows of bf16 caches. Under turbo8v4 (the app's default
+KV Cache Compression) the TurboQuant verify kernel still masked each tree
+row by its ancestry, so a leaf read its own key and value at its slot. G9's
+turbo8v4 tree streams parted from the chain's on travel (+79), summary
+(+219) and code (+105). Under that run's round boundaries no token on
+travel or code was verified under two key spans, so those were the leaf-key
+reorder of G11.
+
+**Fix** (vendor `6c23b42`). The tree variant of the kernel
+(`turbo_verify_p1_{rawk,affk}_tree`) takes each row's depth and slot, as
+G11's MMA copy does. Each row sees keys up to its depth index. In the
+32-key block that holds a leaf's index, the leaf's key row is dequantized
+from its slot into the K tile, that column group's MMAs rerun, and the leaf
+row keeps its score. The main P·V gives leaf rows zero probabilities; each
+leaf then adds its own P·V against the V tile patched with its value, in
+the same group order. Chain rows run the chain variant's arithmetic. The
+tree variant is the fork's own kernel, so no copy of an MLX kernel is
+needed.
+
+**Where the tree code costs.** With the tree code inside every block's
+loop, the kernel's serialized GPU time per layer (`MLX_KERNEL_PROFILE`, the
+verify shape) was 340 µs against the chain variant's 271 at 6K keys
+(+25%), and 78 against 60 at 608. With no leaf to patch it was still +21%
+and +16%: the tree code slowed every block, not just the leaves'. Two
+launches as in vendor `a363526` (the leaf partitions on the tree variant,
+the rest on the chain variant, a two-source merge) were no answer. With
+the 16 layers run one after another, as a verify pass runs them, they
+saved 1.5 ms at 16K, nothing at 6K, and lost 0.6 ms at 608: the two
+launches did not overlap.
+Final: the blocks before the first leaf's index run the chain variant's
+loop body under the depth mask, the rest the tree body, in one launch.
+Serialized: 277.7 µs against 272.9 at 6K, 688 against 685 at 16K, and 80
+against 60 at 608, where the patches sit in a two-block partition. Over 16
+layers in sequence (`benchDFlash2TreeAttention`, now sequential, two runs):
+
+| keys | chain variant | tree, 2 leaves | tree code in every block |
+| --- | --- | --- | --- |
+| 608 | 3.74 ms | +0.34 | +0.45 |
+| 6,008 | 7.41 ms | +0.14 | +0.9 |
+| 16,008 | 14.16 ms | +0.03 | +2.45 |
+
+The same sequential benchmark puts bf16's tree attention (`a363526`'s two
+launches) at +1.3 ms over MLX's SDPA at 6K and 16K keys, and level at 608.
+The same restructure (one launch, the tree code only in the leaves'
+blocks) is the next lever for bf16's summary rounds.
+
+**Tests** (vendor):
+
+- `testTurboVerifyTreeRowsMatchTheirPathsChain`: at the Qwen3.8-27B verify
+  shape, raw and 8-bit keys, 312 to 6,151 keys, every tree row's float32
+  output equals the chain variant's on a block of its path, bit for bit. A
+  control that only reorders (the reference on 32 partitions instead of
+  16) fails every row at 3K and 6K keys.
+- `testQwen35TreeVerifyOverTurboQuantComputesEachRowAsItsPathsChain`: a
+  Qwen 3.5 tree verify over TurboQuant caches gives each row its path's
+  chain logits bit for bit. At this model's size a reordered sum rarely
+  moves a logit: with the verify kernel off (`TURBO_VERIFY_MMA=0`, the
+  masked fallback) it passes too, so the kernel test carries the weight.
+- `testTurboQuantTreeOfOtherWidthsTakesTheMaskedPath`: trees of 4 and 16
+  rows (a drafter with another block size) take the dequantizing fallback.
+  At 4 rows the kernel would have read past its depth and slot inputs.
+- Vendor suite green: XCTest 708 (10 skipped), Swift Testing 957 in 75
+  suites.
+
+**Identity on the fixtures** (`--bench-kv-scheme turbo8v4`, decode only).
+In every run of both builds below, tree streams are IDENTICAL to the
+chain's on travel, math and code, and summary parts at +245. One summary
+token (+155) was verified under different key spans in the two arms: N =
+6,146 in the chain arm (16 partitions of 416 keys) and 6,142 in the tree
+arm (16 of 384). A diagnostic build that splits every pass at multiples of
+448 keys (`DFLASH2_DIAG_TURBO_SPAN=448`, not committed;
+`results/2026-10-08/tree-turbo-span-diag/`) makes summary's tree stream
+IDENTICAL to its chain's for all 512 tokens. So the redirect is
+exact, and what remains is G11's span hazard, here in 512-key buckets. Code
+also verified one token under two spans (+410, N = 512 against 517), with
+no visible change.
+
+**Speed.** `turbo-redirect-v19` (redirect, tree code in every block), four
+alternated rounds, steady (`results/2026-10-08/tree-turbo-redirect/`):
+
+| fixture | chain | tree | Δ | τ chain / tree | median ms/round chain / tree |
+| --- | --- | --- | --- | --- | --- |
+| travel | 52.3 | 57.7 | +10.2% | 2.88 / 3.22 | 54.9 / 55.8 |
+| summary | 48.2 | 49.9 | +3.6% | 2.92 / 3.08 | 59.7 / 61.5 |
+| math | 108.7 | 111.9 | +3.0% | 6.04 / 6.33 | 55.4 / 56.4 |
+| code | 85.2 | 87.6 | +2.8% | 4.67 / 4.90 | 54.6 / 55.7 |
+
+`turbo-loops-v20` (the final kernel), four alternated rounds, steady
+(`results/2026-10-08/tree-turbo-loops/`). A first attempt ran while a
+crash-looping background service and the lock-screen wallpaper loaded the
+machine, with stalls of up to 1.7 s in both arms, and was discarded.
+
+| fixture | chain | tree | Δ | τ chain / tree | median ms/round chain / tree |
+| --- | --- | --- | --- | --- | --- |
+| travel | 52.7 | **57.6** | +9.3% | 2.88 / 3.22 | 54.4 / 55.9 |
+| summary | 48.8 | **50.8** | +4.0% | 2.92 / 3.08 | 59.2 / 60.4 |
+| math | 109.3 | **112.4** | +2.8% | 6.04 / 6.33 | 55.1 / 56.2 |
+| code | 85.6 | **87.7** | +2.5% | 4.67 / 4.90 | 54.3 / 55.6 |
+
+On summary (6K keys) the tree's extra round cost fell from 1.8 ms to 1.2
+ms, as the kernel benchmark predicts. The short fixtures, under 700 keys,
+match v19. One chain run of code lost time to a single long stall (76.2
+tok/s); the medians are unaffected.
+
+Verdict: **ACCEPTED** (vendor `6c23b42`). Under turbo8v4, tree
+rounds now reproduce chain rounds bit for bit except across a 512-key span
+edge, and they speed up every fixture by 2.5–9.3%.
+
+Remaining identity hazard: the partition span's buckets (bf16 2,048 keys
+plus the 1,024 switch, turbo8v4 512). A span fixed per generation would
+close it in both arms, but it changes every chain stream once against
+today's baseline (the diagnostic chain left the default span's at token 7):
+a numerics change for the owner.

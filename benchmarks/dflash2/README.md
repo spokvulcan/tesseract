@@ -121,13 +121,15 @@ logits within 0–2 ulps), so `--bench-check` reports DIVERGED on every
 fixture at 512 tokens. The forced check says which positions those are: at
 each one the record holds the stream's token, AR's argmax and the gap in
 bf16 ulps. Every change must reproduce the first arm's streams exactly,
-tree verification included (each tree row reads its own key where a chain
-block holds it; ledger G11). Moving round boundaries can still change a
-verify pass's key partitions, which depend on its length (2,048-key span
-buckets in the two-pass kernel, the one-pass/two-pass switch at 1,024
-keys). A stream that parts from the first arm's for that reason, at a tie,
-passes `--require-identity` when every forced departure is at most 2 ulps
-(ledger G9).
+tree verification included, under bf16 and turbo8v4 (each tree row reads
+its own key where a chain block holds it; ledger G11, G12). Moving round
+boundaries can still change a verify pass's key partitions, which depend
+on its length: 2,048-key span buckets in the two-pass kernel and the
+one-pass/two-pass switch at 1,024 keys under bf16, 512-key buckets in
+turbo8v4's verify kernel. A stream that parts from the first arm's for
+that reason, at a tie, passes `--require-identity` when every forced
+departure is at most 2 ulps (ledger G9). Under turbo8v4 it cannot: the
+compressed cache leaves bf16 AR's argmax by more than ties.
 
 ## Before and after a change
 

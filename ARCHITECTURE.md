@@ -531,6 +531,9 @@ the images are prefilled before the hand-over and the iterator rotates the text
 after them by their rope delta (ADR-0089). Greedy DFlash2 rounds verify a tree:
 the draft's chain plus its best siblings as leaves, in the same 8 rows
 (`DFLASH2_TREE=0` keeps chains; vendor `dflash2TreeProposal`, ledger G9).
+Each row reads its own key at its depth, over bf16 and TurboQuant caches,
+so a tree round computes each row bit for bit as a chain round over the
+same keys does (ledger G11, G12).
 
 **Agent bootstrap** (`AgentFactory.makeAgent()`): Discovers packages → registers extensions → discovers skills → loads context files → assembles system prompt → wires compaction → creates Agent instance.
 
