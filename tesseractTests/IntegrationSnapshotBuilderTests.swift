@@ -62,24 +62,6 @@ struct IntegrationSnapshotBuilderTests {
         #expect(snapshot.models.first { $0.id == "text-model" }?.visionCapable == false)
     }
 
-    @Test func textOnlyOverrideHidesVisionFromIntegrations() throws {
-        let visionDir = try makeModelDir(
-            config: #"{ "model_type": "qwen3_5", "vision_config": { "spatial_merge_size": 2 } }"#
-        )
-        defer { try? FileManager.default.removeItem(at: visionDir) }
-        let withheld = agentDefinition(id: "withheld", textOnlyOverride: true)
-
-        let snapshot = IntegrationSnapshotBuilder.build(
-            definitions: [withheld],
-            statuses: ["withheld": .downloaded(sizeOnDisk: 1)],
-            selectedAgentModelID: "withheld",
-            port: 8321,
-            modelDirectory: { _ in visionDir }
-        )
-
-        #expect(snapshot.models.first?.visionCapable == false)
-    }
-
     @Test func missingDirectoryMeansNoVision() throws {
         let snapshot = IntegrationSnapshotBuilder.build(
             definitions: [agentDefinition(id: "a")],
@@ -148,7 +130,7 @@ struct IntegrationSnapshotBuilderTests {
 
     // MARK: - Fixtures
 
-    private func agentDefinition(id: String, textOnlyOverride: Bool = false) -> ModelDefinition {
+    private func agentDefinition(id: String) -> ModelDefinition {
         ModelDefinition(
             id: id,
             displayName: "Display \(id)",
@@ -156,8 +138,7 @@ struct IntegrationSnapshotBuilderTests {
             category: .agent,
             source: .huggingFace(repo: "fixture/\(id)", requiredExtension: "safetensors"),
             sizeDescription: "",
-            dependencies: [],
-            textOnlyOverride: textOnlyOverride
+            dependencies: []
         )
     }
 

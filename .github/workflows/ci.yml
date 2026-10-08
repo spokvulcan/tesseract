@@ -1,6 +1,7 @@
 # CI — lint on PRs; also build Release and test on pushes to main.
 # Request a one-off PR build and test run by adding the run-build label, or
-# run the full workflow manually from Actions on a selected branch.
+# run the full workflow manually from Actions on a selected branch. A PR that
+# moves the Vendor/mlx-swift-lm gitlink also runs vendor-test.
 #
 # The release pipeline (release-build.yml) gates on these exact check names
 # for the released commit: build-release, build-ios, test, lint. Rename them
@@ -186,6 +187,72 @@ jobs:
         with:
           name: test-results
           path: TestResults.xcresult
+          retention-days: 7
+
+  # The fork's carry branches have no CI of their own, so a PR that moves the
+  # Vendor/mlx-swift-lm gitlink tests the fork here; a manual run always does.
+  # Not part of the release gate.
+  vendor-changed:
+    name: vendor-changed
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.action != 'labeled')
+    runs-on: ubuntu-latest
+    outputs:
+      moved: ${{ steps.gitlink.outputs.moved }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: gitlink
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ -z "$BASE" ]; then
+            echo "moved=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch --no-tags --depth=1 origin "$BASE"
+          old=$(git rev-parse "$BASE:Vendor/mlx-swift-lm")
+          new=$(git rev-parse "HEAD:Vendor/mlx-swift-lm")
+          echo "Vendor/mlx-swift-lm: $old -> $new"
+          if [ "$old" = "$new" ]; then moved=false; else moved=true; fi
+          echo "moved=$moved" >> "$GITHUB_OUTPUT"
+
+  vendor-test:
+    name: vendor-test
+    needs: vendor-changed
+    if: needs.vendor-changed.outputs.moved == 'true'
+    runs-on: xcode-27
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+
+      - name: Install Metal toolchain
+        run: xcodebuild -downloadComponent MetalToolchain
+
+      - name: Cache SPM checkouts
+        uses: actions/cache@v5
+        with:
+          path: Vendor/mlx-swift-lm/DerivedData/SourcePackages
+          key: vendor-spm-${{ runner.os }}-${{ hashFiles('Vendor/mlx-swift-lm/Package.swift') }}
+          restore-keys: vendor-spm-${{ runner.os }}-
+
+      # MLXLMTests serialized with per-test timeouts (the parallel runner
+      # hangs on this target), then DocC for the engine's targets.
+      - name: MLXLMTests and DocC
+        run: scripts/vendor-test.sh --docs
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: vendor-test-logs
+          path: Vendor/mlx-swift-lm/DerivedData/vendor-test
           retention-days: 7
 
   lint:

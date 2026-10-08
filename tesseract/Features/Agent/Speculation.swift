@@ -79,31 +79,34 @@ nonisolated struct Speculation: Sendable {
     /// The **Speculation Plan** for one request, or `nil` when it decodes
     /// without speculation. The engagement table, in one place:
     ///
-    /// - Speculation needs text-only input whose KV a verify pass can
-    ///   write in place: full precision, or a TurboQuant **KV Scheme** for
-    ///   DFlash2 (its iterator converts after prefill and verifies over the
-    ///   compressed rows). Affine `kvBits` never speculates, and MTP does not
-    ///   take a KV Scheme.
+    /// - Speculation needs KV a verify pass can write in place: full
+    ///   precision, or a TurboQuant **KV Scheme** for DFlash2 (its iterator
+    ///   converts after prefill and verifies over the compressed rows).
+    ///   Affine `kvBits` never speculates, and MTP does not take a KV Scheme.
     /// - DFlash2, when resident, is preferred and engages on every such
-    ///   request, warm or cold, whatever leaf it stores (ADR-0059): the app
-    ///   prefills and captures up to the split, and the iterator
-    ///   capture-prefills the tail. It rejection-samples against its
-    ///   selector, so sampling presets speculate too.
-    /// - MTP engages only at temperature 0 (the Qwen heads are greedy-only;
-    ///   the vendor iterator would pass through after paying the drafter
-    ///   prefill), on a turn that restores nothing and stores a direct leaf,
-    ///   when the single-shot prefill fits the scratch budget. Its iterator
-    ///   prefills the whole prompt from zero, which forfeits the boundary
-    ///   snapshots every other leaf mode is synthesized from (ADR-0056
-    ///   amendment). A turn that stores no leaf — the Raw Generation Start —
-    ///   does not engage it.
+    ///   request, warm or cold, whatever leaf it stores (ADR-0059), with
+    ///   images or without (ADR-0089). The app prefills and captures up to
+    ///   the split, and the iterator capture-prefills the text tail: a keyed
+    ///   split sits past the last image and the tail rotates by the images'
+    ///   rope delta; a whole prompt from zero has the target prefill its own
+    ///   images first. Only the Qwen3.5 classes pair with the draft, and of
+    ///   those only the vision class receives images. It rejection-samples
+    ///   against its selector, so sampling presets speculate too.
+    /// - MTP needs text-only input and engages only at temperature 0 (the
+    ///   Qwen heads are greedy-only; the vendor iterator would pass through
+    ///   after paying the drafter prefill), on a turn that restores nothing
+    ///   and stores a direct leaf, when the single-shot prefill fits the
+    ///   scratch budget. Its iterator prefills the whole prompt from zero,
+    ///   which forfeits the boundary snapshots every other leaf mode is
+    ///   synthesized from (ADR-0056 amendment). A turn that stores no leaf —
+    ///   the Raw Generation Start — does not engage it.
     func plan(for request: SpeculationRequest) -> SpeculationPlan? {
-        guard request.isTextOnly, request.kvBits == nil else { return nil }
+        guard request.kvBits == nil else { return nil }
         if let dflash2 {
             return SpeculationPlan(drafter: .dflash2(dflash2))
         }
-        if let mtp, request.kvScheme == nil, request.temperature == 0, !request.restoresPrefix,
-            request.storedLeaf == .directLeaf,
+        if let mtp, request.isTextOnly, request.kvScheme == nil, request.temperature == 0,
+            !request.restoresPrefix, request.storedLeaf == .directLeaf,
             mtpPrefillFits(promptTokens: request.promptTokens)
         {
             return SpeculationPlan(drafter: .mtp(mtp))
@@ -122,7 +125,7 @@ nonisolated struct Speculation: Sendable {
 /// them before their prefill.
 nonisolated struct SpeculationRequest: Sendable, Equatable {
     /// No image, video or audio reaches the model (on the keyed path, the
-    /// identity key space).
+    /// identity key space). Only MTP reads it.
     var isTextOnly: Bool
     /// The request's affine KV quantization; `nil` is unquantized.
     var kvBits: Int?
@@ -209,6 +212,11 @@ nonisolated struct SpeculationPlan: Sendable {
     /// `prefilledPrefixTokens` positions of `input`. The Model Session calls
     /// this with its model; nothing else constructs a speculative iterator.
     ///
+    /// An `input` with images (a whole prompt from zero) has the target
+    /// prefill through its last image first. A caller that prefilled the
+    /// images itself passes the text alone, a split past the last image, and
+    /// `positionDelta`, the rope delta the text after them rotates by.
+    ///
     /// Penalties ride the app logit processor (ADR-0053), injected through
     /// `GenerationComponents`; they are stripped from the iterator's
     /// parameters so the vendor's parameter-built penalty processor never
@@ -221,6 +229,7 @@ nonisolated struct SpeculationPlan: Sendable {
         model: any LanguageModel,
         cache: [any KVCache],
         prefilledPrefixTokens: Int,
+        positionDelta: Int = 0,
         parameters: GenerateParameters
     ) throws -> SpeculativeDecodeIterator {
         let (iteratorParameters, components) = GenerationLogitProcessor.components(
@@ -228,7 +237,8 @@ nonisolated struct SpeculationPlan: Sendable {
         switch drafter {
         case .mtp(let drafter):
             precondition(
-                prefilledPrefixTokens == 0, "the MTP iterator prefills the whole prompt")
+                prefilledPrefixTokens == 0 && positionDelta == 0,
+                "the MTP iterator prefills the whole text-only prompt")
             return .mtp(
                 try MTPSpeculativeTokenIterator(
                     input: input,
@@ -247,6 +257,7 @@ nonisolated struct SpeculationPlan: Sendable {
                     drafter: drafter.value,
                     mainCache: cache,
                     prefilledPrefixTokens: prefilledPrefixTokens,
+                    positionDelta: positionDelta,
                     parameters: iteratorParameters,
                     blockSize: DFlash2Support.blockSize,
                     components: components
@@ -384,7 +395,7 @@ nonisolated extension Speculation {
     /// The MTP head, loaded from the target's own checkpoint when it ships
     /// `mtp.*` weights. The drafter family is derived from the class of the
     /// model instance in `container`, never from the vision intent: the
-    /// generic loader falls back VLM → LLM on legacy-layout checkpoints, so
+    /// generic loader falls back VLM → LLM when the VLM factory throws, so
     /// intent and outcome can diverge (see `MTPDrafterSupport.drafterPairing`).
     private static func loadMTPDrafter(
         directory: URL, container: ModelContainer

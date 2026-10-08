@@ -4,20 +4,22 @@ Run one DFlash pass instead of the full six-pass app benchmark:
 
 ```sh
 scripts/dflash2-bench.sh \
-  --bench-prompt-file "$PWD/benchmarks/dflash2/travel.txt" \
+  --bench-prompt-file benchmarks/dflash2/travel.txt \
   --bench-json /tmp/dflash-before.json
 ```
 
 The fast wrapper defaults to the frozen short travel fixture (82 input
-tokens). Use `--bench-prompt-file "$PWD/benchmarks/dflash2/summary.txt"` for
-the original 5,976-token summary workload.
+tokens). Use `--bench-prompt-file benchmarks/dflash2/summary.txt` for the
+original 5,976-token summary workload. `bench.sh` makes path arguments
+absolute (the app runs from `/`).
 
 After a code change, run the same command with another JSON output path.
 When changing only prompts, block widths, or output lengths, add `--no-build`.
-The script reuses the recorded Release app path; it labels the source as
+It reuses this checkout's last Release build; it labels the source as
 `reused-binary` rather than attributing that binary to the current source tree.
 All `bench.sh` entrypoints share a lock, so two benchmarks cannot compete for
-the GPU or overwrite the same log.
+the GPU or overwrite the same log. A harness that fails writes the error to
+the log as a `[harness]` line, and the script exits nonzero.
 
 Useful options:
 
@@ -30,6 +32,8 @@ Useful options:
 | `--bench-round-timings` | Include individual round widths, acceptance and latency in JSON. |
 | `--bench-draft-policy fc8` | Experiment with drafter precision: `4bit`, `8bit`, `unquantized`, `fc8`, `selector8`, `fc-selector8`. Target weights are unchanged. |
 | `--bench-json /tmp/run.json` | Save timings, acceptance, prompt identity and complete token streams. |
+| `--bench-vision` | Load the vision class (it runs the text class's engine, ADR-0089), to compare the two classes on one prompt. |
+| `--bench-image PATH` | Attach an image to the prompt; implies `--bench-vision`. DFlash2 hands the image to the target, which prefills through it, and speculates over the text after it. |
 
 Fast mode does not run AR or claim to check identity unless `--bench-check`
 is supplied. Use it periodically and after changes to numerical kernels,
@@ -51,7 +55,8 @@ the iterator already returns each token to the CPU.
 The comparator rejects mismatched prompts, lengths or model identifiers,
 and flags changed acceptance so a different trajectory is not mistaken for
 a faster verification pass. For final claims, repeat runs in alternating
-before/after order and inspect both acceptance and milliseconds per round.
+before/after order and inspect both acceptance and milliseconds per round
+([Before and after a change](#before-and-after-a-change)).
 
 Keep long prompts in a frozen file. The original full runner's default summary prompt is assembled
 from live repository documentation, so editing the docs changes its output
@@ -76,3 +81,24 @@ It reads the recorded vendor baseline commit, checks exact recurrent states,
 and alternates the two kernels. Run it without another GPU workload. Its
 component timings must not be reported as whole-model generation speedups.
 See [FINDINGS.md](FINDINGS.md) for this investigation and saved results.
+
+## Before and after a change
+
+Bench the base commit and the change on one prompt, from two Release builds:
+a worktree at the base keeps its own build, and `TESSERACT_BENCH_APP` points
+`--no-build` at it. The base binary must know every flag you pass.
+
+```sh
+git worktree add --detach ../tesseract-gate-main main   # once
+git -C ../tesseract-gate-main submodule update --init --recursive
+(cd ../tesseract-gate-main && scripts/dev.sh build release)
+scripts/dflash2-bench.sh --bench-check --bench-json /tmp/dflash-after.json
+TESSERACT_BENCH_APP=../tesseract-gate-main scripts/dflash2-bench.sh --no-build \
+  --bench-check --bench-json /tmp/dflash-before.json
+python3 scripts/dflash2-compare.py --require-identity \
+  /tmp/dflash-before.json /tmp/dflash-after.json
+```
+
+To move the base, check out the new commit in the worktree, update its
+submodule and rebuild. For a speed claim, alternate the two arms (ABAB) and
+compare medians.

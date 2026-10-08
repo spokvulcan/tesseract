@@ -21,10 +21,8 @@ import Tokenizers  // referenced by the #huggingFaceTokenizerLoader macro expans
 ///    does not determine the loaded class: the app's non-vision path
 ///    force-loads the MLXLLM text target even from VLM-shaped checkpoints
 ///    (see `LLMActor.loadModel`), and the generic loader itself falls back
-///    VLM → LLM when the VLM factory throws (legacy-layout checkpoints like
-///    the Qwen3.8-27B community quant, which ships `language_model.*` /
-///    `vision_tower.*` tensor names, load as the text model even in vision
-///    mode). Each drafter `fatalError`s on the other family's target, so
+///    VLM → LLM when the VLM factory throws. Each drafter `fatalError`s on
+///    the other family's target, so
 ///    selection keys on ``drafterPairing(for:)`` — the class of the model
 ///    instance that actually loaded — never on config shape or intent.
 nonisolated enum MTPDrafterSupport {

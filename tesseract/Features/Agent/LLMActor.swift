@@ -169,6 +169,7 @@ actor LLMActor {
                 : try await loadParoQuantLLMContainer(from: directory)
             await stackTargetProjections(container: container)
             let result = try await verifyAndStore(container: container, identity: identity)
+            await warnIfVisionDropped(container: container, visionMode: visionMode)
             await loadSpeculation(
                 mode, directory: directory, container: container, identity: identity)
             logLoadCompleted(since: loadStart, clock: loadClock, visionMode: visionMode)
@@ -198,10 +199,25 @@ actor LLMActor {
         }
         await stackTargetProjections(container: container)
         let result = try await verifyAndStore(container: container, identity: identity)
+        await warnIfVisionDropped(container: container, visionMode: visionMode)
         await loadSpeculation(
             mode, directory: directory, container: container, identity: identity)
         logLoadCompleted(since: loadStart, clock: loadClock, visionMode: visionMode)
         return result
+    }
+
+    /// A vision load that resolved to a text class drops every image, and
+    /// nothing else says so: the generic loader falls back to MLXLLM when
+    /// the VLM factory throws. Name the class that loaded.
+    private func warnIfVisionDropped(container: ModelContainer, visionMode: Bool) async {
+        guard visionMode else { return }
+        let textClass: String? = await container.perform { context in
+            context.model is any LLMModel ? String(describing: type(of: context.model)) : nil
+        }
+        if let textClass {
+            Log.agent.warning(
+                "Vision requested but the text class \(textClass) loaded — images are dropped")
+        }
     }
 
     /// Attach the drafters `mode` allows beside the loaded target. A
@@ -386,10 +402,10 @@ actor LLMActor {
 
     /// Whether the loaded instance processes images — the instance truth
     /// the keying phase reads (`ModelSession.producesFlatTextTokens`), not
-    /// the checkpoint's config claim. A text-class load (a `textOnlyOverride`
-    /// definition, or a checkpoint whose layout resolves to the text class
-    /// whatever `visionMode` asked for) drops image attachments and keys the
-    /// request text-only (issue #439). `false` before a load.
+    /// the checkpoint's config claim. A text-class load (a non-vision load,
+    /// or a checkpoint whose layout resolves to the text class whatever
+    /// `visionMode` asked for) drops image attachments and keys the request
+    /// text-only (issue #439). `false` before a load.
     func loadedInstanceProcessesImages() async -> Bool {
         guard let container = modelContainer else { return false }
         return await container.perform { context in !(context.model is any LLMModel) }

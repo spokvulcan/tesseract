@@ -1,3 +1,4 @@
+import CoreImage
 import Foundation
 import MLXLMCommon
 import Testing
@@ -187,6 +188,153 @@ struct SpeculativeDecodeToyTests {
         let leafStore = try #require(events.first { $0.eventName == "leafStore" })
         #expect(leafStore.field("mode") == HTTPLeafStoreMode.canonicalUserLeaf.rawValue)
         #expect(fixture.provider.recorder.verbs.contains(.restore))
+    }
+
+    // MARK: - Images (ADR-0089)
+
+    /// The vision stub's image: a 4×4 grid merges to 2×2, so its run of four
+    /// rows spans two rope positions, a delta of -2 for the text after it.
+    private static let imageFrame = THW(1, 4, 4)
+
+    private static func imageIdentity(padID: Int) -> ModelIdentity {
+        ModelIdentity(
+            configJSON: [
+                "model_type": "qwen3_5", "image_token_id": padID,
+                "vision_config": ["num_heads": 16, "spatial_merge_size": 2],
+            ],
+            chatTemplate: nil)
+    }
+
+    /// The render with each image's single placeholder expanded into its run,
+    /// as the vision processor prepares it.
+    private static func prepared(_ render: [Int], padID: Int) -> [Int] {
+        render.flatMap { token in
+            token == padID
+                ? Array(repeating: token, count: EmittedPathToyTokenizer.imagePadRunLength)
+                : [token]
+        }
+    }
+
+    /// An image-bearing conversation speculates (ADR-0089): the anchored
+    /// vision prepare runs the image, the split sits past it, and the
+    /// iterator takes the text alone, rotated by the image's rope delta. The
+    /// next turn restores past the image and speculates again.
+    @Test(arguments: [0, 3])
+    func keyedImageTurnsSpeculatePastTheImage(missEvery: Int) async throws {
+        let tokenizer = EmittedPathToyTokenizer()
+        let padID = tokenizer.imagePadID
+        let context = EmittedPathSynthesizedReplayTests.preserving
+        let image = HTTPPrefixCacheImage(data: try EmittedPathSynthesizedReplayTests.tinyPNG())
+        let look = HTTPPrefixCacheMessage(role: .user, content: "look", images: [image])
+        let round1 = EmittedPathSynthesizedReplayTests.conversation([look], context: context)
+        let round2 = EmittedPathSynthesizedReplayTests.conversation(
+            [
+                look, EmittedPathSynthesizedReplayTests.assistant("hello world"),
+                EmittedPathSynthesizedReplayTests.user("more"),
+            ], context: context)
+        func render(_ conversation: HTTPPrefixCacheConversation) throws -> [Int] {
+            try tokenizer.applyChatTemplate(
+                messages: conversation.promptMessages, tools: nil,
+                additionalContext: context.additionalContext(merging: nil))
+        }
+        let prompt1 = Self.prepared(try render(round1), padID: padID)
+        let prompt2 = Self.prepared(try render(round2), padID: padID)
+        let reply2 = tokenizer.encode(text: "plan\n</think>\n\nagain", addSpecialTokens: false)
+        let model = ToyLanguageModel(script: prompt2 + reply2, eosTokenId: tokenizer.endOfTurnID)
+        var configuration = ModelConfiguration(id: "speculative-image-\(UUID())")
+        configuration.eosTokenIds = [tokenizer.endOfTurnID]
+        let fixture = ServerCompletionFixture(
+            provider: ToyModelSessionProvider(
+                model: model, tokenizer: tokenizer, configuration: configuration,
+                vision: .init(
+                    padTokenId: padID,
+                    padRunLength: EmittedPathToyTokenizer.imagePadRunLength,
+                    frame: Self.imageFrame, expandsInPlace: true),
+                anchorsVision: true,
+                speculation: .scriptedDFlash2(over: model, missEvery: missEvery)),
+            fingerprint: "speculative-image-\(UUID())", identity: Self.imageIdentity(padID: padID),
+            emittedPathIndex: EmittedPathIndex(), modelID: configuration.name)
+        let runEnd = try #require(prompt1.lastIndex(of: padID)) + 1
+
+        let log1 = ProgressEventLog()
+        let handle1 = try await fixture.start(
+            conversation: round1, parameters: Self.parameters(), renderContext: context,
+            progress: log1)
+        let (text1, info1) = try await collectServerText(handle1)
+        #expect(text1.trimmingCharacters(in: .whitespacesAndNewlines) == "hello world")
+        #expect((info1?.draftTokensProposed ?? 0) > 0)
+        #expect(Self.engagedArms(log1) == [.dflash2])
+        let verbs1 = fixture.provider.recorder.verbs
+        #expect(verbs1.contains(.visionContinuationQuery))
+        #expect(!verbs1.contains(.makeDecodeIterator))
+        let handover1 = try #require(fixture.provider.recorder.speculativeHandovers.last)
+        #expect(handover1.prefilledPrefixTokens >= runEnd)
+        #expect(handover1.positionDelta == -2)
+        #expect(!handover1.carriesImages)
+
+        let log2 = ProgressEventLog()
+        let handle2 = try await fixture.start(
+            conversation: round2, parameters: Self.parameters(), renderContext: context,
+            progress: log2)
+        #expect(handle2.cachedTokenCount >= runEnd)
+        let (text2, info2) = try await collectServerText(handle2)
+        #expect(text2.trimmingCharacters(in: .whitespacesAndNewlines) == "again")
+        #expect((info2?.draftTokensProposed ?? 0) > 0)
+        #expect(Self.engagedArms(log2) == [.dflash2])
+        let handovers = fixture.provider.recorder.speculativeHandovers
+        #expect(handovers.count == 2)
+        #expect(handovers.last?.positionDelta == -2)
+        #expect(handovers.last?.carriesImages == false)
+        await fixture.drain()
+    }
+
+    /// A whole prompt from zero with an image (a tool result's screenshot
+    /// takes this path) speculates too: the iterator gets the image and the
+    /// vision target prefills through it first.
+    @Test func rawStartWithAnImageDecodesThroughTheDFlash2Plan() async throws {
+        let tokenizer = EmittedPathToyTokenizer()
+        let padID = tokenizer.imagePadID
+        let messages: [Message] = [
+            ["role": "user", "content": [["type": "image"], ["type": "text", "text": "look"]]]
+        ]
+        let pixel = CIImage(color: .red).cropped(to: CGRect(x: 0, y: 0, width: 1, height: 1))
+        let input = UserInput(messages: messages, images: [.ciImage(pixel)])
+        let render = try tokenizer.applyChatTemplate(
+            messages: messages, tools: nil, additionalContext: nil)
+        let reply = tokenizer.encode(text: "plan\n</think>\n\nhello world", addSpecialTokens: false)
+        let model = ToyLanguageModel(
+            script: Self.prepared(render, padID: padID) + reply,
+            eosTokenId: tokenizer.endOfTurnID, imagePadTokenId: padID)
+        var configuration = ModelConfiguration(id: "speculative-raw-image")
+        configuration.eosTokenIds = [tokenizer.endOfTurnID]
+        let provider = ToyModelSessionProvider(
+            model: model, tokenizer: tokenizer, configuration: configuration,
+            vision: .init(
+                padTokenId: padID, padRunLength: EmittedPathToyTokenizer.imagePadRunLength,
+                frame: Self.imageFrame, expandsInPlace: true),
+            anchorsVision: true, speculation: .scriptedDFlash2(over: model))
+        let log = ProgressEventLog()
+        let parameters = LLMActor.makeGenerateParameters(from: Self.parameters())
+
+        let start = try await provider.withSession(
+            nonSendable: RawGenerationPrompt.fresh(input, renderContext: .canonical)
+        ) { session, prompt in
+            try await RawGenerationStart.start(
+                session: session, prompt: prompt, tools: nil, parameters: parameters,
+                modelFingerprint: nil, progressHandler: { event in log.append(event) })
+        }
+        var text = ""
+        for await event in start.stream {
+            if case .chunk(let chunk) = event { text += chunk }
+        }
+        await start.waitForCompletion()
+
+        #expect(text.hasSuffix("hello world"))
+        #expect(Self.engagedArms(log) == [.dflash2])
+        #expect(
+            provider.recorder.speculativeHandovers == [
+                .init(prefilledPrefixTokens: 0, positionDelta: 0, carriesImages: true)
+            ])
     }
 
     /// A quantized-KV request keeps ordinary decoding with the draft

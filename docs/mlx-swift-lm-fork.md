@@ -32,6 +32,41 @@ the parked Gemma 4 12B multimodal stack (audio encoder + encoder-free
 `gemma4_unified` processor + suppress_tokens) that tesseract draft PR #359
 pins; it rejoins this table's carry list only if that experiment is revived.
 
+## Vision on the text engine, DFlash2 over images (2026-10-07, ADR-0089)
+
+The gitlink advances from `109c6a8` to `1563459` on
+`feat/vlm-dflash2-one-engine`, two commits (fast-forward;
+`pin-upstream-mlx-swift` unchanged):
+
+- `59fa2c1` `feat(qwen35): run the vision class on the text engine; DFlash2
+  over images`. `MLXVLM.Qwen35` hosts `MLXLLM.Qwen35TextModel` (MLXVLM now
+  depends on MLXLLM). The text model places rows with
+  `Qwen35RotaryPositions`: `.shifted(delta)` is its own rope at cache row +
+  delta on every path (fused norm+rope, compiled decode, verify), and a pass
+  with image rows takes `.multimodal` positions through an interleaved
+  M-RoPE in float32. `DFlash2VerifyRequest` and `dflash2Prefill` carry a
+  `positionDelta`; the iterator takes it, accepts `[1, L]` tokens, and takes
+  image prompts on a `DFlash2MediaTargetModel` (the vision class prefills
+  through its last image). The vision class conforms to both DFlash2 target
+  protocols and `KVCacheDimensionProvider`, and builds its rope delta on the
+  host.
+- `1563459` `docs: fix four DocC links that do not resolve`, all older than
+  `59fa2c1`: the package-level `DFlash2AttentionCache`, and the links to the
+  MTP `generate` overload and `gatedDeltaUpdate` that omitted a label.
+
+Validation at `59fa2c1`: `Qwen35VisionEngineTests` (6: text through the
+vision class is the text model bitwise; DFlash2 over an image prompt
+reproduces greedy decoding with either side prefilling the image), and
+serialized `MLXLMTests` green: XCTest 707 (10 skipped), Swift Testing 948
+tests in 75 suites. Loaded-model gates are in ADR-0089 (As built). At
+`1563459`, `scripts/vendor-test.sh --docs`: the same suite green, and DocC
+with warnings as errors passes for MLXLMCommon, MLXLLM, MLXVLM, MLXEmbedders
+and MLXRerankers. `scripts/verify-docs.sh` still fails for
+MLXGuidedGeneration and MLXHuggingFace before DocC runs: under Xcode 27,
+`clang -extract-api` parses MLXCXGrammar's C++ headers as Objective-C
+(`'algorithm' file not found`). Upstream: not filed; it builds on #607
+(DFlash2).
+
 ## TurboQuant optimization loop (2026-10-03)
 
 The gitlink advances from `56ccc88` to `a4ed063` on

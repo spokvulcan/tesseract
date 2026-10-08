@@ -25,15 +25,26 @@ At most 5 nits per review; summarize the rest as a count.
 
 ## Skip entirely
 
-- `Vendor/` (inert vendor fork)
 - `assets/`, `build/`
 - Lock/manifest churn (`*.resolved`)
+
+## Vendor
+
+`Vendor/` is code we own. `tesseract-speech` and `tesseract-highlight` are
+in-tree packages: review them like the app. `mlx-swift-lm` is our fork of the
+model engine, pinned as a submodule. A PR that moves its gitlink carries every
+fork commit in between, while the PR diff shows only the two `Subproject
+commit` lines. Review `git -C Vendor/mlx-swift-lm diff <old>..<new>` (`log`
+for the commits) at the same bar as app code, under the fork's own
+`Vendor/mlx-swift-lm/CLAUDE.md` code standards. The fork's carry branches have
+no CI of their own: this review and the `vendor-test` CI job are its gate.
 
 ## Documentation drift
 
 Flag it if the PR renames, moves, or deletes a module that `ARCHITECTURE.md`
-names; introduces domain vocabulary that `CONTEXT.md` lacks; or changes a test
-workflow documented in `docs/testing.md`.
+names; introduces domain vocabulary that `CONTEXT.md` lacks; changes a test
+workflow documented in `docs/testing.md`; or moves the vendor pin without an
+entry in `docs/mlx-swift-lm-fork.md`.
 
 ## Decided trade-offs
 

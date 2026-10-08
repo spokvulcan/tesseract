@@ -731,13 +731,13 @@ below the image could be restored. The runner mirrors
 the server's accumulator for a `<think>` block the token cap cut open (the
 buffered thinking is folded into the visible text), so the history it
 replays renders exactly like the stored turn. The scenario skips (passing)
-when the loaded *instance* is a text class — `qwen3.8-27b` and
-`qwen3.8-27b-paro` carry `textOnlyOverride`, so even a vision reload drops
-image attachments and keys the request text-only (issue #439), and every
-image check would measure text caching. Run it against a vision-loaded
-model (`--bench-model-id bonsai-2-27b`): on 2026-09-19 that run passed every
-check, 33 of 33 (follow-up 298 and agent history 297 vs baseline 177,
-different image 177, warm and agent outputs byte-equal to cold).
+when the loaded *instance* is a text class (issue #439): a text-only
+checkpoint, or one whose layout the vision factory refuses. Both Qwen3.8-27B
+entries load the vision class since ADR-0089, so on them the scenario runs
+with the DFlash2 draft resident and every image turn speculates. A
+`bonsai-2-27b` run on 2026-09-19 passed every check, 33 of 33 (follow-up 298
+and agent history 297 vs baseline 177, different image 177, warm and agent
+outputs byte-equal to cold).
 
 The e2e runner reads three switches for memory bisects. `TESSERACT_E2E_SPECULATION=off|mtp|dflash2|automatic`
 pins the drafter policy (unset = Automatic, the catalogue default).
@@ -1028,11 +1028,9 @@ requests, and logs only the input hash and counts. It tests unquantized
 capture/restore correctness; DFlash2 and HTTP timing are covered by the
 separate live replay.
 
-The Qwen3.8 community checkpoint used by this comparison loads as a text
-instance even when vision is requested (`textOnlyOverride`). The HTTP E2E
-runner's image scenario reads that instance truth and skips (passing) on
-it, so the comparison report carries no image gate for this model; use a
-vision-loaded model for image-specific validation.
+The Qwen3.8 community checkpoint used by this comparison loads the vision
+class when vision is requested (ADR-0089), so the HTTP E2E runner's image
+scenario runs on it; this correctness check itself rejects image requests.
 
 ### Tree-side Leaf Lease evidence (#479)
 
@@ -1208,10 +1206,14 @@ approval requirement in the capture baseline still applies to #480.
   weight-heavy stacks in each weight format. Build the `ane-lab` scheme with
   xcodebuild, as for `v2-listen`; `ane-lab conv` runs the probes whose name
   contains `conv`. ADR-0088's format choices come from it.
-- Vendor DFlash2 tests (`swift test --filter DFlash2` in `Vendor/mlx-swift-lm`):
-  run with `--no-parallel`. Two of the parity tests load the 27B target each;
-  in parallel they contend the single GPU until a Metal command buffer hits
-  the watchdog (`kIOGPUCommandBufferCallbackErrorTimeout`). Serial: 18/18 green.
+- Vendor fork tests (`Vendor/mlx-swift-lm`, where `swift test` does not run):
+  `scripts/vendor-test.sh [--no-build] [suite…]` builds for testing once, then
+  runs `MLXLMTests` serialized with a two-minute per-test allowance, and
+  prints only failures and totals. Xcode's parallel runner hangs on this
+  GPU-heavy target, and two DFlash2 parity tests that each load the 27B target
+  contend the single GPU until a Metal command buffer hits the watchdog
+  (`kIOGPUCommandBufferCallbackErrorTimeout`). A Swift Testing free function
+  needs its parentheses: `'testName()'`. `--docs` adds the DocC check.
 - Heavyweight model-loading tests (27B-class) on a 48 GB machine: run them
   **one test per process** (or at most the proven pairs). Packing several into
   one `swift test` process accumulates fixtures across tests —
@@ -1522,13 +1524,8 @@ serialization, preservation across dynamic quantization, and nested CacheList
 forwarding. Run it with the existing vendor cache serialization/copy tests:
 
 ```bash
-cd Vendor/mlx-swift-lm
-xcodebuild test -scheme mlx-swift-lm-Package -destination 'platform=macOS' \
-  -skipPackagePluginValidation -parallel-testing-enabled NO \
-  -only-testing:MLXLMTests/CacheCapacityTests \
-  '-only-testing:MLXLMTests/testCacheSerialization(creator:)' \
-  '-only-testing:MLXLMTests/testCacheCopyIsIndependent(creator:)' \
-  '-only-testing:MLXLMTests/testCacheCopyOnEmptyCache(creator:)'
+scripts/vendor-test.sh CacheCapacityTests 'testCacheSerialization(creator:)' \
+  'testCacheCopyIsIndependent(creator:)' 'testCacheCopyOnEmptyCache(creator:)'
 ```
 
 The vendor's load-memory regressions measure MLX active memory around a
@@ -1542,13 +1539,8 @@ any change to the compiled traces, the projection fusion or stacking, or the
 loader:
 
 ```bash
-cd Vendor/mlx-swift-lm
-xcodebuild test -scheme mlx-swift-lm-Package -destination 'platform=macOS' \
-  -skipPackagePluginValidation \
-  -only-testing:MLXLMTests/Qwen35FusedGDNProjectionTests \
-  -only-testing:MLXLMTests/SiblingCycleTests \
-  -only-testing:MLXLMTests/LoadWeightsTests \
-  '-only-testing:MLXLMTests/testSameInputStackingReleasesEachBlockBeforeTheNext()'
+scripts/vendor-test.sh Qwen35FusedGDNProjectionTests SiblingCycleTests \
+  LoadWeightsTests 'testSameInputStackingReleasesEachBlockBeforeTheNext()'
 ```
 
 App test runs set `TEST_RUNNER_XCTestSessionIdentifier=prefix-cache-unit-tests`;
@@ -1583,12 +1575,12 @@ rounds. Memory reads the realized cache's bytes
 per token and the prefill and decode-phase peaks. The harness fails if a scheme
 leaves any attention layer unconverted, if step 0 (scored before the scheme
 engages) has nonzero KL, or if the unquantized speed rounds stop reproducing
-the reference stream. Run it in Release through `scripts/bench.sh` (pass the
-corpus as an absolute path) and summarize with `scripts/turboquant_summary.py`:
+the reference stream. Run it in Release through `scripts/bench.sh` and
+summarize with `scripts/turboquant_summary.py`:
 
 ```bash
 scripts/bench.sh quick --model qwen3.8-27b --turboquant-bench \
-  --bench-corpus "$PWD/docs/adr" --bench-contexts 8192,32768,65536 \
+  --bench-corpus docs/adr --bench-contexts 8192,32768,65536 \
   --bench-schemes fp16,turbo8v4,turbo0v4
 ```
 
@@ -1609,11 +1601,7 @@ timing (`TEST_RUNNER_TURBOQUANT_DECODE_BENCH=1`, with `-configuration Release
 ENABLE_TESTABILITY=YES`):
 
 ```bash
-cd Vendor/mlx-swift-lm
-xcodebuild test -scheme mlx-swift-lm-Package -destination 'platform=macOS' \
-  -skipPackagePluginValidation \
-  -only-testing:MLXLMTests/TurboQuantGQAFlashTests \
-  -only-testing:MLXLMTests/TurboQuantIntegrationTests
+scripts/vendor-test.sh TurboQuantGQAFlashTests TurboQuantIntegrationTests
 ```
 
 ### KV Scheme in production (ADR-0083)
@@ -1621,16 +1609,13 @@ xcodebuild test -scheme mlx-swift-lm-Package -destination 'platform=macOS' \
 The **KV Scheme** (`turbo8v4`, `turbo0v4`) is a request fact, part of the
 cache partition key and the partition's Stored Form. Run the vendor verify
 tests after any change to positioned rows, the multi-query verify kernel or
-the DFlash2 cache protocol, serially (Swift Testing otherwise runs the
-parameterized iterator test's cases at once, and two threads tracing MLX
-compiles deadlock):
+the DFlash2 cache protocol. The script runs them serially (Swift Testing
+otherwise runs the parameterized iterator test's cases at once, and two
+threads tracing MLX compiles deadlock):
 
 ```bash
-cd Vendor/mlx-swift-lm
-xcodebuild test -scheme mlx-swift-lm-Package -destination 'platform=macOS' \
-  -skipPackagePluginValidation -parallel-testing-enabled NO \
-  -only-testing:MLXLMTests/TurboQuantVerifyTests \
-  -only-testing:"MLXLMTests/testDFlash2IteratorOverTurboQuantCache(keyBits:)"
+scripts/vendor-test.sh TurboQuantVerifyTests \
+  'testDFlash2IteratorOverTurboQuantCache(keyBits:)'
 ```
 
 `TurboQuantVerifyTests` checks the kernel against dequantize + SDPA (raw and

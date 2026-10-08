@@ -77,74 +77,80 @@ struct TesseractApp: App {
         // extra args forwarded by bench.sh (`bench.sh quick --model X
         // --paro-parity-bench`). Plain `--benchmark` runs are unaffected.
         if args.contains("--paro-parity-bench") {
-            Self.runHarness("PARO parity bench") {
+            Self.runHarness("PARO parity bench", logSubdirectory: "paro-parity-bench") {
                 try await ParoParityBenchRunner(runner: BenchmarkRunner()).run()
             }
         } else if args.contains("--turboquant-bench") {
-            Self.runHarness("TurboQuant bench") {
+            Self.runHarness("TurboQuant bench", logSubdirectory: "turboquant-bench") {
                 try await TurboQuantBenchRunner(runner: BenchmarkRunner()).run()
             }
         } else if args.contains("--ssd-read-bench") {
-            Self.runHarness("SSD read bench") {
+            Self.runHarness("SSD read bench", logSubdirectory: nil) {
                 try await SSDReadBenchRunner(runner: BenchmarkRunner()).run()
             }
         } else if args.contains("--warm-parity-bench") {
-            Self.runHarness("Warm Body parity bench") {
+            Self.runHarness("Warm Body parity bench", logSubdirectory: nil) {
                 try await WarmBodyParityBenchRunner(runner: BenchmarkRunner()).run()
             }
         } else if args.contains("--snapshot-bench") {
-            Self.runHarness("Snapshot bench") {
+            Self.runHarness("Snapshot bench", logSubdirectory: "snapshot-bench") {
                 try await SnapshotBenchRunner(runner: BenchmarkRunner()).run()
             }
         } else if args.contains("--prefix-detect-bench") {
-            Self.runHarness("Prefix detect bench") {
+            Self.runHarness("Prefix detect bench", logSubdirectory: "prefix-detect-bench") {
                 try await PrefixDetectBenchRunner(runner: BenchmarkRunner()).run()
             }
         } else if args.contains("--tokenize-cache-bench") {
-            Self.runHarness("Tokenize cache bench") {
+            Self.runHarness("Tokenize cache bench", logSubdirectory: "tokenize-cache-bench") {
                 try await TokenizeCacheBenchRunner(runner: BenchmarkRunner()).run()
             }
         } else if args.contains("--agent-cpu-bench") {
-            Self.runHarness("Agent CPU bench") {
+            Self.runHarness("Agent CPU bench", logSubdirectory: "agent-cpu-bench") {
                 try await AgentCpuBenchRunner(runner: BenchmarkRunner()).run()
             }
         } else if args.contains("--dflash2-bench") {
-            Self.runHarness("DFlash2 bench") {
+            Self.runHarness("DFlash2 bench", logSubdirectory: nil) {
                 try await DFlash2BenchRunner(runner: BenchmarkRunner()).run()
             }
         } else if args.contains("--prefix-cache-e2e") {
-            Self.runHarness("Prefix cache E2E") {
+            Self.runHarness("Prefix cache E2E", logSubdirectory: "prefix-cache-e2e") {
                 try await PrefixCacheE2ERunner(runner: BenchmarkRunner()).run()
             }
         } else if args.contains("--benchmark") {
             Task { @MainActor in
                 do { try await BenchmarkRunner().run() } catch {
-                    Log.agent.error("Benchmark failed: \(error)")
+                    Self.logHarnessFailure("Benchmark failed: \(error)", logSubdirectory: nil)
                 }
                 exit(0)
             }
         } else if args.contains("--hybrid-cache-correctness") {
-            Self.runHarness("Hybrid cache correctness") {
+            Self.runHarness(
+                "Hybrid cache correctness", logSubdirectory: "hybrid-cache-correctness"
+            ) {
                 try await HybridCacheCorrectnessRunner(runner: BenchmarkRunner()).run()
             }
         } else if args.contains("--prefill-step-benchmark") {
-            Self.runHarness("Prefill step benchmark") {
+            Self.runHarness("Prefill step benchmark", logSubdirectory: "prefill-step-benchmark") {
                 try await PrefillStepBenchmarkRunner(runner: BenchmarkRunner()).run()
             }
         } else if args.contains("--paroquant-vlm-smoke") {
-            Self.runHarness("ParoQuant VLM smoke") {
+            Self.runHarness("ParoQuant VLM smoke", logSubdirectory: "paroquant-vlm-smoke") {
                 try await ParoQuantVLMSmokeRunner(runner: BenchmarkRunner()).run()
             }
         } else if args.contains("--prepared-checkpoint-parity") {
-            Self.runHarness("Prepared Checkpoint parity") {
+            Self.runHarness(
+                "Prepared Checkpoint parity", logSubdirectory: "prepared-checkpoint-parity"
+            ) {
                 try await PreparedCheckpointParityRunner(runner: BenchmarkRunner()).run()
             }
         } else if args.contains("--rotated-checkpoint-parity") {
-            Self.runHarness("Rotated Ternary Checkpoint parity") {
+            Self.runHarness(
+                "Rotated Ternary Checkpoint parity", logSubdirectory: "rotated-checkpoint-parity"
+            ) {
                 try await RotatedCheckpointParityRunner(runner: BenchmarkRunner()).run()
             }
         } else if args.contains("--trace-replay") {
-            Self.runHarness("Trace replay") {
+            Self.runHarness("Trace replay", logSubdirectory: "trace-replay") {
                 try await TraceReplayRunner(arguments: args).run()
             }
         }
@@ -152,9 +158,12 @@ struct TesseractApp: App {
 
     /// Spawn a `@MainActor` task that runs a loaded-model verification
     /// harness, exits 0 on success, exits 1 on failure (after logging).
+    /// `logSubdirectory` is where the harness keeps its `latest.log` under
+    /// the benchmark output directory (`nil`: the directory itself).
     @MainActor
     private static func runHarness(
         _ label: String,
+        logSubdirectory: String?,
         run: @MainActor @escaping () async throws -> Void
     ) {
         Task { @MainActor in
@@ -162,10 +171,28 @@ struct TesseractApp: App {
                 try await run()
                 exit(0)
             } catch {
-                Log.agent.error("\(label) failed: \(error)")
+                logHarnessFailure("\(label) failed: \(error)", logSubdirectory: logSubdirectory)
                 exit(1)
             }
         }
+    }
+
+    /// Log a harness failure and append it to the harness's `latest.log`,
+    /// the file the scripts tail; a harness that failed before opening its
+    /// log gets one.
+    private static func logHarnessFailure(_ message: String, logSubdirectory: String?) {
+        Log.agent.error("\(message)")
+        var directory = BenchmarkConfig.fromCommandLine().outputDir
+        if let logSubdirectory { directory.append(path: logSubdirectory) }
+        let url = directory.appending(path: "latest.log")
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        if !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+        }
+        guard let handle = try? FileHandle(forWritingTo: url) else { return }
+        defer { try? handle.close() }
+        _ = try? handle.seekToEnd()
+        try? handle.write(contentsOf: Data("[harness] \(message)\n".utf8))
     }
 
     var body: some Scene {

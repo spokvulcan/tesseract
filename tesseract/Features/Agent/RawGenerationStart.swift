@@ -78,7 +78,9 @@ nonisolated enum RawGenerationStart {
         // The Speculation Plan (ADR-0079): the whole prompt from zero, so
         // nothing is restored and no leaf is stored. A plan's iterator runs
         // the whole prompt's prefill in its init — DFlash2's own chunked
-        // capture prefill — over a fresh cache.
+        // capture prefill — over a fresh cache. A prompt with images (a tool
+        // result's screenshot) has the vision target prefill through its last
+        // image first, and the iterator takes the text after it (ADR-0089).
         //
         // `prefillMs` is stamped right after the iterator build, before the
         // MainActor round trips of the badge and the loop start — the number
@@ -106,7 +108,8 @@ nonisolated enum RawGenerationStart {
                     let cache = try session.newCache(parameters: parameters)
                     for layer in cache { layer.reserveCapacity(promptTokenCount) }
                     return cache
-                }(), prefilledPrefixTokens: 0, plan: speculation, parameters: parameters)
+                }(), prefilledPrefixTokens: 0, positionDelta: 0, plan: speculation,
+                parameters: parameters)
             prefill.prefillMs = (Date.timeIntervalSinceReferenceDate - prefillStarted) * 1000
             engagedArm = speculation.arm
             loop = iterator.startGeneration(

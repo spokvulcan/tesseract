@@ -3,6 +3,9 @@ set -euo pipefail
 
 # Usage: scripts/bench.sh [quick|full] [--model <model-id>] [--prompt <benchmark|production>] [extra args...]
 # Builds Release (for real inference speed), then runs the benchmark headless.
+# --no-build reuses this checkout's last Release build; with
+# TESSERACT_BENCH_APP set to an .app, or to another checkout, it runs that
+# build instead.
 # Example: scripts/bench.sh quick --model qwen3.5-4b
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -50,7 +53,18 @@ for arg in "$@"; do
 done
 # macOS Bash 3.2 treats an empty array as unset under `set -u`.
 set -- ${FILTERED_ARGS[@]+"${FILTERED_ARGS[@]}"}
-APP_PATH_FILE="$BENCH_DIR/release-app.path"
+
+# The Release app of this checkout, or of the project at $1. The products dir
+# comes from xcodebuild, not an mtime-sorted glob (stale sibling DerivedData
+# dirs picked hours-old binaries, #165), and each worktree has its own, so
+# --no-build never runs another checkout's build.
+resolve_app() {
+    PRODUCTS_DIR=$(xcodebuild -project "${1:-$PROJECT}" -scheme "$SCHEME" \
+        -configuration "$CONFIGURATION" -destination 'platform=macOS' \
+        -skipPackagePluginValidation -showBuildSettings 2>/dev/null \
+        | awk -F' = ' '/[[:space:]]BUILT_PRODUCTS_DIR =/{print $2; exit}')
+    APP="$PRODUCTS_DIR/Tesseract Agent.app"
+}
 
 if [ "$SKIP_BUILD" = 0 ]; then
 
@@ -106,28 +120,24 @@ DERIVED_DATA=$(ls -d $DERIVED_DATA_GLOB 2>/dev/null | head -1)
 [ -n "$DERIVED_DATA" ] && echo "$CONFIGURATION" > "$DERIVED_DATA/.last_config"
 echo "Build succeeded."
 
-# Resolve the products dir from xcodebuild, not an mtime-sorted glob —
-# stale sibling DerivedData dirs picked hours-old binaries (#165).
-PRODUCTS_DIR=$(xcodebuild -project "$PROJECT" -scheme "$SCHEME" \
-    -configuration "$CONFIGURATION" -destination 'platform=macOS' \
-    -skipPackagePluginValidation -showBuildSettings 2>/dev/null \
-    | awk -F' = ' '/[[:space:]]BUILT_PRODUCTS_DIR =/{print $2; exit}')
-APP="$PRODUCTS_DIR/Tesseract Agent.app"
-
+resolve_app
 if [ -z "$PRODUCTS_DIR" ] || [ ! -d "$APP" ]; then
     echo "Error: 'Tesseract Agent.app' ($CONFIGURATION) not found at BUILT_PRODUCTS_DIR ('${PRODUCTS_DIR:-unresolved}')."
     exit 1
 fi
-mkdir -p "$BENCH_DIR"
-echo "$APP" > "$APP_PATH_FILE"
 else
-    if [ ! -f "$APP_PATH_FILE" ]; then
-        echo "No recorded Release build. Run without --no-build once."
-        exit 1
+    # TESSERACT_BENCH_APP runs another build: an .app, or a checkout whose
+    # Release build to run, e.g. a base-commit worktree for a before/after
+    # comparison (benchmarks/dflash2/README.md).
+    if [ -d "${TESSERACT_BENCH_APP:-}/tesseract.xcodeproj" ]; then
+        resolve_app "$TESSERACT_BENCH_APP/tesseract.xcodeproj"
+    elif [ -n "${TESSERACT_BENCH_APP:-}" ]; then
+        APP="$TESSERACT_BENCH_APP"
+    else
+        resolve_app
     fi
-    APP="${TESSERACT_BENCH_APP:-$(cat "$APP_PATH_FILE")}"
     if [ ! -d "$APP" ]; then
-        echo "Recorded app is missing: $APP"
+        echo "No Release build at $APP. Run without --no-build once."
         exit 1
     fi
     echo "Reusing Release binary (--no-build): $APP"
@@ -148,6 +158,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         --prompt)
             PROMPT_ARGS=(--bench-prompt "$2")
+            shift 2
+            ;;
+        # The app runs with / as its working directory: hand it absolute paths.
+        --bench-prompt-file|--bench-image|--bench-json|--bench-logits-file|--bench-output|--bench-model|--bench-replay-request|--bench-corpus)
+            if [ $# -lt 2 ]; then
+                echo "$1 needs a path" >&2
+                exit 1
+            fi
+            case "$2" in
+                /*) REMAINING_ARGS+=("$1" "$2") ;;
+                *) REMAINING_ARGS+=("$1" "$PWD/$2") ;;
+            esac
             shift 2
             ;;
         *)
@@ -218,6 +240,12 @@ kill $TAIL_PID 2>/dev/null || true
 wait $TAIL_PID 2>/dev/null || true
 echo ""
 echo "───────────────────────────────────────"
+
+# A harness that throws appends "[harness] <label> failed: <error>" to its log.
+if rg -q '^\[harness\] ' "$LOG_FILE"; then
+    rg '^\[harness\] ' "$LOG_FILE"
+    exit 1
+fi
 
 if [[ " $* " == *" --dflash2-bench "* ]]; then
     if ! rg -q '\[dflash2-bench\] === summary ===' "$LOG_FILE"; then

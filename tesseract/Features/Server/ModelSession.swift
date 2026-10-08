@@ -137,12 +137,14 @@ nonisolated protocol ModelSession {
     /// `input` (a warm restore plus the app driver's checkpoint-capturing
     /// prefill). Its init runs the rest of the prompt's prefill: the whole
     /// prompt, unchunked, for MTP; the tail, capture-emitting, for DFlash2.
-    /// The plan builds it with this session's model
-    /// (`SpeculationPlan.makeIterator`).
+    /// `positionDelta` is the rope delta of text past images the caller
+    /// prefilled (zero without images). The plan builds it with this
+    /// session's model (`SpeculationPlan.makeIterator`).
     func makeSpeculativeDecodeIterator(
         _ input: LMInput,
         cache: [any KVCache],
         prefilledPrefixTokens: Int,
+        positionDelta: Int,
         plan: SpeculationPlan,
         parameters: GenerateParameters
     ) throws -> SpeculativeDecodeIterator
@@ -396,6 +398,7 @@ nonisolated struct ContextBackedModelSession: ModelSession {
         _ input: LMInput,
         cache: [any KVCache],
         prefilledPrefixTokens: Int,
+        positionDelta: Int,
         plan: SpeculationPlan,
         parameters: GenerateParameters
     ) throws -> SpeculativeDecodeIterator {
@@ -404,6 +407,7 @@ nonisolated struct ContextBackedModelSession: ModelSession {
             model: context.model,
             cache: cache,
             prefilledPrefixTokens: prefilledPrefixTokens,
+            positionDelta: positionDelta,
             parameters: parameters
         )
     }

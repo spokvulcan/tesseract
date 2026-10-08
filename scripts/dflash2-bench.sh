@@ -17,6 +17,8 @@ Usage: scripts/dflash2-bench.sh [options]
   --bench-round-timings          Record individual rounds in the JSON report
   --bench-draft-policy POLICY    Experimental precision (default: 4bit)
   --bench-json PATH              Save a machine-readable report
+  --bench-vision                 Load the vision class instead of the text class
+  --bench-image PATH             Attach an image to the prompt (implies --bench-vision)
 USAGE
     exit 0
 fi
