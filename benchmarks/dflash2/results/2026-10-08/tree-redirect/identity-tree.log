@@ -1,0 +1,27 @@
+Reusing Release binary (--no-build): /Users/owl/tesseract-bench-bins/redirect-v17.app
+Running benchmark (sweep: quick)...
+App: /Users/owl/tesseract-bench-bins/redirect-v17.app
+Source: reused-binary
+Waiting for benchmark to start...
+Tailing benchmark log...
+───────────────────────────────────────
+[ruler] blocks 8 max tokens 512 prefill step 1024 thermal nominal gpu 12.78 TFLOP/s
+[ruler] travel run0: 54.4 tok/s, 341/1183 accepted, 3.01 tok/round, 55.4 ms/round
+[ruler] summary run0: 52.0 tok/s, 355/1090 accepted, 3.28 tok/round, 63.1 ms/round
+[ruler] math run0: 114.5 tok/s, 436/560 accepted, 6.45 tok/round, 55.9 ms/round
+[ruler] code run0: 96.1 tok/s, 415/672 accepted, 5.32 tok/round, 55.5 ms/round
+[ruler] gpu reference start 12.78, after-decode 12.43, end 12.42 TFLOP/s
+[ruler] travel ar: 22.2 tok/s (512 tokens in 23.02 s), identity DIVERGED at +234
+[ruler] travel forced AR: 6 departure(s) +234 (3809 vs argmax 16213, 2.00 ulp) +243 (6618 vs argmax 16213, 1.00 ulp) +284 (381 vs argmax 6970, 1.00 ulp) +324 (39 vs argmax 284, 1.00 ulp) +356 (16219 vs argmax 28622, 1.00 ulp) +399 (2236 vs argmax 24118, 1.00 ulp)
+[ruler] summary ar: 20.7 tok/s (512 tokens in 24.72 s), identity DIVERGED at +131
+[ruler] summary forced AR: 6 departure(s) +131 (383 vs argmax 2397, 1.00 ulp) +160 (42903 vs argmax 66690, 1.00 ulp) +180 (26 vs argmax 39018, 1.00 ulp) +238 (5617 vs argmax 174991, 1.00 ulp) +400 (748 vs argmax 318, 0.00 ulp) +491 (9463 vs argmax 28109, 1.00 ulp)
+[ruler] math ar: 19.7 tok/s (512 tokens in 26.04 s), identity DIVERGED at +8
+[ruler] math forced AR: 2 departure(s) +8 (5154 vs argmax 3299, 0.00 ulp) +214 (694 vs argmax 13, 0.00 ulp)
+[ruler] code ar: 20.8 tok/s (512 tokens in 24.56 s), identity DIVERGED at +317
+[ruler] code forced AR: 1 departure(s) +317 (364 vs argmax 7624, 2.00 ulp)
+[ruler] report /private/tmp/claude-501/-Users-owl-projects-tesseract/e4337090-9933-472b-a5de-ed30c1a558bf/scratchpad/ident2/tree.json
+[ruler] identity DIVERGED on at least one fixture
+[dflash2-bench] === summary ===
+
+───────────────────────────────────────
+Full-stream identity check failed. See /var/folders/xz/mc9p7psx2q58z5zdl3b0p7zw0000gn/T/tesseract-debug/benchmark/latest.log

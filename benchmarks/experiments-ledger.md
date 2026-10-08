@@ -4271,11 +4271,15 @@ experiment logged here.
 
 | metric | baseline (`2e7f73d6` + ruler) | best so far | target | binding assumption |
 | --- | --- | --- | --- | --- |
-| prefill 2K / 8K / 32K | 213.8 / 193.6 / 192.3 tok/s | — | ≥ 500 at 8K | GPU-only 4-bit GEMM at ~11 TFLOP/s; 49 GFLOP/token |
-| travel decode | see G3 (heat-dependent) | — | ≥ 100 | τ 2.62 on a planning trace |
-| summary decode | see G3 | — | ≥ 100 | τ 3.01 |
-| math decode | see G3 | — | ≥ 100 | round time |
-| code decode | see G3 | — | ≥ 100 | round time |
+| prefill 2K / 8K / 32K | 200.8 / 210.7 / 186.6 tok/s (G10 base arm) | **218.6 / 230.8 / 200.7** (G6 tile, G10) | ≥ 500 at 8K | 49 GFLOP/token on ≤ 12.9 TFLOP/s of GPU MMA: the GPU-only ceiling is ~260 tok/s, and 230.8 runs at ~89% of it (G5) |
+| travel decode | 47.7 (G11 chain arm) | **54.1** (tree rounds, G11) | ≥ 100 | τ 3.0: the drafter's ~0.7 accuracy per position on prose; even the lattice oracle (τ 5.1) gives ~92 at 55 ms rounds |
+| summary decode | 49.7 | **52.3** | ≥ 100 | τ 3.3, as travel |
+| math decode | 109.3 | **114.5** | ≥ 100 — met | — |
+| code decode | 92.6 | **96.1** | ≥ 100 | τ 5.32 at 55.5 ms per round; 100 needs τ 5.5 or 53 ms rounds |
+
+Decode baselines and bests are medians of four alternated runs of one build
+(chain against tree rounds); every best stream is the baseline's, token for
+token (G11).
 
 ### G1 — the ruler (harness, no verdict)
 
@@ -4656,3 +4660,183 @@ carry no `--bench-check`. The screen-lock wallpaper (an animated Aerial at
 3456 × 2234) also contends for the GPU: one identity run overlapped it. The
 display was put to sleep (`pmset displaysleepnow`) for the rest of the
 session.
+
+**Under the app's KV Cache Compression (turbo8v4).** Same comparison on
+the default-on build (`final-v15`, `--bench-kv-scheme turbo8v4`), chain
+(`DFLASH2_TREE=0`) against tree, two alternated rounds
+(`results/2026-10-08/tree-turbo8v4/`):
+
+| fixture | chain | tree | τ chain / tree | median ms/round chain / tree |
+| --- | --- | --- | --- | --- |
+| travel | 52.8 | 58.6 (+11.0%) | 2.88 / 3.23 | 54.5 / 55.3 |
+| summary | 47.6 | 48.2 (+1.3%) | 2.92 / 2.98 | 59.2 / 60.3 |
+| math | 109.4 | 112.7 (+3.1%) | 6.04 / 6.33 | 55.1 / 55.9 |
+| code | 85.6 | 87.9 (+2.6%) | 4.67 / 5.03 | 54.3 / 55.4 |
+
+The compressed keys and values carry their own error, so under turbo8v4
+both arms leave bf16 AR's argmax by more than ties. Forced departures,
+chain / tree (count, max gap in ulps): travel 7 (4) / 9 (4), summary 14
+(20) / 13 (19), math 1 (1) / 1 (1), code 6 (2) / 8 (3). The first AR
+divergence is the same in both arms on every fixture (+38, +7, +305, +64).
+The tree adds no new class of departure to the shipping scheme.
+
+### G10 — the bank: one Release build against the baseline's behaviour
+
+One Release build of `84d94f24` (`bank-84d94f24.app`). It carries vendor
+`c0e5216` and, from the DerivedData checkout, the unpushed mlx `2394c0d0` /
+mlx-swift `3425495` (G6). Two arms of that build, alternated four times
+with 30 s cool-downs and the quiet-GPU gate:
+
+- **base**: `MLX_QMM_TALL=0 DFLASH2_TREE=0`, the baseline's kernels and
+  rounds. Its decode streams equal the session baseline's on all four
+  fixtures in every run, and its prefill cache digests equal G6's.
+- **final**: the build's defaults (the 128 × 32 prefill tile, tree rounds
+  at T 1.25).
+
+**Prefill** (`results/2026-10-08/bank/`, the ruler's full set; median of 4
+runs per arm, digests identical across arms and runs):
+
+| prompt | base | final | Δ | target |
+| --- | --- | --- | --- | --- |
+| 2K | 200.8 (199.4, 200.7, 201.0, 202.9) | **218.6** (218.1, 219.1, 219.3, 215.8) | +8.8% | not below base |
+| 8K | 210.7 (203.1, 210.1, 211.6, 211.3) | **230.8** (231.9, 230.2, 228.8, 231.4) | +9.6% | ≥ 500 |
+| 32K | 186.6 (178.6, 186.9, 187.4, 186.2) | **200.7** (199.9, 199.1, 201.5, 201.9) | +7.6% | not below base |
+
+The same runs' decode (each decoded after the previous process's 32K
+prefill): travel 45.3 → 48.1 (+6.3%), summary 50.3 → 50.9 (+1.2%), math
+110.5 → 114.9 (+4.0%), code 93.8 → 91.1 (−2.8%). The final arm's travel
+rounds ran at 59–67 ms against 55 in decode-only runs, so the decode of
+record comes from a decode-only bank of the same build:
+
+| fixture | base | final | Δ | τ base / final | median ms/round base / final |
+| --- | --- | --- | --- | --- | --- |
+| travel | 48.2 (48.3, 48.2, 47.8) | **52.9** (52.9, 53.0, 52.8) | +9.6% | 2.62 / 2.91 | 54.2 / 55.0 |
+| summary | 50.6 (50.6, 50.3, 50.6) | **51.5** (51.5, 51.8, 51.5) | +1.8% | 3.01 / 3.13 | 59.2 / 60.1 |
+| math | 111.0 (111.2, 110.9, 111.0) | **116.2** (116.2, 116.2, 116.0) | +4.7% | 6.07 / 6.45 | 54.2 / 55.1 |
+| code | 93.5 (91.5, 93.7, 93.5) | **91.4** (91.5, 91.2, 91.4) | −2.3% | 5.06 / 5.05 | 54.0 / 54.8 |
+
+(`results/2026-10-08/bank-decode/`; the owner stopped the bank after three
+alternated rounds, so these are medians of three runs per arm.) Code's loss
+is G9's: its tree stream left the chain's at the +146 tie and decodes text
+that accepts less. G11 removes that cause.
+
+### G11 — why leaf rows broke identity, and the fix: each row reads its own key at its depth
+
+G9 left tree streams parting from the chain's at bf16 ties and called that
+unavoidable. The owner asked why. It was avoidable.
+
+**Where the bits first part.** Temporary instrumentation (removed) hashed,
+for every committed token, the target's captured hidden rows (layers 2–8,
+plus the drafter's 5, 19, 33, 47, 61) and its logits row. It compared a
+chain run with a tree run of the same build:
+
+- **travel** (1-pass vector SDPA, under 1,024 keys): positions 82–143 are
+  identical in every layer. The first difference is the first leaf hit,
+  position 144 (depth 2, cached in slot 6): identical through layer 6,
+  different from layer 7, the second attention layer. The next token
+  differs from layer 8 on, because its recurrent state has absorbed the
+  leaf's layer-7 output. Every later token differs from then on, and the
+  token stream follows at the next bf16 tie.
+- **summary** (2-pass MMA SDPA, about 6,000 keys): the first leaf (5984)
+  happened to round identically. The second (5997, depth 4, slot 7)
+  differs from an attention layer between 34 and 47, and the cascade runs
+  as before.
+
+**Mechanism.** A leaf caches its key at block slot C + 1 + k. Chain mode
+computes the same token with its key at its own position, the block
+position plus its depth. Both attention kernels place a key in the
+reduction by its index:
+
+- The 1-pass kernel gives key i to simdgroup i mod 32 and merges the 32
+  partials with `simd_sum`.
+- The MMA kernel scores 32-key blocks. The key's column fixes its lane
+  quarter, its 8-column MMA group and its place in the bf16 probability
+  tile.
+
+So the leaf's softmax and P·V sum in another order. Measured at the
+kernel level (random q, k, v), moving a self-key from its depth to slot 6
+changes 0–1 of 6,144 outputs in the 1-pass kernel. In the MMA kernel it
+changes 2,046–2,256 of them, each by one bf16 ulp. One changed element at
+one layer is enough: the token's keys, values and recurrent state carry it
+to every later token until a tie flips. A tree with no siblings never
+displaces a key, which is why G9 found it identical.
+
+**Fix** (vendor `DFlash2TreeAttention.swift`). Bit-exact JIT copies (the
+`fastmath_` prefix compiles them like the AOT metallib) of MLX's
+`sdpa_vector` (under 1,024 keys) and of the fork's
+`sdpa_vector_2pass_1_mma` plus `sdpa_vector_2pass_2` (from 1,024 keys:
+8-row blocks, head dim 256, gqa ≤ 6). In them each tree row sees keys up to
+its depth index and reads its own key and value there, from its slot. In
+the MMA kernel the block holding a leaf's index patches the K tile's row,
+reruns that 8-column group's MMAs and keeps the leaf row's score. The
+leaf's P·V then runs as a separate pass against the patched V tile, in the
+same group order, while the main pass gives the leaf row exact zeros.
+Chain rows run MLX's arithmetic unchanged; leaf rows run the arithmetic a
+chain block of their path runs. bf16 caches take this path. Shapes it
+does not serve, and TurboQuant caches, keep the masked path.
+
+Tests:
+
+- The copies equal `scaledDotProductAttention` bit for bit on chain
+  blocks at N = 315, 811, 1,108, 3,016 and 6,149 (both partition counts).
+- Redirected leaf rows equal the chain-path computation bit for bit.
+- The Qwen 3.5 tree-verify test now requires every row, leaves included,
+  to equal a chain block of its path bit for bit.
+- Vendor suite green: XCTest 708 (10 skipped), Swift Testing 953 in 75
+  suites.
+
+**Result.** With the fix plus the instrumentation, tree and chain are
+identical at every position and every captured layer on all four fixtures.
+The ruler's strict gate on the fix alone (`redirect-v17`, `--bench-check`,
+`results/2026-10-08/tree-redirect/`): tree streams IDENTICAL to the
+baseline's on travel, summary, math and code. The first AR divergences
+(+234, +131, +8, +317) and every forced-AR departure are the baseline's
+own. The G2 gate holds for tree rounds; the forced-AR tie gate is no
+longer needed for them.
+
+**Cost of the copies.** At the verify shape over 16 layers (interleaved
+medians, `benchDFlash2TreeAttention`), the 1-pass copy runs within 3% of
+MLX's kernel at 608 keys. The first MMA copy carried the leaf-patch code
+in every partition and ran 24% over MLX at 6K keys and 16% at 16K, where a
+copy without that code matched MLX. Since a tree block's rows start in the
+15 keys before the visible end, only the partitions from there on can hold
+a leaf's own index. Those now run as their own launch, encoded first; the
+rest run the plain copy, and the merge reads each partition from the
+launch that wrote it (vendor `a363526`). Result: 6.23 ms against MLX's
+5.24 at 6K keys, 11.44 against 11.07 at 16K. A per-kernel profile at 6K
+(serialized) puts the two pass-1 launches at 318.7 µs and the merge at
+29.0 µs, against MLX's 310.6 µs for both passes.
+
+Speed before that split (`redirect-v17`, decode only, four alternated
+rounds, `results/2026-10-08/tree-redirect/`; tree streams identical to the
+chain's on every fixture):
+
+| fixture | chain | tree | Δ | τ chain / tree | median ms/round chain / tree |
+| --- | --- | --- | --- | --- | --- |
+| travel | 47.7 | **54.1** | +13.3% | 2.62 / 3.01 | 54.9 / 55.7 |
+| summary | 49.7 | **52.3** | +5.1% | 3.01 / 3.28 | 59.9 / 62.2 |
+| math | 109.3 | **114.5** | +4.7% | 6.07 / 6.45 | 54.9 / 55.8 |
+| code | 92.6 | **96.1** | +3.7% | 5.06 / 5.32 | 54.6 / 55.5 |
+
+The final build (`redirect-v18`, vendor `a363526`) passes the same strict
+gate: streams IDENTICAL to the baseline's on all four fixtures, and the
+same forced-AR departures (`identity-tree-v18.json`). Its alternated speed
+run was abandoned after two rounds. The machine had fallen into memory
+pressure (98 MB free, 5.5 GB swapped, 4.3 GB of the benchmark process
+compressed), and both arms slowed by 5–35%. v18 changes only the
+long-context attention's cost, and the kernel benchmark above measures
+that.
+
+Verdict: **ACCEPTED** (vendor `d12e9ef`, `a363526`). Tree rounds now speed
+up every fixture with the baseline's exact streams.
+
+Remaining identity hazards, none observed on the fixtures:
+
+- The MMA kernel's partition span depends on N in 2,048-key buckets, and
+  the 1-pass/2-pass switch sits at 1,024. A token verified on different
+  sides of an edge in the two arms reduces differently. On summary both
+  arms crossed N = 6,144 at the same token (6,132), so no token used two
+  spans. A span fixed per generation would close this, at the cost of
+  changing the chain path after a crossing.
+- TurboQuant caches (turbo8v4, the app's default) still verify leaves with
+  their key at the leaf's slot. The same patch fits their verify kernel.

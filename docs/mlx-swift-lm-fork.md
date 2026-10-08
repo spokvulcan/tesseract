@@ -35,9 +35,9 @@ pins; it rejoins this table's carry list only if that experiment is revived.
 ## DFlash2 tree verification: a chain with leaf siblings (2026-10-08)
 
 The gitlink advances from `1563459` to `efe2a16` (with the speed ruler,
-tesseract `9634d712`) and then to `c0e5216`, on branch
+tesseract `9634d712`), then to `c0e5216` and `a363526`, on branch
 `perf/goal-2026-10-08` (fast-forward; `pin-upstream-mlx-swift` unchanged).
-Three commits, **local only until the owner pushes**:
+Five commits, **local only until the owner pushes**:
 
 - `efe2a16` `feat(dflash2): expose the selector's whole lattice for analysis
   and tree search`. `DFlash2DraftModel.proposeLattice` returns the
@@ -76,14 +76,44 @@ Three commits, **local only until the owner pushes**:
   `DFLASH2_TREE=0` turns trees off, `DFLASH2_TREE_RANKS` and
   `DFLASH2_TREE_TEMPERATURE` tune them.
 
-Validation: `DFlash2TreeTests` (acceptance cases; proposal invariants; a
-Qwen 3.5 tree verify whose chain rows equal a chain block of their path bit
-for bit and whose leaf rows equal it within their own key's reduction
-order; the same tree over TurboQuant caches tracks the bf16 cache, cos >
-0.95, and the row gather moves compressed rows unchanged) and serialized
-`MLXLMTests` green: XCTest 708 (10 skipped), Swift Testing 952 tests in 75
-suites. Loaded-model gates: tesseract ledger G9. Upstream: not filed; it
-builds on #607 (DFlash2).
+- `d12e9ef` `fix(dflash2): tree rows read their own key at their depth`.
+  A leaf cached its key past the chain, and both verify attention kernels
+  place a key in the reduction by its index, so a leaf's softmax and P·V
+  summed in another order than a chain block's. One bf16 ulp then carried
+  the stream away from the chain's at a later tie (tesseract ledger G11).
+  `dflash2TreeAttention` runs bit-exact JIT copies (`fastmath_`) of MLX's
+  `sdpa_vector` and of the two-pass MMA kernel and its merge. In them each
+  tree row sees keys up to its depth index and reads its own key and value
+  there, from its slot. The MMA copy patches the leaf's K and V tile row
+  and reruns that column group's MMAs for the leaf row only.
+  `DFlash2AttentionCache.dflash2Attention` takes the tree layout. Tree
+  rounds now reproduce chain rounds bit for bit; the four Qwen3.8-27B
+  fixtures decode the chain's streams token for token.
+- `a363526` `perf(dflash2): run only the leaf partitions with the tree code`.
+  The tree code's registers cost every partition occupancy (20–25% over
+  MLX's MMA kernel). A tree block's rows start in the 15 keys before the
+  visible end, so only the partitions from there on can hold a leaf's own
+  index. Those run as their own launch, encoded first; the rest run a copy
+  without the tree code; the merge reads each partition from the launch
+  that wrote it. Attention over 16 layers at the Qwen3.8-27B verify shape:
+  6.23 ms against MLX's 5.24 at 6K keys, 11.44 against 11.07 at 16K
+  (`benchDFlash2TreeAttention`, `TEST_RUNNER_TREE_ATTENTION_BENCH=1`).
+
+Validation, `DFlash2TreeTests`:
+
+- acceptance cases and proposal invariants;
+- a Qwen 3.5 tree verify whose chain rows equal a chain block of their path
+  bit for bit. Its leaf rows matched only up to their own key's reduction
+  order at `c0e5216`, and bit for bit since `d12e9ef`;
+- the same tree over TurboQuant caches tracks the bf16 cache (cos > 0.95),
+  and the row gather moves compressed rows unchanged;
+- since `d12e9ef`, the kernel copies equal `scaledDotProductAttention` bit
+  for bit at N = 315 to 6,149.
+
+Serialized `MLXLMTests` green: XCTest 708 (10 skipped) and Swift Testing 952
+tests in 75 suites at `c0e5216`, 953 at `d12e9ef`, 954 at `a363526`. Loaded-model gates:
+tesseract ledger G9 and G11. Upstream: not filed; it builds on #607
+(DFlash2).
 
 ## Vision on the text engine, DFlash2 over images (2026-10-07, ADR-0089)
 

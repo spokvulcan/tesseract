@@ -528,7 +528,9 @@ same plan, and the session builds its iterator from it (ADR-0079).
 and loading. The Qwen3.5 vision class runs the text class's engine, so the
 DFlash2 draft pairs with a vision load too, and image-bearing requests speculate:
 the images are prefilled before the hand-over and the iterator rotates the text
-after them by their rope delta (ADR-0089).
+after them by their rope delta (ADR-0089). Greedy DFlash2 rounds verify a tree:
+the draft's chain plus its best siblings as leaves, in the same 8 rows
+(`DFLASH2_TREE=0` keeps chains; vendor `dflash2TreeProposal`, ledger G9).
 
 **Agent bootstrap** (`AgentFactory.makeAgent()`): Discovers packages → registers extensions → discovers skills → loads context files → assembles system prompt → wires compaction → creates Agent instance.
 

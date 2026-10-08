@@ -120,10 +120,12 @@ Identity. The baseline's own stream leaves AR's argmax at bf16 ties (two
 logits within 0–2 ulps), so `--bench-check` reports DIVERGED on every
 fixture at 512 tokens. The forced check says which positions those are: at
 each one the record holds the stream's token, AR's argmax and the gap in
-bf16 ulps. A change that keeps every round's boundaries (a kernel, a
-schedule) must reproduce the first arm's streams exactly. A change that
-moves them (drafting, tree verification) moves the verify attention's key
-partitions too, so its stream may part from the first arm's at a tie; it
+bf16 ulps. Every change must reproduce the first arm's streams exactly,
+tree verification included (each tree row reads its own key where a chain
+block holds it; ledger G11). Moving round boundaries can still change a
+verify pass's key partitions, which depend on its length (2,048-key span
+buckets in the two-pass kernel, the one-pass/two-pass switch at 1,024
+keys). A stream that parts from the first arm's for that reason, at a tie,
 passes `--require-identity` when every forced departure is at most 2 ulps
 (ledger G9).
 
