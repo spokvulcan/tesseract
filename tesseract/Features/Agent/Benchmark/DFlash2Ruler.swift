@@ -12,10 +12,11 @@ import MLXLMCommon
 /// production block size on each fixture, over the production prefill (the
 /// app driver's pipelined chunks up to the speculative split, then the
 /// iterator's capture prefill of the tail; the driver's share runs once per
-/// fixture and is restored per run). `--bench-check` adds the reference the
-/// DFlash2 bench has always checked against: `TokenIterator` greedy decoding
-/// of the whole prompt. Prefill is then timed on the same cold path, from
-/// the first chunk to the first sampled token.
+/// fixture and is restored per run). Prefill is then timed on the same cold
+/// path, from the first chunk to the first sampled token. `--bench-check`
+/// then adds, after every timed run, the reference the DFlash2 bench has
+/// always checked against (`TokenIterator` greedy decoding of the whole
+/// prompt) and the same AR teacher-forced along each fixture's stream.
 ///
 /// Flags: `--bench-fixture-dir DIR` (required), `--bench-prefill a,b,c`
 /// (files in DIR, default the 2K/8K/32K prompts, `none` skips),
@@ -25,7 +26,9 @@ import MLXLMCommon
 /// `--bench-round-timings` (each round's milliseconds and accepted drafts),
 /// `--bench-cooldown S` (idle seconds before every timed run, default 30:
 /// sustained load throttles the GPU, and a run's speed otherwise depends on
-/// what ran before it), `--bench-json PATH`.
+/// what ran before it), `--bench-kv-scheme turbo8v4|turbo0v4` (the app's KV
+/// Cache Compression: attention layers compress once prefill ends; default
+/// bf16), `--bench-json PATH`.
 nonisolated enum DFlash2Ruler {
 
     /// The production chunk of the app driver and the iterator's tail
@@ -77,13 +80,31 @@ nonisolated enum DFlash2Ruler {
         let roundAccepted: [Int]?
     }
 
+    /// The target teacher-forced along a DFlash2 stream with AR decoding:
+    /// every position where the stream's token is not the target's argmax
+    /// given the stream's own prefix.
+    struct ForcedRecord: Encodable {
+        struct Departure: Encodable {
+            let position: Int
+            let token: Int
+            let argmax: Int
+            let tokenLogit: Float
+            let argmaxLogit: Float
+            /// The logit gap in bf16 ulps at the argmax logit's magnitude.
+            let gapUlps: Double
+        }
+        let departures: [Departure]
+    }
+
     struct FixtureRecord: Encodable {
         let name: String
         let sha256: String
         let promptTokens: Int
         let split: Int
-        let ar: ARRecord?
-        let runs: [DecodeRecord]
+        var ar: ARRecord?
+        /// With `--bench-check`: run 0's stream, teacher-forced.
+        var forced: ForcedRecord?
+        var runs: [DecodeRecord]
     }
 
     struct Report: Encodable {
@@ -93,6 +114,8 @@ nonisolated enum DFlash2Ruler {
         let blockSize: Int
         let prefillStepSize: Int
         let cooldownSeconds: Int
+        /// `--bench-kv-scheme`; nil for bf16 attention caches.
+        let kvScheme: String?
         /// The run's MLX_* and DFLASH2_* knobs.
         let environment: [String: String]
         let thermalStart: String
@@ -159,22 +182,24 @@ nonisolated enum DFlash2Ruler {
         for maxTokens in (1...7).map({ 9 + $0 }) {
             _ = try await decode(
                 "warmup", text: String(repeating: sentence, count: 10), context: context,
-                draft: draft, maxNewTokens: maxTokens, runs: 1, check: false, emit: { _ in })
+                draft: draft, maxNewTokens: maxTokens, runs: 1, emit: { _ in })
         }
         _ = try await decode(
             "warmup", text: String(repeating: sentence, count: 330), context: context,
-            draft: draft, maxNewTokens: 320, runs: 1, check: false, emit: { _ in })
+            draft: draft, maxNewTokens: 320, runs: 1, emit: { _ in })
 
         var records: [FixtureRecord] = []
+        var texts: [String] = []
         for name in fixtures {
             let text = try String(
                 contentsOfFile: URL(fileURLWithPath: directory)
                     .appendingPathComponent("\(name).txt").path,
                 encoding: .utf8)
+            texts.append(text)
             records.append(
                 try await decode(
                     name, text: text, context: context, draft: draft,
-                    maxNewTokens: maxNewTokens, runs: runs, check: check, emit: emit))
+                    maxNewTokens: maxNewTokens, runs: runs, emit: emit))
         }
         if !fixtures.isEmpty { gpu.append(gpuReference("after-decode")) }
 
@@ -201,12 +226,22 @@ nonisolated enum DFlash2Ruler {
                 + gpu.map { String(format: "%@ %.2f", $0.label, $0.teraflops) }
                 .joined(separator: ", ") + " TFLOP/s")
 
+        // The references run after every timed run: AR leaves the GPU slower
+        // for minutes (a decode run after one measured ~30% slower).
+        if check {
+            for i in records.indices {
+                try await reference(
+                    &records[i], text: texts[i], context: context, maxNewTokens: maxNewTokens,
+                    emit: emit)
+            }
+        }
+
         if let path = option("--bench-json") {
             let report = Report(
                 sourceRevision: option("--bench-source-revision"),
                 model: context.configuration.name, maxNewTokens: maxNewTokens,
                 blockSize: DFlash2Support.blockSize, prefillStepSize: prefillStepSize,
-                cooldownSeconds: cooldownSeconds,
+                cooldownSeconds: cooldownSeconds, kvScheme: kvScheme?.rawValue,
                 environment: ProcessInfo.processInfo.environment.filter {
                     $0.key.hasPrefix("MLX_") || $0.key.hasPrefix("DFLASH2_")
                 },
@@ -235,7 +270,12 @@ nonisolated enum DFlash2Ruler {
         var parameters = GenerateParameters(maxTokens: maxTokens)
         parameters.temperature = 0
         parameters.prefill = PrefillParameters(stepSize: prefillStepSize)
+        parameters.kvScheme = kvScheme?.rawValue
         return parameters
+    }
+
+    private static var kvScheme: KVScheme? {
+        option("--bench-kv-scheme").flatMap(KVScheme.init(rawValue:))
     }
 
     /// The app driver's pipelined prefill of `[0, split)` into `cache`.
@@ -291,7 +331,7 @@ nonisolated enum DFlash2Ruler {
 
     private static func decode(
         _ name: String, text: String, context: ModelContext, draft: any DFlash2DrafterModel,
-        maxNewTokens: Int, runs: Int, check: Bool, emit: (String) -> Void
+        maxNewTokens: Int, runs: Int, emit: (String) -> Void
     ) async throws -> FixtureRecord {
         let prepared = try await context.processor.prepare(input: UserInput(chat: [.user(text)]))
         let promptTokens = prepared.text.tokens.dim(-1)
@@ -362,24 +402,88 @@ nonisolated enum DFlash2Ruler {
             Memory.clearCache()
         }
 
-        // The reference runs after the timed runs, so its heat lands on none.
-        var ar: ARRecord?
-        if check {
-            let record = try autoregressive(
-                prepared, context: context, maxNewTokens: maxNewTokens)
-            ar = record
-            for i in records.indices {
-                records[i].identity = identityLabel(records[i].stream, record.stream)
-            }
-            emit(
-                String(
-                    format: "[ruler] %@ ar: %.1f tok/s (%d tokens in %.2f s), identity %@", name,
-                    record.tokensPerSecond, record.tokens, record.decodeSeconds,
-                    records.map { $0.identity ?? "?" }.joined(separator: ", ")))
-        }
         return FixtureRecord(
-            name: name, sha256: sha256(text), promptTokens: promptTokens, split: split, ar: ar,
-            runs: records)
+            name: name, sha256: sha256(text), promptTokens: promptTokens, split: split, ar: nil,
+            forced: nil, runs: records)
+    }
+
+    /// `--bench-check` for one fixture: `TokenIterator` greedy decoding of the
+    /// whole prompt, and the same AR teacher-forced along run 0's stream (past
+    /// the first tie the free AR stream is another continuation, so the
+    /// stream is also checked position by position, on its own prefix).
+    private static func reference(
+        _ record: inout FixtureRecord, text: String, context: ModelContext, maxNewTokens: Int,
+        emit: (String) -> Void
+    ) async throws {
+        let prepared = try await context.processor.prepare(input: UserInput(chat: [.user(text)]))
+        let ar = try autoregressive(prepared, context: context, maxNewTokens: maxNewTokens)
+        record.ar = ar
+        for i in record.runs.indices {
+            record.runs[i].identity = identityLabel(record.runs[i].stream, ar.stream)
+        }
+        emit(
+            String(
+                format: "[ruler] %@ ar: %.1f tok/s (%d tokens in %.2f s), identity %@",
+                record.name, ar.tokensPerSecond, ar.tokens, ar.decodeSeconds,
+                record.runs.map { $0.identity ?? "?" }.joined(separator: ", ")))
+        guard let stream = record.runs.first?.stream else { return }
+        let forced = try forcedAutoregressive(prepared, stream: stream, context: context)
+        record.forced = forced
+        emit(
+            "[ruler] \(record.name) forced AR: \(forced.departures.count) departure(s)"
+                + forced.departures.map {
+                    String(
+                        format: " +%d (%d vs argmax %d, %.2f ulp)", $0.position, $0.token,
+                        $0.argmax, $0.gapUlps)
+                }.joined())
+    }
+
+    /// Picks the stream's tokens and records where the target's argmax
+    /// differs.
+    private final class ForcedSampler: LogitSampler {
+        let stream: [Int]
+        var position = 0
+        var departures: [ForcedRecord.Departure] = []
+
+        init(stream: [Int]) { self.stream = stream }
+
+        func sample(logits: MLXArray) -> MLXArray {
+            defer { position += 1 }
+            guard position < stream.count else { return argMax(logits, axis: -1) }
+            let row = logits.reshaped([-1]).asType(.float32)
+            let token = stream[position]
+            let best = argMax(row).item(Int.self)
+            if best != token {
+                let top = row[best].item(Float.self)
+                let mine = row[token].item(Float.self)
+                // A bf16 ulp at |top|: 2^(exponent - 7).
+                let ulp = pow(
+                    2.0, Double(Int(log2(Double(max(abs(top), 1e-30))).rounded(.down)) - 7))
+                departures.append(
+                    .init(
+                        position: position, token: token, argmax: best, tokenLogit: mine,
+                        argmaxLogit: top, gapUlps: Double(top - mine) / ulp))
+            }
+            return MLXArray([Int32(token)])
+        }
+    }
+
+    /// AR decoding as ``autoregressive(_:context:maxNewTokens:)`` runs it,
+    /// fed `stream` instead of its own choices.
+    private static func forcedAutoregressive(
+        _ prepared: LMInput, stream: [Int], context: ModelContext
+    ) throws -> ForcedRecord {
+        var parameters = GenerateParameters(maxTokens: stream.count)
+        parameters.temperature = 0
+        let sampler = ForcedSampler(stream: stream)
+        var iterator = try TokenIterator(
+            input: prepared, model: context.model,
+            cache: try context.model.newCache(parameters: parameters), processor: nil,
+            sampler: sampler, prefill: parameters.prefill, maxTokens: stream.count)
+        while iterator.next() != nil {}
+        Stream.gpu.synchronize()
+        Memory.clearCache()
+        return ForcedRecord(departures: sampler.departures)
     }
 
     /// The reference `--bench-check` has always used: `TokenIterator`
@@ -445,7 +549,7 @@ nonisolated enum DFlash2Ruler {
                     .stream
                 : try await decode(
                     name, text: text, context: context, draft: draft,
-                    maxNewTokens: maxNewTokens, runs: 1, check: false, emit: { _ in }
+                    maxNewTokens: maxNewTokens, runs: 1, emit: { _ in }
                 ).runs[0].stream
 
             // Production prefill, capturing the tail's rows for the drafter.

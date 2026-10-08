@@ -10,12 +10,22 @@ reference, and in-run identity against the AR reference. With two or more
 arms, every later arm is compared with the first: median deltas, whether
 each fixture's DFlash2 streams equal the first arm's, and whether its first
 departure from AR is no earlier than the first arm's (the baseline's known
-bf16 ties). --require-identity exits nonzero when either check fails.
+bf16 ties).
+
+A change that moves round boundaries (drafting, verification shape) moves
+the verify attention's key partitions, so its stream may part from the
+first arm's at a bf16 tie. Such an arm passes when its report carries the
+teacher-forced AR check (`--bench-check`) and every position where its
+stream is not the target's argmax is a tie: a logit gap of at most
+TIE_ULPS bf16 ulps (the baseline's own ties against AR are 0-2 ulps).
+--require-identity exits nonzero when an arm passes neither way.
 """
 import json
 import statistics
 import sys
 from collections import OrderedDict
+
+TIE_ULPS = 2.0
 
 
 def load(arms_spec):
@@ -37,6 +47,7 @@ def summarize(reports):
     prefill, fixtures, gpu, ar = OrderedDict(), OrderedDict(), [], OrderedDict()
     identity = OrderedDict()
     streams = OrderedDict()
+    forced = OrderedDict()
     for report in reports:
         gpu.extend(r["teraflops"] for r in report["gpuReference"])
         for p in report["prefill"]:
@@ -45,11 +56,13 @@ def summarize(reports):
             fixtures.setdefault(fx["name"], []).extend(fx["runs"])
             if fx.get("ar"):
                 ar.setdefault(fx["name"], []).append(fx["ar"])
+            if fx.get("forced") is not None:
+                forced.setdefault(fx["name"], []).append(fx["forced"]["departures"])
             for run in fx["runs"]:
                 if run.get("identity") is not None:
                     identity.setdefault(fx["name"], []).append(run["identity"])
                 streams.setdefault(fx["name"], []).append(run["stream"])
-    return prefill, fixtures, gpu, ar, identity, streams
+    return prefill, fixtures, gpu, ar, identity, streams, forced
 
 
 def ar_position(label):
@@ -73,7 +86,7 @@ def main():
     summaries = OrderedDict((name, summarize(reports)) for name, reports in arms.items())
     base_name = next(iter(summaries))
     failed = False
-    for name, (prefill, fixtures, gpu, ar, identity, streams) in summaries.items():
+    for name, (prefill, fixtures, gpu, ar, identity, streams, forced) in summaries.items():
         print(f"== {name}: {len(arms[name])} report(s), gpu reference median "
               f"{median(gpu):.2f} TFLOP/s (min {min(gpu):.2f}, max {max(gpu):.2f})")
         for file, records in prefill.items():
@@ -95,6 +108,9 @@ def main():
                 labels = sorted(set(identity[fixture]))
                 line += f"  identity {', '.join(labels)}"
             print(line)
+            for departures in forced.get(fixture, []):
+                print(f"          forced AR: {len(departures)} departure(s)"
+                      + "".join(f" +{d['position']} ({d['gapUlps']:.2f} ulp)" for d in departures))
     if len(summaries) > 1:
         base = summaries[base_name]
         for name, summary in list(summaries.items())[1:]:
@@ -112,7 +128,12 @@ def main():
                 ref = base[5][fixture][0]
                 diverged = [first_divergence(s, ref) for s in summary[5][fixture]]
                 same = all(d is None for d in diverged)
-                if not same:
+                # A differing stream passes on the forced check alone: every
+                # departure from the target's argmax a tie.
+                checked = summary[6].get(fixture, [])
+                gaps = [d["gapUlps"] for departures in checked for d in departures]
+                ties = bool(checked) and all(g <= TIE_ULPS for g in gaps)
+                if not same and not ties:
                     failed = failed or require_identity
                 # Against AR, a later arm may only part where the first arm
                 # parts (a known tie) or later, never earlier.
@@ -121,10 +142,14 @@ def main():
                     first = min(ar_position(label) for label in base[4][fixture])
                     later = min(ar_position(label) for label in summary[4][fixture])
                     if later < first:
-                        failed = failed or require_identity
+                        failed = failed or (require_identity and not ties)
                         ar_note = f"  AR identity REGRESSED (+{later} < +{first})"
                     else:
                         ar_note = f"  AR identity held (first part at +{later}, base +{first})"
+                if checked:
+                    ar_note += (f"  forced AR: {len(gaps)} departure(s), "
+                                f"{'all ties' if ties else 'NOT ALL TIES'}"
+                                + (f" (max {max(gaps):.2f} ulp)" if gaps else ""))
                 print(f"  decode  {fixture:16s} {a:6.1f} -> {b:6.1f} tok/s  {100 * (b / a - 1):+.1f}%  "
                       f"streams {'IDENTICAL' if same else 'DIFFER at ' + str(sorted(set(d for d in diverged if d is not None)))}"
                       + ar_note)

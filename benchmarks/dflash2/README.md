@@ -106,14 +106,26 @@ first: sustained load throttles this machine's GPU by ~16%.
 | `--bench-fixtures summary,code` / `none` | Decode these fixtures only |
 | `--bench-prefill prefill-8k.txt` / `none` | Prefill these prompts only |
 | `--bench-runs N` | DFlash2 runs per fixture |
-| `--bench-check` | `TokenIterator` AR reference per fixture, after the timed runs |
+| `--bench-check` | `TokenIterator` AR reference per fixture after the timed runs, and the same AR teacher-forced along run 0's stream |
 | `--bench-round-timings` | Each round's milliseconds and accepted drafts |
+| `--bench-kv-scheme turbo8v4` | The app's KV Cache Compression (attention layers compress once prefill ends); default bf16 |
 | `--bench-lattice DIR` | Dump the drafter's lattice at every anchor (offline policy replay) |
 
 `MLX_*` and `DFLASH2_*` variables reach the app (`bench.sh` forwards them
 through `open --env`), so an env-switch A/B runs as two arms of one build.
 `scripts/dflash2-ruler-report.py A=a1.json A=a2.json B=b1.json B=b2.json
 --require-identity` prints medians per arm, deltas and stream identity.
+
+Identity. The baseline's own stream leaves AR's argmax at bf16 ties (two
+logits within 0–2 ulps), so `--bench-check` reports DIVERGED on every
+fixture at 512 tokens. The forced check says which positions those are: at
+each one the record holds the stream's token, AR's argmax and the gap in
+bf16 ulps. A change that keeps every round's boundaries (a kernel, a
+schedule) must reproduce the first arm's streams exactly. A change that
+moves them (drafting, tree verification) moves the verify attention's key
+partitions too, so its stream may part from the first arm's at a tie; it
+passes `--require-identity` when every forced departure is at most 2 ulps
+(ledger G9).
 
 ## Before and after a change
 
