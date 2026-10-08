@@ -37,7 +37,7 @@ pins; it rejoins this table's carry list only if that experiment is revived.
 The gitlink advances from `1563459` to `efe2a16` (with the speed ruler,
 tesseract `9634d712`), then to `c0e5216`, `a363526` and `6c23b42`, on branch
 `perf/goal-2026-10-08` (fast-forward; `pin-upstream-mlx-swift` unchanged).
-Six commits, **local only until the owner pushes**:
+Six commits, on the fork's `perf/goal-2026-10-08`:
 
 - `efe2a16` `feat(dflash2): expose the selector's whole lattice for analysis
   and tree search`. `DFlash2DraftModel.proposeLattice` returns the
