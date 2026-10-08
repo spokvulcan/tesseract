@@ -4526,3 +4526,133 @@ against 2.62 / 3.01 / 6.07 / 5.06 measured.
   each depth) always forms a valid tree, since a sibling never outscores its
   parent. Projected at today's cooled rounds: travel ~54, summary ~54,
   math ~113, code ~98 tok/s.
+
+### G9 — chain + leaf siblings in the same 8-row verify
+
+The G8 lever, built (vendor `perf/goal-2026-10-08`). Each full-width greedy
+round drafts the selector's chain plus its best siblings as leaves: the top
+7 of the 7 chain nodes and the rank 2–4 siblings at every depth, scored by
+path log-probability under the selector's local scores. A sibling never
+outscores its parent, so the kept set is a chain prefix with leaves on it.
+One 8-row verify checks all of it:
+
+- **Mask and rope.** Each row sees the committed columns and its
+  ancestors' slots; it rotates at its depth (`attentionNormRope` reads one
+  position per row).
+- **Slots.** Keys and values are cached in slot order: the anchor and the
+  chain at their depths, exactly where a chain block puts them, then the
+  leaves. A chain row reads the same keys in the same slots as in a chain
+  block.
+- **Linear layers.** The conv reads each row's ancestors from a window table
+  (`gdn_conv_norm_qkv_tree`); the scan runs a leaf row on a copy of the
+  state, and only committing rows keep it (`gated_delta_step_y_tree`).
+- **Acceptance and commit.** The chain is accepted while each node is the
+  target's argmax at its parent; at the first miss, a leaf at that depth
+  that is the argmax extends the path by one; the bonus is the argmax at the
+  path's last row. The commit gathers the path's cache rows and recurrent
+  captures and replays them as a chain. Proposal and acceptance are one
+  compiled trace each.
+- **TurboQuant** (the app's default KV Cache Compression) takes the tree
+  through per-row slot masks in its verify kernel and gathers its compressed
+  rows.
+
+**Exactness.** With zero siblings the tree path reproduces the chain's
+travel stream bit for bit (`DFLASH2_TREE_RANKS=0`). Vendor tests: every row
+of a tree scan equals the chain scan of its path bit for bit; in a Qwen 3.5
+tree verify every chain row equals a chain block of its path bit for bit
+and every leaf row equals it up to the reduction order of its own key.
+
+With siblings the stream leaves the chain's at bf16 ties, and no lever that
+changes τ can avoid that. The verify's MMA SDPA splits the key axis into
+contiguous spans of ⌈N / (blocks · 32)⌉ · 32 keys, N = positionUpperBound +
+8 (the previous anchor + 16). Once a leaf hit moves the round boundaries,
+every later row sums its keys in another order, as a better drafter's would.
+The G2 gate (streams identical to the baseline's) only fits changes that
+keep τ; for τ levers this session adds a sharper one.
+
+**Forced AR (new gate).** `--bench-check` now also teacher-forces the target
+along the run's own stream with AR decoding (`TokenIterator`, the M = 1
+decode kernels) and records every position where the stream's token is not
+the argmax, with the logit gap in bf16 ulps. A stream passes when every
+departure is a tie of at most 2 ulps (G2's four baseline ties are 0–2 ulps);
+`dflash2-ruler-report.py --require-identity` passes a stream that differs
+from the first arm's only on this check. Results on the four fixtures
+(`results/2026-10-08/tree-identity/`, v11 build; the chain arm's streams
+equal the baseline's on all four):
+
+| fixture | chain (baseline) departures | tree departures | tree leaves the chain at | first AR divergence chain / tree |
+| --- | --- | --- | --- | --- |
+| travel | 6: +234 (2 ulp), +243, +284, +324, +356, +399 (1) | 6: +234 (2), +240, +242, +246 (1), +401, +463 (0) | +240 | +234 / +234 |
+| summary | 6: +131, +160, +180, +238 (1), +400 (0), +491 (1) | 8: +131, +156, +219 (1), +259 (2), +273, +443, +475 (1), +493 (0) | +156 | +131 / +131 |
+| math | 2: +8, +214 (0) | 1: +8 (0) | +214 | +8 / +8 |
+| code | 1: +317 (2) | 3: +146 (2), +228 (0), +240 (1) | +146 | +317 / +146 |
+
+Every departure in both arms is a 0–2 ulp tie: the baseline itself leaves
+AR's argmax at 15 positions in 2,048 tokens. Code's first AR divergence moves
+from +317 to +146, onto a 2-ulp tie (1212 vs AR's 1393).
+
+**τ on the same text.** After the streams part, the arms decode different
+text, so whole-run τ mixes the lever with content. Up to the parting point
+(the same tokens in both arms), tree vs chain: travel 3.29 vs 3.10 (+6.0%),
+summary 2.87 vs 2.67 (+7.4%), math 5.58 vs 5.44 (+2.6%), code 4.50 vs 4.11
+(+9.4%), against the replay's +12.1 / +9.7 / +2.4 / +7.4%.
+
+**Round cost.** Travel, one binary, chain / zero-sibling tree / tree, two
+alternated rounds (`results/2026-10-08/tree-tri/`): median 54.9 / 55.6 /
+55.8–56.0 ms per round. The tree path costs ~1 ms (1.8%) per round, mostly
+~500 extra small launches (masks, slot reorders, gathers).
+
+**Selector temperature.** Leaf items rank by log-probability under
+softmax(scores / T). Fit by log-loss on the chain's per-position hits (on
+positions whose chain prefix is right), the selector is overconfident on
+prose and math: the best T is 1.25 on travel, summary and math and 1.0 on
+code (`research/goal-2026-10-08/calib.py`). Replayed leaf τ at T 1.0 / 1.25
+/ 1.5: travel +12.1 / +14.7 / +15.2%, summary +9.7 / +11.2 / +11.2%, math
++2.4 / +7.7 / +5.0%, code +7.4 / +6.2 / +5.2% (`leaf_temp.py`). The default
+is the calibration's 1.25, not the replay's best; `DFLASH2_TREE_TEMPERATURE`
+overrides it. Best-first general trees at the same 7 nodes are no better
+(T 0.7 / 1.0 / 1.5: travel +8.7 / +12.5 / +11.8%, summary +7.0 / +6.3 /
++10.5%, math +2.4 / +1.2 / +5.0%, code +8.5 / +9.7 / +5.2%;
+`tree_compare.py`) and would need a recurrent state per inner node.
+
+**Speed (the ruler, bf16 KV).** One build (`tree-v14`), three arms
+alternated four times: chain (`DFLASH2_TREE=0`), tree at T 1.0, tree at
+T 1.25; 30 s cool-downs, a quiet-GPU gate before each run
+(`results/2026-10-08/tree-abc/`). Round 1 ran right after a `--bench-check`
+run had heat-soaked the machine (its chain arm ran 10–20% slow), so the
+table takes the medians of rounds 2–4; GPU reference 12.6–12.9 TFLOP/s in
+every run.
+
+| fixture | chain | tree T 1.0 | tree T 1.25 | τ chain / T 1.25 | median ms/round chain / T 1.25 |
+| --- | --- | --- | --- | --- | --- |
+| travel | 48.3 | 53.1 (+9.9%) | **52.9 (+9.4%)** | 2.62 / 2.91 | 54.2 / 55.0 |
+| summary | 50.7 | 51.5 (+1.5%) | **51.8 (+2.0%)** | 3.01 / 3.13 | 59.1 / 60.1 |
+| math | 110.8 | 111.9 (+1.0%) | **116.2 (+4.9%)** | 6.07 / 6.45 | 54.3 / 55.1 |
+| code | 93.6 | 92.9 (−0.8%) | **91.4 (−2.3%)** | 5.06 / 5.05 | 54.0 / 54.7 |
+
+Runs agree within 0.5% per arm except one: `tree100-4` decoded code at
+4.8 tok/s with 4–8 s rounds, a whole-machine stall (the median ignores it).
+
+The whole-run numbers mix the lever with the text each arm ends up
+decoding. On the tokens both arms share (T 1.25 against the chain), the
+tree gains τ +15.8% on travel (first 324 tokens), +15.9% on summary (180),
++6.3% on math (all 512: the streams never part) and +6.1% on code (146).
+Code's whole-run τ is flat because its stream leaves the chain's at the
++146 tie and the continuation it then writes accepts less.
+
+Verdict: **ACCEPTED, on by default at T 1.25** (`DFLASH2_TREE=0` turns it
+off). Every token is still the target's argmax at its row, and every
+departure from AR's argmax is a 0–2 ulp tie, as the baseline's own are.
+τ rises 6–16% on the same text for ~0.8 ms (1.5%) more per round. Under the
+ruler: travel +9.4%, summary +2.0%, math +4.9%, code −2.3%. The binding
+assumption on prose is unchanged: τ ≈ 3 is the drafter's ~0.7 accuracy per
+position.
+
+Harness notes. `--bench-check` runs about 50 s of M = 1 decode per fixture.
+Interleaved with the timed runs, it left the GPU reference at 5.3–5.4
+TFLOP/s and the next fixtures 20–90% slower; the slowdown outlasted the
+process. The references now run after every timed run, and speed runs
+carry no `--bench-check`. The screen-lock wallpaper (an animated Aerial at
+3456 × 2234) also contends for the GPU: one identity run overlapped it. The
+display was put to sleep (`pmset displaysleepnow`) for the rest of the
+session.
