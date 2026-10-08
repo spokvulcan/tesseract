@@ -1,0 +1,126 @@
+# Tesseract Architecture
+
+This document describes the architecture of Tesseract Agent, a privacy-focused, fully offline AI assistant for macOS.
+
+For development guidelines and build commands, see [CLAUDE.md](./CLAUDE.md).
+For domain vocabulary, see [CONTEXT.md](./CONTEXT.md); for decision records, see `docs/adr/`.
+
+---
+
+## Overview
+
+Tesseract Agent runs entirely on-device on Apple Silicon. It provides dictation (speech-to-text), text-to-speech, an LLM-powered agent with tool-calling capabilities, and a local OpenAI-compatible HTTP server accelerated by a tiered KV prefix cache. All inference uses local models: WhisperKit (CoreML) for ASR, MLX for LLM and TTS, with the TTS codec's conv stack on the Neural Engine through Core ML where the chip allows (ADR-0075).
+
+**Key Principles:**
+- Privacy-first: No audio or text data leaves the device
+- Offline: All models run locally on Apple Silicon
+- Non-sandboxed: the agent left the App Sandbox for cross-process Accessibility perception (ADR-0047); Hardened Runtime and Developer-ID notarization unchanged
+- Responsive: Real-time audio feedback, streaming inference
+
+---
+
+## System Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                          Tesseract Agent                             │
+├──────────────────────────────────────────────────────────────────────┤
+│  App Layer                                                           │
+│  ┌──────────────┐ ┌──────────────────────────┐ ┌──────────────────┐  │
+│  │ TesseractApp │ │ DependencyContainer      │ │ AppDelegate      │  │
+│  │ Window scene │ │ (Composition Root)       │ │ (AppKit bridge)  │  │
+│  └──────────────┘ └──────────────────────────┘ └──────────────────┘  │
+├──────────────────────────────────────────────────────────────────────┤
+│  Coordinators (@Observable, @MainActor)                              │
+│  ┌────────────────┐ ┌────────────────┐ ┌──────────────────────────┐  │
+│  │  Dictation     │ │  Speech        │ │  Agent                   │  │
+│  │  Coordinator   │ │  Coordinator   │ │  Coordinator             │  │
+│  └────────────────┘ └────────────────┘ └──────────────────────────┘  │
+├──────────────────────────────────────────────────────────────────────┤
+│  Engines (@Observable, @MainActor)                                   │
+│  ┌────────────────┐ ┌────────────────┐ ┌──────────────────────────┐  │
+│  │ Transcription  │ │ SpeechEngine   │ │  Agent                   │  │
+│  │ Engine         │ │ Presenter      │ │  Engine                  │  │
+│  └────────────────┘ └────────────────┘ └──────────────────────────┘  │
+├──────────────────────────────────────────────────────────────────────┤
+│  Model adapters behind ports (actor-isolated inference)              │
+│  ┌──────────────────────┐ ┌──────────────────────┐ ┌──────────────┐  │
+│  │ SpeechRecognizer     │ │ SpeechEngine (pkg)   │ │ LLMActor     │  │
+│  │ WhisperKit (ASR)     │ │ Qwen3 TTS (MLX, ANE) │ │ MLX LLM      │  │
+│  └──────────────────────┘ └──────────────────────┘ └──────────────┘  │
+├──────────────────────────────────────────────────────────────────────┤
+│  Platform Adapters (AppKit)                                          │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌────────────┐  │
+│  │ HotkeyMgr    │ │ TextInjector │ │ MenuBarMgr   │ │ Panel      │  │
+│  │ (CGEventTap) │ │ (Clipboard)  │ │ (NSStatusBar)│ │ Controllers│  │
+│  └──────────────┘ └──────────────┘ └──────────────┘ └────────────┘  │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Directory Structure
+
+Representative, not exhaustive — trust the file system over this listing.
+
+```
+tesseract/
+├── App/                         # Application lifecycle
+│   ├── TesseractApp.swift       # SwiftUI App entry (Window scene)
+│   ├── AppDelegate.swift        # macOS lifecycle, single instance, window management
+│   ├── AppBindings.swift        # App Bindings: launch sequence + subscription rules
+│   ├── AppTerminationCoordinator.swift # Teardown ordering (closure-struct steps)
+│   └── DependencyContainer.swift# Composition root, pure wiring
+│
+├── Core/                        # Shared services
+│   ├── Audio/
+│   │   ├── AudioCaptureEngine.swift   # @Observable, AVAudioEngine recording
+│   │   ├── AudioMeter.swift           # MeterFrame + real-time FFT meter tap
+│   │   ├── AudioDeviceManager.swift   # Input device enumeration
+│   │   └── AudioConverter.swift       # Format conversion
+│   ├── Permissions/
+│   │   └── PermissionsManager.swift   # Mic & Accessibility checks
+│   ├── SettledWidth.swift       # Settled Width policy + modifier (pure value, unit-tested)
+│   ├── StorageEnvironment.swift # Storage roots: the owner's, or per-process scratch under tests (ADR-0073)
+│   ├── ViewModifiers.swift      # Scoped dependency injection
+│   └── Logging.swift            # Unified logging (Log enum)
+│
+├── Platform/                    # AppKit bridge code
+│   ├── HotkeyManager.swift           # Global hotkey listener (CGEventTap)
+│   ├── ObjCExceptions.swift           # NSException → thrown error seam (wraps AVFAudio graph steps)
+│   ├── ObjCExceptionCatcher.h/.m      # The one Objective-C file: the @try behind ObjCExceptions
+│   ├── TextInjector.swift             # Clipboard-based paste injection
+│   ├── InAppReplacer.swift            # Puts a Lens fix back in the app (ADR-0085)
+│   ├── TextExtractor.swift            # Selected text extraction
+│   ├── MenuBarManager.swift           # Status bar menu (NSStatusItem)
+│   ├── OverlayPlacement.swift         # Overlay canvas frame math (pure value, unit-tested)
+│   ├── OverlayScreenLocator.swift     # Screen detection for overlays
+│   └── SpeechOverlayPanel.swift       # Speech Overlay: read-along words over every app
+│
+├── Features/                    # Feature modules
+│   ├── Dictation/
+│   │   ├── DictationCoordinator.swift # Thin composer over Voice Capture Session
+│   │   ├── DictationFeed.swift        # Overlay Feed: phases, beats, Live Preview, hold, meter
+│   │   ├── Proofread/                 # Proofread Pass (ADR-0034): policy, verdicts, MLX adapter
+│   │   ├── Corrections/               # Correction Pair flywheel (#289): value + bounded store
+│   │   ├── LearnedWords/              # Learned Words (ADR-0085): store, matcher, sounds-alike key
+│   │   ├── Lens/                      # Lens (ADR-0085/0086): the one dictation overlay, Live Preview, the fix
+│   │   ├── CatchRecord/               # Catch Record (PRD #612): the Dictation page's model, chart, tiles, takes
+│   │   └── Views/                     # Main window shell, the Dictation page, the history sheet
+│   ├── Speech/                        # engine v2 lives in Vendor/tesseract-speech
+│   │   ├── SpeechCoordinator.swift    # @Observable orchestrator; drains engine events
+│   │   ├── SpeechEnginePresenter.swift# @Observable residency mirror of the pkg engine
+│   │   ├── AudioPlayback.swift        # @MainActor playback port (seam)
+│   │   ├── AudioPlaybackManager.swift # AVFoundation adapter (real pause/resume)
+│   │   ├── WordHighlightSurface.swift # Spoken-word highlight port (ADR-0004)
+│   │   ├── ReadAlong/                 # Read-Along: the one heard-word clock (ADR-0076/0077)
+│   │   ├── Reader/                    # Reader: TextKit 2 text view, bookmark, document store
+│   │   ├── Overlay/                   # Speech Overlay: one scrolling feed, island or captions
+│   │   ├── Voices/                    # Voice library and designer (VoiceDesign checkpoints)
+│   │   └── Views/                     # Speech page: control bar, display settings
+│   ├── Transcription/
+│   │   ├── TranscriptionEngine.swift  # @Observable facade over SpeechRecognizer
+│   │   ├── SpeechRecognizer.swift     # Model port (
+
+Question: summarize the key architectural decisions in one paragraph.
+Answer:

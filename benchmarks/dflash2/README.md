@@ -82,6 +82,39 @@ and alternates the two kernels. Run it without another GPU workload. Its
 component timings must not be reported as whole-model generation speedups.
 See [FINDINGS.md](FINDINGS.md) for this investigation and saved results.
 
+## The speed ruler
+
+`scripts/dflash2-ruler.sh` measures the 500/100 goal in one Release run and
+writes one JSON report (ledger, session 2026-10-08):
+
+```sh
+scripts/dflash2-ruler.sh --bench-check --bench-json /tmp/ruler.json
+```
+
+Decode runs first: each of `travel`, `summary`, `math` and `code` prefills
+the production way (the app driver's pipelined 1,024-token chunks up to the
+speculative split, then the DFlash2 iterator's capture prefill of the tail)
+and decodes 512 greedy tokens at block 8. Then cold prefill is timed on
+`prefill-2k.txt`, `prefill-8k.txt` and `prefill-32k.txt` (exactly 2,048 /
+8,192 / 32,768 templated tokens), first chunk to first sampled token, with a
+digest of the cache's bits so two builds can be shown to prefill
+identically. Every timed run waits `--bench-cooldown` seconds (default 30)
+first: sustained load throttles this machine's GPU by ~16%.
+
+| Option | Purpose |
+| --- | --- |
+| `--bench-fixtures summary,code` / `none` | Decode these fixtures only |
+| `--bench-prefill prefill-8k.txt` / `none` | Prefill these prompts only |
+| `--bench-runs N` | DFlash2 runs per fixture |
+| `--bench-check` | `TokenIterator` AR reference per fixture, after the timed runs |
+| `--bench-round-timings` | Each round's milliseconds and accepted drafts |
+| `--bench-lattice DIR` | Dump the drafter's lattice at every anchor (offline policy replay) |
+
+`MLX_*` and `DFLASH2_*` variables reach the app (`bench.sh` forwards them
+through `open --env`), so an env-switch A/B runs as two arms of one build.
+`scripts/dflash2-ruler-report.py A=a1.json A=a2.json B=b1.json B=b2.json
+--require-identity` prints medians per arm, deltas and stream identity.
+
 ## Before and after a change
 
 Bench the base commit and the change on one prompt, from two Release builds:
