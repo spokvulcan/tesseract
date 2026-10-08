@@ -1,4 +1,7 @@
 import Foundation
+import MLXLLM
+import MLXLMCommon
+import MLXVLM
 import Testing
 
 @testable import Tesseract_Agent
@@ -25,6 +28,43 @@ struct DFlash2SupportTests {
 
         #expect(DFlash2Support.checkpointRefusesDraft(rotated))
         #expect(!DFlash2Support.checkpointRefusesDraft(plain))
+    }
+
+    // MARK: - Target pairing
+
+    /// A four-layer Qwen3.5 checkpoint with a vision tower.
+    private static let tinyVisionCheckpoint = """
+        {
+            "model_type": "qwen3_5", "image_token_id": 500, "video_token_id": 501,
+            "vision_start_token_id": 502, "vision_end_token_id": 503, "vocab_size": 512,
+            "text_config": {
+                "model_type": "qwen3_5", "hidden_size": 64, "num_hidden_layers": 4,
+                "intermediate_size": 128, "num_attention_heads": 4, "num_key_value_heads": 2,
+                "head_dim": 32, "vocab_size": 512, "full_attention_interval": 2,
+                "linear_num_value_heads": 4, "linear_num_key_heads": 2,
+                "linear_key_head_dim": 32, "linear_value_head_dim": 32,
+                "linear_conv_kernel_dim": 4
+            },
+            "vision_config": {
+                "model_type": "qwen3_vl", "depth": 1, "hidden_size": 32, "intermediate_size": 64,
+                "out_hidden_size": 64, "num_heads": 2, "patch_size": 16,
+                "spatial_merge_size": 2, "temporal_patch_size": 2, "num_position_embeddings": 64
+            }
+        }
+        """
+
+    /// The vision class runs the text class's engine (ADR-0089), so a
+    /// vision-mode load pairs with the draft at the same depth.
+    @Test func bothQwen35ClassesPairAtTheirDepth() throws {
+        let data = Data(Self.tinyVisionCheckpoint.utf8)
+        let vision = MLXVLM.Qwen35(
+            try JSONDecoder().decode(MLXVLM.Qwen35Configuration.self, from: data))
+        let text = MLXLLM.Qwen35Model(
+            try JSONDecoder().decode(MLXLLM.Qwen35Configuration.self, from: data))
+        for model in [vision, text] as [any LanguageModel] {
+            #expect(DFlash2Support.pairsWithTarget(model), "\(type(of: model))")
+            #expect(DFlash2Support.targetLayerCount(model) == 4, "\(type(of: model))")
+        }
     }
 
     // MARK: - Target geometry
@@ -98,9 +138,8 @@ struct DFlash2SupportTests {
     // MARK: - Model definition wiring
 
     /// Both Qwen3.8-27B targets — the uniform quant and the PARO Checkpoint
-    /// — pull the draft, and both carry the Text-Only Override: the draft
-    /// pairs only with the MLXLLM text classes (`pairsWithTarget`), so a
-    /// vision-mode load of either would never speculate (map #457 lifts it).
+    /// — pull the draft. Either class pairs with it, the vision one too
+    /// (ADR-0089), so a vision-mode load speculates as a text one does.
     @MainActor
     @Test func draftIsDownloadableDependencyOfBothQwen38Targets() {
         let draft = ModelDefinition.withID(DFlash2Support.draftModelID)
@@ -111,7 +150,6 @@ struct DFlash2SupportTests {
             let target = ModelDefinition.withID(id)
             #expect(target != nil, "missing \(id)")
             #expect(target?.dependencies.contains(DFlash2Support.draftModelID) == true)
-            #expect(target?.textOnlyOverride == true, "\(id) must load the text class")
         }
     }
 

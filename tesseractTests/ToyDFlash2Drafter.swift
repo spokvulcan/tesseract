@@ -26,8 +26,10 @@ nonisolated extension ToyLanguageModel: DFlash2TargetModel {
         cache.allSatisfy { $0 is KVCacheSimple }
     }
 
+    /// The toy has no rope: its predictions follow cache rows, so a rope
+    /// delta changes nothing.
     func dflash2Prefill(
-        _ tokens: MLXArray, cache: [any KVCache], captureLayers: [Int]
+        _ tokens: MLXArray, cache: [any KVCache], captureLayers: [Int], positionDelta _: Int
     ) -> (logits: MLXArray, hidden: [MLXArray]) {
         let logits = self(tokens, cache: cache)
         return (logits, captureLayers.map { _ in MLXArray.zeros([1, tokens.dim(-1), 1]) })
@@ -53,6 +55,23 @@ nonisolated extension ToyLanguageModel: DFlash2TargetModel {
                 MLXArray.zeros([1, request.tokens.dim(-1), 1])
             },
             recurrentCaptures: [])
+    }
+}
+
+/// The toy as a target that prefills its own images (ADR-0089): its forward
+/// through the last `imagePadTokenId` row (the stub's run stands in for the
+/// tower) and a zero rope delta. Nil without a pad id, or with no text after
+/// the run.
+nonisolated extension ToyLanguageModel: DFlash2MediaTargetModel {
+    func dflash2PrefillMedia(
+        _ input: LMInput, cache: [any KVCache], prefill _: PrefillParameters
+    ) throws -> (prefilledTokens: Int, positionDelta: Int)? {
+        let tokens = input.text.tokens.reshaped(-1).asArray(Int32.self).map(Int.init)
+        guard let imagePadTokenId, let last = tokens.lastIndex(of: imagePadTokenId),
+            last + 1 < tokens.count
+        else { return nil }
+        eval(self(MLXArray(tokens[...last].map(Int32.init))[.newAxis], cache: cache))
+        return (last + 1, 0)
     }
 }
 

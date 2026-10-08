@@ -31,6 +31,9 @@ final class PrefixCacheE2ERunner {
     private let runner: BenchmarkRunner
     private let logger = Logger(subsystem: "app.tesseract.agent", category: "benchmark")
     private var logFileHandle: FileHandle?
+    /// Every image-bearing request `runRequest` served, for Step Z's
+    /// speculation check.
+    private var imageTurns: [RequestResult] = []
 
     init(runner: BenchmarkRunner) {
         self.runner = runner
@@ -384,6 +387,21 @@ final class PrefixCacheE2ERunner {
         let assistantText: String
         let assistantReasoning: String?
         let toolCalls: [ToolCallInfo]
+        /// The arm that decoded speculatively; nil for plain decoding.
+        var speculativeArm: SpeculativeArm?
+        var draftTokensProposed: Int?
+        var draftTokensAccepted: Int?
+
+        var decodeSummary: String {
+            guard let speculativeArm else { return "decode=autoregressive" }
+            return "decode=\(speculativeArm.rawValue) "
+                + "accepted=\(draftTokensAccepted ?? 0)/\(draftTokensProposed ?? 0)"
+        }
+    }
+
+    /// The arm a request's progress events report engaging.
+    private final class EngagedArm {
+        var arm: SpeculativeArm?
     }
 
     private struct ManagedPathEquivalenceResult {
@@ -415,6 +433,11 @@ final class PrefixCacheE2ERunner {
             case .toolResult(_, let content):
                 HTTPPrefixCacheMessage(role: .tool, content: content)
             }
+        }
+
+        var carriesImages: Bool {
+            if case .user(_, let images) = self { return !images.isEmpty }
+            return false
         }
 
         var llmMessage: LLMMessage {
@@ -452,12 +475,16 @@ final class PrefixCacheE2ERunner {
             templateContextDigest: renderContext.digest
         )
         let startInstant = ContinuousClock.now
+        let engaged = EngagedArm()
         let start = try await engine.llmActor.startServerCompletion(
             modelID: modelID,
             conversation: prefixCacheConversation,
             toolSpecs: toolSpecs,
             parameters: parameters,
-            renderContext: renderContext
+            renderContext: renderContext,
+            progressHandler: { event in
+                if case .speculationEngaged(let arm) = event { engaged.arm = arm }
+            }
         )
 
         var ttftSeconds: Double = 0
@@ -466,6 +493,7 @@ final class PrefixCacheE2ERunner {
         var assistantReasoning = ""
         var toolCalls: [ToolCallInfo] = []
         var firstTokenSeen = false
+        var info: AgentGeneration.Info?
 
         for try await event in start.stream {
             if !firstTokenSeen {
@@ -495,7 +523,9 @@ final class PrefixCacheE2ERunner {
                 // from the stored leaf inside the assistant turn.
                 assistantText += assistantReasoning
                 assistantReasoning = ""
-            case .thinkStart, .thinkEnd, .malformedToolCall, .toolCallDelta, .info:
+            case .info(let completion):
+                info = completion
+            case .thinkStart, .thinkEnd, .malformedToolCall, .toolCallDelta:
                 break
             }
         }
@@ -507,15 +537,23 @@ final class PrefixCacheE2ERunner {
 
         let trimmedReasoning = assistantReasoning.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        return RequestResult(
+        let result = RequestResult(
             cachedTokens: start.cachedTokenCount,
             promptTokens: start.diagnostics.promptTokenCount,
             ttftSeconds: ttftSeconds,
             generatedText: generatedText,
             assistantText: assistantText,
             assistantReasoning: trimmedReasoning.isEmpty ? nil : trimmedReasoning,
-            toolCalls: toolCalls
+            toolCalls: toolCalls,
+            speculativeArm: engaged.arm,
+            draftTokensProposed: info?.draftTokensProposed,
+            draftTokensAccepted: info?.draftTokensAccepted
         )
+        log("  \(result.decodeSummary)")
+        if messages.contains(where: \.carriesImages) {
+            imageTurns.append(result)
+        }
+        return result
     }
 
     private func runRequest(
@@ -1345,6 +1383,7 @@ final class PrefixCacheE2ERunner {
         checks: inout [CheckResult]
     ) async throws {
         log("\n── Step Z: Image scenario ──")
+        imageTurns = []
         let identity = ModelIdentity(directory: modelDir)
         guard identity.imageKeying != nil else {
             log("  model defines no image keying (not a recognized VLM) — skipping")
@@ -1711,6 +1750,27 @@ final class PrefixCacheE2ERunner {
                 passed: imageAddEquivalence.passed,
                 detail: imageAddEquivalence.detail
             ))
+
+        // An image no longer switches speculation off (ADR-0089): with the
+        // draft resident, every image-bearing turn decodes with it.
+        if await engine.llmActor.loadedDFlash2Draft() {
+            let speculated = imageTurns.filter { ($0.draftTokensProposed ?? 0) > 0 }
+            checks.append(
+                CheckResult(
+                    name: "image_turns_speculate",
+                    passed: !imageTurns.isEmpty && speculated.count == imageTurns.count,
+                    detail: "\(speculated.count) of \(imageTurns.count) image-bearing turns "
+                        + "proposed drafts: "
+                        + imageTurns.map(\.decodeSummary).joined(separator: ", ")
+                ))
+        } else {
+            checks.append(
+                CheckResult(
+                    name: "image_turns_speculate",
+                    passed: true,
+                    detail: "skipped — no DFlash2 draft resident on the vision load"
+                ))
+        }
     }
 
     /// Long shared user-message prefix (~80 tokens) for the branch-point
@@ -1904,11 +1964,17 @@ final class PrefixCacheE2ERunner {
             let ttftSeconds: Double
             let cachedTokens: Int
             let generated: String
+            let speculativeArm: String?
+            let draftTokensProposed: Int?
+            let draftTokensAccepted: Int?
 
             init(_ r: RequestResult, textPrefix: Int = 200) {
                 self.ttftSeconds = r.ttftSeconds
                 self.cachedTokens = r.cachedTokens
                 self.generated = String(r.generatedText.prefix(textPrefix))
+                self.speculativeArm = r.speculativeArm?.rawValue
+                self.draftTokensProposed = r.draftTokensProposed
+                self.draftTokensAccepted = r.draftTokensAccepted
             }
         }
         struct Measurements: Codable {

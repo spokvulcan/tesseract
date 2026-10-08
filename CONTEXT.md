@@ -477,22 +477,13 @@ in-actor `nil` return (a retired pattern), degraded mode (unqualified).
 
 **Vision-Capable Model**:
 A model whose on-disk config declares image input (the Qwen3.5-family
-`vision_config`) and whose catalog entry carries no **Text-Only Override**;
-text-only checkpoints do not. Fixed for a downloaded model — distinct from
-**Vision Mode**, which is whether that capability is currently loaded. Every
-**PARO Checkpoint** in the catalog declares image input.
+`vision_config`); text-only checkpoints do not. Fixed for a downloaded model —
+distinct from **Vision Mode**, which is whether that capability is currently
+loaded. Every **PARO Checkpoint** in the catalog declares image input.
 _Avoid_: "vision model" (ambiguous with the loaded container), "multimodal" (there
-is no audio/video input path), "supports images" as a per-request flag,
-"declares vision" as a synonym (declaration is one of the two inputs).
-
-**Text-Only Override**:
-A catalog entry's declaration that its checkpoint, although it declares image
-input, is served as text-only: no image affordances, the text-class load, no
-image keying. The catalog withholding a capability the checkpoint has — never the
-checkpoint lacking it.
-_Avoid_: "vision disabled" (collides with the global vision opt-out, a user
-setting), "text-only model" (that is a checkpoint without `vision_config`),
-"unsupported vision" (the capability exists; it is withheld).
+is no audio/video input path), "supports images" as a per-request flag, Text-Only
+Override (retired by ADR-0089: no catalog entry withholds the image input its
+checkpoint declares).
 
 **Vision Mode**:
 Whether a **Vision-Capable Model** is currently loaded as its image-able VLM
@@ -662,7 +653,9 @@ local); planned checkpoint.
 Where a prefill hands the prompt to the decode iterator: autoregressive, where
 the app prefills the whole **Text Tail** and the standard iterator decodes from
 its last token; or speculative at a split, where the app's capturing prefill
-runs to the split and the **Speculation Plan**'s iterator prefills the rest.
+runs to the split and the **Speculation Plan**'s iterator prefills the rest. A
+keyed split never precedes the **Minimum Warm Offset**, so the iterator takes
+text only.
 Any generation path can name its own.
 _Avoid_: decode route, speculation route (route belongs to the **Prefill
 Strategy** and the **Completion Route**); decode handoff (handoff is the
@@ -2390,8 +2383,9 @@ not the architecture).
 The drafters resident beside one model load, and the rules for engaging them: the
 MTP head a Qwen3.5-family checkpoint ships, and the separate DFlash2 draft beside
 Qwen3.8-27B. A load attaches what the Speculative Decoding setting allows and the
-loaded target pairs with. Residency (the Models page's draft row) is read from it,
-and every request asks it for a **Speculation Plan** (ADR-0079).
+loaded target pairs with; the draft pairs with the text and the vision class alike,
+which run one engine (ADR-0089). Residency (the Models page's draft row) is read
+from it, and every request asks it for a **Speculation Plan** (ADR-0079).
 _Avoid_: drafter support (the per-family facts it loads through); speculation
 mode (the load-time setting); **Speculative Canonical Prefill** (an unrelated
 background prefill).
@@ -2402,7 +2396,9 @@ input, KV quantization and **KV Scheme**, temperature, prompt length, whether a 
 which leaf the turn stores): the arm, the advance allowance its rounds add to the
 turn's **Maximum Advance**, and where the app's prefill hands over to the iterator. The
 **Server Completion** and the **Raw Generation Start** read the same plan; no plan
-means ordinary decoding. Under ADR-0087 (proposed) the Prefill Planner asks for it
+means ordinary decoding. DFlash2 speculates with images or without (ADR-0089): the
+images are prefilled before the hand-over and the iterator rotates the text after
+them by the **Position Anchor**'s rope delta; MTP needs text-only input. Under ADR-0087 (proposed) the Prefill Planner asks for it
 once on the keyed path and the **Prefill Plan** carries its answer, the arm and split
 in the **Decode Handover** and the allowance in the **Maximum Advance**; plan
 application reads neither.

@@ -48,9 +48,19 @@ struct SpeculationPlanTests {
 
     // MARK: - Both arms
 
-    @Test(arguments: [dflash2Only, mtpOnly, both])
-    func imageBearingRequestsNeverSpeculate(_ speculation: Speculation) {
-        #expect(speculation.plan(for: Self.request(isTextOnly: false)) == nil)
+    /// Images keep DFlash2, cold or warm (ADR-0089): the images are
+    /// prefilled before the hand-over and the iterator speculates over the
+    /// text after them. MTP's head never sees an image, so a request MTP
+    /// would take as text plans nothing with images where MTP is the only
+    /// drafter.
+    @Test(arguments: [false, true])
+    func imageBearingRequestsSpeculateWithDFlash2Only(restoresPrefix: Bool) throws {
+        let request = Self.request(isTextOnly: false, restoresPrefix: restoresPrefix)
+        for speculation in [Self.dflash2Only, Self.both] {
+            let plan = try #require(speculation.plan(for: request))
+            #expect(plan.arm == .dflash2)
+        }
+        #expect(Self.mtpOnly.plan(for: request) == nil)
     }
 
     /// Speculation rewinds verify rows in place, which only unquantized KV

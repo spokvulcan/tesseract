@@ -11,6 +11,7 @@
 #   archive     Create release archive for App Store submission
 #   clean       Clean build artifacts and derived data
 #   log         Tail system log filtered to tesseract
+#   log-show [minutes] [pattern]  Print the last N minutes (default 10), non-blocking
 
 set -euo pipefail
 
@@ -333,54 +334,60 @@ cmd_clean() {
     echo "Clean complete."
 }
 
+# Whitelist: our subsystem + print()/NSLog from our process (empty subsystem).
+# To reveal <private> values, mark interpolations as public: \(path, privacy: .public)
+LOG_PREDICATE='subsystem == "app.tesseract.agent" OR (process == "Tesseract Agent" AND subsystem == "")'
+
+# Compact `log` lines on stdin → "time LVL [category] message"; colored when
+# $1 is 1. ERR is an error-type entry (Logger.error and .warning), FLT a fault.
+_format_log_lines() {
+    awk -v color="${1:-0}" '
+        BEGIN {
+            if (color == 1) { dim = "\033[2m"; red = "\033[31m"; cyan = "\033[36m"; reset = "\033[0m" }
+        }
+        /^(Filtering|Timestamp)/ { next }
+        # Continuation lines of a multi-line message carry no timestamp.
+        $2 !~ /^[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\./ { print; fflush(); next }
+        {
+            level = $3 == "E" ? red "ERR" reset " " : $3 == "F" ? red "FLT" reset " " : ""
+            if (match($0, /\[app\.tesseract\.agent:[A-Za-z]+\] /)) {
+                category = "[" substr($0, RSTART + 21, RLENGTH - 23) "]"
+                msg = substr($0, RSTART + RLENGTH)
+                printf "%s%s%s %s%s%-14s%s %s\n", dim, substr($2, 1, 12), reset, level, cyan, category, reset, msg
+            } else {
+                # print()/NSLog/vendor logs: the message follows "Process[pid:tid] "
+                msg = match($0, /\[[0-9a-f]+:[0-9a-f]+\] /) ? substr($0, RSTART + RLENGTH) : $0
+                printf "%s%s%s %s%s\n", dim, substr($2, 1, 12), reset, level, msg
+            }
+            fflush()
+        }'
+}
+
 cmd_log() {
     echo "Tailing tesseract logs (Ctrl-C to stop)..."
     echo ""
+    local color=0
+    [ -t 1 ] && color=1
+    /usr/bin/log stream --predicate "$LOG_PREDICATE" --level debug --style compact 2>&1 \
+        | _format_log_lines "$color"
+}
 
-    # Whitelist: our subsystem + print()/NSLog from our process (empty subsystem).
-    # To reveal <private> values, mark interpolations as public: \(path, privacy: .public)
-    log stream \
-        --predicate 'subsystem == "app.tesseract.agent" OR (process == "Tesseract Agent" AND subsystem == "")' \
-        --level debug \
-        --style compact 2>&1 \
-    | while IFS= read -r line; do
-        # Skip the header line from log stream
-        [[ "$line" == Filtering* ]] && continue
-
-        # Extract timestamp
-        if [[ "$line" =~ ([0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+) ]]; then
-            local time="${BASH_REMATCH[1]}"
-            # Truncate to milliseconds
-            time="${time%???}"
-        else
-            echo "$line"
-            continue
-        fi
-
-        # Extract log level
-        local level=""
-        if [[ "$line" =~ (Error|Fault) ]]; then
-            level="\033[31mERR\033[0m "
-        elif [[ "$line" =~ Warning ]]; then
-            level="\033[33mWRN\033[0m "
-        fi
-
-        # Extract category from [app.tesseract.agent:category]
-        local category=""
-        if [[ "$line" =~ \[app\.tesseract\.agent:([a-z]+)\] ]]; then
-            category="${BASH_REMATCH[1]}"
-        fi
-
-        # Extract message: everything after the last ]
-        local msg="${line##*\] }"
-
-        if [ -n "$category" ]; then
-            printf "\033[2m%s\033[0m %s\033[36m%-14s\033[0m %s\n" "$time" "$level" "[$category]" "$msg"
-        else
-            # print()/NSLog/vendor logs — no category, show as-is with timestamp
-            printf "\033[2m%s\033[0m %s%s\n" "$time" "$level" "$msg"
-        fi
-    done
+# The last N minutes (default 10), optionally only lines matching an extended
+# regex (case-insensitive); returns at once. `log show` reads the persistent
+# store: notice and above. Info and debug lines reach `log` (stream) only.
+cmd_log_show() {
+    local minutes="${1:-10}"
+    local pattern="${2:-}"
+    if ! [[ "$minutes" =~ ^[0-9]+$ ]]; then
+        echo "Error: minutes must be a whole number, got '$minutes'" >&2
+        return 1
+    fi
+    local color=0
+    [ -t 1 ] && color=1
+    /usr/bin/log show --last "${minutes}m" --predicate "$LOG_PREDICATE" \
+        --info --debug --style compact 2>&1 \
+        | { if [ -n "$pattern" ]; then grep -E -i -- "$pattern" || true; else cat; fi; } \
+        | _format_log_lines "$color"
 }
 
 usage() {
@@ -402,6 +409,7 @@ usage() {
     echo "  resolve     Resolve SPM package dependencies"
     echo "  clean       Clean build artifacts and derived data"
     echo "  log         Tail system log filtered to tesseract"
+    echo "  log-show [minutes] [pattern]  Print the last N minutes (default 10); pattern is a case-insensitive regex"
 }
 
 # --- Main ------------------------------------------------------------------
@@ -422,6 +430,7 @@ case "${1:-}" in
     resolve)     cmd_resolve ;;
     clean)       cmd_clean ;;
     log)         cmd_log ;;
+    log-show)    shift; cmd_log_show "$@" ;;
     "")          usage ;;
     *)
         echo "Unknown command: $1" >&2

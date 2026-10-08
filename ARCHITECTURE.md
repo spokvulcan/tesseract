@@ -525,7 +525,10 @@ load attaches them, the Model Session carries them, and each request asks for a
 **Speculation Plan**. The Server Completion and the Raw Generation Start read the
 same plan, and the session builds its iterator from it (ADR-0079).
 `DFlash2Support` and `MTPDrafterSupport` keep the per-family detection, pairing
-and loading.
+and loading. The Qwen3.5 vision class runs the text class's engine, so the
+DFlash2 draft pairs with a vision load too, and image-bearing requests speculate:
+the images are prefilled before the hand-over and the iterator rotates the text
+after them by their rope delta (ADR-0089).
 
 **Agent bootstrap** (`AgentFactory.makeAgent()`): Discovers packages → registers extensions → discovers skills → loads context files → assembles system prompt → wires compaction → creates Agent instance.
 
@@ -606,6 +609,20 @@ after a Leaf Handoff, its Leaf Lease, concluded exactly once inside the
 request's LLM gate turn. Vocabulary: CONTEXT.md → Prefix cache snapshot
 lifecycle, SSD snapshot ledger, Prefill orchestration, Eviction tuning.
 Verification gates: docs/testing.md → Loaded-model verification.
+An image request takes the same arm: `RequestKeyingPhase` prepares it (the
+processor expands each image into its pad run) and builds the
+`CacheKeySpace`, the image table that maps prompt tokens to the Cache Key
+Path and gives the rope delta up to any offset. `PrefillPlanner` detects
+boundaries in key space and captures nothing below the Minimum Warm Offset,
+where the last image's run ends. `ServerCompletion` restores with a
+`PositionAnchor` (the delta as the vendor's `qwen35.ropeDeltas` state) or
+runs the Image Span through the vision container's windowed `prepare`, then
+chunk-prefills the Text Tail. `StateThreadedTokenIterator` threads that state
+through decode; when the Speculation Plan engages DFlash2, the draft's
+iterator takes over at the plan's `prefillSplit` with
+`keySpace.positionAnchorDelta(upTo:)`. The agent chat's
+`RawGenerationStart` (a tool result's screenshot) hands the whole prompt over
+and the target prefills the images itself (ADR-0007, ADR-0089).
 `Features/Server/Integrations/` configures external clients against the live
 server: the server itself serves a setup script whose one-liner runs the
 **Config Merge** (`OpenCodeConfigMerge`, a pure function over an

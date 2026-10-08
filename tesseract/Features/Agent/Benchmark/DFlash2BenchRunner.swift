@@ -5,13 +5,14 @@ import MLXLLM
 import MLXLMCommon
 import MLXNN
 
+// Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
 /// The DFlash2 perf ruler: autoregressive baseline vs the DFlash2 speculative
 /// arm on the same long-context prompt, ABBA-interleaved against thermal
 /// drift (the experiments-ledger discipline), decode-only timing (iterator
 /// construction/prefill happens outside the timed region).
 ///
 /// Driven via `scripts/bench.sh quick --model qwen3.8-27b --dflash2-bench`.
-nonisolated struct DFlash2BenchRunner {
+nonisolated struct DFlash2BenchRunner {  // swiftlint:disable:this type_body_length
     let runner: BenchmarkRunner
 
     private struct RoundTiming: Sendable, Encodable {
@@ -40,6 +41,11 @@ nonisolated struct DFlash2BenchRunner {
     private static var check: Bool { arguments.contains("--bench-check") }
     private static var captureFullStream: Bool { check || option("--bench-json") != nil }
     private static var draftPolicy: String { option("--bench-draft-policy") ?? "4bit" }
+    /// `--bench-image PATH` attaches an image to the prompt; it and
+    /// `--bench-vision` load the vision class, which runs the same engine
+    /// (ADR-0089), so both classes can be measured on one prompt.
+    private static var image: URL? { option("--bench-image").map(URL.init(fileURLWithPath:)) }
+    private static var vision: Bool { arguments.contains("--bench-vision") || image != nil }
     /// `--bench-kv-scheme turbo8v4|turbo0v4`: both arms hold their KV in the
     /// scheme after prefill (the AR iterator through its plan, DFlash2 in its
     /// own prefill).
@@ -1171,8 +1177,9 @@ nonisolated struct DFlash2BenchRunner {
         }
         let engine = AgentEngine()
         let modelDir = try runner.resolveModelDirectory()
-        Self.log("[dflash2-bench] loading model: \(modelDir.path)")
-        try await engine.llmActor.loadModel(from: modelDir, visionMode: false, speculation: .off)
+        Self.log("[dflash2-bench] loading model: \(modelDir.path) vision=\(Self.vision)")
+        try await engine.llmActor.loadModel(
+            from: modelDir, visionMode: Self.vision, speculation: .off)
         Self.log("[dflash2-bench] model loaded")
 
         guard
@@ -1228,8 +1235,13 @@ nonisolated struct DFlash2BenchRunner {
                 "[dflash2-bench] \(arm.paddedToColumn) median \(String(format: "%6.1f", median)) tok/s\(accStr)"
             )
         }
-        // Check every measured stream, including repeated runs.
-        if let arFingerprint = results.first(where: { $0.arm == "ar" })?.fingerprint {
+        // Check every measured stream, including repeated runs. An image
+        // prompt checks against AR over the iterator's own prefill split;
+        // plain AR's agreement with it is the prefill's, not speculation's.
+        let reference =
+            results.first(where: { $0.arm == "ar-split" })
+            ?? results.first(where: { $0.arm == "ar" })
+        if let arFingerprint = reference?.fingerprint {
             var mismatched = false
             for result in results {
                 let fp = result.fingerprint
@@ -1238,6 +1250,14 @@ nonisolated struct DFlash2BenchRunner {
                         $0.element.0 != $0.element.1
                     })?.offset
                     ?? (fp.count == arFingerprint.count ? nil : min(fp.count, arFingerprint.count))
+                if reference?.arm == "ar-split", result.arm == "ar" {
+                    emit(
+                        "[dflash2-bench] ar run\(result.runIndex) vs ar-split: "
+                            + (fp == arFingerprint
+                                ? "same stream"
+                                : "parts at +\(diverge.map(String.init) ?? "?") (prefill split)"))
+                    continue
+                }
                 mismatched = mismatched || fp != arFingerprint
                 emit(
                     "[dflash2-bench] \(result.arm) run\(result.runIndex) identity \(Self.captureFullStream ? "full stream" : "first 8"): \(fp == arFingerprint ? "MATCH" : "DIVERGED at +\(diverge.map(String.init) ?? "?")")"
@@ -1270,11 +1290,14 @@ nonisolated struct DFlash2BenchRunner {
         // fold below is the bench's own.
         let promptText = try buildPromptText()
         let prepared = try await context.processor.prepare(
-            input: UserInput(chat: [.user(promptText)]))
+            input: UserInput(chat: [.user(promptText, images: image.map { [.url($0)] } ?? [])]))
         let promptTokens = prepared.text.tokens.dim(-1)
         // Acceptance references are only comparable across identical prompt
         // bytes (ledger R55): every bank records the prompt hash.
         emit("[dflash2-bench] prompt sha256 \(promptSHA256(promptText))")
+        emit(
+            "[dflash2-bench] target \(type(of: context.model)) prompt tokens \(promptTokens)"
+                + (image.map { " image \($0.lastPathComponent)" } ?? ""))
 
         let draft: any DFlash2DrafterModel
         if draftPolicy == "4bit" {
@@ -1336,6 +1359,61 @@ nonisolated struct DFlash2BenchRunner {
             return ArmResult(
                 arm: "ar", runIndex: runIndex, decodeSeconds: seconds,
                 tokens: tokens, accepted: 0, proposed: 0, rounds: 0,
+                prefillSeconds: prefillSeconds, roundTimings: [], fingerprint: fingerprint)
+        }
+
+        /// AR decoding over the DFlash2 iterator's own prefill of an image
+        /// prompt: the target prefills through the image, then the text after
+        /// it in the iterator's chunks, rotated by the image's rope delta.
+        /// Plain AR prefills that text in the image's last chunk, through the
+        /// multimodal rope; this arm removes that difference, so what is left
+        /// between it and DFlash2 is one-token decode against the verify pass,
+        /// as on a text prompt.
+        func runARSplit(_ runIndex: Int) throws -> ArmResult {
+            guard let target = context.model as? any DFlash2MediaTargetModel else {
+                throw DFlash2BenchError.imagePromptUnsupported
+            }
+            var parameters = GenerateParameters(maxTokens: maxNewTokens)
+            parameters.temperature = 0
+            let cache = try context.model.newCache(parameters: parameters)
+            let prefillStart = ContinuousClock.now
+            guard
+                let media = try target.dflash2PrefillMedia(
+                    prepared, cache: cache, prefill: parameters.prefill)
+            else { throw DFlash2BenchError.imagePromptUnsupported }
+            let prompt = prepared.text.tokens.reshaped(-1)
+            let stepSize = max(1, parameters.prefill.stepSize ?? 2048)
+            var start = media.prefilledTokens
+            var logits = MLXArray(0)
+            while start < prompt.dim(0) {
+                let remaining = prompt.dim(0) - start
+                let end = start + (remaining == 1 ? 1 : min(stepSize, remaining - 1))
+                logits =
+                    target.dflash2Prefill(
+                        prompt[start..<end].expandedDimensions(axis: 0), cache: cache,
+                        captureLayers: [], positionDelta: media.positionDelta
+                    ).logits
+                if end < prompt.dim(0) { eval(cache) }
+                start = end
+            }
+            var token = argMax(logits[0..., -1, 0...], axis: -1)
+            eval(token)
+            let prefillSeconds = elapsedSeconds(since: prefillStart)
+            var state: LMOutput.State? = PositionAnchor.seededState(ropeDelta: media.positionDelta)
+            let decodeStart = ContinuousClock.now
+            var fingerprint: [Int] = []
+            for _ in 0..<maxNewTokens {
+                if fingerprint.count < fingerprintLimit { fingerprint.append(token.item(Int.self)) }
+                let output = context.model(
+                    LMInput.Text(tokens: token.reshaped(1, 1)), cache: cache, state: state)
+                state = output.state
+                token = argMax(output.logits[0..., -1, 0...], axis: -1)
+                asyncEval(token)
+            }
+            return ArmResult(
+                arm: "ar-split", runIndex: runIndex,
+                decodeSeconds: elapsedSeconds(since: decodeStart),
+                tokens: maxNewTokens, accepted: 0, proposed: 0, rounds: 0,
                 prefillSeconds: prefillSeconds, roundTimings: [], fingerprint: fingerprint)
         }
 
@@ -1445,6 +1523,11 @@ nonisolated struct DFlash2BenchRunner {
                 let ar = try runAR(0)
                 results.append(ar)
                 report(ar)
+                if image != nil {
+                    let split = try runARSplit(0)
+                    results.append(split)
+                    report(split)
+                }
             }
             for run in 0..<positiveOption("--bench-runs", default: 1) {
                 for blockSize in blocks {
@@ -1683,6 +1766,8 @@ private enum DFlash2BenchError: Error {
     case draftMissing
     case outputMismatch
     case unsupportedDraftPolicy
+    /// The target cannot prefill the image prompt for the split AR arm.
+    case imagePromptUnsupported
 }
 
 extension String {

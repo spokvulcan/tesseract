@@ -55,7 +55,8 @@ between families and modes, so it gets its own column.
   server maps OpenAI `reasoning_effort` onto them (ADR-0060). Thinking off
   per request via `chat_template_kwargs: {"enable_thinking": false}`.
 - Vision-language checkpoint (`vision_config` present). Both 27B entries
-  carry the **Text-Only Override** in the catalog until map #457 lands.
+  serve images, and image-bearing requests speculate with the DFlash2 draft
+  as text ones do (ADR-0089).
 - `generation_config.json`: temperature 1.0, top_p 0.95, top_k 20.
 
 ### Bonsai 2 27B (Rotated Ternary Checkpoint of Qwen3.8-27B)

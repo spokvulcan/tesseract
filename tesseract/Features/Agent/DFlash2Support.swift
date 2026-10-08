@@ -56,10 +56,9 @@ nonisolated enum DFlash2Support {
     }
 
     /// Which loaded targets the DFlash2 draft can speculate for: the vendor
-    /// `DFlash2TargetModel` conformers (the MLXLLM Qwen3.5 text classes).
-    /// The app force-loads the MLXLLM text target even from VLM-shaped
-    /// checkpoints (see `MTPDrafterSupport`), so the MLXVLM container never
-    /// reaches here in practice.
+    /// `DFlash2TargetModel` conformers, the MLXLLM Qwen3.5 text classes and
+    /// the MLXVLM Qwen3.5 vision class that runs the same engine
+    /// (ADR-0089), so a vision-mode load speculates as a text one does.
     static func pairsWithTarget(_ model: any LanguageModel) -> Bool {
         model is any DFlash2TargetModel
     }

@@ -53,7 +53,7 @@ nonisolated enum IntegrationSnapshotBuilder {
             .map { definition in
                 let visionCapable =
                     modelDirectory(definition.id)
-                    .map { ModelCatalog.isVisionCapable(definition: definition, directory: $0) }
+                    .map { ModelCatalog.isVisionCapable(directory: $0) }
                     ?? false
                 return IntegrationSnapshot.Model(
                     id: definition.id,

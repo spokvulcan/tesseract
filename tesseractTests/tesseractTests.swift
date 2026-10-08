@@ -107,9 +107,6 @@ struct ModelDefinitionCatalogTests {
         #expect(model.repoID == "prism-ml/Ternary-Bonsai-2-27B-mlx-2bit")
         #expect(model.cacheSubdirectory == "prism-ml_Ternary-Bonsai-2-27B-mlx-2bit")
         #expect(model.requiredExtension == "safetensors")
-        // The pack ships a vision tower; no Text-Only Override (map #457 is
-        // about DFlash2 in the VLM class, which this entry does not require).
-        #expect(model.textOnlyOverride == false)
         #expect(model.dependencies.isEmpty)
         #expect(
             ModelDefinition.byCategory()

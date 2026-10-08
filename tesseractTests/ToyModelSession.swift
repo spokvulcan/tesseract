@@ -39,6 +39,9 @@ nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensio
     /// queue — not `script` — answers what the toy predicts, keyed on the
     /// tokens actually fed rather than on absolute positions.
     let completions: ToyCompletionQueue?
+    /// The placeholder id an image's rows carry, for a toy that stands in
+    /// for a vision target prefilling its own images; nil otherwise.
+    let imagePadTokenId: Int?
 
     init(
         script: [Int],
@@ -47,6 +50,7 @@ nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensio
         layers: Int = 2,
         headDim: Int = 4,
         recurrentElements: Int = 0,
+        imagePadTokenId: Int? = nil,
         onForward: (@Sendable (Int) -> Void)? = nil
     ) {
         self.onForward = onForward
@@ -56,6 +60,7 @@ nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensio
         )
         self.script = script
         self.completions = nil
+        self.imagePadTokenId = imagePadTokenId
         self.eosTokenId = eosTokenId
         self.vocabSize = vocabSize
         self.kvHeads = Array(repeating: 1, count: layers)
@@ -80,6 +85,7 @@ nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensio
         self.onForward = onForward
         self.script = []
         self.completions = completions
+        self.imagePadTokenId = nil
         self.eosTokenId = completions.eosTokenId
         self.vocabSize = vocabSize
         self.kvHeads = Array(repeating: 1, count: layers)
@@ -473,13 +479,29 @@ nonisolated final class ModelVerbRecorder: @unchecked Sendable {
         let cacheOffset: Int?
     }
 
+    /// What one `makeSpeculativeDecodeIterator` verb handed the iterator.
+    struct SpeculativeHandover: Equatable, Sendable {
+        let prefilledPrefixTokens: Int
+        let positionDelta: Int
+        /// Whether the input still carried images (the target prefills them).
+        let carriesImages: Bool
+    }
+
     private let lock = NSLock()
     private var _verbs: [ModelVerb] = []
     private var _prefillCapacities: [Int] = []
     private var _captures: [Capture] = []
+    private var _speculativeHandovers: [SpeculativeHandover] = []
 
     var prefillCapacities: [Int] { lock.withLock { _prefillCapacities } }
     var captures: [Capture] { lock.withLock { _captures } }
+    var speculativeHandovers: [SpeculativeHandover] {
+        lock.withLock { _speculativeHandovers }
+    }
+
+    func recordSpeculativeHandover(_ handover: SpeculativeHandover) {
+        lock.withLock { _speculativeHandovers.append(handover) }
+    }
 
     func recordCaptures(_ snapshots: [HybridCacheSnapshot]) {
         let captures = snapshots.map {
@@ -689,14 +711,20 @@ nonisolated struct RecordingModelSession: ModelSession {
         _ input: LMInput,
         cache: [any KVCache],
         prefilledPrefixTokens: Int,
+        positionDelta: Int,
         plan: SpeculationPlan,
         parameters: GenerateParameters
     ) throws -> SpeculativeDecodeIterator {
         recorder.record(.makeSpeculativeDecodeIterator)
+        recorder.recordSpeculativeHandover(
+            .init(
+                prefilledPrefixTokens: prefilledPrefixTokens, positionDelta: positionDelta,
+                carriesImages: input.image != nil))
         return try base.makeSpeculativeDecodeIterator(
             input,
             cache: cache,
             prefilledPrefixTokens: prefilledPrefixTokens,
+            positionDelta: positionDelta,
             plan: plan,
             parameters: parameters
         )

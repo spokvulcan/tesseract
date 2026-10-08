@@ -29,8 +29,10 @@ Many cheap, trustworthy measurements per hour beat one slow end-to-end run.
   needs, on the shortest prompt that shows the effect.
 - **Build once, run many.** `build-for-testing`, then
   `test-without-building -only-testing:<suite>` while iterating; full
-  suites once, before committing. Read a script's source before passing it
-  flags: `scripts/bench.sh` builds and runs on any argument.
+  suites once, before committing. The vendor fork's tests:
+  `scripts/vendor-test.sh [--no-build] [suite…]`. Read a script's source
+  before passing it flags: `scripts/bench.sh` builds and runs on any
+  argument.
 - **A/B in one build.** Put both variants behind a temporary env switch,
   alternate them (ABAB, at least four runs), compare medians, and keep a
   reference arm (bf16 SDPA) in every run to catch GPU clock drift. Runs from
@@ -42,7 +44,8 @@ Many cheap, trustworthy measurements per hour beat one slow end-to-end run.
 - **Watch long runs.** Run anything over two minutes in the background with
   a timeout, note its expected duration, poll its output, and kill it when it
   overruns. A subagent with no new tool call for five minutes is stuck: stop
-  it and do the work directly.
+  it and do the work directly. The app's logs:
+  `scripts/dev.sh log-show [minutes] [pattern]`, which returns at once.
 - **Failures in unrelated suites:** run the same suite on the base commit
   and diff the failure lists before chasing them.
 

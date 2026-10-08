@@ -1900,14 +1900,19 @@ nonisolated final class ServerCompletion {
                         // capture still fires; that token stays unconsumed
                         // for the iterator, which prefills [split, end) and
                         // samples the first token exactly like its cold
-                        // prepare's own-chunk final position.
+                        // prepare's own-chunk final position. An image-bearing
+                        // plan's base is past its last image, so the iterator
+                        // takes text only, rotated by the images' rope delta
+                        // (ADR-0089).
                         if let speculation, let splitOffset = speculativeSplitOffset {
                             var snapshots = prefixSnapshots
                             if splitOffset > executionBaseOffset {
                                 let prefixTokenCount = splitOffset - executionBaseOffset
+                                let generationTokens = inputForGeneration.text.tokens
                                 let prefixText = LMInput.Text(
-                                    tokens: inputForGeneration.text.tokens[
-                                        ..<(prefixTokenCount + 1)],
+                                    tokens: generationTokens.ndim <= 1
+                                        ? generationTokens[..<(prefixTokenCount + 1)]
+                                        : generationTokens[0..., ..<(prefixTokenCount + 1)],
                                     mask: nil)
                                 let warmed = try prefixCache.storageActivityGate
                                     .withPrefillMarked {
@@ -1919,7 +1924,8 @@ nonisolated final class ServerCompletion {
                                             prefillStepSize: facts.prefillStepSize,
                                             consumeAll: false,
                                             initialState: initialState,
-                                            evalPolicy: .pipelined,
+                                            evalPolicy: imagePrefixInput == nil
+                                                ? .pipelined : .checkedSynchronous,
                                             storedForm: facts.partitionKey.kvScheme
                                         )
                                     }
@@ -1929,10 +1935,18 @@ nonisolated final class ServerCompletion {
                             memory.mark(
                                 .dflashPreparing,
                                 facts: RequestMemoryTelemetry.cacheFacts(liveCache))
+                            guard
+                                let positionDelta = keySpace.positionAnchorDelta(
+                                    upTo: splitOffset)
+                            else {
+                                throw AgentEngineError.generationFailed(
+                                    "speculative split \(splitOffset) inside an image run")
+                            }
                             let iterator = try session.makeSpeculativeDecodeIterator(
-                                fullInput,
+                                LMInput(text: fullInput.text),
                                 cache: liveCache,
                                 prefilledPrefixTokens: splitOffset,
+                                positionDelta: positionDelta,
                                 plan: speculation,
                                 parameters: facts.decodeParameters
                             )
@@ -2471,6 +2485,7 @@ nonisolated final class ServerCompletion {
                 fullInput,
                 cache: cache,
                 prefilledPrefixTokens: 0,
+                positionDelta: 0,
                 plan: plan,
                 parameters: request.facts.decodeParameters
             )
