@@ -4635,7 +4635,10 @@ every run.
 | code | 93.6 | 92.9 (−0.8%) | **91.4 (−2.3%)** | 5.06 / 5.05 | 54.0 / 54.7 |
 
 Runs agree within 0.5% per arm except one: `tree100-4` decoded code at
-4.8 tok/s with 4–8 s rounds, a whole-machine stall (the median ignores it).
+4.8 tok/s with 4–8 s rounds (the median ignores it). The cause, found
+later (G12's harness note): the app's Companion, running inside the
+benchmark process, loaded a second copy of the model and served a request
+during that fixture.
 
 The whole-run numbers mix the lever with the text each arm ends up
 decoding. On the tokens both arms share (T 1.25 against the chain), the
@@ -4932,9 +4935,10 @@ alternated rounds, steady (`results/2026-10-08/tree-turbo-redirect/`):
 | code | 85.2 | 87.6 | +2.8% | 4.67 / 4.90 | 54.6 / 55.7 |
 
 `turbo-loops-v20` (the final kernel), four alternated rounds, steady
-(`results/2026-10-08/tree-turbo-loops/`). A first attempt ran while a
-crash-looping background service and the lock-screen wallpaper loaded the
-machine, with stalls of up to 1.7 s in both arms, and was discarded.
+(`results/2026-10-08/tree-turbo-loops/`). A first attempt, run while the
+screen was locked, stalled for up to 1.7 s in both arms and was discarded;
+its cause was not isolated (the lock-screen wallpaper and a crash-looping
+background service were both running).
 
 | fixture | chain | tree | Δ | τ chain / tree | median ms/round chain / tree |
 | --- | --- | --- | --- | --- | --- |
@@ -4951,6 +4955,16 @@ tok/s); the medians are unaffected.
 Verdict: **ACCEPTED** (vendor `6c23b42`). Under turbo8v4, tree
 rounds now reproduce chain rounds bit for bit except across a 512-key span
 edge, and they speed up every fixture by 2.5–9.3%.
+
+Harness note (2026-10-09). A prefill-only ruler run hung: every harness
+process ran the app's launch sequence, so the Companion started inside it,
+loaded a second copy of the model 30 s after the ruler's, and the two
+threads deadlocked in mlx-swift's `compile` (each holding the lock the other
+waited for). `--dflash2-bench` processes now skip that launch sequence, as
+`--turboquant-bench` ones already did. In the app log of this session's
+earlier ruler processes, one more loaded a second copy: G9's `tree100-4`,
+whose code fixture fell to 4.8 tok/s and which every median already
+excludes.
 
 Remaining identity hazard: the partition span's buckets (bf16 2,048 keys
 plus the 1,024 switch, turbo8v4 512). A span fixed per generation would

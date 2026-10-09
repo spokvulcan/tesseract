@@ -758,6 +758,10 @@ final class DependencyContainer: ObservableObject {
         // The TurboQuant bench reads the process-wide MLX memory counters; the
         // Companion and the prewarms must not load a model beside it.
         guard !CommandLine.arguments.contains("--turboquant-bench") else { return }
+        // The DFlash2 bench and its speed ruler own their model too: a
+        // Companion moment that loaded a second copy beside a ruler run
+        // deadlocked both in MLX's compile.
+        guard !CommandLine.arguments.contains("--dflash2-bench") else { return }
         // Prevent duplicate setup from multiple window instances
         guard !hasSetup else { return }
         hasSetup = true
