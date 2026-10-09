@@ -85,6 +85,9 @@ nonisolated enum StepChoice: String, Sendable, Equatable {
     case start
     /// Not yet: the slot moves a quarter of an hour on, and is cued again then.
     case later
+    /// Not finished: the slot runs a quarter of an hour longer, and checks in
+    /// again at its new end.
+    case extend
     /// Not today: due tomorrow, off today's plan.
     case tomorrow
     /// Already done.
@@ -93,8 +96,16 @@ nonisolated enum StepChoice: String, Sendable, Equatable {
     case dismiss
 }
 
-/// A planned step whose slot starts now, as the Jarvis Panel shows it.
+/// A planned step at its start or, once the owner started it, at its end,
+/// as the Jarvis Panel shows it.
 nonisolated struct StepCue: Sendable, Equatable {
+    enum Phase: String, Sendable, Equatable {
+        /// Its slot starts now.
+        case start
+        /// The slot the owner started is over: done, longer, or another day?
+        case end
+    }
+
     var reminderID: String
     var title: String
     var start: Date
@@ -103,12 +114,18 @@ nonisolated struct StepCue: Sendable, Equatable {
     var isMustDo: Bool
     /// What comes after it ("Design review at 15:00").
     var next: String?
+    var phase: Phase = .start
 
     var end: Date { start.addingTimeInterval(TimeInterval(minutes * 60)) }
 
     /// One slot, one cue: a task moved to another time is a new slot.
     static func key(_ placement: Placement) -> String {
         "\(placement.reminderID)@\(Int(placement.start.timeIntervalSince1970))"
+    }
+
+    /// One end, one check-in: a slot made longer has a new end.
+    static func endKey(_ placement: Placement) -> String {
+        "\(key(placement))+\(placement.minutes)"
     }
 }
 
@@ -299,8 +316,12 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     /// Event nudges already recorded as delivered (carried: a nudge stays in
     /// Notification Center past midnight).
     var firedNudgeIDs: Set<String> = []
-    /// Planned slots whose start was cued, by `StepCue.key`, with when.
+    /// Planned slots whose start was cued, by `StepCue.key`, and whose end
+    /// was checked in, by `StepCue.endKey`, with when.
     var cuedSteps: [String: Date] = [:]
+    /// Slots the owner started (Start on a cue, Start now on Today), by
+    /// `StepCue.key`: their end checks in.
+    var startedSteps: Set<String> = []
 
     init(day: DayKey, syncedNudgeIDs: Set<String>? = nil) {
         self.day = day
@@ -311,7 +332,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         case day, syncedNudgeIDs, lastPresentAt, morningPlanAt, eveningWrapUpAt, nightReflectionAt
         case running, cards, mustDoID, plan, carryOver, carryOverForNextDay, ledger, agents
         case agentSpokenAt, lastTickAt, lastTriageAt, whereYouWere, deferred, firedNudgeIDs
-        case cuedSteps
+        case cuedSteps, startedSteps
     }
 
     /// Every field but the day is optional on disk, so a state saved by an
@@ -339,6 +360,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         deferred = (try? c.decodeIfPresent(Set<MomentKind>.self, forKey: .deferred)) ?? []
         firedNudgeIDs = (try? c.decodeIfPresent(Set<String>.self, forKey: .firedNudgeIDs)) ?? []
         cuedSteps = (try? c.decodeIfPresent([String: Date].self, forKey: .cuedSteps)) ?? [:]
+        startedSteps = (try? c.decodeIfPresent(Set<String>.self, forKey: .startedSteps)) ?? []
     }
 
     /// The next day's state: what must survive the rollover survives.

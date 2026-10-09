@@ -6,7 +6,9 @@
 //  the Jarvis Panel when its slot starts and the owner is at the Mac — once,
 //  never while away, in quiet hours, a call, a game or a meeting, never over
 //  a panel that is up, and not when its reminder rings at the same minute —
-//  and each of the owner's four choices (and closing it) does what it says.
+//  and each of the owner's choices (and closing it) does what it says. A
+//  step the owner started checks in when its time is up; "Start now" on
+//  Today counts as started and needs no cue.
 //
 
 import Foundation
@@ -271,11 +273,104 @@ struct DayEngineStepCueTests {
         #expect(Self.traced(.cueReaction, in: closed.effects)?["action"] == .string("dismiss"))
     }
 
+    // MARK: The end of a started step
+
+    /// The letter started from its cue at 11:12: 11:12–11:32.
+    static func started() -> DayState { choose(.start, at: local(11, 12)).state }
+
+    static func tick(_ state: DayState, at now: Date, panelUp: Bool = false) -> DayEngine.Decision {
+        DayEngine.decide(.tick, snapshot: snapshot(at: now, panelUp: panelUp), state: state)
+    }
+
+    @Test func aStartedStepChecksInWhenItsTimeIsUp() throws {
+        #expect(Self.cues(Self.tick(Self.started(), at: Self.local(11, 31)).effects).isEmpty)
+        let up = Self.tick(Self.started(), at: Self.local(11, 32))
+        let cue = try #require(Self.cues(up.effects).first)
+        #expect(cue.phase == .end)
+        #expect(cue.reminderID == "letter")
+        #expect(cue.end == Self.local(11, 32))
+        #expect(Self.traced(.cuePresented, in: up.effects)?["phase"] == .string("end"))
+        let after = Self.tick(up.state, at: Self.local(11, 33))
+        #expect(Self.cues(after.effects).isEmpty)
+    }
+
+    @Test func startNowOnTodayIsStartedAndNeedsNoCue() throws {
+        let placed = DayEngine.decide(
+            .cardAction(.place(reminderID: "deck", start: Self.local(11, 15), minutes: 25)),
+            snapshot: Self.snapshot(at: Self.local(11, 15)), state: Self.cued())
+        let next = Self.tick(placed.state, at: Self.local(11, 16))
+        #expect(Self.cues(next.effects).isEmpty)
+        let up = Self.tick(placed.state, at: Self.local(11, 40))
+        let cue = try #require(Self.cues(up.effects).first)
+        #expect(cue.phase == .end)
+        #expect(cue.reminderID == "deck")
+    }
+
+    @Test func aStartedStepIsNotInterruptedByTheNextStart() {
+        // The letter, started at 11:30, runs until 11:50 over the deck's 11:35.
+        let started = Self.choose(.start, at: Self.local(11, 30)).state
+        #expect(Self.cues(Self.tick(started, at: Self.local(11, 35)).effects).isEmpty)
+        // Done early: the deck's start is cued after all.
+        let doneEarly = DayEngine.decide(
+            .tick,
+            snapshot: Self.snapshot(
+                at: Self.local(11, 38), open: [Self.deck, Self.dentist], done: [Self.letter]),
+            state: started)
+        #expect(Self.cues(doneEarly.effects).first?.reminderID == "deck")
+    }
+
+    @Test func aStepThatWasNeverStartedDoesNotCheckIn() {
+        let closed = Self.choose(.dismiss, at: Self.local(11, 11))
+        #expect(Self.cues(Self.tick(closed.state, at: Self.local(11, 30)).effects).isEmpty)
+    }
+
+    @Test func aStepDoneBeforeItsTimeIsUpDoesNotCheckIn() {
+        let decision = DayEngine.decide(
+            .tick,
+            snapshot: Self.snapshot(
+                at: Self.local(11, 32), open: [Self.deck, Self.dentist], done: [Self.letter]),
+            state: Self.started())
+        #expect(Self.cues(decision.effects).isEmpty)
+    }
+
+    @Test func fifteenMoreMinutesRunsItLongerAndChecksInAgain() throws {
+        let up = Self.tick(Self.started(), at: Self.local(11, 32))
+        let longer = DayEngine.decide(
+            .cardAction(.step(reminderID: "letter", .extend)),
+            snapshot: Self.snapshot(at: Self.local(11, 33)), state: up.state)
+        let slot = try #require(longer.state.plan.first { $0.reminderID == "letter" })
+        #expect(slot.start == Self.local(11, 12))
+        #expect(slot.minutes == 35)
+        #expect(Self.traced(.cueReaction, in: longer.effects)?["action"] == .string("extend"))
+        #expect(Self.cues(Self.tick(longer.state, at: Self.local(11, 40)).effects).isEmpty)
+        let again = try #require(
+            Self.cues(Self.tick(longer.state, at: Self.local(11, 47)).effects).first)
+        #expect(again.phase == .end)
+        #expect(again.end == Self.local(11, 47))
+    }
+
+    @Test func aStepThatEndsAsTheNextBeginsChecksInFirst() throws {
+        // The letter, started at 11:15, ends as the deck's slot begins.
+        let started = Self.choose(.start, at: Self.local(11, 15)).state
+        let both = Self.tick(started, at: Self.local(11, 35))
+        let first = try #require(Self.cues(both.effects).first)
+        #expect(first.phase == .end)
+        #expect(first.reminderID == "letter")
+        #expect(Self.cues(both.effects).count == 1)
+        let waiting = Self.tick(both.state, at: Self.local(11, 36), panelUp: true)
+        #expect(Self.cues(waiting.effects).isEmpty)
+        let next = try #require(
+            Self.cues(Self.tick(waiting.state, at: Self.local(11, 37)).effects).first)
+        #expect(next.phase == .start)
+        #expect(next.reminderID == "deck")
+    }
+
     // MARK: Saved state
 
     @Test func aStateSavedBeforeCuesStillLoads() throws {
         let json = #"{"day": "2026-09-30", "plan": []}"#
         let state = try JSONDecoder().decode(DayState.self, from: Data(json.utf8))
         #expect(state.cuedSteps.isEmpty)
+        #expect(state.startedSteps.isEmpty)
     }
 }

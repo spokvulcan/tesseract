@@ -237,8 +237,9 @@ struct JarvisPanelView: View {
     }
 }
 
-/// A planned step starting now: what it is, until when and what follows,
-/// and the four ways on — start, a quarter of an hour on, tomorrow, done.
+/// A planned step at its start — what it is, until when and what follows,
+/// and the four ways on: start, a quarter of an hour on, tomorrow, done — or
+/// at the end of the slot the owner started: done, longer, or tomorrow.
 private struct StepCueContent: View {
     let cue: StepCue
     let choose: (StepChoice) -> Void
@@ -247,7 +248,9 @@ private struct StepCueContent: View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text("Time for").fontWeight(.semibold).foregroundStyle(Color.accentColor)
+                    Text(cue.phase == .start ? "Time for" : "Time's up")
+                        .fontWeight(.semibold)
+                        .foregroundStyle(Color.accentColor)
                     Spacer()
                     Text("\(AgendaTime.clock(cue.start))–\(AgendaTime.clock(cue.end))")
                         .foregroundStyle(.secondary)
@@ -265,22 +268,31 @@ private struct StepCueContent: View {
             // Every button non-focusable: they appear after the panel's
             // first layout (GlassPanel's macOS 27.0 focus freeze).
             HStack(spacing: 8) {
-                Button("Start") { choose(.start) }
-                    .buttonStyle(PanelButtonStyle(prominent: true))
-                    .focusable(false)
-                Button("In \(DayEngine.stepLaterMinutes) min") { choose(.later) }
-                    .buttonStyle(PanelButtonStyle())
-                    .focusable(false)
-                    .help("Move it a quarter of an hour on; Jarvis asks again then")
-                Button("Tomorrow") { choose(.tomorrow) }
-                    .buttonStyle(PanelButtonStyle())
-                    .focusable(false)
-                Spacer(minLength: 0)
-                Button("Done") { choose(.done) }
-                    .buttonStyle(PanelButtonStyle())
-                    .focusable(false)
+                switch cue.phase {
+                case .start:
+                    choice("Start", .start, prominent: true)
+                    choice("In \(DayEngine.stepLaterMinutes) min", .later)
+                        .help("Move it a quarter of an hour on; Jarvis asks again then")
+                    choice("Tomorrow", .tomorrow)
+                    Spacer(minLength: 0)
+                    choice("Done", .done)
+                case .end:
+                    choice("Done", .done, prominent: true)
+                    choice("\(DayEngine.stepLaterMinutes) more min", .extend)
+                        .help("Keep going a quarter of an hour; Jarvis asks again then")
+                    choice("Tomorrow", .tomorrow)
+                    Spacer(minLength: 0)
+                }
             }
         }
+    }
+
+    private func choice(_ title: String, _ choice: StepChoice, prominent: Bool = false)
+        -> some View
+    {
+        Button(title) { choose(choice) }
+            .buttonStyle(PanelButtonStyle(prominent: prominent))
+            .focusable(false)
     }
 
     private var detail: String {

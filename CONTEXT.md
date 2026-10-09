@@ -1842,11 +1842,13 @@ A planned step put on the Jarvis Panel when its slot starts and the owner is at
 the Mac: the task, until when and what follows, with Start (the slot starts
 this minute), In 15 min (it moves on and is cued again then), Tomorrow and
 Done. A Morning Plan's slots and the owner's own "Do it at 16:30" live only in
-the day's state, so without it nothing marks their start. Built by code, no
-model; each slot once, within ten minutes of its start; never while away, in
-quiet hours, a call, a game or a meeting, nor over a panel that is up; a slot
-whose reminder rings at the same minute is left to Reminders. Closing it
-changes nothing.
+the day's state, so without it nothing marks their start. A step the owner
+started (Start on a cue, or Start now on Today) checks in when its time is up:
+Done, 15 more min (it runs longer and checks in again), Tomorrow; while it
+runs, no other start interrupts it. Built by code, no model; each start and
+end once, within ten minutes; never while away, in quiet hours, a call, a
+game or a meeting, nor over a panel that is up; a slot whose reminder rings
+at the same minute is left to Reminders. Closing it changes nothing.
 _Avoid_: reminder (Reminders' own alarm), nudge (an event's OS notification).
 
 **Day Engine**:

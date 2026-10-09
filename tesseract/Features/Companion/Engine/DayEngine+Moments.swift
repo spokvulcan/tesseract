@@ -378,9 +378,11 @@ nonisolated extension DayEngine {
             return [.trace(.cardReaction, ["action": "unplanned"])]
 
         case .place(let reminderID, let start, let minutes):
+            let slot = Placement(reminderID: reminderID, start: start, minutes: minutes)
             state.plan.removeAll { $0.reminderID == reminderID }
-            state.plan.append(Placement(reminderID: reminderID, start: start, minutes: minutes))
+            state.plan.append(slot)
             state.plan.sort { $0.start < $1.start }
+            markStartedIfNow(slot, snapshot: snapshot, state: &state)
             return [.trace(.cardReaction, ["action": "placed", "minutes": .int(minutes)])]
 
         case .leftover(let cardID, let reminderID, let suggestion):

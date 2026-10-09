@@ -235,7 +235,8 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # (TEST_RUNNER_TODAY_GALLERY_DIR=<dir> also writes each render there as a PNG,
 # dark and light), the Step Cue (a planned slot put on the panel at its start,
 # once, and never while away, quiet, in a call, a game or a meeting, or over a
-# panel that is up; and what each choice does), the Jarvis Panel's content
+# panel that is up; a started step's check-in at its end, which no other start
+# interrupts; and what each choice does), the Jarvis Panel's content
 # over fixture cards (TEST_RUNNER_PANEL_GALLERY_DIR=<dir> writes the PNGs),
 # cards and prompts, the Day Thread's store, the seen ledger, the
 # Delivery Ladder and governor, the Claude Code merge, the Profile and recall

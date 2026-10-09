@@ -3,8 +3,9 @@
 //  tesseractTests
 //
 //  The Jarvis Panel's content, rendered with the app's view over fixture
-//  cards: a Step Cue (and one for the must-do, with a long title) at its own
-//  shorter height, and a Breakpoint card at the full one. With
+//  cards: a Step Cue (one for the must-do, with a long title, and one at
+//  the end of a started step) at its own shorter height, and a Breakpoint
+//  card at the full one. With
 //  PANEL_GALLERY_DIR set (TEST_RUNNER_PANEL_GALLERY_DIR through xcodebuild),
 //  each render is also written there as a PNG, in dark and light, for judging
 //  the panel by eye. The glass itself is the window's; a plain background
@@ -29,6 +30,7 @@ struct JarvisPanelGalleryTests {
     enum Shown: String, CaseIterable, CustomTestStringConvertible {
         case stepCue
         case stepCueMustDo
+        case stepCheckIn
         case breakpoint
 
         var testDescription: String { rawValue }
@@ -40,7 +42,7 @@ struct JarvisPanelGalleryTests {
 
         @MainActor var height: CGFloat {
             switch self {
-            case .stepCue, .stepCueMustDo: JarvisPanelController.cueHeight
+            case .stepCue, .stepCueMustDo, .stepCheckIn: JarvisPanelController.cueHeight
             case .breakpoint: JarvisPanelController.size.height
             }
         }
@@ -59,6 +61,11 @@ struct JarvisPanelGalleryTests {
                         "Implement the Companion with a cloud model, so it is actually useful every day",
                     start: Self.at(14), minutes: 90, areaName: "Daily", isMustDo: true,
                     next: nil)
+            case .stepCheckIn:
+                model.cue = StepCue(
+                    reminderID: "letter", title: "Write to the case worker about the bus ticket",
+                    start: Self.at(11, 12), minutes: 20, areaName: "Inbox", isMustDo: false,
+                    next: "Companion work at 11:35", phase: .end)
             case .breakpoint:
                 model.card = DayCard(
                     id: "breakpoint-1", kind: .breakpoint, createdAt: Self.at(15, 44),

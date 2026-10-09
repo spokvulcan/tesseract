@@ -259,10 +259,16 @@ the owner must remember to read does not. What changed:
   panel the owner hasn't closed (it waits a tick, and a card that takes the
   panel on the same tick goes first). A slot whose reminder rings at the same
   minute is left to Reminders. Closing it changes nothing.
+- **A started step checks in when its time is up.** A step the owner started
+  (Start on a cue, or Start now on Today, which needs no cue of its own) is
+  put back on the panel at its end while its task is open: Done, 15 more min
+  (it runs longer and checks in again), Tomorrow. While it runs, no other
+  step's start interrupts it; the check-in names what comes next.
 - **The panel's buttons are drawn by hand** (capsules, the main one in the
   accent): the panel is never key, and a system prominent button turns gray
   in a window that isn't.
-- **The trace measures it**: `cue.presented` (how late, the slot's length,
-  the must-do) and `cue.reaction` (the choice, the time to react).
+- **The trace measures it**: `cue.presented` (start or end, how late, the
+  slot's length, the must-do) and `cue.reaction` (the choice, the time to
+  react).
 - `JarvisPanelGalleryTests` renders the panel's content over fixture cards;
   `TEST_RUNNER_PANEL_GALLERY_DIR` writes the renders as PNGs.
