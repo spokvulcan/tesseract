@@ -51,12 +51,14 @@ nonisolated struct AgendaEvent: Sendable, Equatable, Hashable, Identifiable, Cod
     /// Whether anyone besides the owner is invited: a meeting, not a block.
     var hasOtherAttendees: Bool
     var isEditable: Bool
+    /// The event's own link (a calendar invite's conference link may be here).
+    var url: URL?
 
     init(
         id: String, title: String, start: Date, end: Date, isAllDay: Bool = false,
         calendarID: String, calendarTitle: String, colorHex: String? = nil,
         location: String? = nil, notes: String? = nil, hasOtherAttendees: Bool = false,
-        isEditable: Bool = true
+        isEditable: Bool = true, url: URL? = nil
     ) {
         self.id = id
         self.title = title
@@ -70,6 +72,7 @@ nonisolated struct AgendaEvent: Sendable, Equatable, Hashable, Identifiable, Cod
         self.notes = notes
         self.hasOtherAttendees = hasOtherAttendees
         self.isEditable = isEditable
+        self.url = url
     }
 
     var duration: TimeInterval { end.timeIntervalSince(start) }
@@ -78,6 +81,10 @@ nonisolated struct AgendaEvent: Sendable, Equatable, Hashable, Identifiable, Cod
     /// service ("Zoom"), so "online" is plain and a password never shows; a
     /// place stays as written.
     var place: String? { AgendaPlace.label(location) }
+
+    /// The call to join: the first meeting-service link in its place, its own
+    /// link or its notes (where an invite writes "Join with Google Meet").
+    var meetingLink: URL? { AgendaPlace.meetingLink(in: [location, url?.absoluteString, notes]) }
 }
 
 /// A calendar location as people read it.
@@ -91,6 +98,21 @@ nonisolated enum AgendaPlace {
         ("facetime.apple.com", "FaceTime"), ("app.slack.com", "Slack"),
         ("discord.com", "Discord"), ("discord.gg", "Discord"),
     ]
+
+    /// The first link to a meeting service in `texts`, in order: a call's to
+    /// join. Other links (a doc, a map) aren't one.
+    static func meetingLink(in texts: [String?]) -> URL? {
+        for text in texts.compactMap(\.self) {
+            for match in text.matches(of: /(?i)https?:\/\/[^\s,;<>"]+/) {
+                guard let url = URL(string: String(match.output)),
+                    let host = url.host?.lowercased(),
+                    services.contains(where: { host == $0.host || host.hasSuffix("." + $0.host) })
+                else { continue }
+                return url
+            }
+        }
+        return nil
+    }
 
     /// - Parameter withLink: keep the meeting link, its query (a password)
     ///   dropped, after the service ("Zoom — us04web.zoom.us/j/123").

@@ -285,4 +285,22 @@ struct AgendaPlaceTests {
             AgendaPlace.label("https://us04web.zoom.us/j/78521739484?pwd=abc.1", withLink: true)
                 == "Zoom — us04web.zoom.us/j/78521739484")
     }
+
+    @Test func aCallsLinkIsFoundInItsPlaceItsLinkOrItsNotes() {
+        #expect(
+            AgendaPlace.meetingLink(in: ["https://us04web.zoom.us/j/785?pwd=abc", nil, nil])
+                == URL(string: "https://us04web.zoom.us/j/785?pwd=abc"))
+        // An invite writes it in the notes; a doc linked first isn't a call.
+        let notes = """
+            Agenda: https://docs.google.com/document/d/1
+            Join with Google Meet: https://meet.google.com/abc-defg-hij
+            """
+        #expect(
+            AgendaPlace.meetingLink(in: ["Room 4", nil, notes])
+                == URL(string: "https://meet.google.com/abc-defg-hij"))
+        #expect(
+            AgendaPlace.meetingLink(in: [nil, "https://teams.microsoft.com/l/meetup-join/x", nil])
+                == URL(string: "https://teams.microsoft.com/l/meetup-join/x"))
+        #expect(AgendaPlace.meetingLink(in: ["Efstaleiti 1", nil, "https://example.org"]) == nil)
+    }
 }

@@ -43,6 +43,44 @@ struct NudgePlannerTests {
         #expect(nudges.first?.body == "In 10 min · 10:00–10:30 · Room 2")
     }
 
+    @Test func aCallsNudgeCarriesItsLink() throws {
+        var call = Self.event("call", Self.local(30, 10))
+        call.location = nil
+        call.notes = "Join with Google Meet: https://meet.google.com/abc-defg-hij"
+        let nudge = try #require(
+            NudgePlanner.plan(events: [call], now: Self.now, leadMinutes: 10).first)
+        #expect(nudge.link == URL(string: "https://meet.google.com/abc-defg-hij"))
+        // A room has no link.
+        #expect(
+            NudgePlanner.plan(
+                events: [Self.event("room", Self.local(30, 10))], now: Self.now,
+                leadMinutes: 10
+            ).first?.link == nil)
+        // A new link, or a later end, is nudged again with what is true now.
+        var moved = call
+        moved.notes = "Join with Google Meet: https://meet.google.com/new-link-xyz"
+        let relinked = try #require(
+            NudgePlanner.plan(events: [moved], now: Self.now, leadMinutes: 10).first)
+        #expect(relinked.id != nudge.id)
+        var longer = call
+        longer.end = Self.local(30, 11)
+        let extended = try #require(
+            NudgePlanner.plan(events: [longer], now: Self.now, leadMinutes: 10).first)
+        #expect(extended.id != nudge.id)
+        #expect(extended.body == "In 10 min · 10:00–11:00")
+    }
+
+    @Test func joinOpensTheCallAndAnyOtherClickToday() {
+        let link = "https://meet.google.com/abc-defg-hij"
+        #expect(
+            CompanionNotifier.joinURL(action: CompanionNotifier.joinAction, link: link)
+                == URL(string: link))
+        #expect(
+            CompanionNotifier.joinURL(
+                action: "com.apple.UNNotificationDefaultActionIdentifier", link: link) == nil)
+        #expect(CompanionNotifier.joinURL(action: CompanionNotifier.joinAction, link: nil) == nil)
+    }
+
     @Test func aDepartureIsNudgedAtItsTime() {
         let course = AgendaEvent(
             id: "course", title: "Course", start: Self.local(30, 13), end: Self.local(30, 14),

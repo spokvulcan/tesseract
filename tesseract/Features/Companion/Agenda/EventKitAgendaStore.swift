@@ -331,7 +331,8 @@ final class EventKitAgendaStore: AgendaStore {
             location: event.location,
             notes: event.notes,
             hasOtherAttendees: others,
-            isEditable: event.calendar?.allowsContentModifications ?? false)
+            isEditable: event.calendar?.allowsContentModifications ?? false,
+            url: event.url)
     }
 
     nonisolated private static func value(of reminder: EKReminder) -> AgendaReminder {

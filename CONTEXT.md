@@ -1854,9 +1854,11 @@ _Avoid_: focus (the day has several goals, not one focus), priority.
 **Nudge**:
 A notification scheduled with the OS a few minutes before a calendar event, so
 it fires even with Tesseract closed — and, for an event in person, at the time
-the Morning Plan set to leave for it ("Time to leave for Class"). Reminders
-with a due time need none: they carry their own alarm, delivered by Reminders
-on every device.
+the Morning Plan set to leave for it ("Time to leave for Class"). A call's
+nudge has a Join button that opens its link — the first meeting-service link in
+its place, its own link or the invite's notes — so ten minutes ahead, or late,
+joining is one click. Reminders with a due time need none: they carry their own
+alarm, delivered by Reminders on every device.
 _Avoid_: wake (retired), alert (unqualified).
 
 **Step Cue**:

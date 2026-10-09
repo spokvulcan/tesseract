@@ -21,6 +21,8 @@ nonisolated struct Nudge: Sendable, Equatable, Hashable, Codable, Identifiable {
     let fireAt: Date
     let title: String
     let body: String
+    /// A call's link: the nudge offers to join it.
+    var link: URL? = nil
 }
 
 nonisolated enum NudgePlanner {
@@ -47,10 +49,15 @@ nonisolated enum NudgePlanner {
                 "\(AgendaTime.clock(event.start, calendar: calendar))–\(AgendaTime.clock(event.end, calendar: calendar))"
             var body = leadMinutes > 0 ? "In \(leadMinutes) min · \(when)" : "Now · \(when)"
             if let place = event.place { body += " · \(place)" }
-            let digest = stableHash("\(event.title)|\(event.location ?? "")|\(leadMinutes)")
+            let link = event.meetingLink
+            // Its end and link too: a meeting made longer, or a new link, is
+            // nudged again with what is true now.
+            let digest = stableHash(
+                "\(event.title)|\(event.location ?? "")|\(leadMinutes)|\(Int(event.end.timeIntervalSince1970))|\(link?.absoluteString ?? "")"
+            )
             return Nudge(
                 id: "\(idPrefix)\(event.id).\(digest)", eventID: event.id, fireAt: fireAt,
-                title: event.title, body: body)
+                title: event.title, body: body, link: link)
         }
         .sorted { $0.fireAt < $1.fireAt }
     }

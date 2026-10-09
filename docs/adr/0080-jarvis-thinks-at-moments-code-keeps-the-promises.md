@@ -572,3 +572,12 @@ the owner must remember to read does not. What changed:
 - `JarvisPanelGalleryTests` renders the panel's content over fixture cards,
   each at the height the panel fits to it; `TEST_RUNNER_PANEL_GALLERY_DIR`
   writes the renders as PNGs.
+- **A call's nudge joins it.** The owner's days hold several calls; a
+  nudge said "In 10 min · Google Meet" and a click opened Today, so joining
+  meant hunting for the link in the calendar, minutes before the call.
+  A nudge for an event with a meeting-service link — in its place, its own
+  link (`EKEvent.url`, now read) or the invite's notes, where Google writes
+  "Join with Google Meet" — carries it and a Join button that opens it; any
+  other click still opens Today. A nudge's id now includes the event's end
+  and link, so a meeting made longer or given a new link is nudged again with
+  what is true now.
