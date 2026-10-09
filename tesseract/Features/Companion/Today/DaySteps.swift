@@ -350,8 +350,8 @@ private struct EventStep: View {
                         Text("Leave at \(AgendaTime.clock(leave.at))")
                             .foregroundStyle(Color.accentColor)
                     }
-                    if style == .table, let location = event.location, !location.isEmpty {
-                        Text(location).foregroundStyle(.secondary).lineLimit(1)
+                    if style == .table, let place = event.place {
+                        Text(place).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }
             }
@@ -368,7 +368,7 @@ private struct EventStep: View {
         var parts = [event.calendarTitle]
         if !isAllDay { parts.append("until \(AgendaTime.clock(event.end))") }
         if let leave { parts.append("leave at \(AgendaTime.clock(leave.at))") }
-        if let location = event.location, !location.isEmpty { parts.append(location) }
+        if let place = event.place { parts.append(place) }
         return parts.joined(separator: " · ")
     }
 }

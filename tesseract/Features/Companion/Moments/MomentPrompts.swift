@@ -66,7 +66,7 @@ nonisolated enum MomentPrompts {
             lines.append("Events still ahead (id · when — title · place):")
             for (index, event) in leaving.enumerated() {
                 var line = "- e\(index + 1) · \(clock(event.start, facts)) — \(event.title)"
-                if let place = event.location, !place.isEmpty { line += " · \(place)" }
+                if let place = event.place { line += " · \(place)" }
                 lines.append(line)
             }
         }

@@ -359,6 +359,12 @@ the owner must remember to read does not. What changed:
   "1h 5m"), refreshed on its own clock, with the step in the tooltip; it
   goes back to the glyph alone when the step ends or is done
   (`DayEngine.focus`, pushed through `CompanionPresence`).
+- **An online meeting reads as its service.** A Zoom event's location is
+  its link with the password; it showed under the event on the Day Line, in
+  its nudge, in the agenda tool and in the plan's list of events to leave
+  for. `AgendaEvent.place` reads it as "Zoom" (text around the link stays:
+  "Room 4 · Microsoft Teams"), which also tells the plan there is nothing to
+  travel to; the agent's listing keeps the link without its query.
 - **The plan sees the likeliest tasks first.** The Day Opening and the
   Morning Plan listed up to 25 undated reminders in the store's order, most
   of them from collection lists (films, books, places) no day plans. They now

@@ -106,7 +106,7 @@ nonisolated enum CardParser {
             leaving.insert(event.id)
             return Departure(
                 eventID: event.id, title: event.title, at: at.date, eventStart: event.start,
-                location: event.location)
+                location: event.place)
         }
         return .card(
             .morningPlan(

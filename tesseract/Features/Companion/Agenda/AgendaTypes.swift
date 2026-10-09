@@ -73,6 +73,46 @@ nonisolated struct AgendaEvent: Sendable, Equatable, Hashable, Identifiable, Cod
     }
 
     var duration: TimeInterval { end.timeIntervalSince(start) }
+
+    /// Where it happens, as the owner reads it: a meeting link becomes its
+    /// service ("Zoom"), so "online" is plain and a password never shows; a
+    /// place stays as written.
+    var place: String? { AgendaPlace.label(location) }
+}
+
+/// A calendar location as people read it.
+nonisolated enum AgendaPlace {
+
+    /// Meeting services by host.
+    static let services: [(host: String, name: String)] = [
+        ("zoom.us", "Zoom"), ("meet.google.com", "Google Meet"),
+        ("teams.microsoft.com", "Microsoft Teams"), ("teams.live.com", "Microsoft Teams"),
+        ("webex.com", "Webex"), ("whereby.com", "Whereby"), ("meet.jit.si", "Jitsi"),
+        ("facetime.apple.com", "FaceTime"), ("app.slack.com", "Slack"),
+        ("discord.com", "Discord"), ("discord.gg", "Discord"),
+    ]
+
+    /// - Parameter withLink: keep the meeting link, its query (a password)
+    ///   dropped, after the service ("Zoom — us04web.zoom.us/j/123").
+    static func label(_ location: String?, withLink: Bool = false) -> String? {
+        guard let location = location?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !location.isEmpty
+        else { return nil }
+        guard let range = location.range(of: #"https?://[^\s,;]+"#, options: .regularExpression)
+        else { return location }
+        let url = URL(string: String(location[range]))
+        let host = (url?.host ?? "").lowercased()
+        var service =
+            services.first { host == $0.host || host.hasSuffix("." + $0.host) }?.name
+            ?? (host.hasPrefix("www.") ? String(host.dropFirst(4)) : host)
+        if withLink, let url {
+            service += " — \(url.host ?? "")\(url.path)"
+        }
+        let rest = location.replacingCharacters(in: range, with: "")
+            .trimmingCharacters(
+                in: CharacterSet(charactersIn: " -–—/|,;:").union(.whitespacesAndNewlines))
+        return rest.isEmpty ? service : "\(rest) · \(service)"
+    }
 }
 
 /// One reminder. `due` is a whole day when `dueHasTime` is false.

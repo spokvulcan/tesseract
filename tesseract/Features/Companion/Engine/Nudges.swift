@@ -46,7 +46,7 @@ nonisolated enum NudgePlanner {
             let when =
                 "\(AgendaTime.clock(event.start, calendar: calendar))–\(AgendaTime.clock(event.end, calendar: calendar))"
             var body = leadMinutes > 0 ? "In \(leadMinutes) min · \(when)" : "Now · \(when)"
-            if let location = event.location, !location.isEmpty { body += " · \(location)" }
+            if let place = event.place { body += " · \(place)" }
             let digest = stableHash("\(event.title)|\(event.location ?? "")|\(leadMinutes)")
             return Nudge(
                 id: "\(idPrefix)\(event.id).\(digest)", eventID: event.id, fireAt: fireAt,
@@ -66,7 +66,7 @@ nonisolated enum NudgePlanner {
                 event.start == departure.eventStart
             else { return nil }
             var body = "It starts at \(AgendaTime.clock(event.start, calendar: calendar))"
-            if let location = event.location, !location.isEmpty { body += " · \(location)" }
+            if let place = event.place { body += " · \(place)" }
             let digest = stableHash("\(event.title)|\(departure.at.timeIntervalSince1970)")
             return Nudge(
                 id: "\(leavePrefix)\(event.id).\(digest)", eventID: event.id,

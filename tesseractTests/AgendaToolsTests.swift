@@ -256,3 +256,27 @@ struct AgendaToolsTests {
         #expect(f.agenda.areas.map(\.name) == ["Job", "Body"])
     }
 }
+
+/// A calendar location as people read it: a meeting link is its service, a
+/// password never shows, and a place stays as written.
+struct AgendaPlaceTests {
+
+    @Test(
+        arguments: [
+            ("https://us04web.zoom.us/j/78521739484?pwd=abc.1", "Zoom"),
+            ("https://meet.google.com/abc-defg-hij", "Google Meet"),
+            ("Room 4 / https://teams.microsoft.com/l/meetup-join/xyz", "Room 4 · Microsoft Teams"),
+            ("https://www.example.org/call", "example.org"),
+            ("Efstaleiti 1", "Efstaleiti 1"),
+            ("  ", nil),
+        ] as [(String, String?)])
+    func aLocationReadsAsAPlace(_ location: String, _ label: String?) {
+        #expect(AgendaPlace.label(location) == label)
+    }
+
+    @Test func theAgentKeepsTheLinkButNotItsPassword() {
+        #expect(
+            AgendaPlace.label("https://us04web.zoom.us/j/78521739484?pwd=abc.1", withLink: true)
+                == "Zoom — us04web.zoom.us/j/78521739484")
+    }
+}
