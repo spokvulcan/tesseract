@@ -334,4 +334,20 @@ nonisolated extension DayCard {
         guard let freshFor else { return true }
         return now.timeIntervalSince(createdAt) < freshFor
     }
+
+    /// It has something to say on Today. A Breakpoint with nothing that
+    /// needs the owner says nothing: "nothing needs you" is no news, and it
+    /// would push the plan's word off the card after every break.
+    var hasWord: Bool {
+        if case .breakpoint(let breakpoint) = body {
+            return !breakpoint.needsYou.isEmpty || isRefining
+        }
+        return true
+    }
+
+    /// Jarvis's word on the Now Card: the latest open card with something to
+    /// say, while it is fresh.
+    static func word(in cards: [DayCard], at now: Date) -> DayCard? {
+        cards.last { !$0.dismissed && $0.hasWord && $0.isFresh(at: now) }
+    }
 }

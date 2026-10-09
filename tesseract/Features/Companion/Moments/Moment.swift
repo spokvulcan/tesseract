@@ -28,7 +28,8 @@ nonisolated enum MomentKind: String, Sendable, Equatable, Hashable, Codable, Cas
     var title: String {
         switch self {
         case .morningPlan: "Morning Plan"
-        case .breakpoint: "Welcome back"
+        // Jarvis's line does the greeting; the title says what the card is.
+        case .breakpoint: "While you were away"
         case .triage: "Triage"
         case .eveningWrapUp: "Evening Wrap-up"
         case .nightReflection: "Night Reflection"

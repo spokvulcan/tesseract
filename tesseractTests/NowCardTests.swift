@@ -220,4 +220,37 @@ struct NowCardTests {
             body: .reflection(ReflectionCard(carryOver: "Night", tomorrow: [], proposals: [])))
         #expect(reflection.isFresh(at: Self.local(31, 2)))
     }
+
+    @Test func aBreakpointWithNothingForTheOwnerLeavesThePlansWordStanding() {
+        let plan = DayCard(
+            id: "plan", kind: .morningPlan, createdAt: Self.local(30, 8), isFallback: false,
+            body: .morningPlan(
+                MorningPlanCard(line: "A calm day.", mustDoID: nil, placements: [], suggestions: [])
+            ))
+        func breakpoint(needsYou: [WaitingItem]) -> DayCard {
+            DayCard(
+                id: "back", kind: .breakpoint, createdAt: Self.local(30, 10), isFallback: false,
+                body: .breakpoint(
+                    BreakpointCard(
+                        awayFrom: Self.local(30, 9, 30), awayUntil: Self.local(30, 10),
+                        line: "Nothing needs you right now.", needsYou: needsYou, next: [],
+                        whereYouWere: "Xcode",
+                        canWait: [QuietGroup(app: "YouTube", lines: ["A new video"])])))
+        }
+        let at = Self.local(30, 10, 5)
+        let quiet = breakpoint(needsYou: [])
+        #expect(DayCard.word(in: [plan, quiet], at: at)?.id == "plan")
+        let anna = WaitingItem(
+            id: "n1", kind: .notification, title: "Anna", detail: "The deck?", app: "Slack")
+        #expect(DayCard.word(in: [plan, breakpoint(needsYou: [anna])], at: at)?.id == "back")
+        // While Jarvis judges what came in, the card speaks.
+        var judging = quiet
+        judging.isRefining = true
+        #expect(DayCard.word(in: [plan, judging], at: at)?.id == "back")
+        // Dismissed or stale, the word goes; a quiet card never stands in.
+        var closed = plan
+        closed.dismissed = true
+        #expect(DayCard.word(in: [closed, quiet], at: at) == nil)
+        #expect(DayCard.word(in: [plan, quiet], at: Self.local(30, 12, 30)) == nil)
+    }
 }

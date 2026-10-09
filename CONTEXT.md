@@ -1787,8 +1787,9 @@ step, what's left, or a done day and how tomorrow starts) with one-click
 offers that move it on (Done, Start now, "Do it at 16:30", Tomorrow, Plan my
 day, Wrap up the day). Code builds it from the Timeline, so it never waits on
 the model; Jarvis's latest card line rides along while fresh (a plan for four
-hours, a welcome back for one, the evening's cards until the day ends), and
-everything Waiting on You and the evening's leftovers sit on it, each said
+hours, a welcome back for one, the evening's cards until the day ends) — a
+Breakpoint with nothing for the owner says nothing, so the plan's word stands —
+and everything Waiting on You and the evening's leftovers sit on it, each said
 once.
 _Avoid_: hero, focus card, "the card" (unqualified: each Moment makes a card).
 
@@ -1890,7 +1891,8 @@ _Avoid_: summons (retired), welcome-back notification.
 **Breakpoint Card**:
 What needs the owner (people, agents, missed notifications — one action each:
 Open, Later, Done), the next event and what fits before it, where the owner
-was, and how many other things can wait (expandable).
+was, and how many other things can wait (expandable). Titled "While you were
+away"; Jarvis's line does the greeting.
 
 **Jarvis Panel**:
 The floating card rung: a Siri-style Liquid Glass panel near the top-right,

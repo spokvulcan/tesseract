@@ -282,6 +282,13 @@ the owner must remember to read does not. What changed:
   Today. The day's first sit-down is the owner starting their day, not
   Jarvis reaching out at night: the Morning Plan, made ahead or made then,
   takes the panel at it (a game or a call still keeps it in Today).
+- **"Nothing needs you" is no news.** 39 of the 43 Breakpoint cards had
+  nothing for the owner, yet each became Jarvis's word on the Now Card for an
+  hour, pushing the Morning Plan's line and tips off it after the first
+  break. Jarvis's word is now the latest card with something to say; a
+  Breakpoint speaks only when something needs the owner (or while Jarvis is
+  judging what came in). The Breakpoint is titled "While you were away", so
+  the greeting is said once, by Jarvis's line.
 - **The trace measures it**: `cue.presented` (start or end, how late, the
   slot's length, the must-do) and `cue.reaction` (the choice, the time to
   react).

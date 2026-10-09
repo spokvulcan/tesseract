@@ -391,7 +391,7 @@ private struct CardContent: View {
             switch card.body {
             case .breakpoint(let breakpoint):
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text("Welcome back").fontWeight(.semibold)
+                    Text(card.kind.title).fontWeight(.semibold)
                     Text(awayText(breakpoint)).foregroundStyle(.secondary)
                 }
                 Text(breakpoint.line).fixedSize(horizontal: false, vertical: true)
@@ -463,7 +463,7 @@ private struct CardContent: View {
     private func awayText(_ card: BreakpointCard) -> String {
         let minutes = Int(card.awayUntil.timeIntervalSince(card.awayFrom) / 60)
         return
-            "Away \(MomentPrompts.minutesText(minutes)) · \(AgendaTime.clock(card.awayFrom))–\(AgendaTime.clock(card.awayUntil))"
+            "\(MomentPrompts.minutesText(minutes)) · \(AgendaTime.clock(card.awayFrom))–\(AgendaTime.clock(card.awayUntil))"
     }
 }
 

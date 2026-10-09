@@ -19,11 +19,9 @@ struct NowCardView: View {
 
     var body: some View {
         let state = runtime.state
-        // Jarvis's word: the day's latest card, until it is dismissed or the
-        // day moves past it.
-        let jarvis = state.cards.last.flatMap {
-            $0.dismissed || !$0.isFresh(at: facts.now) ? nil : $0
-        }
+        // Jarvis's word: the day's latest card with something to say, until
+        // it is dismissed or the day moves past it.
+        let jarvis = DayCard.word(in: state.cards, at: facts.now)
         let waiting = Waiting(state: state, now: facts.now)
         VStack(alignment: .leading, spacing: 12) {
             header(jarvis)
