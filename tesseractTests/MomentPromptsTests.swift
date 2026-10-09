@@ -46,6 +46,30 @@ struct MomentPromptsTests {
         #expect(MomentPrompts.leavingEvents(Self.facts).map(\.id) == ["E1", "E2"])
     }
 
+    @Test func undatedTasksComeTheLikeliestFirstAndCollectionsAreSummed() {
+        func reminder(_ id: String, list: String) -> AgendaReminder {
+            AgendaReminder(id: id, title: "Task \(id)", listID: list, listTitle: list.capitalized)
+        }
+        // Twenty films, then an Inbox capture, then a task in a list that
+        // also holds dated work.
+        let films = (1...20).map { reminder("film\($0)", list: "movies") }
+        let facts = DayFacts(
+            now: TimelineBuilderTests.local(30, 7, 30),
+            dueOrOverdue: [
+                AgendaReminder(
+                    id: "spec", title: "Write the spec", listID: "work", listTitle: "Work",
+                    due: TimelineBuilderTests.local(30, 0))
+            ],
+            undated: films + [reminder("idea", list: "inbox"), reminder("deck", list: "work")],
+            inboxListID: "inbox")
+        #expect(
+            MomentPrompts.plannableUndated(facts).prefix(3).map(\.id) == ["idea", "deck", "film1"])
+        let lines = MomentPrompts.agendaLines(facts)
+        let listed = lines.filter { $0.hasPrefix("- ") && $0.contains("Task ") }
+        #expect(listed.count == MomentPrompts.undatedShown)
+        #expect(lines.contains("- …and 7 more, in Movies"))
+    }
+
     @Test func theMorningPlanAsksForTheCardWithIDs() {
         let text = MomentPrompts.morningPlan(facts: Self.facts)
         #expect(text.hasPrefix("[Morning Plan]"))

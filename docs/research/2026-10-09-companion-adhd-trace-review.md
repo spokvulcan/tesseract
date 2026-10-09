@@ -91,10 +91,10 @@ The trace measures the new behaviour: `cue.presented` / `cue.reaction`,
    that is a full prefill of 8–27k tokens. A short conversation (system prompt,
    Profile, the request) would share the cached root and cost seconds. This
    revisits ADR-0080 decision 4 and needs the owner's call.
-2. **Keep someday lists out of the plan's candidates.** The Morning Plan sees
-   up to 25 undated reminders, most from collection lists (films, books,
-   places). Mapping Areas, or ordering the Inbox and lists with dated work
-   first, would shorten the request and sharpen the plan.
+2. **Keep someday lists out of the plan's candidates.** Partly done: the
+   requests now list 15 undated reminders, the Inbox and lists with dated work
+   first, the rest summed by list. Mapping Areas (or marking lists Jarvis
+   never plans from) would go further.
 3. **A weekly look-back.** Goals span weeks; the Companion sees one day at a
    time. A Sunday moment over the week's completed reminders per Area, with one
    focus for the next week, would carry goals across days.

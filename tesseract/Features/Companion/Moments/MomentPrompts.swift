@@ -173,16 +173,42 @@ nonisolated enum MomentPrompts {
             lines.append("Tasks due today or earlier (id · Area · when — title):")
             lines += due.prefix(25).map { taskLine($0, facts) }
         }
-        let undated = facts.undated
+        let undated = plannableUndated(facts)
         if !undated.isEmpty {
             lines.append("Undated tasks (id · Area — title):")
-            lines += undated.prefix(25).map { taskLine($0, facts) }
-            if undated.count > 25 { lines.append("- …and \(undated.count - 25) more") }
+            lines += undated.prefix(undatedShown).map { taskLine($0, facts) }
+            let rest = undated.dropFirst(undatedShown)
+            if !rest.isEmpty {
+                var areas: [String] = []
+                for name in rest.map({ facts.areaName(of: $0) }) where !areas.contains(name) {
+                    areas.append(name)
+                }
+                lines.append(
+                    "- …and \(rest.count) more, in \(areas.prefix(4).joined(separator: ", "))")
+            }
         }
         if !facts.doneToday.isEmpty {
             lines.append("Done today: " + facts.doneToday.map(\.title).joined(separator: "; "))
         }
         return lines
+    }
+
+    /// The most undated tasks a request lists.
+    static let undatedShown = 15
+
+    /// Undated tasks a plan can use, the likeliest first: the Inbox, then
+    /// lists that hold dated work (where the owner plans), then the rest —
+    /// collections such as films or books, which no day plans.
+    static func plannableUndated(_ facts: DayFacts) -> [AgendaReminder] {
+        let planned = Set(
+            (facts.dueOrOverdue + facts.dueTomorrow + facts.doneToday).map(\.listID))
+        func rank(_ reminder: AgendaReminder) -> Int {
+            if reminder.listID == facts.inboxListID { return 0 }
+            return planned.contains(reminder.listID) ? 1 : 2
+        }
+        return facts.undated.enumerated()
+            .sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }
+            .map(\.element)
     }
 
     static func taskLine(_ reminder: AgendaReminder, _ facts: DayFacts) -> String {

@@ -359,6 +359,11 @@ the owner must remember to read does not. What changed:
   "1h 5m"), refreshed on its own clock, with the step in the tooltip; it
   goes back to the glyph alone when the step ends or is done
   (`DayEngine.focus`, pushed through `CompanionPresence`).
+- **The plan sees the likeliest tasks first.** The Day Opening and the
+  Morning Plan listed up to 25 undated reminders in the store's order, most
+  of them from collection lists (films, books, places) no day plans. They now
+  list 15: the Inbox first, then lists that hold dated work, then the rest,
+  with what is left summed by list ("…and 12 more, in Movies, Books").
 - **The capture hotkey is taught where it pays.** In ten days it was never
   used; tasks came through Today's composer and the agent's tools. An empty
   Inbox now says "Tap Right ⌥ in any app to write a thought down, or hold it
