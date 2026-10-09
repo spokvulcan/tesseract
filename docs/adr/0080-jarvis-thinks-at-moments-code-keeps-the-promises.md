@@ -400,10 +400,13 @@ the owner must remember to read does not. What changed:
   two hours start again) and In 30 min; closing it holds it for two hours.
   Five minutes away is a break whatever the cue said, and a cue still up
   then comes down. No model; the Step Cue's manners (never while away, in
-  quiet hours, a call, a game or a meeting, nor over a panel that is up),
-  and never into a step the owner started: a step's check-in comes first and
-  the next step's start after it, so the break lands between steps. A
-  setting turns it off; `cue.presented` and `cue.reaction` carry it with
+  quiet hours, a call, a game or a meeting, nor over a panel that is up); a
+  step's check-in comes first and the next step's start after it, so the
+  break lands between steps. A step the owner started holds it back only
+  when it ends within half an hour: a Morning Plan gave the day's must-do a
+  two-and-a-half-hour slot, and holding the break for all of it would make
+  four hours at the Mac, so a longer step gets it midway, with the step to
+  come back to and until when. A setting turns it off; `cue.presented` and `cue.reaction` carry it with
   the phase "break" (a reaction "away": up from the Mac with the cue on the
   panel).
 - **After a night past midnight, the plan keeps the day light.** The

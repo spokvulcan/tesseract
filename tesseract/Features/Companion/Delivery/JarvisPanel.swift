@@ -553,7 +553,8 @@ private struct StepCueContent: View {
 }
 
 /// Two hours at the Mac: how long and since when, one small thing to do —
-/// a different one each time that day — and Taking 5 or In 30 min.
+/// a different one each time that day — the step to come back to, and
+/// Taking 5 or In 30 min.
 private struct BreakCueContent: View {
     let cue: BreakCue
     let choose: (BreakChoice) -> Void
@@ -581,6 +582,12 @@ private struct BreakCueContent: View {
                 Text(Self.ideas[max(cue.number - 1, 0) % Self.ideas.count])
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                if let step = cue.step, let end = cue.stepEnd {
+                    Text("Then back to \(step) until \(AgendaTime.clock(end)).")
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             // Non-focusable, like every button here (GlassPanel's macOS 27.0
             // focus freeze).

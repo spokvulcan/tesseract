@@ -207,6 +207,10 @@ nonisolated struct BreakCue: Sendable, Equatable {
     var minutes: Int
     /// The day's how-manyth Break Cue, from 1: each says something different.
     var number: Int
+    /// The step the owner started, which runs on through the break, and
+    /// when it ends.
+    var step: String? = nil
+    var stepEnd: Date? = nil
 }
 
 // MARK: - Effects

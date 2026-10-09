@@ -60,12 +60,17 @@ nonisolated extension DayEngine {
         guard !snapshot.panelUp,
             DeliveryLadder.rungs(for: .normal, snapshot: snapshot, sittingDown: started)
                 .contains(.panel),
-            !inMeeting(snapshot),
-            // A step the owner started is still running: a focus session isn't
-            // interrupted. What comes due meanwhile waits, its check-in names
-            // what is under way, and it is cued once the owner is free.
-            focus(snapshot: snapshot, state: state) == nil
+            !inMeeting(snapshot)
         else { return [] }
+        // A step the owner started is still running: a focus session isn't
+        // interrupted. What comes due meanwhile waits, its check-in names
+        // what is under way, and it is cued once the owner is free — but a
+        // break isn't held past half an hour: a long step gets one midway.
+        if let focus = focus(snapshot: snapshot, state: state) {
+            let left = focus.end.timeIntervalSince(snapshot.now)
+            guard left >= TimeInterval(breakHeldMinutes * 60) else { return [] }
+            return breakCueIfDue(snapshot: snapshot, state: &state, during: focus) ?? []
+        }
         let steps = snapshot.settings.stepCues
         // A step that is over comes first: it closes what the next one opens.
         // A break comes between it and the next step: the time to take one.

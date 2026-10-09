@@ -5,9 +5,10 @@
 //  The body keeps time too, as decision tables: two hours at the Mac with no
 //  break of five minutes or more puts a Break Cue on the Jarvis Panel, by
 //  the Step Cue's manners — never while away, in quiet hours, a call, a game
-//  or a meeting, never over a panel that is up, never into a step the owner
-//  started, and between a step's check-in and the next step's start — and
-//  each answer does what it says. Five minutes away is a break, whatever the
+//  or a meeting, never over a panel that is up, between a step's check-in
+//  and the next step's start, and into a step the owner started only when
+//  that runs on for half an hour or more — and each answer does what it
+//  says. Five minutes away is a break, whatever the
 //  cue said: the count starts again, and a cue still up comes down.
 //
 
@@ -101,6 +102,7 @@ struct DayEngineBreakCueTests {
         #expect(cue.since == Self.local(9))
         #expect(cue.minutes == 120)
         #expect(cue.number == 1)
+        #expect(cue.step == nil)
         let fields = try #require(Self.traced(.cuePresented, in: decision.effects))
         #expect(fields["phase"] == .string("break"))
         #expect(fields["minutes"] == .int(120))
@@ -161,17 +163,18 @@ struct DayEngineBreakCueTests {
 
     // MARK: Between steps
 
-    /// The letter, started at 10:45, runs to 11:15.
-    static func onAStep() -> DayState {
+    /// The letter, started at 10:45, runs to 11:15 — or, `minutes` long,
+    /// later.
+    static func onAStep(minutes: Int = 30) -> DayState {
         var state = state()
-        let slot = Placement(reminderID: "letter", start: local(10, 45), minutes: 30)
+        let slot = Placement(reminderID: "letter", start: local(10, 45), minutes: minutes)
         state.plan = [slot]
         state.startedSteps = [StepCue.key(slot)]
         state.cuedSteps[StepCue.key(slot)] = local(10, 45)
         return state
     }
 
-    @Test func aStepTheOwnerStartedIsNotInterruptedItsCheckInComesFirst() throws {
+    @Test func aStepEndingWithinHalfAnHourHoldsTheBreakItsCheckInComesFirst() throws {
         #expect(Self.breaks(Self.tick(Self.onAStep(), at: Self.local(11)).effects).isEmpty)
         let end = Self.tick(Self.onAStep(), at: Self.local(11, 15))
         #expect(Self.steps(end.effects).first?.phase == .end)
@@ -182,6 +185,23 @@ struct DayEngineBreakCueTests {
         let rest = try #require(
             Self.breaks(Self.tick(done.state, at: Self.local(11, 17)).effects).first)
         #expect(rest.minutes == 137)
+    }
+
+    @Test func aLongStepGetsTheBreakMidwayAndRunsOn() throws {
+        // Started at 10:45 for two and a half hours: to 13:15.
+        let midway = Self.tick(Self.onAStep(minutes: 150), at: Self.local(11))
+        let rest = try #require(Self.breaks(midway.effects).first)
+        #expect(rest.minutes == 120)
+        #expect(rest.step == "Write to the case worker")
+        #expect(rest.stepEnd == Self.local(13, 15))
+        #expect(Self.steps(midway.effects).isEmpty)
+        let taken = Self.answer(.taking, midway.state, at: Self.local(11, 1))
+        #expect(taken.state.plan == Self.onAStep(minutes: 150).plan)
+        #expect(taken.state.startedSteps == Self.onAStep(minutes: 150).startedSteps)
+        // The step still checks in at its end.
+        let end = Self.tick(taken.state, at: Self.local(13, 15))
+        #expect(Self.steps(end.effects).first?.phase == .end)
+        #expect(Self.breaks(end.effects).isEmpty)
     }
 
     @Test func aBreakComesBeforeTheNextStepStarts() throws {

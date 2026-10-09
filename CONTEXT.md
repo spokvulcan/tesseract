@@ -1892,9 +1892,11 @@ start again) and In 30 min (asked again then); closing it holds it for two
 hours. Five minutes away is a break whatever the cue said, and one still on
 the panel then comes down. Built by code, no model, by the Step Cue's
 manners: never while away, in quiet hours, a call, a game or a meeting, nor
-over a panel that is up, nor into a step the owner started — a step's
-check-in comes first and the next step's start after it, so the break lands
-between steps. A toggle in Settings (Your Day) turns Break Cues off.
+over a panel that is up; a step's check-in comes first and the next step's
+start after it, so the break lands between steps. A step the owner started
+holds it back only when it ends within half an hour; a longer one gets it
+midway, naming the step to come back to ("Then back to Write the ADR until
+13:15."). A toggle in Settings (Your Day) turns Break Cues off.
 _Avoid_: break reminder, Pomodoro (no timer the owner sets), Breakpoint (the
 card on coming back).
 

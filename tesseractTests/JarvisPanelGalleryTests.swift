@@ -45,6 +45,7 @@ struct JarvisPanelGalleryTests {
         case stepCheckInSmall
         case stepCheckInMeeting
         case breakCue
+        case breakCueMidStep
         case morningPlan
         case eveningWrapUp
         case eveningWrapUpWeek
@@ -116,8 +117,11 @@ struct JarvisPanelGalleryTests {
                     minutes: 70, areaName: "Work", isMustDo: true,
                     next: "Design review at 15:00", nextAt: Self.at(15), phase: .end,
                     resumeAt: Self.at(16))
-            case .breakCue:
-                model.rest = BreakCue(since: Self.at(9, 55), minutes: 125, number: 1)
+            case .breakCue, .breakCueMidStep:
+                model.rest = BreakCue(
+                    since: Self.at(9, 55), minutes: 125, number: self == .breakCue ? 1 : 2,
+                    step: self == .breakCue ? nil : "Write the cache ADR",
+                    stepEnd: self == .breakCue ? nil : Self.at(13, 15))
             case .morningPlan:
                 model.card = TodayFixture.morning.state.cards.first
             case .eveningWrapUp:

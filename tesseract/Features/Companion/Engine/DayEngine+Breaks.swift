@@ -10,12 +10,15 @@
 //  (stand up, water, look away), with Taking 5 and In 30 min.
 //
 //  No model. It keeps the Step Cue's manners — never while away, in quiet
-//  hours, a call, a game or a meeting, never over a panel that is up, and
-//  never into a step the owner started: a step's check-in comes before it
-//  and the next step's start after it, so the break lands between steps.
-//  Five minutes away is a break, whatever the cue said, and a cue still on
-//  the panel then comes down. Taking 5 starts the count again, In 30 min
-//  asks again then, and closing it holds it for two hours.
+//  hours, a call, a game or a meeting, never over a panel that is up — and
+//  lands between steps: a step's check-in comes before it and the next
+//  step's start after it. A step the owner started holds it back only when
+//  it ends within half an hour (its check-in is the break); a longer one
+//  gets it midway: a Morning Plan gave the must-do a two-and-a-half-hour
+//  slot, and holding the break for all of it would make four hours at the
+//  Mac. Five minutes away is a break, whatever the cue said, and a cue
+//  still on the panel then comes down. Taking 5 starts the count again, In
+//  30 min asks again then, and closing it holds it for two hours.
 //
 
 import Foundation
@@ -28,6 +31,9 @@ nonisolated extension DayEngine {
     static let breakAwayMinutes = 5
     /// "In 30 min" asks again this much later.
     static let breakLaterMinutes = 30
+    /// A step the owner started holds a due break back if it ends within
+    /// this long; a longer one gets the break midway.
+    static let breakHeldMinutes = 30
 
     /// Back from `awayFrom`: five minutes or more is a break — the time at
     /// the Mac starts again, and a Break Cue still on the panel comes down.
@@ -53,9 +59,12 @@ nonisolated extension DayEngine {
     }
 
     /// Two hours at the Mac with no break, and nothing asked to wait: a
-    /// Break Cue. Called once the panel is free (`cueIfDue`): one that left
-    /// the panel unanswered comes back.
-    static func breakCueIfDue(snapshot: DaySnapshot, state: inout DayState) -> [DayEffect]? {
+    /// Break Cue — naming the step it comes `during`, which runs on. Called
+    /// once the panel is free (`cueIfDue`): one that left the panel
+    /// unanswered comes back.
+    static func breakCueIfDue(
+        snapshot: DaySnapshot, state: inout DayState, during focus: StepFocus? = nil
+    ) -> [DayEffect]? {
         guard snapshot.settings.breakCues, let since = state.sittingSince else { return nil }
         let due = max(
             since.addingTimeInterval(TimeInterval(breakAfterMinutes * 60)),
@@ -64,8 +73,11 @@ nonisolated extension DayEngine {
         state.breakCuedAt = snapshot.now
         state.breakCues += 1
         let minutes = Int(snapshot.now.timeIntervalSince(since) / 60)
+        let cue = BreakCue(
+            since: since, minutes: minutes, number: state.breakCues, step: focus?.title,
+            stepEnd: focus?.end)
         return [
-            .presentBreak(BreakCue(since: since, minutes: minutes, number: state.breakCues)),
+            .presentBreak(cue),
             .trace(
                 .cuePresented,
                 [
