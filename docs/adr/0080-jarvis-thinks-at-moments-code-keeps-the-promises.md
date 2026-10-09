@@ -327,6 +327,13 @@ the owner must remember to read does not. What changed:
   (Jira, GitHub, CI, calendars, Notion, …) is now an app's news: it waits
   for the next Breakpoint and costs no model call. Paging tools stay people,
   and the title is never read (in Slack it is the workspace).
+- **The night's draft of tomorrow reaches the morning.** The Night
+  Reflection writes a first draft of tomorrow (on 7 October: send the request
+  a colleague asked for early, documents ready for both ID checks, the free
+  mid-morning for the Companion work), but only its carry-over note opened
+  the next day; the draft lived on a card no one saw by morning. The draft
+  now rides into the next Day Opening as "Last night's first draft of
+  today", where the Morning Plan reads it.
 - **The trace measures it**: `cue.presented` (start or end, how late, the
   slot's length, the must-do) and `cue.reaction` (the choice, the time to
   react).

@@ -302,6 +302,10 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     var carryOver: String?
     /// Tonight's note, handed to the next day.
     var carryOverForNextDay: String?
+    /// Last night's first draft of this day, for its opening.
+    var draft: [String] = []
+    /// Tonight's first draft of tomorrow, handed to the next day.
+    var draftForNextDay: [String] = []
 
     /// Other apps' banners and what the owner has seen (carried across days:
     /// unresolved items expire on their own).
@@ -343,6 +347,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         case running, cards, mustDoID, plan, carryOver, carryOverForNextDay, ledger, agents
         case agentSpokenAt, lastTickAt, lastTriageAt, whereYouWere, deferred, firedNudgeIDs
         case cuedSteps, startedSteps, interrupted, morningPlanResumed, windDownAt
+        case draft, draftForNextDay
     }
 
     /// Every field but the day is optional on disk, so a state saved by an
@@ -375,6 +380,8 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         morningPlanResumed =
             (try? c.decodeIfPresent(Bool.self, forKey: .morningPlanResumed)) ?? false
         windDownAt = try? c.decodeIfPresent(Date.self, forKey: .windDownAt)
+        draft = (try? c.decodeIfPresent([String].self, forKey: .draft)) ?? []
+        draftForNextDay = (try? c.decodeIfPresent([String].self, forKey: .draftForNextDay)) ?? []
     }
 
     /// The day as a relaunch finds it: the moment in flight never finished,
@@ -393,6 +400,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         var next = DayState(day: day, syncedNudgeIDs: syncedNudgeIDs)
         next.lastPresentAt = lastPresentAt
         next.carryOver = carryOverForNextDay
+        next.draft = draftForNextDay
         next.ledger = ledger
         next.agents = agents
         next.agentSpokenAt = agentSpokenAt

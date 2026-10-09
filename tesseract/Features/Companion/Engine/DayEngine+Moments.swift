@@ -280,6 +280,7 @@ nonisolated extension DayEngine {
         case .reflection(let card):
             state.nightReflectionAt = snapshot.now
             state.carryOverForNextDay = card.carryOver
+            state.draftForNextDay = card.tomorrow
         case .breakpoint, .triage:
             break
         }

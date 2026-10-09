@@ -21,6 +21,20 @@ struct MomentPromptsTests {
         #expect(opening.contains("Areas: Health, Life, Work"))
         #expect(opening.contains("Carried over from last night: Finish the spec first."))
         #expect(opening.contains("- 09:30–10:00 Standup"))
+        #expect(!opening.contains("first draft"))
+    }
+
+    @Test func theDayOpeningCarriesLastNightsDraftOfTheDay() {
+        let opening = MomentPrompts.dayOpening(
+            facts: Self.facts, profile: [], carryOver: "A good close.",
+            draft: ["Send Anna the request early", "Documents ready for the ID check"])
+        #expect(
+            opening.contains(
+                """
+                Last night's first draft of today:
+                - Send Anna the request early
+                - Documents ready for the ID check
+                """))
     }
 
     @Test func theMorningPlanAsksForTheCardWithIDs() {

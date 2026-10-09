@@ -240,7 +240,7 @@ final class CompanionRuntime {
         let snapshot = snapshot()
         return MomentPrompts.dayOpening(
             facts: snapshot.facts(state: state), profile: snapshot.profile,
-            carryOver: state.carryOver)
+            carryOver: state.carryOver, draft: state.draft)
     }
 
     // MARK: Effects

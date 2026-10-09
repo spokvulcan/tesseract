@@ -15,9 +15,10 @@ nonisolated enum MomentPrompts {
     // MARK: Day Opening
 
     /// The Day Thread's first message: the owner's Profile, their Areas,
-    /// today's agenda and last night's carry-over note.
+    /// today's agenda, and last night's carry-over note and first draft of
+    /// the day.
     static func dayOpening(
-        facts: DayFacts, profile: [String], carryOver: String?
+        facts: DayFacts, profile: [String], carryOver: String?, draft: [String] = []
     ) -> String {
         var lines = ["[Day Opening — \(dayName(facts.now, calendar: facts.calendar))]"]
         lines.append(
@@ -35,6 +36,11 @@ nonisolated enum MomentPrompts {
         if let carryOver, !carryOver.isEmpty {
             lines.append("")
             lines.append("Carried over from last night: \(carryOver)")
+        }
+        if !draft.isEmpty {
+            lines.append("")
+            lines.append("Last night's first draft of today:")
+            lines += draft.map { "- \($0)" }
         }
         lines.append("")
         lines += agendaLines(facts)

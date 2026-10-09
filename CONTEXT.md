@@ -1931,12 +1931,14 @@ let go. Nothing is ever labelled missed or failed.
 **Night Reflection**:
 Once a night, after the Evening Wrap-up — on power, or on a battery at least
 half full with a cool Mac: tomorrow's carry-over note, a first draft of
-tomorrow, and zero to three Fact Proposals.
+tomorrow, and zero to three Fact Proposals. The note and the draft open the
+next day's thread, where the Morning Plan reads them.
 
 **Day Thread**:
 One append-only conversation per day, on its own agent with the same system
 prompt and tools as every chat. It opens with the **Day Opening** (the Profile,
-the Areas, today's agenda, last night's carry-over note); moments append a
+the Areas, today's agenda, last night's carry-over note and first draft of the
+day); moments append a
 request and a card; the owner's Today chat appends too. A new day (at 04:00)
 starts a new thread; within a day compaction runs only past its ceiling.
 _Avoid_: Mission Control, standing conversation (both retired).

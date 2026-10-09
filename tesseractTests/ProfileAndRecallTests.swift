@@ -268,5 +268,9 @@ struct NightReflectionTests {
         let morning = DayEngine.decide(
             .tick, snapshot: Self.snapshot(at: Self.local(31, 7)), state: decided.state)
         #expect(morning.state.carryOver == "The spec is nearly done; finish it first.")
+        // Its first draft of tomorrow opens the next day too, for the plan.
+        #expect(decided.state.draftForNextDay == ["Finish the spec"])
+        #expect(morning.state.draft == ["Finish the spec"])
+        #expect(morning.state.draftForNextDay.isEmpty)
     }
 }
