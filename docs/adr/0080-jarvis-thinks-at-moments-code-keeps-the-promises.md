@@ -298,9 +298,10 @@ the owner must remember to read does not. What changed:
   Good Night take the card in (`card.reaction` "kept"): it leaves the panel
   and stays in Today, unlike the close button; a kept card never takes the
   panel again (Jarvis's version of a kept plan updates in Today) and its
-  items no longer light the glyph. A cue a card takes the panel from is held
-  by the engine, which knows the cue on the panel, and comes back by the
-  cue's own rules once the panel is free, while its slot still runs. The panel
+  items no longer light the glyph. A cue a card takes the panel from is
+  un-cued by the engine, which knows the cue on the panel, and comes back by
+  the cue's own rules once the panel is free (a start while its slot still
+  runs, an end that day). The panel
   shows the card as the day has it now, so an item handled there leaves it
   (it used to stay), and it is as tall as what it says (it was always 560 pt).
 - **The plan meets the first sit-down on the panel, quiet hours or not.**
