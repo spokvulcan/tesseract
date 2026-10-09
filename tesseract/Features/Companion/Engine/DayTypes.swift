@@ -430,6 +430,9 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     var interrupted: MomentKind?
     /// The Morning Plan was run again once after a quit cut it short.
     var morningPlanResumed = false
+    /// The first sit-down wanted a plan while the model was busy (a moment
+    /// running, a chat): it runs at the next tick the model is free.
+    var morningPlanWaiting = false
     /// When tonight's wind-down banner went out.
     var windDownAt: Date?
 
@@ -445,7 +448,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         case cuedSteps, startedSteps, interrupted, morningPlanResumed, windDownAt
         case draft, draftForNextDay, departures, satDownAt, weekFocus
         case weekFocusSetAt, mustDoDoneAt, mustDoDays, cueOnPanel, taskProposals
-        case putOff, smallStarts, lastActiveAt, nightMeasured
+        case putOff, smallStarts, lastActiveAt, nightMeasured, morningPlanWaiting
     }
 
     /// Every field but the day is optional on disk, so a state saved by an
@@ -493,6 +496,8 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         smallStarts = (try? c.decodeIfPresent(Set<String>.self, forKey: .smallStarts)) ?? []
         lastActiveAt = try? c.decodeIfPresent(Date.self, forKey: .lastActiveAt)
         nightMeasured = (try? c.decodeIfPresent(Bool.self, forKey: .nightMeasured)) ?? false
+        morningPlanWaiting =
+            (try? c.decodeIfPresent(Bool.self, forKey: .morningPlanWaiting)) ?? false
     }
 
     /// The day as a relaunch finds it: the moment in flight never finished,

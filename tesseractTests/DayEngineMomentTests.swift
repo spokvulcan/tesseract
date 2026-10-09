@@ -199,6 +199,26 @@ struct DayEngineMomentTests {
             })
     }
 
+    @Test func aFirstSitDownsPlanWaitsForABusyModelAndThenRuns() throws {
+        // The owner sits down at 07:40 while last night's reflection still runs.
+        var state = Self.state()
+        state.running = .triage
+        let busy = DayEngine.decide(
+            .presenceReturned(awayFrom: Self.local(29, 23)),
+            snapshot: Self.snapshot(at: Self.local(30, 7, 40)), state: state)
+        #expect(Self.moments(busy.effects).isEmpty)
+        #expect(busy.state.morningPlanWaiting)
+        // The model is free a minute later: the plan comes.
+        var free = busy.state
+        free.running = nil
+        let later = DayEngine.decide(
+            .tick, snapshot: Self.snapshot(at: Self.local(30, 7, 41)), state: free)
+        let request = try #require(Self.moments(later.effects).first)
+        #expect(request.kind == .morningPlan)
+        #expect(request.trigger == .firstPresence)
+        #expect(!later.state.morningPlanWaiting)
+    }
+
     @Test func aLateReplanWaitsForAModelThatIsFree() {
         // Prepared at 07:00, the owner sits down at 14:43 while Triage runs.
         var state = Self.state()

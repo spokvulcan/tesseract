@@ -53,6 +53,7 @@ nonisolated enum DayEngine {
             if snapshot.ownerPresent {
                 state.lastPresentAt = snapshot.now
                 state.lastActiveAt = snapshot.now
+                effects += waitingPlanIfFree(snapshot: snapshot, state: &state)
                 effects += eveningIfDue(snapshot: snapshot, state: &state)
                 effects += meetingEnded(snapshot: snapshot, state: &state)
                 effects += triageIfDue(snapshot: snapshot, state: &state)
@@ -192,29 +193,50 @@ nonisolated enum DayEngine {
         if afterTheNight, hour < snapshot.settings.morningEndHour {
             state.satDownAt = snapshot.now
             if state.morningPlanAt == nil {
-                return morningPlan(trigger: .firstPresence, snapshot: snapshot, state: &state)
+                return planTheDayOrWait(snapshot: snapshot, state: &state)
             }
             // Planned while they were away: it comes forward now.
             let prepared = presentPreparedMorningPlan(
                 awayFrom: awayFrom, snapshot: snapshot, state: state)
             if !prepared.isEmpty { return prepared }
         } else if afterTheNight, snapshot.minuteOfDay < snapshot.settings.eveningMinutes,
-            noPlanSeen(awayFrom: awayFrom, state: state), state.running == nil,
-            !snapshot.chatBusy
+            noPlanSeen(awayFrom: awayFrom, state: state)
         {
             // A day that starts late — a weekend, a long night (4 October:
             // first at the Mac at 14:43, a plan only on asking) — still gets
             // its plan at the first sit-down, made now: one prepared that
             // morning is hours out of date, its slots gone by.
             state.satDownAt = snapshot.now
-            if state.morningPlanAt != nil { state.plan = [] }
-            return morningPlan(trigger: .firstPresence, snapshot: snapshot, state: &state)
+            return planTheDayOrWait(snapshot: snapshot, state: &state)
         }
         let evening = eveningIfDue(snapshot: snapshot, state: &state)
         if !evening.isEmpty { return evening }
         guard away >= TimeInterval(snapshot.settings.breakpointAwayMinutes * 60) else { return [] }
         return breakpoint(
             awayFrom: awayFrom, trigger: .presenceReturned, snapshot: snapshot, state: &state)
+    }
+
+    /// The first sit-down's plan, made now (one prepared while the owner was
+    /// away is made again, its stale slots cleared) — or, with the model
+    /// busy (a moment running, a chat), at the next tick it is free.
+    private static func planTheDayOrWait(snapshot: DaySnapshot, state: inout DayState)
+        -> [DayEffect]
+    {
+        guard state.running == nil, !snapshot.chatBusy else {
+            state.morningPlanWaiting = true
+            return []
+        }
+        state.morningPlanWaiting = false
+        if state.morningPlanAt != nil { state.plan = [] }
+        return morningPlan(trigger: .firstPresence, snapshot: snapshot, state: &state)
+    }
+
+    /// A first sit-down's plan that waited for the model, once it is free.
+    static func waitingPlanIfFree(snapshot: DaySnapshot, state: inout DayState)
+        -> [DayEffect]
+    {
+        guard state.morningPlanWaiting, !isEvening(snapshot) else { return [] }
+        return planTheDayOrWait(snapshot: snapshot, state: &state)
     }
 
     /// The owner hasn't seen a plan today: none was made, or only one made
