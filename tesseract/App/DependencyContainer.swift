@@ -606,9 +606,10 @@ final class DependencyContainer: ObservableObject {
         companionPresence.onChange = { [weak manager] state in
             manager?.updateState(fromCompanion: state)
         }
-        // A step the owner started: its time left beside the glyph.
-        companionPresence.onFocusChange = { [weak manager] focus in
-            manager?.updateFocus(focus)
+        // The started step's time left, or the time until what comes next,
+        // beside the glyph.
+        companionPresence.onClockChange = { [weak manager] clock in
+            manager?.updateClock(clock)
         }
         manager.onTakeAppshot = { [appshotController] in
             Task { await appshotController.takeAppshot() }

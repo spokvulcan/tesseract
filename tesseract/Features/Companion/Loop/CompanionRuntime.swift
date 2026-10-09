@@ -182,7 +182,7 @@ final class CompanionRuntime {
         }
         send(.companionDisabled)
         isActive = false
-        presence.setFocus(nil)
+        presence.setClock(nil)
         delivery.closePanel()
         Log.companion.info("Companion off")
     }
@@ -211,7 +211,7 @@ final class CompanionRuntime {
             state = decision.state
             stateStore.save(state)
         }
-        presence.setFocus(isActive ? DayEngine.focus(snapshot: snapshot, state: state) : nil)
+        presence.setClock(isActive ? DayEngine.clock(snapshot: snapshot, state: state) : nil)
         for effect in decision.effects { await perform(effect) }
     }
 

@@ -1856,7 +1856,9 @@ started (Start on a cue, or Start now on Today) checks in when its time is up:
 Done, 15 more min (from now, if answered late), Tomorrow; while it runs, no
 other cue interrupts it — what comes due meanwhile waits, named by the
 check-in, and is cued once the owner is free — and the menu bar shows its time
-left beside the glyph ("25m"), so the time can be seen from any app. Built by code, no model; each start and
+left beside the glyph ("25m"), so the time can be seen from any app (in the
+half hour before the next event or time to leave, the menu bar counts down
+to that instead: "in 12m", "leave in 12m"). Built by code, no model; each start and
 end once, as soon as the owner can see it; never while away, in quiet hours
 (but not the morning's end of them once the owner sat down to start the
 day), a call, a game or a meeting, nor over a panel that is up. What came due

@@ -448,13 +448,100 @@ struct DayEngineStepCueTests {
                 == nil)
     }
 
-    @Test func theMenuBarSaysTheTimeLeftShort() {
+    @Test func theMenuBarSaysItsClockShort() {
         let now = Self.local(11, 0)
-        #expect(MenuBarFocusText.timeLeft(until: Self.local(11, 25), now: now) == "25m")
-        #expect(MenuBarFocusText.timeLeft(until: Self.local(12, 5), now: now) == "1h 5m")
-        #expect(MenuBarFocusText.timeLeft(until: Self.local(12, 0), now: now) == "1h")
-        #expect(MenuBarFocusText.timeLeft(until: now.addingTimeInterval(30), now: now) == "1m")
-        #expect(MenuBarFocusText.spoken(until: Self.local(11, 25), now: now) == "25 min left")
+        #expect(MenuBarClockText.timeLeft(until: Self.local(11, 25), now: now) == "25m")
+        #expect(MenuBarClockText.timeLeft(until: Self.local(12, 5), now: now) == "1h 5m")
+        #expect(MenuBarClockText.timeLeft(until: Self.local(12, 0), now: now) == "1h")
+        #expect(MenuBarClockText.timeLeft(until: now.addingTimeInterval(30), now: now) == "1m")
+        #expect(MenuBarClockText.spoken(until: Self.local(11, 25), now: now) == "25 min left")
+        let focus = MenuBarClock(
+            kind: .focus, title: "Write to the case worker", until: Self.local(11, 25))
+        #expect(MenuBarClockText.label(focus, now: now) == "25m")
+        #expect(
+            MenuBarClockText.tooltip(focus, now: now) == "Write to the case worker — 25 min left")
+        let event = MenuBarClock(kind: .event, title: "Design review", until: Self.local(11, 12))
+        #expect(MenuBarClockText.label(event, now: now) == "in 12m")
+        #expect(MenuBarClockText.tooltip(event, now: now) == "Design review at 11:12 — in 12 min")
+        let leave = MenuBarClock(kind: .leave, title: "Climbing", until: Self.local(11, 12))
+        #expect(MenuBarClockText.label(leave, now: now) == "leave in 12m")
+        #expect(
+            MenuBarClockText.tooltip(leave, now: now) == "Leave for Climbing at 11:12 — in 12 min")
+    }
+
+    // MARK: The menu bar's clock
+
+    @Test func theMenuBarCountsDownTheStartedStep() {
+        #expect(
+            DayEngine.clock(snapshot: Self.snapshot(at: Self.local(11, 20)), state: Self.started())
+                == MenuBarClock(
+                    kind: .focus, title: "Write to the case worker", until: Self.local(11, 32)))
+    }
+
+    @Test func halfAnHourAheadItCountsDownToTheNextEvent() {
+        let review = AgendaEvent(
+            id: "review", title: "Design review", start: Self.local(12), end: Self.local(13),
+            calendarID: "c", calendarTitle: "Work", hasOtherAttendees: true)
+        let state = Self.state()
+        #expect(
+            DayEngine.clock(
+                snapshot: Self.snapshot(at: Self.local(11, 29), events: [review]), state: state)
+                == nil)
+        #expect(
+            DayEngine.clock(
+                snapshot: Self.snapshot(at: Self.local(11, 30), events: [review]), state: state)
+                == MenuBarClock(kind: .event, title: "Design review", until: Self.local(12)))
+        // An all-day event has no start to count down to.
+        let birthday = AgendaEvent(
+            id: "b", title: "Birthday", start: Self.local(0), end: Self.local(24), isAllDay: true,
+            calendarID: "c", calendarTitle: "Home")
+        #expect(
+            DayEngine.clock(
+                snapshot: Self.snapshot(at: Self.local(11, 30), events: [birthday]), state: state)
+                == nil)
+    }
+
+    @Test func aMeetingComingUpShowsOverAStepThatWouldRunIntoIt() throws {
+        // The letter, started at 11:30, runs to 11:50; the review starts at 11:45.
+        let started = Self.choose(.start, at: Self.local(11, 30)).state
+        let review = AgendaEvent(
+            id: "review", title: "Design review", start: Self.local(11, 45),
+            end: Self.local(12, 30), calendarID: "c", calendarTitle: "Work",
+            hasOtherAttendees: true)
+        let clock = try #require(
+            DayEngine.clock(
+                snapshot: Self.snapshot(at: Self.local(11, 35), events: [review]), state: started))
+        #expect(clock.kind == .event)
+        #expect(clock.until == Self.local(11, 45))
+    }
+
+    @Test func itSaysWhenToLeaveForAnEventInPerson() throws {
+        let climbing = AgendaEvent(
+            id: "climb", title: "Climbing", start: Self.local(18, 30), end: Self.local(20),
+            calendarID: "c", calendarTitle: "Home", location: "Boulderhalle")
+        var state = Self.state()
+        state.departures = [
+            Departure(
+                eventID: "climb", title: "Climbing", at: Self.local(18),
+                eventStart: Self.local(18, 30))
+        ]
+        #expect(
+            DayEngine.clock(
+                snapshot: Self.snapshot(at: Self.local(17, 40), events: [climbing]), state: state)
+                == MenuBarClock(kind: .leave, title: "Climbing", until: Self.local(18)))
+        // Past the time to leave: the event's own start.
+        let late = try #require(
+            DayEngine.clock(
+                snapshot: Self.snapshot(at: Self.local(18, 5), events: [climbing]), state: state))
+        #expect(late.kind == .event)
+        // Moved since the plan set the time: no time to leave, and the event
+        // is more than half an hour off.
+        var moved = climbing
+        moved.start = Self.local(19)
+        #expect(
+            DayEngine.clock(
+                snapshot: Self.snapshot(at: Self.local(17, 40), events: [moved]), state: state)
+                == nil)
     }
 
     @Test func startNowOnTodayIsStartedAndNeedsNoCue() throws {

@@ -368,8 +368,12 @@ the owner must remember to read does not. What changed:
   is in another app. While a step the owner started runs (its task still
   open), the status item shows its time left beside the glyph ("25m",
   "1h 5m"), refreshed on its own clock, with the step in the tooltip; it
-  goes back to the glyph alone when the step ends or is done
-  (`DayEngine.focus`, pushed through `CompanionPresence`).
+  goes back to the glyph alone when the step ends or is done. The same
+  clock counts down, in the half hour before, to the next event ("in 12m")
+  or the time to leave for one in person ("leave in 12m") — the first that
+  comes, so a meeting shows even over a step that would run into it; the
+  OS nudge ten minutes before was the only word of it outside Today
+  (`DayEngine.clock`, pushed through `CompanionPresence`).
 - **A promise in a message becomes a task with one click.** On 7 October a
   Breakpoint noted a colleague "still waiting on that request from you" and
   the Night Reflection's draft said to send it early, but nothing made it a

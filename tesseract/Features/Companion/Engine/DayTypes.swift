@@ -84,11 +84,28 @@ nonisolated enum CardAction: Sendable, Equatable {
     case taskProposal(id: String, add: Bool)
 }
 
-/// The step the owner started and is in now, for the menu bar's timer.
+/// The step the owner started and is in now.
 nonisolated struct StepFocus: Sendable, Equatable {
     var reminderID: String
     var title: String
     var end: Date
+}
+
+/// What the menu bar counts down beside the glyph, so time can be seen from
+/// any app: the started step's time left, or the time until what comes next.
+nonisolated struct MenuBarClock: Sendable, Equatable {
+    enum Kind: Sendable, Equatable {
+        /// The step the owner started: "25m" left.
+        case focus
+        /// An event starts: "in 12m".
+        case event
+        /// Time to leave for an event in person: "leave in 12m".
+        case leave
+    }
+
+    var kind: Kind
+    var title: String
+    var until: Date
 }
 
 /// What the owner chose on a Step Cue.

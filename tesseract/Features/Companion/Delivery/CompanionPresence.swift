@@ -27,12 +27,12 @@ final class CompanionPresence {
     /// How many items are waiting on the owner right now.
     private(set) var waitingCount = 0
 
-    /// The step the owner started and is in, while it runs.
-    private(set) var focus: StepFocus?
+    /// What the menu bar counts down: the started step, what comes next.
+    private(set) var clock: MenuBarClock?
 
     /// The menu-bar push: AppKit side, not an Observation consumer.
     @ObservationIgnored var onChange: ((State) -> Void)?
-    @ObservationIgnored var onFocusChange: ((StepFocus?) -> Void)?
+    @ObservationIgnored var onClockChange: ((MenuBarClock?) -> Void)?
 
     /// Overlapping moments are depth-counted, so one ending does not clear
     /// another that is still running.
@@ -53,10 +53,10 @@ final class CompanionPresence {
         recompute()
     }
 
-    func setFocus(_ focus: StepFocus?) {
-        guard focus != self.focus else { return }
-        self.focus = focus
-        onFocusChange?(focus)
+    func setClock(_ clock: MenuBarClock?) {
+        guard clock != self.clock else { return }
+        self.clock = clock
+        onClockChange?(clock)
     }
 
     private func recompute() {

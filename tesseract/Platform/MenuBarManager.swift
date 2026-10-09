@@ -74,9 +74,9 @@ final class MenuBarManager: NSObject {
     private var statusItem: NSStatusItem?
     private var iconView: NSImageView?
     /// The time left of a step the owner started, beside the glyph.
-    private var focusLabel: NSTextField?
-    private var focus: StepFocus?
-    private var focusRefresh: Timer?
+    private var clockLabel: NSTextField?
+    private var clock: MenuBarClock?
+    private var clockRefresh: Timer?
     private var settingsObservationTask: Task<Void, Never>?
     /// The Models section's live state, and the clock that refreshes it while
     /// the menu is open.
@@ -133,39 +133,38 @@ final class MenuBarManager: NSObject {
         applyActivityToIcon()
     }
 
-    /// A step the owner started is running (or nil: none is): its time left
-    /// shows beside the glyph, refreshed on its own clock, so the time can be
-    /// seen from any app.
-    func updateFocus(_ focus: StepFocus?) {
-        self.focus = focus
-        focusRefresh?.invalidate()
-        focusRefresh = nil
-        if focus != nil {
+    /// The started step's time left, or the time until what comes next (or
+    /// nil: nothing to count down) shows beside the glyph, refreshed on its
+    /// own clock, so the time can be seen from any app.
+    func updateClock(_ clock: MenuBarClock?) {
+        self.clock = clock
+        clockRefresh?.invalidate()
+        clockRefresh = nil
+        if clock != nil {
             let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.applyFocus() }
+                MainActor.assumeIsolated { self?.applyClock() }
             }
             RunLoop.main.add(timer, forMode: .common)
-            focusRefresh = timer
+            clockRefresh = timer
         }
-        applyFocus()
+        applyClock()
     }
 
-    private func applyFocus() {
-        guard let item = statusItem, let label = focusLabel else { return }
+    private func applyClock() {
+        guard let item = statusItem, let label = clockLabel else { return }
         let now = Date()
-        if let focus, focus.end > now {
-            label.stringValue = MenuBarFocusText.timeLeft(until: focus.end, now: now)
+        if let clock, clock.until > now {
+            label.stringValue = MenuBarClockText.label(clock, now: now)
             label.isHidden = false
             item.length = 22 + 3 + label.intrinsicContentSize.width + 6
-            item.button?.toolTip =
-                "\(focus.title) — \(MenuBarFocusText.spoken(until: focus.end, now: now))"
+            item.button?.toolTip = MenuBarClockText.tooltip(clock, now: now)
         } else {
             label.isHidden = true
             item.length = NSStatusItem.squareLength
             item.button?.toolTip = nil
-            if focus != nil {
-                focusRefresh?.invalidate()
-                focusRefresh = nil
+            if clock != nil {
+                clockRefresh?.invalidate()
+                clockRefresh = nil
             }
         }
     }
@@ -187,7 +186,7 @@ final class MenuBarManager: NSObject {
         }
         statusItem = nil
         iconView = nil
-        focusLabel = nil
+        clockLabel = nil
     }
 
     private func createStatusItem() {
@@ -195,27 +194,14 @@ final class MenuBarManager: NSObject {
         statusItem = item
 
         if let button = item.button {
-            // The glyph lives in an embedded image view, not `button.image`:
-            // `addSymbolEffect` is public on `NSImageView` only. The view is
-            // click-through so the button keeps owning the menu.
-            let icon = ClickThroughImageView()
-            icon.imageScaling = .scaleNone
-            // The time left of a started step, hidden until there is one; a
-            // hidden view leaves the stack, so the glyph alone stays centred.
-            let label = ClickThroughLabel(labelWithString: "")
-            label.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
-            label.isHidden = true
-            let stack = NSStackView(views: [icon, label])
-            stack.orientation = .horizontal
-            stack.spacing = 3
-            stack.translatesAutoresizingMaskIntoConstraints = false
+            let (stack, icon, label) = Self.makeStatusContent()
             button.addSubview(stack)
             NSLayoutConstraint.activate([
                 stack.centerXAnchor.constraint(equalTo: button.centerXAnchor),
                 stack.centerYAnchor.constraint(equalTo: button.centerYAnchor),
             ])
             iconView = icon
-            focusLabel = label
+            clockLabel = label
         }
 
         let menu = NSMenu()
@@ -225,7 +211,25 @@ final class MenuBarManager: NSObject {
 
         appliedActivity = .idle
         setIcon(for: .idle)
-        applyFocus()
+        applyClock()
+    }
+
+    /// The status item's content. The glyph lives in an embedded image view,
+    /// not `button.image`: `addSymbolEffect` is public on `NSImageView` only.
+    /// Beside it, the menu bar's clock, hidden until there is something to
+    /// count down; a hidden view leaves the stack, so the glyph alone stays
+    /// centred. Both are click-through so the button keeps owning the menu.
+    static func makeStatusContent() -> (stack: NSStackView, icon: NSImageView, label: NSTextField) {
+        let icon = ClickThroughImageView()
+        icon.imageScaling = .scaleNone
+        let label = ClickThroughLabel(labelWithString: "")
+        label.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+        label.isHidden = true
+        let stack = NSStackView(views: [icon, label])
+        stack.orientation = .horizontal
+        stack.spacing = 3
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        return (stack, icon, label)
     }
 
     // MARK: - Icon
@@ -677,18 +681,42 @@ private final class ClickThroughLabel: NSTextField {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-/// How the menu bar says the time left of a started step: short beside the
-/// glyph ("25m", "1h 5m"), whole in its tooltip.
-nonisolated enum MenuBarFocusText {
+/// How the menu bar says its clock: short beside the glyph ("25m" left of a
+/// started step, "in 12m" to an event, "leave in 12m"), whole in its tooltip.
+nonisolated enum MenuBarClockText {
+    static func label(_ clock: MenuBarClock, now: Date) -> String {
+        let time = timeLeft(until: clock.until, now: now)
+        switch clock.kind {
+        case .focus: return time
+        case .event: return "in \(time)"
+        case .leave: return "leave in \(time)"
+        }
+    }
+
+    static func tooltip(_ clock: MenuBarClock, now: Date, calendar: Calendar = .current)
+        -> String
+    {
+        let at = AgendaTime.clock(clock.until, calendar: calendar)
+        let minutes = MomentPrompts.minutesText(minutesLeft(until: clock.until, now: now))
+        switch clock.kind {
+        case .focus: return "\(clock.title) — \(minutes) left"
+        case .event: return "\(clock.title) at \(at) — in \(minutes)"
+        case .leave: return "Leave for \(clock.title) at \(at) — in \(minutes)"
+        }
+    }
+
     static func timeLeft(until end: Date, now: Date) -> String {
-        let minutes = max(1, Int((end.timeIntervalSince(now) / 60).rounded(.up)))
+        let minutes = minutesLeft(until: end, now: now)
         if minutes < 60 { return "\(minutes)m" }
         return minutes % 60 == 0 ? "\(minutes / 60)h" : "\(minutes / 60)h \(minutes % 60)m"
     }
 
     static func spoken(until end: Date, now: Date) -> String {
-        let minutes = max(1, Int((end.timeIntervalSince(now) / 60).rounded(.up)))
-        return "\(MomentPrompts.minutesText(minutes)) left"
+        "\(MomentPrompts.minutesText(minutesLeft(until: end, now: now))) left"
+    }
+
+    private static func minutesLeft(until end: Date, now: Date) -> Int {
+        max(1, Int((end.timeIntervalSince(now) / 60).rounded(.up)))
     }
 }
 

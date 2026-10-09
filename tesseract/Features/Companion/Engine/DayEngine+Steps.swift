@@ -185,6 +185,40 @@ nonisolated extension DayEngine {
         return nil
     }
 
+    // MARK: - The menu bar's clock
+
+    /// How far ahead the menu bar counts down to what comes next.
+    static let clockLead: TimeInterval = 30 * 60
+
+    /// The menu bar's countdown: whichever comes first of the started step's
+    /// end, the time to leave for an event in person and an event's start —
+    /// the last two only within half an hour. A meeting coming up shows even
+    /// over a step that would run into it.
+    static func clock(snapshot: DaySnapshot, state: DayState) -> MenuBarClock? {
+        let now = snapshot.now
+        let horizon = now.addingTimeInterval(clockLead)
+        var times: [MenuBarClock] = []
+        if let focus = focus(snapshot: snapshot, state: state) {
+            times.append(MenuBarClock(kind: .focus, title: focus.title, until: focus.end))
+        }
+        let ahead = snapshot.agenda.events.filter {
+            !$0.isAllDay && $0.start > now && $0.start <= horizon
+        }
+        if let event = ahead.min(by: { $0.start < $1.start }) {
+            times.append(MenuBarClock(kind: .event, title: event.title, until: event.start))
+        }
+        for departure in state.departures where departure.at > now && departure.at <= horizon {
+            // Still on the calendar at the time the plan set it for.
+            guard
+                let event = snapshot.agenda.events.first(where: {
+                    $0.id == departure.eventID && $0.start == departure.eventStart
+                })
+            else { continue }
+            times.append(MenuBarClock(kind: .leave, title: event.title, until: departure.at))
+        }
+        return times.min { $0.until < $1.until }
+    }
+
     // MARK: - Started
 
     /// A slot given to a task from now ("Start now" on Today) is started:
