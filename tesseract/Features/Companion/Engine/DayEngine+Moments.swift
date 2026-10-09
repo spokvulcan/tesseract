@@ -442,11 +442,12 @@ nonisolated extension DayEngine {
 
         case .place(let reminderID, let start, let minutes):
             let slot = Placement(reminderID: reminderID, start: start, minutes: minutes)
-            state.plan.removeAll { $0.reminderID == reminderID }
-            state.plan.append(slot)
-            state.plan.sort { $0.start < $1.start }
-            markStartedIfNow(slot, snapshot: snapshot, state: &state)
+            place(slot, snapshot: snapshot, state: &state)
             return [.trace(.cardReaction, ["action": "placed", "minutes": .int(minutes)])]
+
+        case .placeAll(let slots):
+            for slot in slots { place(slot, snapshot: snapshot, state: &state) }
+            return [.trace(.cardReaction, ["action": "fitted", "count": .int(slots.count)])]
 
         case .leftover(let cardID, let reminderID, let suggestion):
             guard let index = state.cards.firstIndex(where: { $0.id == cardID }),
@@ -575,6 +576,15 @@ nonisolated extension DayEngine {
             state.cards[index].kept = true
             return [reaction("kept", card: state.cards[index], snapshot: snapshot)]
         }
+    }
+
+    /// A task's slot in today's plan, in place of any it had; one from now
+    /// is started.
+    private static func place(_ slot: Placement, snapshot: DaySnapshot, state: inout DayState) {
+        state.plan.removeAll { $0.reminderID == slot.reminderID }
+        state.plan.append(slot)
+        state.plan.sort { $0.start < $1.start }
+        markStartedIfNow(slot, snapshot: snapshot, state: &state)
     }
 
     /// The day's must-do. A different one starts undone: the done mark was

@@ -56,6 +56,8 @@ nonisolated enum CardAction: Sendable, Equatable {
     case removeFromPlan(reminderID: String)
     /// Put a task into today's plan at a time ("Find a time").
     case place(reminderID: String, start: Date, minutes: Int)
+    /// Tasks that slid, back into today's plan in one go ("Fit all 3 in").
+    case placeAll([Placement])
     case leftover(cardID: String, reminderID: String, Leftover.Suggestion)
     /// Every remaining leftover, each with its own suggestion.
     case allLeftovers(cardID: String)

@@ -309,6 +309,20 @@ struct NowCardTests {
                 Placement(reminderID: "gym", start: Self.local(30, 13, 45), minutes: 60),
                 Placement(reminderID: "dentist", start: Self.local(30, 14, 45), minutes: 15),
             ])
+        // One yes puts them all in the plan, traced as one decision.
+        var state = DayState(day: DayKey(rawValue: "2026-09-30"))
+        state.plan = facts.plan
+        let fitted = DayEngine.decide(
+            .cardAction(.placeAll(card.offeredPlacements)),
+            snapshot: DaySnapshot(
+                now: Self.local(30, 12, 30), settings: DaySettings(), agenda: .empty,
+                ownerPresent: true),
+            state: state)
+        #expect(fitted.state.plan.map(\.reminderID) == ["rent", "gym", "dentist"])
+        #expect(
+            fitted.effects.contains(.trace(.cardReaction, ["action": "fitted", "count": .int(3)])))
+        // Rent's slot starts now: it is under way.
+        #expect(fitted.state.startedSteps.contains(StepCue.key(fitted.state.plan[0])))
     }
 
     @Test func aPlansLineGoesStaleButTheEveningsHolds() {
