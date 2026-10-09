@@ -99,21 +99,23 @@ The trace measures the new behaviour: `cue.presented` / `cue.reaction`,
    their request already holds, yet read the whole Day Thread; after a relaunch
    that is a full prefill of 8–27k tokens. A short conversation (system prompt,
    Profile, the request) would share the cached root and cost seconds. This
-   revisits ADR-0080 decision 4 and needs the owner's call.
+   revisits ADR-0080 decision 4 and needs the owner's call. Not the cause of
+   the cold prefills: the Day Opening is committed to the thread once, so it
+   does not change across a relaunch, and the SSD prefix cache is on by
+   default; why a relaunched thread misses it is not yet known.
 2. **Keep someday lists out of the plan's candidates.** Partly done: the
    requests now list 15 undated reminders, the Inbox and lists with dated work
    first, the rest summed by list. Mapping Areas (or marking lists Jarvis
    never plans from) would go further.
 3. **A weekly look-back.** Built as part of the Evening Wrap-up on the week's
-   last day: the week's done reminders by Area and next week's one focus,
-   kept for the week. Next: let the focus pick a must-do when the plan has
-   none, and count the week's must-dos.
-4. **A leaner agenda listing.** The `agenda` tool prints every event's full id,
-   calendar name and meeting URL (with its password); short handles and the
-   URL's host would shrink every thread that asks about the day.
-5. **Make capture discoverable.** The one-key capture hotkey was never used in
-   ten days; adding tasks happened through Today's composer and the agent's
-   tools.
+   last day: the week's done reminders by Area, the must-dos kept, next
+   week's one focus (kept for the week, steering the plan's must-do), and up
+   to five overdue tasks to decide, so the week ends on a clean slate.
+4. **A leaner agenda listing.** Measured and set aside: event and reminder
+   ids are about 2% of the listings' text, and the threads show no tool call
+   that failed on a mistyped id. Meeting links already lose their password.
+5. **Make capture discoverable.** Built: an empty Inbox names the capture
+   hotkey.
 6. **Re-read the trace after a week** with the new events, and keep what moves
    the owner to act: `scripts/companion-trace-report.py [days]` prints, per
    day, moments and cold prefills, cards by rung, reactions (kept apart from
