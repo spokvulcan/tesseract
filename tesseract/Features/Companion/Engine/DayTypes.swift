@@ -77,6 +77,9 @@ nonisolated enum CardAction: Sendable, Equatable {
     case wrapUpNow
     /// The owner answered a Step Cue.
     case step(reminderID: String, StepChoice)
+    /// The owner took a card in on the panel (Looks Good, Good Night): it
+    /// leaves the panel and stays in Today.
+    case keep(cardID: String)
 }
 
 /// What the owner chose on a Step Cue.
@@ -335,6 +338,12 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     /// Slots the owner started (Start on a cue, Start now on Today), by
     /// `StepCue.key`: their end checks in.
     var startedSteps: Set<String> = []
+    /// Slots whose start came while a started step ran, by `StepCue.key`:
+    /// they are cued once the owner is free, while they still run.
+    var heldSteps: Set<String> = []
+    /// When the owner sat down to start this day (the first sit-down after
+    /// the night): for them, the morning's end of quiet hours is over.
+    var satDownAt: Date?
     /// A moment the app quit in the middle of, until the engine picks it up.
     var interrupted: MomentKind?
     /// The Morning Plan was run again once after a quit cut it short.
@@ -352,7 +361,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         case running, cards, mustDoID, plan, carryOver, carryOverForNextDay, ledger, agents
         case agentSpokenAt, lastTickAt, lastTriageAt, whereYouWere, deferred, firedNudgeIDs
         case cuedSteps, startedSteps, interrupted, morningPlanResumed, windDownAt
-        case draft, draftForNextDay, departures
+        case draft, draftForNextDay, departures, heldSteps, satDownAt
     }
 
     /// Every field but the day is optional on disk, so a state saved by an
@@ -388,6 +397,8 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         draft = (try? c.decodeIfPresent([String].self, forKey: .draft)) ?? []
         draftForNextDay = (try? c.decodeIfPresent([String].self, forKey: .draftForNextDay)) ?? []
         departures = (try? c.decodeIfPresent([Departure].self, forKey: .departures)) ?? []
+        heldSteps = (try? c.decodeIfPresent(Set<String>.self, forKey: .heldSteps)) ?? []
+        satDownAt = try? c.decodeIfPresent(Date.self, forKey: .satDownAt)
     }
 
     /// The day as a relaunch finds it: the moment in flight never finished,
@@ -395,7 +406,8 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     /// it was refining keeps the version code built.
     func relaunched() -> DayState {
         var state = self
-        state.interrupted = running
+        // One still waiting from an earlier launch is kept.
+        state.interrupted = running ?? interrupted
         state.running = nil
         for index in state.cards.indices { state.cards[index].isRefining = false }
         return state
@@ -407,6 +419,8 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         next.lastPresentAt = lastPresentAt
         next.carryOver = carryOverForNextDay
         next.draft = draftForNextDay
+        // Quiet hours that begin just before 04:00 are still the same night.
+        next.windDownAt = windDownAt
         next.ledger = ledger
         next.agents = agents
         next.agentSpokenAt = agentSpokenAt

@@ -126,6 +126,34 @@ struct DayEngineWindDownTests {
         #expect(banner.body == "Tomorrow starts with Standup at 09:00 — 8 h from now.")
     }
 
+    @Test func quietHoursInTheDayAreNoBedtime() {
+        let decision = DayEngine.decide(
+            .tick, snapshot: Self.snapshot(at: Self.local(30, 13), quiet: (13 * 60, 14 * 60)),
+            state: Self.state())
+        #expect(Self.banners(decision.effects).isEmpty)
+    }
+
+    @Test func aShortQuietWindowThatIsOverSaysNothing() {
+        let decision = DayEngine.decide(
+            .tick,
+            snapshot: Self.snapshot(at: Self.local(30, 23, 30), quiet: (23 * 60, 23 * 60 + 20)),
+            state: Self.state())
+        #expect(Self.banners(decision.effects).isEmpty)
+    }
+
+    @Test func quietHoursFromJustBeforeFourAreOneNightAcrossTheRollover() {
+        let quiet = (3 * 60 + 30, 9 * 60)
+        let first = DayEngine.decide(
+            .tick, snapshot: Self.snapshot(at: Self.local(31, 3, 30), quiet: quiet),
+            state: Self.state())
+        #expect(Self.banners(first.effects).count == 1)
+        // 04:05: a new day's state, the same night.
+        let after = DayEngine.decide(
+            .tick, snapshot: Self.snapshot(at: Self.local(31, 4, 5), quiet: quiet),
+            state: first.state)
+        #expect(Self.banners(after.effects).isEmpty)
+    }
+
     @Test func anOpenTomorrowSaysSo() throws {
         let decision = DayEngine.decide(
             .tick, snapshot: Self.snapshot(at: Self.local(30, 23), events: []),

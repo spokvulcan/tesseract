@@ -37,6 +37,9 @@ final class JarvisPanelController {
 
     private let model = JarvisPanelModel()
     private var panel: GlassPanel?
+    /// A cue a card took the panel from: it comes back when the card goes,
+    /// while its step is still timely.
+    private var shelvedCue: StepCue?
     private let thread: DayThread
     private let voice: AgentVoiceInputController
     private let agenda: Agenda
@@ -73,6 +76,7 @@ final class JarvisPanelController {
 
     /// Show (or update in place) a card.
     func show(_ card: DayCard) {
+        if isShowing, let cue = model.cue { shelvedCue = cue }
         model.cue = nil
         model.card = card
         model.showQuiet = false
@@ -123,6 +127,21 @@ final class JarvisPanelController {
         voice.cancel()
         model.listening = false
         panel?.orderOut(nil)
+        // The card that took a cue's place is gone: the cue comes back, if
+        // its step is still timely.
+        if let cue = shelvedCue {
+            shelvedCue = nil
+            let late = Date().timeIntervalSince(cue.phase == .start ? cue.start : cue.end)
+            if cue.end > Date() || (cue.phase == .end && late < DayEngine.stepCueWindow) {
+                Task { @MainActor [weak self] in self?.show(cue) }
+            }
+        }
+    }
+
+    /// Close, and let nothing come back (the Companion was switched off).
+    func closeAll() {
+        shelvedCue = nil
+        close()
     }
 
     private func makePanel() -> GlassPanel {
@@ -152,6 +171,11 @@ final class JarvisPanelController {
                     self?.onExpand()
                 },
                 act: { [weak self] action in self?.onAction(action) },
+                keep: { [weak self] in
+                    guard let self, let card = self.model.card else { return }
+                    self.onAction(.keep(cardID: card.id))
+                    self.close()
+                },
                 choose: { [weak self] choice in
                     guard let self, let cue = self.model.cue else { return }
                     self.onAction(.step(reminderID: cue.reminderID, choice))
@@ -160,7 +184,11 @@ final class JarvisPanelController {
                 send: { [weak self] in self?.send() },
                 capture: { [weak self] in self?.capture() },
                 mic: { [weak self] in self?.toggleMic() },
-                onContentHeight: { [weak self] height in self?.fit(content: height) }))
+                onContentHeight: { [weak self] height in
+                    // On the next turn: never resize the window inside its own
+                    // layout pass.
+                    Task { @MainActor [weak self] in self?.fit(content: height) }
+                }))
         return panel
     }
 
@@ -201,6 +229,8 @@ struct JarvisPanelView: View {
     let close: () -> Void
     let expand: () -> Void
     let act: (CardAction) -> Void
+    /// Take the card in: off the panel, still in Today.
+    let keep: () -> Void
     let choose: (StepChoice) -> Void
     let send: () -> Void
     let capture: () -> Void
@@ -232,7 +262,7 @@ struct JarvisPanelView: View {
                     } else if let shown = model.card {
                         CardContent(
                             card: liveCard(shown.id) ?? shown, agenda: agenda, now: now(),
-                            showQuiet: $model.showQuiet, act: act, close: close, expand: expand)
+                            showQuiet: $model.showQuiet, act: act, keep: keep, expand: expand)
                     }
                     if let asked = model.asked {
                         Exchange(asked: asked, thread: thread)
@@ -383,7 +413,7 @@ private struct CardContent: View {
     let now: Date
     @Binding var showQuiet: Bool
     let act: (CardAction) -> Void
-    let close: () -> Void
+    let keep: () -> Void
     let expand: () -> Void
 
     var body: some View {
@@ -449,9 +479,9 @@ private struct CardContent: View {
                 }
             case .morningPlan(let plan):
                 MorningPlanContent(
-                    card: card, plan: plan, agenda: agenda, now: now, close: close, expand: expand)
+                    card: card, plan: plan, agenda: agenda, now: now, keep: keep, expand: expand)
             case .eveningWrapUp(let wrapUp):
-                WrapUpContent(card: card, wrapUp: wrapUp, act: act, close: close, expand: expand)
+                WrapUpContent(card: card, wrapUp: wrapUp, act: act, keep: keep, expand: expand)
             case .reflection:
                 Text(card.kind.title).fontWeight(.semibold)
                 Text(card.line).fixedSize(horizontal: false, vertical: true)
@@ -478,7 +508,7 @@ private struct MorningPlanContent: View {
     let plan: MorningPlanCard
     let agenda: Agenda
     let now: Date
-    let close: () -> Void
+    let keep: () -> Void
     let expand: () -> Void
 
     var body: some View {
@@ -507,7 +537,7 @@ private struct MorningPlanContent: View {
                 }
             }
             HStack(spacing: 8) {
-                Button("Looks Good", action: close)
+                Button("Looks Good", action: keep)
                     .buttonStyle(PanelButtonStyle(prominent: true))
                     .focusable(false)
                 Button("Open Today", action: expand)
@@ -601,7 +631,7 @@ private struct WrapUpContent: View {
     let card: DayCard
     let wrapUp: EveningWrapUpCard
     let act: (CardAction) -> Void
-    let close: () -> Void
+    let keep: () -> Void
     let expand: () -> Void
 
     var body: some View {
@@ -648,7 +678,7 @@ private struct WrapUpContent: View {
                         .buttonStyle(PanelButtonStyle(prominent: true))
                         .focusable(false)
                 } else {
-                    Button("Good Night", action: close)
+                    Button("Good Night", action: keep)
                         .buttonStyle(PanelButtonStyle(prominent: wrapUp.leftovers.isEmpty))
                         .focusable(false)
                 }

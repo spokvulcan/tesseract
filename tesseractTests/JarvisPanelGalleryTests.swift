@@ -172,7 +172,7 @@ struct JarvisPanelGalleryTests {
             NSHostingView(
                 rootView: JarvisPanelView(
                     model: model, thread: container.dayThread, agenda: container.agenda,
-                    liveCard: { _ in nil }, close: {}, expand: {}, act: { _ in },
+                    liveCard: { _ in nil }, close: {}, expand: {}, act: { _ in }, keep: {},
                     choose: { _ in }, send: {}, capture: {}, mic: {},
                     onContentHeight: { content = $0 }, now: { shown.now }
                 )

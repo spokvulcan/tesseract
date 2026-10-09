@@ -255,15 +255,19 @@ the owner must remember to read does not. What changed:
   task, until when and what follows, with Start (the slot starts this minute),
   In 15 min (it moves on and is cued again then), Tomorrow and Done. No model.
   Each slot is cued once, within ten minutes of its start; never while away,
-  in quiet hours, a call, a game or a meeting with other people, nor over a
+  in quiet hours (but the morning's end of them is over once the owner sat
+  down to start the day), a call, a game or a meeting with other people, nor
+  over a
   panel the owner hasn't closed (it waits a tick, and a card that takes the
   panel on the same tick goes first). A slot whose reminder rings at the same
   minute is left to Reminders. Closing it changes nothing.
 - **A started step checks in when its time is up.** A step the owner started
   (Start on a cue, or Start now on Today, which needs no cue of its own) is
   put back on the panel at its end while its task is open: Done, 15 more min
-  (it runs longer and checks in again), Tomorrow. While it runs, no other
-  step's start interrupts it; the check-in names what comes next.
+  (fifteen minutes from now, or from its end if that is still ahead; it checks
+  in again), Tomorrow. While it runs, no other step's start interrupts it: a
+  start that comes meanwhile is held, the check-in names it, and it is cued
+  once the owner is free, while its slot still runs.
 - **The panel's buttons are drawn by hand** (capsules, the main one in the
   accent): the panel is never key, and a system prominent button turns gray
   in a window that isn't.
@@ -272,7 +276,10 @@ the owner must remember to read does not. What changed:
   all". The Morning Plan now lists the steps ahead (its tasks among the day's
   events, the must-do starred) and its tips, with Looks Good; the Evening
   Wrap-up lists what got done and each leftover with Tomorrow, Later and Let
-  go (Jarvis's pick in the accent) or Do What Jarvis Suggests. The panel
+  go (Jarvis's pick in the accent) or Do What Jarvis Suggests. Looks Good and
+  Good Night take the card in (`card.reaction` "kept"): it leaves the panel
+  and stays in Today, unlike the close button. A cue a card takes the panel
+  from comes back when the card goes, while its step is still timely. The panel
   shows the card as the day has it now, so an item handled there leaves it
   (it used to stay), and it is as tall as what it says (it was always 560 pt).
 - **The plan meets the first sit-down on the panel, quiet hours or not.**
@@ -309,15 +316,16 @@ the owner must remember to read does not. What changed:
   plan, and so nothing to cue. A relaunch now records the moment it cut
   short (`DayState.relaunched()`), and when the Companion comes on the
   engine runs a Morning Plan again with the trigger `resumed` — once, not
-  after the owner closed the card, not in the evening. Every other moment
+  after the owner closed the card, not in the evening or the small hours. Every other moment
   already runs again on its own trigger.
 - **The wind-down.** The owner was at the Mac past midnight most nights,
   with mornings that start at 07:15 or 07:30, and nothing in the Companion
   spoke to sleep (Health's own bedtime banners are held as an app's news).
   As quiet hours begin with the owner still at the Mac, one banner a night
   says when tomorrow starts and how far off that is ("Tomorrow starts with
-  All Hands at 07:30 — 8 h 30 min from now."). Code, no model; within the
-  first hour of quiet hours, midnight or not; never in a game or a call; a
+  All Hands at 07:30 — 8 h 30 min from now."). Code, no model; for quiet
+  hours that start at night, within their first hour and while they hold,
+  once a night (across the 04:00 rollover too); never in a game or a call; a
   setting beside quiet hours turns it off (`night.wind-down` in the trace).
 - **A bot in a chat app is an app's news.** Slack counts as people, so
   every Jira comment relayed through it went to Triage: 7 of the 18 Slack

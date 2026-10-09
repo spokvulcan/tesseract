@@ -299,10 +299,6 @@ struct NowCardTests {
         let anna = WaitingItem(
             id: "n1", kind: .notification, title: "Anna", detail: "The deck?", app: "Slack")
         #expect(DayCard.word(in: [plan, breakpoint(needsYou: [anna])], at: at)?.id == "back")
-        // While Jarvis judges what came in, the card speaks.
-        var judging = quiet
-        judging.isRefining = true
-        #expect(DayCard.word(in: [plan, judging], at: at)?.id == "back")
         // Dismissed or stale, the word goes; a quiet card never stands in.
         var closed = plan
         closed.dismissed = true

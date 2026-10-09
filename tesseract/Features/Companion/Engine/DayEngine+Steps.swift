@@ -32,8 +32,12 @@ nonisolated extension DayEngine {
     // MARK: - The cue
 
     static func stepCueIfDue(snapshot: DaySnapshot, state: inout DayState) -> [DayEffect] {
+        // Once the owner sat down to start the day, the morning's end of
+        // quiet hours doesn't hold the plan back.
+        let started = DeliveryLadder.dayStarted(state.satDownAt, snapshot: snapshot)
         guard snapshot.settings.stepCues, !snapshot.panelUp,
-            DeliveryLadder.rungs(for: .normal, snapshot: snapshot).contains(.panel),
+            DeliveryLadder.rungs(for: .normal, snapshot: snapshot, sittingDown: started)
+                .contains(.panel),
             !inMeeting(snapshot)
         else { return [] }
         // A step that is over comes first: it closes what the next one opens.
@@ -47,17 +51,26 @@ nonisolated extension DayEngine {
     {
         let now = snapshot.now
         let facts = snapshot.facts(state: state)
+        // A slot starting now, or one held back by a focus session and still
+        // running.
+        let starting = state.plan.filter { slot in
+            slot.start <= now && now < end(of: slot)
+                && (now.timeIntervalSince(slot.start) < stepCueWindow
+                    || state.heldSteps.contains(StepCue.key(slot)))
+                && state.cuedSteps[StepCue.key(slot)] == nil
+        }
         // A step the owner started is still running: a focus session isn't
-        // interrupted, and its check-in names what comes next.
+        // interrupted. What would start meanwhile is held, its check-in names
+        // it, and it is cued once the owner is free.
         let focused = state.plan.contains { slot in
             state.startedSteps.contains(StepCue.key(slot)) && slot.start <= now
                 && now < end(of: slot) && facts.task(slot.reminderID) != nil
         }
-        guard !focused else { return nil }
-        let starting = state.plan.filter { slot in
-            slot.start <= now && now < end(of: slot)
-                && now.timeIntervalSince(slot.start) < stepCueWindow
-                && state.cuedSteps[StepCue.key(slot)] == nil
+        guard !focused else {
+            for slot in starting where facts.task(slot.reminderID) != nil {
+                state.heldSteps.insert(StepCue.key(slot))
+            }
+            return nil
         }
         for slot in starting.sorted(by: { $0.start < $1.start }) {
             // Done, or gone from Reminders: nothing to start.
@@ -129,15 +142,20 @@ nonisolated extension DayEngine {
         }
     }
 
-    /// The day's next event or open task once this slot ends.
+    /// The day's next step once this slot ends: an open task already under
+    /// way (one a focus session held back), else the next event or task.
     private static func nextStep(after slot: Placement, facts: DayFacts) -> String? {
-        for row in TimelineBuilder.build(facts: facts).rows where row.start >= end(of: slot) {
+        let slotEnd = end(of: slot)
+        for row in TimelineBuilder.build(facts: facts).rows {
             let at = AgendaTime.clock(row.start, calendar: facts.calendar)
             switch row.kind {
-            case .event(let event): return "\(event.title) at \(at)"
+            case .event(let event) where row.start >= slotEnd:
+                return "\(event.title) at \(at)"
             case .task(let task) where !task.isDone && task.id != slot.reminderID:
-                return "\(task.reminder.title) at \(at)"
-            default: continue
+                if row.start >= slotEnd { return "\(task.reminder.title) at \(at)" }
+                if (row.end ?? row.start) > slotEnd { return task.reminder.title }
+            default:
+                continue
             }
         }
         return nil
@@ -171,8 +189,13 @@ nonisolated extension DayEngine {
             let later = minute.addingTimeInterval(TimeInterval(stepLaterMinutes * 60))
             _ = moveSlot(reminderID, to: later, state: &state)
         case .extend:
+            // A quarter of an hour on from now, or from its end if that is
+            // still ahead: a late answer doesn't make it already over.
             if let index = state.plan.firstIndex(where: { $0.reminderID == reminderID }) {
-                state.plan[index].minutes += stepLaterMinutes
+                let slot = state.plan[index]
+                let from = max(end(of: slot), minute)
+                let until = from.addingTimeInterval(TimeInterval(stepLaterMinutes * 60))
+                state.plan[index].minutes = Int(until.timeIntervalSince(slot.start) / 60)
             }
         case .tomorrow:
             state.plan.removeAll { $0.reminderID == reminderID }

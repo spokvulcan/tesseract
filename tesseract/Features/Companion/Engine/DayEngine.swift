@@ -136,6 +136,7 @@ nonisolated enum DayEngine {
         if away >= DaySettings.overnightGap, hour >= snapshot.settings.morningStartHour,
             hour < snapshot.settings.morningEndHour
         {
+            state.satDownAt = snapshot.now
             if state.morningPlanAt == nil {
                 return morningPlan(trigger: .firstPresence, snapshot: snapshot, state: &state)
             }
@@ -177,8 +178,12 @@ nonisolated enum DayEngine {
     /// to rest, not a rule; then quiet hours hold everything of Jarvis's.
     static func windDownIfDue(snapshot: DaySnapshot, state: inout DayState) -> [DayEffect] {
         let settings = snapshot.settings
-        guard settings.windDown, state.windDownAt == nil,
-            settings.quietStartMinutes != settings.quietEndMinutes,
+        // Quiet hours that start at night (a daytime window is no bedtime),
+        // still on, once a night (across the 04:00 rollover too).
+        let nightStart =
+            settings.quietStartMinutes >= 18 * 60 || settings.quietStartMinutes < 4 * 60
+        guard settings.windDown, nightStart, DeliveryLadder.isQuietHours(snapshot),
+            state.windDownAt.map({ snapshot.now.timeIntervalSince($0) >= 12 * 3600 }) ?? true,
             !snapshot.frontmostIsGame,
             !DeliveryLadder.interruptionFreeApps.contains(snapshot.frontmostBundleID ?? "")
         else { return [] }

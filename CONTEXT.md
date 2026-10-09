@@ -1850,9 +1850,11 @@ this minute), In 15 min (it moves on and is cued again then), Tomorrow and
 Done. A Morning Plan's slots and the owner's own "Do it at 16:30" live only in
 the day's state, so without it nothing marks their start. A step the owner
 started (Start on a cue, or Start now on Today) checks in when its time is up:
-Done, 15 more min (it runs longer and checks in again), Tomorrow; while it
-runs, no other start interrupts it. Built by code, no model; each start and
-end once, within ten minutes; never while away, in quiet hours, a call, a
+Done, 15 more min (from now, if answered late), Tomorrow; while it runs, no
+other start interrupts it — one that comes meanwhile is held, named by the
+check-in, and cued once the owner is free. Built by code, no model; each start and
+end once, within ten minutes; never while away, in quiet hours (but not the
+morning's end of them once the owner sat down to start the day), a call, a
 game or a meeting, nor over a panel that is up; a slot whose reminder rings
 at the same minute is left to Reminders. Closing it changes nothing; a toggle
 in Settings (Your Day) turns Step Cues off.
@@ -1977,8 +1979,9 @@ Nudges still fire. Nothing unanswered is re-summoned; it stays in Today.
 **Wind-down**:
 The night's one banner as quiet hours begin with the owner still at the Mac:
 "Time to wind down — Tomorrow starts with All Hands at 07:30 — 8 h 30 min from
-now." Built by code, within the first hour of quiet hours, never in a game or
-a call; the owner can switch it off beside quiet hours in Settings.
+now." Built by code, for quiet hours that start at night, within their first
+hour, once a night; never in a game or a call; the owner can switch it off
+beside quiet hours in Settings.
 _Avoid_: bedtime (Health's own), reminder.
 
 **Governor**:

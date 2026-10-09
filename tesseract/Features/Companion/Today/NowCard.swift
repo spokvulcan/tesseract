@@ -405,9 +405,7 @@ nonisolated extension DayCard {
     /// needs the owner says nothing: "nothing needs you" is no news, and it
     /// would push the plan's word off the card after every break.
     var hasWord: Bool {
-        if case .breakpoint(let breakpoint) = body {
-            return !breakpoint.needsYou.isEmpty || isRefining
-        }
+        if case .breakpoint(let breakpoint) = body { return !breakpoint.needsYou.isEmpty }
         return true
     }
 

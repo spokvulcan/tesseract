@@ -87,8 +87,7 @@ nonisolated extension DayEngine {
     static func resumeInterrupted(snapshot: DaySnapshot, state: inout DayState) -> [DayEffect] {
         guard let kind = state.interrupted else { return [] }
         state.interrupted = nil
-        guard kind == .morningPlan, !state.morningPlanResumed,
-            snapshot.minuteOfDay < snapshot.settings.eveningMinutes,
+        guard kind == .morningPlan, !state.morningPlanResumed, !isEvening(snapshot),
             let index = state.cards.lastIndex(where: { $0.kind == .morningPlan }),
             !state.cards[index].dismissed
         else { return [] }
@@ -518,6 +517,11 @@ nonisolated extension DayEngine {
 
         case .step(let reminderID, let choice):
             return stepChosen(reminderID, choice, snapshot: snapshot, state: &state)
+
+        case .keep(let cardID):
+            // Taken in: off the panel (the panel closes itself), still in Today.
+            guard let card = state.cards.first(where: { $0.id == cardID }) else { return [] }
+            return [reaction("kept", card: card, snapshot: snapshot)]
         }
     }
 

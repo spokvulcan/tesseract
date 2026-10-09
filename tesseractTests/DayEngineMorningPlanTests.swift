@@ -217,6 +217,43 @@ struct DayEngineMorningPlanTests {
         #expect(!Day.moments(evening.effects).contains { $0.kind == .morningPlan })
     }
 
+    @Test func aPlanCutShortIsNotRunAgainInTheSmallHours() throws {
+        // Relaunched at 00:30: still the 30th's day (until 04:00), and night.
+        let night = DayEngine.decide(
+            .companionEnabled,
+            snapshot: Day.snapshot(at: Day.local(31, 0, 30), present: false),
+            state: try Self.cutShort())
+        #expect(!Day.moments(night.effects).contains { $0.kind == .morningPlan })
+    }
+
+    @Test func aResumeStillWaitingSurvivesAnotherRelaunch() throws {
+        var waiting = try Self.cutShort()
+        #expect(waiting.interrupted == .morningPlan)
+        // The Companion was off: nothing picked it up before the next quit.
+        waiting = waiting.relaunched()
+        #expect(waiting.interrupted == .morningPlan)
+    }
+
+    @Test func lookingGoodKeepsThePlansWordOnToday() throws {
+        let sitDown = DayEngine.decide(
+            .presenceReturned(awayFrom: Day.local(29, 23)),
+            snapshot: Day.snapshot(at: Day.local(30, 9, 3)), state: Day.state())
+        let card = try #require(sitDown.state.cards.last)
+        let kept = DayEngine.decide(
+            .cardAction(.keep(cardID: card.id)),
+            snapshot: Day.snapshot(at: Day.local(30, 9, 5)), state: sitDown.state)
+        #expect(kept.state.cards.last?.dismissed == false)
+        #expect(DayCard.word(in: kept.state.cards, at: Day.local(30, 9, 5))?.id == card.id)
+        #expect(
+            kept.effects.contains {
+                if case .trace(.cardReaction, let fields) = $0 {
+                    fields["action"] == .string("kept")
+                } else {
+                    false
+                }
+            })
+    }
+
     @Test func otherMomentsCutShortWaitForTheirOwnTriggers() {
         var state = Day.state()
         state.morningPlanAt = Day.local(30, 8)
