@@ -243,7 +243,10 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # fixture cards at the height it fits them (the plan's steps, the wrap-up's
 # leftovers; TEST_RUNNER_PANEL_GALLERY_DIR=<dir> writes the PNGs), the menu
 # bar's clock beside the glyph (a started step's time left, the next event or
-# time to leave in its last half hour; the same directory gets its PNGs),
+# time to leave in its last half hour; the same directory gets its PNGs), one
+# day walked through the engine signal by signal where those rules meet (the
+# plan, a cue started, an absence and the late check-in, the must-do put off
+# and started small, the clock, the evening),
 # cards and prompts, the Day Thread's store, the seen ledger, the
 # Delivery Ladder and governor, the Claude Code merge, the Profile and recall
 # (fixture conversation files), the trace, the voice overlay's placements, and
@@ -259,6 +262,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/DayEngineWindDownTests \
   -only-testing:tesseractTests/JarvisPanelGalleryTests \
   -only-testing:tesseractTests/MenuBarClockGalleryTests \
+  -only-testing:tesseractTests/DayWalkTests \
   -only-testing:tesseractTests/NotificationSourceTests \
   -only-testing:tesseractTests/ModifierKeyDetectorTests \
   -only-testing:tesseractTests/CardItemActionTests \
