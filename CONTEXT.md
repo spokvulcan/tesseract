@@ -1884,8 +1884,9 @@ day), a call, a game or a meeting, nor over a panel that is up or while
 Jarvis is writing a card. What came due meanwhile is cued late — a start while its slot still runs, an end that day —
 and says so ("Still time for", "How did it go?"). A slot whose reminder rings
 at the same minute is left to Reminders. It chimes softly as it appears, with
-the app's sounds on. Done is answered for a moment ("Done", the must-do
-credited, what comes next) before the panel closes, with an Undo: the task
+the app's sounds on. Done is answered for a moment ("Done in 26 min" for a
+step started and answered at its end, the must-do credited, what comes next)
+before the panel closes, with an Undo: the task
 reopens and the cue is back, to choose again; when what comes next is a call
 within a quarter hour, with Join too. A step put off twice in a
 day is offered as five minutes ("Just five minutes?", Start 5 min), and five

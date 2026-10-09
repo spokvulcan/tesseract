@@ -1117,6 +1117,9 @@ struct DayEngineStepCueTests {
             state: Self.started())
         #expect(seen.state.stepRuns == [StepRun(planned: 20, actual: 26, at: Self.local(11, 38))])
         #expect(seen.state.startedMinutes.isEmpty)
+        let fields = Self.traced(.cueTimed, in: seen.effects)
+        #expect(fields?["planned"] == .int(20))
+        #expect(fields?["actual"] == .int(26))
     }
 
     @Test func aStepDoneLongAfterItsTimeIsNotTimed() {

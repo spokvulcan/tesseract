@@ -443,8 +443,9 @@ nonisolated extension DayEngine {
     /// minutes it had, kept for the plan's sizing — unless done well after
     /// its time was up (the owner away when it checked in), when how long
     /// it took is unknown.
-    static func noteStepRuns(snapshot: DaySnapshot, state: inout DayState) {
-        guard !state.startedMinutes.isEmpty else { return }
+    static func noteStepRuns(snapshot: DaySnapshot, state: inout DayState) -> [DayEffect] {
+        guard !state.startedMinutes.isEmpty else { return [] }
+        var effects: [DayEffect] = []
         for slot in state.plan {
             let key = StepCue.key(slot)
             guard let planned = state.startedMinutes[key],
@@ -458,7 +459,9 @@ nonisolated extension DayEngine {
             let actual = max(1, Int(completed.timeIntervalSince(slot.start) / 60))
             state.stepRuns.append(StepRun(planned: planned, actual: actual, at: completed))
             state.stepRuns = Array(state.stepRuns.suffix(30))
+            effects.append(.trace(.cueTimed, ["planned": .int(planned), "actual": .int(actual)]))
         }
+        return effects
     }
 
     // MARK: - The owner's choice

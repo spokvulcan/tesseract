@@ -9,7 +9,8 @@ day, ADR-0080) and prints, per day: moments (and how many ran with a cold
 prefix cache), cards by delivery rung, card reactions by action ("kept" apart
 from "dismissed"), Step and Break Cues by phase and the owner's choices (a
 Break Cue's prefixed "break"), steps moved off a meeting, breaks from the Mac
-(how many, and the median and longest sitting before one), the wind-down,
+(how many, and the median and longest sitting before one), how long timed
+steps took against their plan, the wind-down,
 nudges (event and leave), notifications by source, Triage, and the tasks the
 Night Reflection proposed and what the owner decided. A Step Cue shown ten
 minutes or more after its moment counts as late. The night before is how long
@@ -50,6 +51,7 @@ def summarise(path):
     triage = [0, 0]
     wind_down = 0
     sittings = []
+    timed = [0, 0]
     tasks = collections.Counter()
     night = None
     for record in records(path):
@@ -72,6 +74,10 @@ def summarise(path):
             cues[phase] += 1
             if fields.get("late", 0) >= 600:
                 cues[phase + " late"] += 1
+        elif event == "cue.timed":
+            timed[0] += fields.get("planned", 0)
+            timed[1] += fields.get("actual", 0)
+            cues["timed"] += 1
         elif event == "cue.moved":
             cues["moved off a meeting"] += 1
         elif event == "cue.reaction":
@@ -120,6 +126,8 @@ def summarise(path):
             "%d · median %d · longest %d" % (
                 len(sittings), sorted(sittings)[len(sittings) // 2], max(sittings))
             if sittings else None),
+        "step pace (actual / planned)": (
+            "%.1f×" % (timed[1] / timed[0]) if timed[0] else None),
         "night before": night,
         "wind-down": wind_down,
         "task proposals": dict(tasks),

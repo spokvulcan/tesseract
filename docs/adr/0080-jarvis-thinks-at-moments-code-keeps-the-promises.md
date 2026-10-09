@@ -595,4 +595,8 @@ the owner must remember to read does not. What changed:
   when the real length is unknown. From five runs, when the pace is 15% or
   more off, the plan's request says so ("Lately the owner's steps took
   about 1.5× the time planned (6 steps): give each slot that much room, and
-  fewer of them."). Code measures; the model only reads one line.
+  fewer of them."). Code measures; the model only reads one line. The
+  owner sees the same measure as each step ends: the panel's "Done" says
+  how long it took ("Done in 26 min") when answered at its end — time made
+  visible, never weighed against the plan — and `cue.timed` traces each run
+  for the report's pace by day.

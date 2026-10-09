@@ -46,6 +46,9 @@ nonisolated enum CompanionTraceEvent: String, Sendable, Equatable, CaseIterable 
     /// A meeting landed on a planned step not yet begun: code moved the step
     /// to the first free time after it. Carries how far, and its length.
     case cueMoved = "cue.moved"
+    /// A step the owner started whole was seen done in time: the minutes it
+    /// had and the minutes it took, what the Morning Plan's pace is made of.
+    case cueTimed = "cue.timed"
 
     // MARK: - nudge.*: OS-scheduled notifications for events and reminders
 

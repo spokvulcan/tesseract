@@ -237,6 +237,19 @@ struct JarvisPanelGalleryTests {
         #expect(cue.doneLine(now: now) == nil)
     }
 
+    @Test func aStepDoneAtItsEndSaysHowLongItTook() {
+        var cue = StepCue(
+            reminderID: "adr", title: "Write the cache ADR", start: Shown.at(10, 45),
+            minutes: 75, areaName: "Work", isMustDo: false, next: nil, phase: .end)
+        #expect(cue.doneHeading(now: Shown.at(12)) == "Done in 1 h 15 min")
+        #expect(cue.doneHeading(now: Shown.at(11, 50)) == "Done in 1 h 5 min")
+        // Answered long after its end: how long it took is unknown.
+        #expect(cue.doneHeading(now: Shown.at(12, 30)) == "Done")
+        // Done before it began ("Did it"): nothing to time.
+        cue.phase = .start
+        #expect(cue.doneHeading(now: Shown.at(12)) == "Done")
+    }
+
     @Test func aStepDoneBeforeACallOffersToJoinIt() throws {
         let link = try #require(URL(string: "https://meet.google.com/abc-defg-hij"))
         var cue = StepCue(

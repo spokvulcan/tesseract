@@ -613,7 +613,7 @@ private struct StepDoneContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline) {
-                Label("Done", systemImage: "checkmark.circle.fill")
+                Label(cue.doneHeading(now: now), systemImage: "checkmark.circle.fill")
                     .fontWeight(.semibold)
                     .foregroundStyle(Color.accentColor)
                 Spacer()
@@ -681,6 +681,17 @@ extension StepCue {
         guard isMustDo else { return next }
         return ["That's the must-do — the rest is a bonus.", next].compactMap(\.self)
             .joined(separator: "\n")
+    }
+
+    /// "Done in 26 min": how long a step the owner started took, said as it
+    /// ends — time made visible, never weighed against the plan. Only when
+    /// answered at its end; later, how long it took is unknown.
+    func doneHeading(now: Date) -> String {
+        guard phase == .end, now > start,
+            now.timeIntervalSince(end) <= DayEngine.stepCueLate
+        else { return "Done" }
+        let minutes = max(1, Int(now.timeIntervalSince(start) / 60))
+        return "Done in \(MomentPrompts.minutesText(minutes))"
     }
 
     /// What comes next is a call starting within a quarter hour (or a few
