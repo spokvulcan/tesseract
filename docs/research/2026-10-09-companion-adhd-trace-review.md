@@ -162,7 +162,18 @@ day, and the cold prefills.
    that failed on a mistyped id. Meeting links already lose their password.
 5. **Make capture discoverable.** Built: an empty Inbox names the capture
    hotkey.
-6. **Re-read the trace after a week** with the new events, and keep what moves
+6. **Sleep is read as a return.** `IdleMonitor` answers
+   `willSleepNotification` with its return path, a leftover of the retired
+   memory consolidation (ADR-0035), which stopped its GPU work that way. The
+   Companion is now its only listener, so every sleep after an absence sends
+   the engine a "return": a Breakpoint can be made for nobody, and the last
+   presence is stamped at the sleep, not the last use. The new features read
+   the last clock tick with the owner at the Mac instead
+   (`DayState.lastActiveAt`). Treating sleep as the start (or continuation)
+   of an absence, and only input or an unlock as a return, would fix it at
+   the source; dark wakes (Power Nap) need the same care, and
+   `IdleMonitorTests` pins the wake path.
+7. **Re-read the trace after a week** with the new events, and keep what moves
    the owner to act: `scripts/companion-trace-report.py [days]` prints, per
    day, moments and cold prefills, cards by rung, reactions (kept apart from
    dismissed), Step Cues (late ones apart) and the owner's choices — "later"
