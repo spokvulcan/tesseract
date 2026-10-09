@@ -116,8 +116,10 @@ The trace measures the new behaviour: `cue.presented` / `cue.reaction`,
 6. **Re-read the trace after a week** with the new events, and keep what moves
    the owner to act: `scripts/companion-trace-report.py [days]` prints, per
    day, moments and cold prefills, cards by rung, reactions (kept apart from
-   dismissed), Step Cues and the owner's choices, the wind-down, event and
-   leave nudges, notifications by source, and Triage.
+   dismissed), Step Cues (late ones apart) and the owner's choices — "later"
+   and "startSmall" among them, the measure of whether five minutes beats a
+   snooze — the wind-down, event and leave nudges, notifications by source,
+   Triage, and task proposals with what became of them.
 
 ## Appendix: the queries
 

@@ -8,8 +8,10 @@ Reads ~/Library/Application Support/CompanionTrace/trace-*.jsonl (one file per
 day, ADR-0080) and prints, per day: moments (and how many ran with a cold
 prefix cache), cards by delivery rung, card reactions by action ("kept" apart
 from "dismissed"), Step Cues by phase and the owner's choices, the wind-down,
-nudges (event and leave), notifications by source, and Triage. Counts only —
-no titles, messages or names.
+nudges (event and leave), notifications by source, Triage, and the tasks the
+Night Reflection proposed and what the owner decided. A Step Cue shown ten
+minutes or more after its moment counts as late. Counts only — no titles,
+messages or names.
 """
 
 import collections
@@ -44,6 +46,7 @@ def summarise(path):
     sources = collections.Counter()
     triage = [0, 0]
     wind_down = 0
+    tasks = collections.Counter()
     for record in records(path):
         event = record["event"]
         fields = record.get("fields", {})
@@ -60,7 +63,10 @@ def summarise(path):
         elif event == "card.reaction":
             reactions[fields.get("action", "?")] += 1
         elif event == "cue.presented":
-            cues[fields.get("phase", "start")] += 1
+            phase = fields.get("phase", "start")
+            cues[phase] += 1
+            if fields.get("late", 0) >= 600:
+                cues[phase + " late"] += 1
         elif event == "cue.reaction":
             choices[fields.get("action", "?")] += 1
         elif event == "nudge.scheduled":
@@ -76,6 +82,15 @@ def summarise(path):
             triage[1] += fields.get("raised", 0)
         elif event == "night.wind-down":
             wind_down += 1
+        elif event == "task.proposed":
+            tasks["proposed"] += fields.get("count", 0)
+        elif event == "task.decided":
+            if fields.get("added"):
+                tasks["added"] += 1
+            elif fields.get("existed"):
+                tasks["already there"] += 1
+            else:
+                tasks["let go"] += 1
     return {
         "moments": dict(moments),
         "cold prefills": dict(cold),
@@ -88,6 +103,7 @@ def summarise(path):
         "notifications": dict(sources),
         "triage runs / raised": "%d / %d" % tuple(triage),
         "wind-down": wind_down,
+        "task proposals": dict(tasks),
     }
 
 
