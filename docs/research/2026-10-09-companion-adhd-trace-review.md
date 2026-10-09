@@ -113,7 +113,7 @@ each is fixed and tested:
 | A declined or cancelled meeting still got a nudge, a "meeting ended" Breakpoint and busy time | Events leave both out as they are read |
 | Nudges were bare clock times: after a flight they fired on the old zone's clock time | Each nudge carries its time zone |
 | A banner still in Notification Center, read again as it was opened, came in as new after the ledger forgot it | The ledger remembers the ids it dropped |
-| A second raise hid the first (each Triage card replaced the last); a Breakpoint reply for a replaced card lost its banners | Triage cards gather; a reply for a replaced card marks nothing |
+| A second raise hid the first (each Triage card replaced the last); a second Breakpoint made while the first was judged left its banners to no one | Triage cards gather what still waits; one Breakpoint at a time |
 | A moment that landed after 04:00 counted for the new day (a late reflection took tonight's, its reply went to the new thread) | A request carries its day; a late reflection opens the morning; the thread turns between moments |
 
 ## Trying it
