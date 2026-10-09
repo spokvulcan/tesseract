@@ -57,6 +57,8 @@ final class JarvisPanelController {
     /// A capture or its undo is under way: + or Undo again does it once.
     private var isCapturing = false
     private var noticeTask: Task<Void, Never>?
+    /// The "Done" on the panel closes it when this ends.
+    private var doneTask: Task<Void, Never>?
 
     /// The panel's width, and the tallest it grows.
     static let size = NSSize(width: 400, height: 560)
@@ -84,8 +86,9 @@ final class JarvisPanelController {
     var isShowing: Bool { panel?.isVisible == true }
     var shownCardID: String? { isShowing ? model.card?.id : nil }
 
-    /// How long a step marked done is said before the panel closes.
-    static let doneLinger: Duration = .milliseconds(2500)
+    /// How long a step marked done is said, with its Undo, before the panel
+    /// closes.
+    static let doneLinger: Duration = .seconds(5)
 
     /// Show (or update in place) a card.
     func show(_ card: DayCard) {
@@ -121,23 +124,35 @@ final class JarvisPanelController {
         close()
     }
 
-    /// Done on a cue is said for a moment — the win, and what comes next —
-    /// then the panel closes, unless something else took it meanwhile or
-    /// the owner turned to Jarvis (typing, asking, speaking).
+    /// Done on a cue is said for a moment — the win, what comes next, and
+    /// an Undo — then the panel closes, unless something else took it
+    /// meanwhile, the owner took it back, or turned to Jarvis (typing,
+    /// asking, speaking).
     private func acknowledge(_ cue: StepCue) {
         model.cue = nil
         model.done = cue
         // What the field held before: only what changes meanwhile counts.
         let draft = model.draft
         let asked = model.asked
-        Task { @MainActor [weak self] in
+        doneTask?.cancel()
+        doneTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: Self.doneLinger)
-            guard let self, self.model.done == cue else { return }
+            guard !Task.isCancelled, let self, self.model.done == cue else { return }
             self.model.done = nil
             let turnedToJarvis =
                 self.model.listening || self.model.asked != asked || self.model.draft != draft
             if !turnedToJarvis { self.close() }
         }
+    }
+
+    /// Not done after all: the task reopens and the cue is back, to choose
+    /// again.
+    private func undoDone() {
+        guard let cue = model.done else { return }
+        doneTask?.cancel()
+        onAction(.step(reminderID: cue.reminderID, .undo))
+        model.done = nil
+        model.cue = cue
     }
 
     /// As tall as what the panel says, between its least and full height.
@@ -249,6 +264,7 @@ final class JarvisPanelController {
                     self.onAction(.step(reminderID: cue.reminderID, choice))
                     if choice == .done { self.acknowledge(cue) } else { self.close() }
                 },
+                undoDone: { [weak self] in self?.undoDone() },
                 chooseBreak: { [weak self] choice in
                     guard let self, self.model.rest != nil else { return }
                     self.onAction(.breakCue(choice))
@@ -345,6 +361,8 @@ struct JarvisPanelView: View {
     /// Take the card in: off the panel, still in Today.
     let keep: () -> Void
     let choose: (StepChoice) -> Void
+    /// Take back the Done the panel is saying.
+    var undoDone: () -> Void = {}
     var chooseBreak: (BreakChoice) -> Void = { _ in }
     let send: () -> Void
     let capture: () -> Void
@@ -378,7 +396,7 @@ struct JarvisPanelView: View {
                     } else if let rest = model.rest {
                         BreakCueContent(cue: rest, choose: chooseBreak)
                     } else if let done = model.done {
-                        StepDoneContent(cue: done, now: now())
+                        StepDoneContent(cue: done, now: now(), undo: undoDone)
                     } else if let shown = model.card {
                         CardContent(
                             card: liveCard(shown.id) ?? shown, agenda: agenda, now: now(),
@@ -582,16 +600,25 @@ private struct BreakCueContent: View {
 }
 
 /// The win, said: the step is done, the must-do credited, and what comes
-/// next — a moment's word before the panel closes.
+/// next — a moment's word before the panel closes, with an Undo for a Done
+/// that wasn't meant.
 private struct StepDoneContent: View {
     let cue: StepCue
     let now: Date
+    let undo: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Label("Done", systemImage: "checkmark.circle.fill")
-                .fontWeight(.semibold)
-                .foregroundStyle(Color.accentColor)
+            HStack(alignment: .firstTextBaseline) {
+                Label("Done", systemImage: "checkmark.circle.fill")
+                    .fontWeight(.semibold)
+                    .foregroundStyle(Color.accentColor)
+                Spacer()
+                Button("Undo", action: undo)
+                    .buttonStyle(PanelButtonStyle(compact: true))
+                    .focusable(false)
+                    .help("Not done after all: it reopens, and you can choose again")
+            }
             Text(cue.title)
                 .fontWeight(.semibold)
                 .lineLimit(2)

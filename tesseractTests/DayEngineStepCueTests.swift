@@ -403,6 +403,39 @@ struct DayEngineStepCueTests {
         #expect(done.state.plan == Self.cued().plan)
     }
 
+    @Test func undoReopensTheTaskAndPutsItsCueBackToChooseAgain() throws {
+        let done = Self.choose(.done, at: Self.local(11, 11))
+        #expect(done.state.cueOnPanel == nil)
+        let undone = DayEngine.decide(
+            .cardAction(.step(reminderID: "letter", .undo)),
+            snapshot: Self.snapshot(at: Self.local(11, 11), panelUp: true), state: done.state)
+        #expect(undone.effects.contains(.mutateAgenda(.reopen(reminderID: "letter"))))
+        #expect(undone.state.cueOnPanel == StepCue.key(Self.state().plan[0]))
+        #expect(Self.traced(.cueReaction, in: undone.effects)?["action"] == .string("undo"))
+        // Chosen again: Start starts it.
+        let started = DayEngine.decide(
+            .cardAction(.step(reminderID: "letter", .start)),
+            snapshot: Self.snapshot(at: Self.local(11, 12), panelUp: true), state: undone.state)
+        #expect(started.state.cueOnPanel == nil)
+        let slot = try #require(started.state.plan.first { $0.reminderID == "letter" })
+        #expect(started.state.startedSteps.contains(StepCue.key(slot)))
+    }
+
+    @Test func aMustDoOpenAgainIsNotDoneAfterAll() {
+        var state = Self.state()
+        state.mustDoID = "letter"
+        let done = DayEngine.decide(
+            .agendaChanged,
+            snapshot: Self.snapshot(
+                at: Self.local(11, 20), open: [Self.deck, Self.dentist], done: [Self.letter]),
+            state: state)
+        #expect(done.state.mustDoDoneAt == Self.local(11, 20))
+        // Undone on the panel, or unticked in Reminders.
+        let reopened = DayEngine.decide(
+            .agendaChanged, snapshot: Self.snapshot(at: Self.local(11, 21)), state: done.state)
+        #expect(reopened.state.mustDoDoneAt == nil)
+    }
+
     @Test func closingTheCueChangesNothing() {
         let closed = Self.choose(.dismiss, at: Self.local(11, 11))
         #expect(closed.state.plan == Self.cued().plan)

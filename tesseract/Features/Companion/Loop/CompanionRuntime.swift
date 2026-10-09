@@ -372,6 +372,8 @@ final class CompanionRuntime {
                 try await agenda.deleteReminder(id: id, source: "wrapUp")
             case .complete(let id):
                 _ = try await agenda.updateReminder(id: id, completed: true, source: "card")
+            case .reopen(let id):
+                _ = try await agenda.updateReminder(id: id, completed: false, source: "card")
             case .followUp(let title, let at):
                 _ = try agenda.addReminder(title: title, due: at, dueHasTime: true, source: "card")
             case .add(let title, let due):

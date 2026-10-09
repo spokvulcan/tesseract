@@ -39,7 +39,7 @@ nonisolated enum CompanionTraceEvent: String, Sendable, Equatable, CaseIterable 
     /// phase "break", two hours at the Mac put a Break Cue up: how long.
     case cuePresented = "cue.presented"
     /// The owner answered a Step Cue (start, later, resume after a meeting,
-    /// tomorrow, done or dismiss), or a Break Cue (phase "break": taking,
+    /// tomorrow, done, undo — Done taken back — or dismiss), or a Break Cue (phase "break": taking,
     /// later, dismiss, or away — up from the Mac with it on the panel).
     /// Carries the time to react.
     case cueReaction = "cue.reaction"

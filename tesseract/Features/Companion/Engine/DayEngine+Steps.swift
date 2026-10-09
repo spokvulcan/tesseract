@@ -426,6 +426,12 @@ nonisolated extension DayEngine {
             effects.append(.mutateAgenda(.dueTomorrow(reminderID: reminderID)))
         case .done:
             effects.append(.mutateAgenda(.complete(reminderID: reminderID)))
+        case .undo:
+            effects.append(.mutateAgenda(.reopen(reminderID: reminderID)))
+            // The cue the owner answered is back on the panel.
+            state.cueOnPanel =
+                state.cuedSteps.filter { $0.key.hasPrefix("\(reminderID)@") }
+                .max { $0.value < $1.value }?.key
         case .dismiss:
             break
         }

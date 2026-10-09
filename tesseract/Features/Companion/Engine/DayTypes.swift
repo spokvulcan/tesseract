@@ -132,6 +132,9 @@ nonisolated enum StepChoice: String, Sendable, Equatable {
     case tomorrow
     /// Already done.
     case done
+    /// Not done after all (Undo, as the panel says "Done"): the task reopens
+    /// and its cue is back on the panel, to choose again.
+    case undo
     /// Closed: nothing changes.
     case dismiss
 }
@@ -262,6 +265,8 @@ nonisolated enum AgendaMutation: Sendable, Equatable {
     case delete(reminderID: String)
     /// Done.
     case complete(reminderID: String)
+    /// Not done after all: open again.
+    case reopen(reminderID: String)
     /// Due on this day, keeping a time of day if it had one.
     case dueOn(reminderID: String, day: Date)
     /// Due at this moment.

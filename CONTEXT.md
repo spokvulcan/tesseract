@@ -1872,7 +1872,8 @@ meanwhile is cued late â€” a start while its slot still runs, an end that day â€
 and says so ("Still time for", "How did it go?"). A slot whose reminder rings
 at the same minute is left to Reminders. It chimes softly as it appears, with
 the app's sounds on. Done is answered for a moment ("Done", the must-do
-credited, what comes next) before the panel closes. A step put off twice in a
+credited, what comes next) before the panel closes, with an Undo: the task
+reopens and the cue is back, to choose again. A step put off twice in a
 day is offered as five minutes ("Just five minutes?", Start 5 min), and five
 minutes in it asks to keep going. A meeting ends a step: one started or moved
 ends five minutes before the next meeting with other people or event with a

@@ -151,10 +151,17 @@ nonisolated enum DayEngine {
     }
 
     /// The must-do seen done, for the week's look-back; with `before`, only
-    /// if it was done by then.
+    /// if it was done by then. Seen open again (an undo, or unticked in
+    /// Reminders), it isn't done after all.
     private static func noteMustDoDone(
         snapshot: DaySnapshot, state: inout DayState, before: Date? = nil
     ) {
+        if before == nil, state.mustDoDoneAt != nil,
+            snapshot.agenda.open.contains(where: { $0.id == state.mustDoID })
+        {
+            state.mustDoDoneAt = nil
+            return
+        }
         guard let mustDo = state.mustDoID, state.mustDoDoneAt == nil,
             (snapshot.agenda.doneToday + snapshot.agenda.doneThisWeek).contains(where: {
                 $0.id == mustDo && ($0.completedAt ?? .distantPast) < (before ?? .distantFuture)

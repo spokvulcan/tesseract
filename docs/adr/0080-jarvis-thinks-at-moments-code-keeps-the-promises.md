@@ -274,7 +274,13 @@ the owner must remember to read does not. What changed:
   next (unless that has started since the cue went up) — the win said aloud
   and the next step named at the moment one ends; a card that arrives
   meanwhile takes the panel at once, a cue waits for it to close, and the
-  panel stays if the owner turned to Jarvis (typing, asking, speaking). Starting is
+  panel stays if the owner turned to Jarvis (typing, asking, speaking).
+  It says so for five seconds with an Undo: the day's first must-do cue
+  was answered Done eighteen seconds after it went up, at the start of a
+  two-and-a-half-hour slot — done already, or a slip — and a slip
+  completed the task with no way back from the panel. Undo reopens it and puts the cue back to
+  choose again (`cue.reaction` "undo"); a must-do seen open again is no
+  longer counted done for the week's look-back. Starting is
   the hard part: a step put off twice in a day ("In 15 min") is offered as
   "Just five minutes?" with Start 5 min, and five minutes in its check-in
   asks to keep going ("five minutes counts"); Keep going adds a quarter of
