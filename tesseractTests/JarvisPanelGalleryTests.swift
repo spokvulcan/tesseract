@@ -4,8 +4,8 @@
 //
 //  The Jarvis Panel's content, rendered with the app's view over fixture
 //  cards — a Step Cue (one for the must-do, with a long title, one at the
-//  end of a started step, and both shown late, the owner back from away),
-//  the Morning Plan with its steps over the
+//  end of a started step, both shown late, the owner back from away, and
+//  the word a step marked done gets), the Morning Plan with its steps over the
 //  Today gallery's morning, the Evening Wrap-up with its leftovers, and a
 //  Breakpoint card — each at the height the panel fits to it. With
 //  PANEL_GALLERY_DIR set (TEST_RUNNER_PANEL_GALLERY_DIR through xcodebuild),
@@ -35,6 +35,7 @@ struct JarvisPanelGalleryTests {
         case stepCheckIn
         case stepCueLate
         case stepCheckInLate
+        case stepDone
         case morningPlan
         case eveningWrapUp
         case breakpoint
@@ -83,6 +84,11 @@ struct JarvisPanelGalleryTests {
                     reminderID: "letter", title: "Write to the case worker about the bus ticket",
                     start: Self.at(11, 12), minutes: 20, areaName: "Inbox", isMustDo: false,
                     next: nil, phase: .end, late: true)
+            case .stepDone:
+                model.done = StepCue(
+                    reminderID: "adr", title: "Write the cache ADR", start: Self.at(13, 45),
+                    minutes: 75, areaName: "Work", isMustDo: true,
+                    next: "Design review at 15:00", phase: .end)
             case .morningPlan:
                 model.card = TodayFixture.morning.state.cards.first
             case .eveningWrapUp:
@@ -143,6 +149,21 @@ struct JarvisPanelGalleryTests {
                     .write(to: directory.appendingPathComponent(name))
             }
         }
+    }
+
+    @Test func aStepMarkedDoneIsCreditedAndPointsOn() {
+        var cue = StepCue(
+            reminderID: "letter", title: "Write to the case worker", start: Shown.at(11, 10),
+            minutes: 20, areaName: "Inbox", isMustDo: false, next: "Design review at 15:00")
+        #expect(cue.doneLine == "Next: Design review at 15:00.")
+        cue.isMustDo = true
+        #expect(
+            cue.doneLine
+                == "That's the must-do — the rest is a bonus.\nNext: Design review at 15:00.")
+        cue.next = nil
+        #expect(cue.doneLine == "That's the must-do — the rest is a bonus.")
+        cue.isMustDo = false
+        #expect(cue.doneLine == nil)
     }
 
     @Test func thePanelFitsWhatItSays() {

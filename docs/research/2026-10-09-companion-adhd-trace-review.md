@@ -79,7 +79,7 @@ the ideas the changes lean on; it makes no claims beyond them.
 | 6 | A bot posting through a chat app is an app's news, not a person |
 | 8 | The night's draft of tomorrow opens the next day's thread |
 | 10 | The plan sets a time to leave for an event in person; the OS nudges then, the Now Card and the Day Line say it |
-| — | Once the must-do is done, the Now Card says the rest is a bonus |
+| — | Once the must-do is done, the Now Card says the rest is a bonus; Done on a Step Cue is answered for a moment — the win, and what comes next |
 | — | A week's focus: the week's last evening looks back (done by Area, must-dos kept) and names next week's one thing, shown beside Today's date |
 | — | An online meeting reads as its service ("Zoom"), never its link and password |
 | — | The plan's candidates come the likeliest first; collection lists are summed |

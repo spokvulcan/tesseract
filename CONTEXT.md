@@ -1865,7 +1865,8 @@ day), a call, a game or a meeting, nor over a panel that is up. What came due
 meanwhile is cued late — a start while its slot still runs, an end that day —
 and says so ("Still time for", "How did it go?"). A slot whose reminder rings
 at the same minute is left to Reminders. It chimes softly as it appears, with
-the app's sounds on. Closing it changes nothing; a toggle in Settings (Your
+the app's sounds on. Done is answered for a moment ("Done", the must-do
+credited, what comes next) before the panel closes. Closing it changes nothing; a toggle in Settings (Your
 Day) turns Step Cues off.
 _Avoid_: reminder (Reminders' own alarm), nudge (an event's OS notification).
 

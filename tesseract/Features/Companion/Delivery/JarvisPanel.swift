@@ -25,6 +25,9 @@ final class JarvisPanelModel {
     var card: DayCard?
     /// A planned step starting now; shown instead of a card.
     var cue: StepCue?
+    /// A step just marked done on its cue: said for a moment, then the
+    /// panel closes.
+    var done: StepCue?
     var showQuiet = false
     var draft = ""
     var listening = false
@@ -71,9 +74,13 @@ final class JarvisPanelController {
     var isShowing: Bool { panel?.isVisible == true }
     var shownCardID: String? { isShowing ? model.card?.id : nil }
 
+    /// How long a step marked done is said before the panel closes.
+    static let doneLinger: Duration = .milliseconds(2500)
+
     /// Show (or update in place) a card.
     func show(_ card: DayCard) {
         model.cue = nil
+        model.done = nil
         model.card = card
         model.showQuiet = false
         present()
@@ -82,8 +89,22 @@ final class JarvisPanelController {
     /// Show a planned step at its start or end, in place of whatever is up.
     func show(_ cue: StepCue) {
         model.card = nil
+        model.done = nil
         model.cue = cue
         present()
+    }
+
+    /// Done on a cue is said for a moment — the win, and what comes next —
+    /// then the panel closes, unless something else took it meanwhile.
+    private func acknowledge(_ cue: StepCue) {
+        model.cue = nil
+        model.done = cue
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.doneLinger)
+            guard let self, self.model.done == cue else { return }
+            self.model.done = nil
+            self.close()
+        }
     }
 
     /// As tall as what the panel says, between its least and full height.
@@ -170,7 +191,7 @@ final class JarvisPanelController {
                 choose: { [weak self] choice in
                     guard let self, let cue = self.model.cue else { return }
                     self.onAction(.step(reminderID: cue.reminderID, choice))
-                    self.close()
+                    if choice == .done { self.acknowledge(cue) } else { self.close() }
                 },
                 send: { [weak self] in self?.send() },
                 capture: { [weak self] in self?.capture() },
@@ -250,6 +271,8 @@ struct JarvisPanelView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     if let cue = model.cue {
                         StepCueContent(cue: cue, choose: choose)
+                    } else if let done = model.done {
+                        StepDoneContent(cue: done)
                     } else if let shown = model.card {
                         CardContent(
                             card: liveCard(shown.id) ?? shown, agenda: agenda, now: now(),
@@ -365,6 +388,40 @@ private struct StepCueContent: View {
         var line = parts.joined(separator: " · ")
         if let next = cue.next { line += ". Then \(next)." }
         return line
+    }
+}
+
+/// The win, said: the step is done, the must-do credited, and what comes
+/// next — a moment's word before the panel closes.
+private struct StepDoneContent: View {
+    let cue: StepCue
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label("Done", systemImage: "checkmark.circle.fill")
+                .fontWeight(.semibold)
+                .foregroundStyle(Color.accentColor)
+            Text(cue.title)
+                .fontWeight(.semibold)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+            if let line = cue.doneLine {
+                Text(line)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+extension StepCue {
+    /// What the panel says once the step is done: the must-do credited (the
+    /// Now Card's word too), then, on its own line, what comes next.
+    var doneLine: String? {
+        let next = next.map { "Next: \($0)." }
+        guard isMustDo else { return next }
+        return ["That's the must-do — the rest is a bonus.", next].compactMap(\.self)
+            .joined(separator: "\n")
     }
 }
 
