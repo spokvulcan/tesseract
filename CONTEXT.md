@@ -1955,7 +1955,8 @@ The moment at the evening time (or the next presence before 03:00; after the
 step the owner started, if one is running — it doesn't interrupt a focus
 session): what got
 done, and each leftover rolled to tomorrow or another day, kept for later, or
-let go. Nothing is ever labelled missed or failed. On the week's last day (the
+let go (a repeating reminder skips to tomorrow instead: it is one item for its
+whole series, so letting it go would delete every occurrence). Nothing is ever labelled missed or failed. On the week's last day (the
 day before the calendar's first weekday) it also looks back on the week — what
 got done, by Area — and names the **Week's Focus**: next week's one thing, in a
 few words, which opens each day's thread, steers the Morning Plan's must-do and

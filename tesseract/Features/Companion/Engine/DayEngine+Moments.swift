@@ -469,7 +469,8 @@ nonisolated extension DayEngine {
             state.cards[index].body = .eveningWrapUp(card)
             state.plan.removeAll { $0.reminderID == reminderID }
             return [
-                .mutateAgenda(mutation(for: suggestion, reminderID: reminderID)),
+                .mutateAgenda(
+                    mutation(for: suggestion, reminderID: reminderID, snapshot: snapshot)),
                 reaction(
                     "leftover.\(suggestion.rawValue)", card: state.cards[index], snapshot: snapshot),
             ]
@@ -479,7 +480,8 @@ nonisolated extension DayEngine {
                 case .eveningWrapUp(var card) = state.cards[index].body
             else { return [] }
             let mutations = card.leftovers.map {
-                DayEffect.mutateAgenda(mutation(for: $0.suggestion, reminderID: $0.reminderID))
+                DayEffect.mutateAgenda(
+                    mutation(for: $0.suggestion, reminderID: $0.reminderID, snapshot: snapshot))
             }
             let moved = Set(card.leftovers.map(\.reminderID))
             card.leftovers = []
@@ -647,13 +649,18 @@ nonisolated extension DayEngine {
         }
     }
 
-    private static func mutation(for suggestion: Leftover.Suggestion, reminderID: String)
-        -> AgendaMutation
-    {
+    /// A repeating reminder is one item for its whole series: Later can't
+    /// take its date (EventKit refuses) and Let go would delete every
+    /// occurrence, so for it both skip to tomorrow and the series goes on.
+    private static func mutation(
+        for suggestion: Leftover.Suggestion, reminderID: String, snapshot: DaySnapshot
+    ) -> AgendaMutation {
+        let repeats = snapshot.agenda.open.first { $0.id == reminderID }?.repeats == true
         switch suggestion {
-        case .tomorrow: .dueTomorrow(reminderID: reminderID)
-        case .later: .clearDue(reminderID: reminderID)
-        case .drop: .delete(reminderID: reminderID)
+        case .tomorrow: return .dueTomorrow(reminderID: reminderID)
+        case .later where !repeats: return .clearDue(reminderID: reminderID)
+        case .drop where !repeats: return .delete(reminderID: reminderID)
+        case .later, .drop: return .dueTomorrow(reminderID: reminderID)
         }
     }
 

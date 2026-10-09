@@ -338,7 +338,8 @@ final class EventKitAgendaStore: AgendaStore {
             dueHasTime: components?.hour != nil,
             isCompleted: reminder.isCompleted,
             completedAt: reminder.completionDate,
-            createdAt: reminder.creationDate)
+            createdAt: reminder.creationDate,
+            repeats: reminder.hasRecurrenceRules)
     }
 
     nonisolated private static func hex(_ color: CGColor?) -> String? {

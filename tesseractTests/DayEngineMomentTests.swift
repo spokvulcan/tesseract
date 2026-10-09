@@ -418,6 +418,31 @@ struct DayEngineMomentTests {
         #expect(all.effects.contains(.setWaiting(0)))
     }
 
+    @Test func aRepeatingLeftoverSkipsToTomorrowInsteadOfLosingItsSeries() throws {
+        // A daily habit is one reminder for its whole series.
+        let daily = AgendaReminder(
+            id: "R1", title: "Duolingo", listID: "daily", listTitle: "Daily",
+            due: Self.local(30, 0), repeats: true)
+        let reply =
+            #"{"line": "A good day.", "leftovers": [{"id": "R1", "suggest": "drop"}]}"#
+        let decided = DayEngine.decide(
+            .momentOutcome(
+                MomentRequest(kind: .eveningWrapUp, trigger: .eveningTime, text: "x"),
+                .reply(reply, measure)),
+            snapshot: Self.snapshot(at: Self.local(30, 21, 5), open: [daily]),
+            state: running(.eveningWrapUp))
+        let card = try #require(decided.state.cards.last)
+        for choice in [Leftover.Suggestion.drop, .later] {
+            let decision = DayEngine.decide(
+                .cardAction(.leftover(cardID: card.id, reminderID: "R1", choice)),
+                snapshot: Self.snapshot(at: Self.local(30, 21, 10), open: [daily]),
+                state: decided.state)
+            #expect(decision.effects.contains(.mutateAgenda(.dueTomorrow(reminderID: "R1"))))
+            #expect(!decision.effects.contains(.mutateAgenda(.delete(reminderID: "R1"))))
+            #expect(!decision.effects.contains(.mutateAgenda(.clearDue(reminderID: "R1"))))
+        }
+    }
+
     @Test func nothingIsEverCalledMissed() {
         let facts = Self.snapshot(at: Self.local(30, 21)).facts(state: Self.state())
         let card = FallbackCards.eveningWrapUp(facts: facts, leftovers: [Self.review])

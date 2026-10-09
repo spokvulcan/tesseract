@@ -144,11 +144,15 @@ nonisolated struct AgendaReminder: Sendable, Equatable, Hashable, Identifiable, 
     var isCompleted: Bool
     var completedAt: Date?
     var createdAt: Date?
+    /// A repeating reminder: one item for the whole series, so deleting it
+    /// deletes them all, and it can't lose its date.
+    var repeats: Bool
 
     init(
         id: String, title: String, notes: String? = nil, listID: String, listTitle: String,
         colorHex: String? = nil, due: Date? = nil, dueHasTime: Bool = false,
-        isCompleted: Bool = false, completedAt: Date? = nil, createdAt: Date? = nil
+        isCompleted: Bool = false, completedAt: Date? = nil, createdAt: Date? = nil,
+        repeats: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -161,6 +165,7 @@ nonisolated struct AgendaReminder: Sendable, Equatable, Hashable, Identifiable, 
         self.isCompleted = isCompleted
         self.completedAt = completedAt
         self.createdAt = createdAt
+        self.repeats = repeats
     }
 }
 
