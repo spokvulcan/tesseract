@@ -252,9 +252,7 @@ final class DependencyContainer: ObservableObject {
         liveCard: { [weak self] id in self?.companionRuntime.state.cards.first { $0.id == id } },
         onAction: { [weak self] action in self?.companionRuntime.act(action) },
         onExpand: { (NSApp.delegate as? AppDelegate)?.navigateToToday() },
-        onCapture: { [weak self] text in
-            Task { await self?.captureService.capture(text, source: "panel") }
-        })
+        capture: captureService)
     lazy var companionRuntime: CompanionRuntime = CompanionRuntime(
         settings: settingsManager, agenda: agenda, notifier: companionNotifier,
         trace: companionTrace, idleMonitor: idleMonitor, presence: companionPresence,

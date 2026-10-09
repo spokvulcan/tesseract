@@ -31,6 +31,8 @@ struct TodayComposer: View {
 
     @State private var text = ""
     @State private var holdingMic = false
+    /// A task is being saved: ⌘↩ again saves it once.
+    @State private var adding = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -203,9 +205,14 @@ struct TodayComposer: View {
 
     private func addTask() {
         let words = trimmed
-        guard !words.isEmpty else { return }
-        text = ""
-        Task { await capture.capture(words, source: "today") }
+        guard !words.isEmpty, !adding else { return }
+        adding = true
+        Task {
+            let outcome = await capture.capture(words, source: "today")
+            adding = false
+            // Only saved words leave the field; a failure keeps them to retry.
+            if case .added = outcome, trimmed == words { text = "" }
+        }
     }
 }
 
@@ -239,7 +246,7 @@ private struct ComposerNotice: View {
         } else if let change = agenda.lastChange, Date().timeIntervalSince(change.at) < 15 {
             banner(
                 icon: "checkmark.circle", tint: .accentColor, message: change.line,
-                actionTitle: "Undo", action: { Task { try? await agenda.undo(change) } }
+                actionTitle: "Undo", action: { Task { await capture.undo(change) } }
             ) { agenda.clearLastChange() }
             .task(id: change.id) {
                 try? await Task.sleep(for: Self.shownFor)

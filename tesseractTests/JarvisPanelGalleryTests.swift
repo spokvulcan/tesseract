@@ -10,7 +10,8 @@
 //  steps over the
 //  Today gallery's morning, the Evening Wrap-up with its leftovers (and on
 //  the week's last day, with one that has waited since last week), and a
-//  Breakpoint card — each at the height the panel fits to it. With
+//  Breakpoint card (also with the line the + button leaves: the reminder it
+//  added, with its undo) — each at the height the panel fits to it. With
 //  PANEL_GALLERY_DIR set (TEST_RUNNER_PANEL_GALLERY_DIR through xcodebuild),
 //  each render is also written there as a PNG, in dark and light, for judging
 //  the panel by eye. The glass itself is the window's; a plain background
@@ -45,6 +46,7 @@ struct JarvisPanelGalleryTests {
         case eveningWrapUp
         case eveningWrapUpWeek
         case breakpoint
+        case breakpointCaptured
 
         var testDescription: String { rawValue }
 
@@ -149,7 +151,13 @@ struct JarvisPanelGalleryTests {
                             tomorrowFirst: "07:30 Put the bins out",
                             week: "Twelve things done, most of them for work.",
                             focus: "The job search")))
-            case .breakpoint:
+            case .breakpoint, .breakpointCaptured:
+                if self == .breakpointCaptured {
+                    model.notice = .added(
+                        AgendaChange(
+                            at: Self.at(15, 45), line: "Added “Send the deck” — today 15:55, Work.",
+                            undo: .deleteReminder(id: "deck")))
+                }
                 model.card = DayCard(
                     id: "breakpoint-1", kind: .breakpoint, createdAt: Self.at(15, 44),
                     isFallback: false,

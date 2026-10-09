@@ -33,6 +33,10 @@ final class JarvisPanelModel {
     var listening = false
     /// The last exchange typed here, so the answer shows in the panel.
     var asked: String?
+    /// What just happened to the field's words: a reminder added (with its
+    /// undo), or why they didn't go — a take that wasn't heard, a capture
+    /// that didn't save.
+    var notice: CaptureOutcome?
 }
 
 @MainActor
@@ -46,7 +50,10 @@ final class JarvisPanelController {
     private let liveCard: (String) -> DayCard?
     private let onAction: (CardAction) -> Void
     private let onExpand: () -> Void
-    private let onCapture: (String) -> Void
+    private let captureService: CaptureService
+    /// A capture or its undo is under way: + or Undo again does it once.
+    private var isCapturing = false
+    private var noticeTask: Task<Void, Never>?
 
     /// The panel's width, and the tallest it grows.
     static let size = NSSize(width: 400, height: 560)
@@ -60,7 +67,7 @@ final class JarvisPanelController {
         thread: DayThread, voice: AgentVoiceInputController, agenda: Agenda,
         liveCard: @escaping (String) -> DayCard?,
         onAction: @escaping (CardAction) -> Void, onExpand: @escaping () -> Void,
-        onCapture: @escaping (String) -> Void
+        capture: CaptureService
     ) {
         self.thread = thread
         self.voice = voice
@@ -68,7 +75,7 @@ final class JarvisPanelController {
         self.liveCard = liveCard
         self.onAction = onAction
         self.onExpand = onExpand
-        self.onCapture = onCapture
+        self.captureService = capture
     }
 
     var isShowing: Bool { panel?.isVisible == true }
@@ -123,6 +130,7 @@ final class JarvisPanelController {
         self.panel = panel
         guard !panel.isVisible else { return }
         model.asked = nil
+        model.notice = nil
         panel.placeTopRight()
         panel.alphaValue = 0
         panel.orderFrontRegardless()
@@ -167,11 +175,31 @@ final class JarvisPanelController {
         voice.onVoiceTranscription = { [weak self] text in
             guard let self else { return }
             self.model.listening = false
+            let typed = self.model.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard typed.isEmpty else {
+                // Words were in the field: the spoken ones join them, for
+                // the owner to send or add.
+                self.model.draft = typed + " " + text
+                return
+            }
             self.model.draft = text
             self.send()
         }
-        // A take with no words (too short, no speech) ends listening too.
-        voice.onVoiceFailure = { [weak self] _ in self?.model.listening = false }
+        // Not sure what was said: in the field to look over, never sent as
+        // heard.
+        voice.onVoiceRejected = { [weak self] raw in
+            guard let self else { return }
+            self.model.listening = false
+            let typed = self.model.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+            self.model.draft = typed.isEmpty ? raw : typed + " " + raw
+            self.showNotice(.failed("Not sure I heard that right. Check the words, then send."))
+        }
+        // A take with no words (too short, no speech), or a microphone that
+        // didn't start: listening ends, and the panel says why.
+        voice.onVoiceFailure = { [weak self] message in
+            self?.model.listening = false
+            self?.showNotice(.failed(message))
+        }
         panel.host(
             JarvisPanelView(
                 model: model, thread: thread, agenda: agenda, liveCard: liveCard,
@@ -201,6 +229,7 @@ final class JarvisPanelController {
                 },
                 send: { [weak self] in self?.send() },
                 capture: { [weak self] in self?.capture() },
+                undo: { [weak self] in self?.undoCapture() },
                 mic: { [weak self] in self?.toggleMic() },
                 onContentHeight: { [weak self] height in
                     // On the next turn: never resize the window inside its own
@@ -218,21 +247,60 @@ final class JarvisPanelController {
         model.draft = ""
     }
 
-    /// The + button: the field's words become a reminder, no model.
+    /// The + button: the field's words become a reminder, no model. The
+    /// panel says what happened; the words leave the field only once saved.
     private func capture() {
         let text = model.draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        onCapture(text)
-        model.draft = ""
+        guard !text.isEmpty, !isCapturing else { return }
+        isCapturing = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let outcome = await self.captureService.capture(text, source: "panel")
+            self.isCapturing = false
+            self.showNotice(outcome)
+            let still = self.model.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+            if case .added = outcome, still == text { self.model.draft = "" }
+        }
+    }
+
+    /// Undo the reminder on the line — and say "Undone." only when it was.
+    private func undoCapture() {
+        guard !isCapturing, case .added(let change) = model.notice else { return }
+        isCapturing = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let undone = await self.captureService.undo(change)
+            self.isCapturing = false
+            self.showNotice(
+                undone
+                    ? .failed("Undone.")
+                    : self.captureService.lastOutcome ?? .failed("Couldn't undo."))
+        }
+    }
+
+    /// The line stays a few seconds, longer when something didn't go.
+    private func showNotice(_ notice: CaptureOutcome) {
+        model.notice = notice
+        noticeTask?.cancel()
+        let shown: Duration = if case .added = notice { .seconds(8) } else { .seconds(12) }
+        noticeTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: shown)
+            guard !Task.isCancelled, let self, self.model.notice == notice else { return }
+            self.model.notice = nil
+        }
     }
 
     private func toggleMic() {
         if model.listening {
             voice.finishCapture()
             model.listening = false
+        } else if voice.voiceState == .transcribing {
+            showNotice(.failed("Still writing the last one down."))
         } else {
             voice.start()
-            model.listening = true
+            // Listening only if the microphone started: a busy or refused
+            // one has said why.
+            model.listening = voice.voiceState == .recording
         }
     }
 }
@@ -252,6 +320,8 @@ struct JarvisPanelView: View {
     let choose: (StepChoice) -> Void
     let send: () -> Void
     let capture: () -> Void
+    /// Undo the reminder the + button just added.
+    var undo: () -> Void = {}
     let mic: () -> Void
     /// What the panel says was laid out at this height.
     var onContentHeight: (CGFloat) -> Void = { _ in }
@@ -286,6 +356,9 @@ struct JarvisPanelView: View {
                     }
                     if let asked = model.asked {
                         Exchange(asked: asked, thread: thread)
+                    }
+                    if let notice = model.notice {
+                        NoticeLine(notice: notice, undo: undo)
                     }
                 }
                 .padding(.horizontal, 18)
@@ -857,6 +930,36 @@ private struct ItemRow: View {
                 .foregroundStyle(.secondary)
                 .focusable(false)
         }
+    }
+}
+
+/// What just happened to the field's words, above it: the reminder the +
+/// button added, with its undo, or why the words didn't go (they stay in
+/// the field).
+private struct NoticeLine: View {
+    let notice: CaptureOutcome
+    let undo: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: isAdded ? "checkmark.circle.fill" : "info.circle")
+                .foregroundStyle(isAdded ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+            Text(notice.line)
+                .foregroundStyle(isAdded ? .primary : .secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            if isAdded {
+                Button("Undo", action: undo)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.tint)
+                    .fontWeight(.medium)
+                    .focusable(false)
+            }
+        }
+    }
+
+    private var isAdded: Bool {
+        if case .added = notice { true } else { false }
     }
 }
 

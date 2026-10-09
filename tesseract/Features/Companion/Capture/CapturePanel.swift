@@ -5,7 +5,8 @@
 //  The capture hotkey's panel: a glass bar near the top of the screen, over
 //  any app. Tap the hotkey and type; hold it and speak. Either way the words
 //  go through the capture door into Reminders, and the panel answers with
-//  one line and an undo, then fades.
+//  one line and an undo, then fades. Words that didn't save stay in the
+//  field with the reason; only the owner's Escape or × throws them away.
 //
 //  Nothing shows until the press says what it is: a release before the hold
 //  threshold is a tap, a hold past it starts listening. That lets the hotkey
@@ -42,8 +43,14 @@ final class CapturePanelController {
     private var panel: GlassPanel?
     /// Waiting out the hold threshold after a press.
     private var holdTask: Task<Void, Never>?
-    /// The press became a hold: the microphone is on.
+    /// The press became a hold: the microphone is on, or was asked to be.
     private var isHolding = false
+    /// The panel was up when the hold began: the owner was typing.
+    private var wasUpBeforeHold = false
+    /// Words typed before a hold: the spoken ones join them.
+    private var typedBeforeHold = ""
+    /// A save or an undo is under way: Return or Undo again does it once.
+    private var isBusy = false
     private var dismissTask: Task<Void, Never>?
 
     private static let width: CGFloat = 560
@@ -60,6 +67,9 @@ final class CapturePanelController {
         }
         voice.onVoiceFailure = { [weak self] message in
             self?.voiceFailed(message)
+        }
+        voice.onVoiceRejected = { [weak self] raw in
+            self?.voiceRejected(raw)
         }
     }
 
@@ -79,6 +89,9 @@ final class CapturePanelController {
         holdTask = nil
         if isHolding {
             isHolding = false
+            // The microphone never started (busy, no permission), or the
+            // last take is still being written down: the line says so.
+            guard voice.voiceState == .recording else { return }
             model.mode = .transcribing
             voice.finishCapture()
             return
@@ -102,13 +115,36 @@ final class CapturePanelController {
         holdTask = nil
         guard isHolding else { return }
         isHolding = false
-        hide()
+        // Only the listening this hold began: a take still being written
+        // down goes on.
+        guard model.mode == .listening else { return }
+        voice.cancel()
+        typedBeforeHold = ""
+        guard wasUpBeforeHold else {
+            hide()
+            return
+        }
+        // ⌥ held for an accent while typing here: back to the words.
+        model.mode = .typing
+        model.focusRequest += 1
+        panel?.makeKey()
     }
 
     /// Held past the threshold: listen.
     private func beginHolding() {
         holdTask = nil
         isHolding = true
+        // One take at a time: say so, rather than listen to nothing.
+        if voice.voiceState == .transcribing {
+            show()
+            model.outcome = .failed(
+                "Still writing the last one down. Hold the key again in a moment.")
+            panel?.setHeight(Self.withLineHeight)
+            return
+        }
+        wasUpBeforeHold = panel?.isVisible == true
+        typedBeforeHold =
+            wasUpBeforeHold ? model.text.trimmingCharacters(in: .whitespacesAndNewlines) : ""
         show()
         model.mode = .listening
         voice.start()
@@ -116,14 +152,22 @@ final class CapturePanelController {
 
     // MARK: Panel
 
+    /// Up from hidden, the bar starts empty; already up (a second tap, the
+    /// menu), the words stay.
     private func show() {
         dismissTask?.cancel()
-        model.outcome = nil
-        model.text = ""
         let panel = self.panel ?? makePanel()
         self.panel = panel
-        panel.setHeight(Self.barHeight)
-        panel.placeTopCenter()
+        if !panel.isVisible {
+            model.outcome = nil
+            model.text = ""
+            panel.setHeight(Self.barHeight)
+            panel.placeTopCenter()
+        } else if case .added = model.outcome {
+            // The last confirmation has done its job.
+            model.outcome = nil
+            panel.setHeight(Self.barHeight)
+        }
         panel.orderFrontRegardless()
     }
 
@@ -141,11 +185,14 @@ final class CapturePanelController {
         return panel
     }
 
+    /// Closed by the owner (Escape, the ×) or after a saved capture: what is
+    /// in the field goes with it.
     func hide() {
         dismissTask?.cancel()
         holdTask?.cancel()
         holdTask = nil
         isHolding = false
+        typedBeforeHold = ""
         voice.cancel()
         panel?.orderOut(nil)
         model.text = ""
@@ -154,15 +201,25 @@ final class CapturePanelController {
     }
 
     private func voiceFinished(_ text: String) {
-        model.text = text
         model.mode = .typing
-        submit()
+        guard !typedBeforeHold.isEmpty else {
+            model.text = text
+            submit()
+            return
+        }
+        // Words were waiting in the field: the spoken ones join them, for
+        // the owner to look over and save.
+        model.text = typedBeforeHold + " " + text
+        typedBeforeHold = ""
+        model.focusRequest += 1
+        panel?.makeKey()
     }
 
     /// The take ended without words (too short, no speech, a failed
     /// transcription): back to typing, with the reason, instead of waiting.
     private func voiceFailed(_ message: String) {
         guard panel?.isVisible == true, model.mode != .typing else { return }
+        typedBeforeHold = ""
         model.mode = .typing
         model.outcome = .failed("\(message). Type it instead, or hold the key and speak again.")
         panel?.setHeight(Self.withLineHeight)
@@ -170,23 +227,53 @@ final class CapturePanelController {
         panel?.makeKey()
     }
 
+    /// A take the proofreader couldn't make sense of: in the field to look
+    /// over, never saved as heard.
+    private func voiceRejected(_ raw: String) {
+        model.mode = .typing
+        model.text = typedBeforeHold.isEmpty ? raw : typedBeforeHold + " " + raw
+        typedBeforeHold = ""
+        model.outcome = .failed("Not sure I heard that right. Fix it if needed, then press Return.")
+        panel?.setHeight(Self.withLineHeight)
+        model.focusRequest += 1
+        panel?.makeKey()
+    }
+
     private func submit() {
         let text = model.text
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard !isBusy, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+        isBusy = true
+        typedBeforeHold = ""
         Task {
             let outcome = await capture.capture(text, source: "hotkey")
+            isBusy = false
             model.outcome = outcome
-            if case .added = outcome { model.text = "" }
             panel?.setHeight(Self.withLineHeight)
+            guard case .added = outcome else {
+                // Not saved: the words stay, with the reason, until the
+                // owner fixes them or closes the panel.
+                model.focusRequest += 1
+                panel?.makeKey()
+                return
+            }
+            // Only the words that were saved leave the field.
+            if model.text == text { model.text = "" }
             scheduleDismiss(after: .seconds(5))
         }
     }
 
+    /// Undo the capture on the line — and say "Undone." only when it was.
     private func undo() {
+        guard !isBusy, case .added(let change) = model.outcome else { return }
+        isBusy = true
         Task {
-            await capture.undoLast()
-            model.outcome = .failed("Undone.")
-            scheduleDismiss(after: .seconds(2))
+            let undone = await capture.undo(change)
+            isBusy = false
+            model.outcome =
+                undone ? .failed("Undone.") : capture.lastOutcome ?? .failed("Couldn't undo.")
+            scheduleDismiss(after: .seconds(undone ? 2 : 5))
         }
     }
 
@@ -194,8 +281,11 @@ final class CapturePanelController {
         dismissTask?.cancel()
         dismissTask = Task { [weak self] in
             try? await Task.sleep(for: delay)
-            guard !Task.isCancelled else { return }
-            self?.hide()
+            guard !Task.isCancelled, let self else { return }
+            // Words typed meanwhile, the next thought: they and the bar stay.
+            let typing = !self.model.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            guard !typing, self.model.mode == .typing else { return }
+            self.hide()
         }
     }
 }

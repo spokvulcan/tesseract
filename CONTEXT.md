@@ -1824,6 +1824,10 @@ Add task (⌘↩) all go through one door and the
 deterministic capture parser ("call the dentist tomorrow at 10", "after the
 1:1", "#health"). The hotkey is one key — Right ⌥ alone by default: tap to type,
 hold to speak; another key pressed with it cancels, so ⌥-typing works as usual.
+Each surface says what happened in one line — the reminder added, with an undo
+that takes back that one, or why not — and the words leave the field only once
+saved. Spoken words join words already typed and wait for Return; a take the
+Proofread Pass couldn't make sense of is shown to check, never saved as heard.
 
 **One-key hotkey**:
 A modifier pressed and released on its own (Right ⌥, Right ⌘, Right ⌃, Right ⇧
@@ -2074,7 +2078,9 @@ never rose above silence is not transcribed), post-processing, the **Learned Wor
 (applied after the regex cleanup and before the **Proofread Pass**), the in-flight
 transcription `Task`, and cancellation — behind a small value-returning interface
 (`start`/`stop`/`transcribeAndCommit`/`cancel`), delivering clean text to a
-caller-injected commit closure. Composed *directly* by both `DictationCoordinator` and
+caller-injected commit closure. The microphone and the recognizer are shared, so
+`cancel` stops only the capture and the take this session started: a panel closing
+never cuts off dictation's. Composed *directly* by both `DictationCoordinator` and
 **Voice Input**, which keep only their own state, errors, sounds, and commit. Distinct
 from **Voice Input** (one caller, agent-composer presentation) and from the **Operation
 Guard** it composes (the epoch protocol alone).

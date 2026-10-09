@@ -152,6 +152,10 @@ final class VoiceCaptureSession {
     /// successor is never clobbered.
     private var inFlightTask: Task<Outcome, Never>?
 
+    /// This session started the running capture. The microphone and the
+    /// recognizer are shared, so ``cancel()`` stops only what it started.
+    private var ownsCapture = false
+
     init(
         audioCapture: any AudioCapturing,
         transcriptionEngine: any Transcribing,
@@ -178,6 +182,7 @@ final class VoiceCaptureSession {
         operations.invalidate()
         do {
             try audioCapture.startCapture()
+            ownsCapture = true
             targetApp = frontmostApp()
             return .started
         } catch {
@@ -188,6 +193,7 @@ final class VoiceCaptureSession {
     /// Stops capture and applies the minimum-duration guard. Does not advance the
     /// epoch — the caller's maximum-duration auto-stop drives *when* this is called.
     func stop() -> StopResult {
+        ownsCapture = false
         guard var audioData = audioCapture.stopCapture() else { return .noAudio }
         guard audioData.duration >= Self.minimumRecordingDuration else { return .tooShort }
         // Not evidence either: a silent capture is neither transcribed nor
@@ -307,13 +313,19 @@ final class VoiceCaptureSession {
     /// nothing), cancels the in-flight task (aborting a commit suspended mid-flight),
     /// stops capture if running, and tells the engine to cancel. The caller resets
     /// its own presentation state.
+    ///
+    /// Only this session's own work: the microphone and the recognizer are
+    /// shared, and a panel closing must not cut off another surface's take
+    /// (dictation's, or the composer's).
     func cancel() {
         operations.invalidate()
+        let transcribing = inFlightTask != nil
         inFlightTask?.cancel()
         inFlightTask = nil
-        if audioCapture.isCapturing {
+        if ownsCapture, audioCapture.isCapturing {
             _ = audioCapture.stopCapture()
         }
-        transcriptionEngine.cancelTranscription()
+        ownsCapture = false
+        if transcribing { transcriptionEngine.cancelTranscription() }
     }
 }
