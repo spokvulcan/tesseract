@@ -31,6 +31,49 @@ struct ProfileStoreTests {
         #expect(ProfileStore(url: url).facts.isEmpty)
     }
 
+    @Test func forgettingNeverTakesTheWrongFact() {
+        let store = ProfileStore(url: nil)
+        store.add("Allergic to penicillin.", source: .chat)
+        store.add("Walks the dog at 7.", source: .chat)
+        // A shared word is not the fact.
+        #expect(store.factToForget("Allergic to peanuts") == nil)
+        #expect(store.factToForget("that") == nil)
+        // Its exact words, its id, or every word only it holds.
+        #expect(store.factToForget("allergic to penicillin.")?.text == "Allergic to penicillin.")
+        let dog = store.facts[1]
+        #expect(store.factToForget(dog.id)?.text == "Walks the dog at 7.")
+        #expect(store.factToForget("dog walks")?.text == "Walks the dog at 7.")
+    }
+
+    @Test func aProposalAnsweredNotTrueIsNeverAskedAgain() throws {
+        let store = ProfileStore(url: nil)
+        store.propose(
+            [ProposalDraft(text: "Drinks green tea.", reason: "x")], source: "night-reflection")
+        let tea = try #require(store.openProposals.first)
+        store.decide(tea.id, keep: false)
+        store.propose(
+            [ProposalDraft(text: "Drinks green tea.", reason: "again")], source: "night-reflection")
+        #expect(store.openProposals.isEmpty)
+    }
+
+    @Test func anUnreadableProfileIsKeptAsideNotOverwritten() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("profile-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("profile.json")
+        try Data("{ not json".utf8).write(to: url)
+        let store = ProfileStore(url: url)
+        #expect(store.facts.isEmpty)
+        store.add("Starts fresh.", source: .owner)
+        let kept = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+            .filter { $0.contains("unreadable") }
+        #expect(kept.count == 1)
+        #expect(
+            try String(contentsOf: dir.appendingPathComponent(kept[0]), encoding: .utf8)
+                == "{ not json")
+    }
+
     @Test func proposalsWaitForTheOwnersDecision() throws {
         let store = ProfileStore(url: nil)
         store.add("Works on Tesseract in the evenings.", source: .chat)
