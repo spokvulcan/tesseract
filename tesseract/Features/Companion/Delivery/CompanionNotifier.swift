@@ -101,14 +101,28 @@ final class CompanionNotifier {
         content.categoryIdentifier = Self.nudgeCategory
         content.userInfo = [Self.eventUserInfoKey: nudge.eventID]
         content.interruptionLevel = .timeSensitive
-        let parts = Calendar.current.dateComponents(
-            [.year, .month, .day, .hour, .minute, .second], from: nudge.fireAt)
         let request = UNNotificationRequest(
             identifier: nudge.id, content: content,
-            trigger: UNCalendarNotificationTrigger(dateMatching: parts, repeats: false))
+            trigger: UNCalendarNotificationTrigger(
+                dateMatching: Self.triggerComponents(for: nudge.fireAt), repeats: false))
         do { try await UNUserNotificationCenter.current().add(request) } catch {
             Log.companion.error("Scheduling a nudge failed: \(error)")
         }
+    }
+
+    /// The moment a nudge fires, with its time zone attached: without one a
+    /// calendar trigger matches the clock time wherever the Mac is, and after
+    /// a flight the nudge for a 16:00 Berlin meeting fired at 15:50 London
+    /// time, fifty minutes after it began. Its id doesn't change with the
+    /// zone, so it was never rescheduled.
+    nonisolated static func triggerComponents(for date: Date, calendar: Calendar = .current)
+        -> DateComponents
+    {
+        var parts = calendar.dateComponents(
+            [.year, .month, .day, .hour, .minute, .second], from: date)
+        parts.calendar = calendar
+        parts.timeZone = calendar.timeZone
+        return parts
     }
 
     func cancel(nudgeIDs: [String]) {

@@ -137,4 +137,18 @@ struct DayEngineNudgeTests {
             state: DayState(day: DayKey(for: NudgePlannerTests.now)))
         #expect(decision.effects.isEmpty)
     }
+
+    @Test func aNudgeFiresAtItsMomentInAnyTimeZone() throws {
+        var berlin = Calendar(identifier: .gregorian)
+        berlin.timeZone = TimeZone(identifier: "Europe/Berlin")!
+        let fireAt = berlin.date(
+            from: DateComponents(year: 2026, month: 10, day: 9, hour: 15, minute: 50))!
+        let parts = CompanionNotifier.triggerComponents(for: fireAt, calendar: berlin)
+        #expect(parts.timeZone == berlin.timeZone)
+        // Read in London, the same moment: 14:50 there.
+        var london = Calendar(identifier: .gregorian)
+        london.timeZone = TimeZone(identifier: "Europe/London")!
+        #expect(london.date(from: parts) == fireAt)
+        #expect(try #require(parts.date) == fireAt)
+    }
 }
