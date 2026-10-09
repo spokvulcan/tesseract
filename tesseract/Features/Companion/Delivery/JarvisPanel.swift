@@ -39,21 +39,30 @@ final class JarvisPanelController {
     private var panel: GlassPanel?
     private let thread: DayThread
     private let voice: AgentVoiceInputController
+    private let agenda: Agenda
+    private let liveCard: (String) -> DayCard?
     private let onAction: (CardAction) -> Void
     private let onExpand: () -> Void
     private let onCapture: (String) -> Void
 
+    /// The panel's width, and the tallest it grows.
     static let size = NSSize(width: 400, height: 560)
-    /// A Step Cue's panel: the step, its choices and the field.
-    static let cueHeight: CGFloat = 252
+    /// The header and the field around what the panel says.
+    static let chromeHeight: CGFloat = 124
+    static let minimumHeight: CGFloat = 220
 
+    /// - Parameter liveCard: the card as the day has it now, so items the
+    ///   owner handles leave the panel and a refined card updates in it.
     init(
-        thread: DayThread, voice: AgentVoiceInputController,
+        thread: DayThread, voice: AgentVoiceInputController, agenda: Agenda,
+        liveCard: @escaping (String) -> DayCard?,
         onAction: @escaping (CardAction) -> Void, onExpand: @escaping () -> Void,
         onCapture: @escaping (String) -> Void
     ) {
         self.thread = thread
         self.voice = voice
+        self.agenda = agenda
+        self.liveCard = liveCard
         self.onAction = onAction
         self.onExpand = onExpand
         self.onCapture = onCapture
@@ -67,31 +76,41 @@ final class JarvisPanelController {
         model.cue = nil
         model.card = card
         model.showQuiet = false
-        present(height: Self.size.height)
+        present()
     }
 
-    /// Show a planned step that starts now, in place of whatever is up.
+    /// Show a planned step at its start or end, in place of whatever is up.
     func show(_ cue: StepCue) {
         model.card = nil
         model.cue = cue
-        present(height: Self.cueHeight)
+        present()
     }
 
-    private func present(height: CGFloat) {
+    /// As tall as what the panel says, between its least and full height.
+    static func height(forContent content: CGFloat) -> CGFloat {
+        min(max(content + chromeHeight, minimumHeight), size.height)
+    }
+
+    private func present() {
         let panel = self.panel ?? makePanel()
         self.panel = panel
-        // A question asked in the panel keeps the room its answer needs.
-        if model.asked == nil || !panel.isVisible { panel.setHeight(height) }
-        if !panel.isVisible {
-            model.asked = nil
-            panel.placeTopRight()
-            panel.alphaValue = 0
-            panel.orderFrontRegardless()
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.2
-                panel.animator().alphaValue = 1
-            }
+        guard !panel.isVisible else { return }
+        model.asked = nil
+        panel.placeTopRight()
+        panel.alphaValue = 0
+        panel.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.2
+            panel.animator().alphaValue = 1
         }
+    }
+
+    /// The content was laid out: the panel follows its height, keeping its
+    /// top edge where it is.
+    private func fit(content: CGFloat) {
+        guard let panel else { return }
+        let height = Self.height(forContent: content)
+        if abs(panel.frame.height - height) > 0.5 { panel.setHeight(height) }
     }
 
     /// Take a card down (dismissed elsewhere, or replaced).
@@ -119,7 +138,7 @@ final class JarvisPanelController {
         voice.onVoiceFailure = { [weak self] _ in self?.model.listening = false }
         panel.host(
             JarvisPanelView(
-                model: model, thread: thread,
+                model: model, thread: thread, agenda: agenda, liveCard: liveCard,
                 close: { [weak self] in
                     guard let self else { return }
                     if let card = self.model.card { self.onAction(.dismiss(cardID: card.id)) }
@@ -140,7 +159,8 @@ final class JarvisPanelController {
                 },
                 send: { [weak self] in self?.send() },
                 capture: { [weak self] in self?.capture() },
-                mic: { [weak self] in self?.toggleMic() }))
+                mic: { [weak self] in self?.toggleMic() },
+                onContentHeight: { [weak self] height in self?.fit(content: height) }))
         return panel
     }
 
@@ -148,7 +168,6 @@ final class JarvisPanelController {
         let text = model.draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, thread.canSend else { return }
         thread.send(text)
-        if model.asked == nil { panel?.setHeight(Self.size.height) }
         model.asked = text
         model.draft = ""
     }
@@ -177,6 +196,8 @@ final class JarvisPanelController {
 struct JarvisPanelView: View {
     @Bindable var model: JarvisPanelModel
     let thread: DayThread
+    let agenda: Agenda
+    let liveCard: (String) -> DayCard?
     let close: () -> Void
     let expand: () -> Void
     let act: (CardAction) -> Void
@@ -184,6 +205,10 @@ struct JarvisPanelView: View {
     let send: () -> Void
     let capture: () -> Void
     let mic: () -> Void
+    /// What the panel says was laid out at this height.
+    var onContentHeight: (CGFloat) -> Void = { _ in }
+    /// The clock the plan's steps are read against (fixed in the gallery).
+    var now: () -> Date = Date.init
 
     var body: some View {
         VStack(spacing: 0) {
@@ -204,8 +229,10 @@ struct JarvisPanelView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     if let cue = model.cue {
                         StepCueContent(cue: cue, choose: choose)
-                    } else if let card = model.card {
-                        CardContent(card: card, showQuiet: $model.showQuiet, act: act)
+                    } else if let shown = model.card {
+                        CardContent(
+                            card: liveCard(shown.id) ?? shown, agenda: agenda, now: now(),
+                            showQuiet: $model.showQuiet, act: act, close: close, expand: expand)
                     }
                     if let asked = model.asked {
                         Exchange(asked: asked, thread: thread)
@@ -214,6 +241,11 @@ struct JarvisPanelView: View {
                 .padding(.horizontal, 18)
                 .padding(.vertical, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .onGeometryChange(for: CGFloat.self) {
+                    $0.size.height
+                } action: {
+                    onContentHeight($0)
+                }
             }
 
             HStack(spacing: 10) {
@@ -257,7 +289,7 @@ private struct StepCueContent: View {
                         .monospacedDigit()
                 }
                 Text(cue.title)
-                    .font(.system(size: 15, weight: .semibold))
+                    .fontWeight(.semibold)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(detail)
@@ -310,13 +342,15 @@ private struct StepCueContent: View {
 /// never key (a system prominent button turns gray there).
 private struct PanelButtonStyle: ButtonStyle {
     var prominent = false
+    /// A row's own choices: smaller than the card's main buttons.
+    var compact = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .fontWeight(prominent ? .semibold : .regular)
             .foregroundStyle(prominent ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
-            .padding(.horizontal, 14)
-            .frame(height: 30)
+            .padding(.horizontal, compact ? 10 : 14)
+            .frame(height: compact ? 24 : 30)
             .background(
                 prominent ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.primary.opacity(0.1)),
                 in: Capsule()
@@ -345,8 +379,12 @@ private struct CircleButton: View {
 
 private struct CardContent: View {
     let card: DayCard
+    let agenda: Agenda
+    let now: Date
     @Binding var showQuiet: Bool
     let act: (CardAction) -> Void
+    let close: () -> Void
+    let expand: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -409,13 +447,14 @@ private struct CardContent: View {
                 ForEach(triage.raise) { item in
                     ItemRow(cardID: card.id, item: item, act: act)
                 }
-            case .morningPlan, .eveningWrapUp, .reflection:
+            case .morningPlan(let plan):
+                MorningPlanContent(
+                    card: card, plan: plan, agenda: agenda, now: now, close: close, expand: expand)
+            case .eveningWrapUp(let wrapUp):
+                WrapUpContent(card: card, wrapUp: wrapUp, act: act, close: close, expand: expand)
+            case .reflection:
                 Text(card.kind.title).fontWeight(.semibold)
                 Text(card.line).fixedSize(horizontal: false, vertical: true)
-                if card.isRefining {
-                    Text("Jarvis is still thinking it through; this card updates when he's done.")
-                        .foregroundStyle(.secondary)
-                }
                 Text("Open Today to see it all.").foregroundStyle(.secondary)
             }
         }
@@ -425,6 +464,209 @@ private struct CardContent: View {
         let minutes = Int(card.awayUntil.timeIntervalSince(card.awayFrom) / 60)
         return
             "Away \(MomentPrompts.minutesText(minutes)) · \(AgendaTime.clock(card.awayFrom))–\(AgendaTime.clock(card.awayUntil))"
+    }
+}
+
+/// The plan, whole on the panel: Jarvis's line, the steps ahead (the tasks
+/// he placed among the day's events, the must-do starred), his tips, and a
+/// yes — no trip to Today to see it.
+private struct MorningPlanContent: View {
+    /// Between the rows of a list on the panel (its sections are 12 apart).
+    static let rowSpacing: CGFloat = 6
+
+    let card: DayCard
+    let plan: MorningPlanCard
+    let agenda: Agenda
+    let now: Date
+    let close: () -> Void
+    let expand: () -> Void
+
+    var body: some View {
+        let steps = PlanStep.ahead(plan: plan, agenda: agenda, now: now)
+        VStack(alignment: .leading, spacing: 12) {
+            Text(card.kind.title).fontWeight(.semibold)
+            Text(card.line).fixedSize(horizontal: false, vertical: true)
+            if card.isRefining {
+                Text("Jarvis is still thinking it through; this card updates when he's done.")
+                    .foregroundStyle(.secondary)
+            }
+            if !steps.isEmpty {
+                VStack(alignment: .leading, spacing: Self.rowSpacing) {
+                    ForEach(steps) { step in
+                        PlanStepRow(step: step)
+                    }
+                }
+            }
+            if !plan.suggestions.isEmpty {
+                VStack(alignment: .leading, spacing: Self.rowSpacing) {
+                    ForEach(plan.suggestions, id: \.self) { tip in
+                        Text("· \(tip)")
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            HStack(spacing: 8) {
+                Button("Looks Good", action: close)
+                    .buttonStyle(PanelButtonStyle(prominent: true))
+                    .focusable(false)
+                Button("Open Today", action: expand)
+                    .buttonStyle(PanelButtonStyle())
+                    .focusable(false)
+            }
+        }
+    }
+}
+
+/// One step of the plan on the panel: a placed task or an event.
+struct PlanStep: Identifiable, Equatable {
+    enum Kind: Equatable {
+        case task(isMustDo: Bool)
+        case event(colorHex: String?)
+    }
+
+    let id: String
+    var start: Date
+    var title: String
+    var minutes: Int
+    var kind: Kind
+
+    /// The most the panel lists; Today has the rest.
+    static let shown = 5
+
+    /// The day's events and the plan's tasks still ahead, in time order —
+    /// read through the same Timeline as Today.
+    @MainActor
+    static func ahead(plan: MorningPlanCard, agenda: Agenda, now: Date) -> [PlanStep] {
+        let facts = DayFacts(
+            snapshot: agenda.snapshot, areas: agenda.areas, inboxListID: agenda.inbox?.id,
+            now: now, mustDoID: plan.mustDoID, plan: plan.placements)
+        let steps = TimelineBuilder.build(facts: facts).rows.compactMap { row -> PlanStep? in
+            guard !row.isPast else { return nil }
+            switch row.kind {
+            case .event(let event):
+                return PlanStep(
+                    id: row.id, start: event.start, title: event.title,
+                    minutes: Int(event.duration / 60), kind: .event(colorHex: event.colorHex))
+            case .task(let task) where !task.isDone:
+                return PlanStep(
+                    id: row.id, start: row.start, title: task.reminder.title,
+                    minutes: task.minutes, kind: .task(isMustDo: task.isMustDo))
+            default:
+                return nil
+            }
+        }
+        return Array(steps.prefix(shown))
+    }
+}
+
+private struct PlanStepRow: View {
+    let step: PlanStep
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(AgendaTime.clock(step.start))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .frame(width: 42, alignment: .leading)
+            marker
+                .frame(width: 14)
+            Text(step.title).lineLimit(1)
+            Spacer(minLength: 6)
+            Text(MomentPrompts.minutesText(step.minutes))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+    }
+
+    @ViewBuilder private var marker: some View {
+        switch step.kind {
+        case .task(let isMustDo):
+            Image(systemName: isMustDo ? "star.fill" : "circle")
+                .imageScale(.small)
+                .foregroundStyle(
+                    isMustDo ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+        case .event(let colorHex):
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(Color(hexString: colorHex))
+                .frame(width: 3, height: 12)
+        }
+    }
+}
+
+/// The evening, whole on the panel: Jarvis's line, what got done, each
+/// leftover with its three ways on (Jarvis's pick in the accent) or all of
+/// them his way at once, and how tomorrow starts.
+private struct WrapUpContent: View {
+    let card: DayCard
+    let wrapUp: EveningWrapUpCard
+    let act: (CardAction) -> Void
+    let close: () -> Void
+    let expand: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(card.kind.title).fontWeight(.semibold)
+            Text(card.line).fixedSize(horizontal: false, vertical: true)
+            if !wrapUp.done.isEmpty {
+                VStack(alignment: .leading, spacing: MorningPlanContent.rowSpacing) {
+                    Text("Done today · \(wrapUp.done.count)").fontWeight(.semibold)
+                    ForEach(Array(wrapUp.done.prefix(3).enumerated()), id: \.offset) { _, title in
+                        Label {
+                            Text(title).lineLimit(1)
+                        } icon: {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                    if wrapUp.done.count > 3 {
+                        Text("and \(wrapUp.done.count - 3) more").foregroundStyle(.secondary)
+                    }
+                }
+            }
+            if !wrapUp.leftovers.isEmpty {
+                VStack(alignment: .leading, spacing: MorningPlanContent.rowSpacing * 2) {
+                    Text("Left from today").fontWeight(.semibold)
+                    ForEach(wrapUp.leftovers) { leftover in
+                        VStack(alignment: .leading, spacing: MorningPlanContent.rowSpacing) {
+                            Text(leftover.title).lineLimit(2)
+                            HStack(spacing: 6) {
+                                choice("Tomorrow", .tomorrow, for: leftover)
+                                choice("Later", .later, for: leftover)
+                                choice("Let go", .drop, for: leftover)
+                            }
+                        }
+                    }
+                }
+            }
+            if let first = wrapUp.tomorrowFirst {
+                Text("Tomorrow starts with \(first).").foregroundStyle(.secondary)
+            }
+            HStack(spacing: 8) {
+                if wrapUp.leftovers.count > 1 {
+                    Button("Do What Jarvis Suggests") { act(.allLeftovers(cardID: card.id)) }
+                        .buttonStyle(PanelButtonStyle(prominent: true))
+                        .focusable(false)
+                } else {
+                    Button("Good Night", action: close)
+                        .buttonStyle(PanelButtonStyle(prominent: wrapUp.leftovers.isEmpty))
+                        .focusable(false)
+                }
+                Button("Open Today", action: expand)
+                    .buttonStyle(PanelButtonStyle())
+                    .focusable(false)
+            }
+        }
+    }
+
+    private func choice(
+        _ title: String, _ suggestion: Leftover.Suggestion, for leftover: Leftover
+    ) -> some View {
+        Button(title) {
+            act(.leftover(cardID: card.id, reminderID: leftover.reminderID, suggestion))
+        }
+        .buttonStyle(PanelButtonStyle(prominent: leftover.suggestion == suggestion, compact: true))
+        .focusable(false)
     }
 }
 

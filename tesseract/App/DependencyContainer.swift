@@ -248,7 +248,8 @@ final class DependencyContainer: ObservableObject {
     )
     /// The floating card rung: the Breakpoint card in a Siri-style glass panel.
     lazy var jarvisPanel: JarvisPanelController = JarvisPanelController(
-        thread: dayThread, voice: panelVoiceInput,
+        thread: dayThread, voice: panelVoiceInput, agenda: agenda,
+        liveCard: { [weak self] id in self?.companionRuntime.state.cards.first { $0.id == id } },
         onAction: { [weak self] action in self?.companionRuntime.act(action) },
         onExpand: { (NSApp.delegate as? AppDelegate)?.navigateToToday() },
         onCapture: { [weak self] text in

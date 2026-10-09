@@ -267,8 +267,17 @@ the owner must remember to read does not. What changed:
 - **The panel's buttons are drawn by hand** (capsules, the main one in the
   accent): the panel is never key, and a system prominent button turns gray
   in a window that isn't.
+- **A card on the panel says it all.** Every Morning Plan and Evening Wrap-up
+  that reached the panel was dismissed: the panel said "Open Today to see it
+  all". The Morning Plan now lists the steps ahead (its tasks among the day's
+  events, the must-do starred) and its tips, with Looks Good; the Evening
+  Wrap-up lists what got done and each leftover with Tomorrow, Later and Let
+  go (Jarvis's pick in the accent) or Do What Jarvis Suggests. The panel
+  shows the card as the day has it now, so an item handled there leaves it
+  (it used to stay), and it is as tall as what it says (it was always 560 pt).
 - **The trace measures it**: `cue.presented` (start or end, how late, the
   slot's length, the must-do) and `cue.reaction` (the choice, the time to
   react).
-- `JarvisPanelGalleryTests` renders the panel's content over fixture cards;
-  `TEST_RUNNER_PANEL_GALLERY_DIR` writes the renders as PNGs.
+- `JarvisPanelGalleryTests` renders the panel's content over fixture cards,
+  each at the height the panel fits to it; `TEST_RUNNER_PANEL_GALLERY_DIR`
+  writes the renders as PNGs.

@@ -3,9 +3,10 @@
 //  tesseractTests
 //
 //  The Jarvis Panel's content, rendered with the app's view over fixture
-//  cards: a Step Cue (one for the must-do, with a long title, and one at
-//  the end of a started step) at its own shorter height, and a Breakpoint
-//  card at the full one. With
+//  cards — a Step Cue (one for the must-do, with a long title, and one at
+//  the end of a started step), the Morning Plan with its steps over the
+//  Today gallery's morning, the Evening Wrap-up with its leftovers, and a
+//  Breakpoint card — each at the height the panel fits to it. With
 //  PANEL_GALLERY_DIR set (TEST_RUNNER_PANEL_GALLERY_DIR through xcodebuild),
 //  each render is also written there as a PNG, in dark and light, for judging
 //  the panel by eye. The glass itself is the window's; a plain background
@@ -31,6 +32,8 @@ struct JarvisPanelGalleryTests {
         case stepCue
         case stepCueMustDo
         case stepCheckIn
+        case morningPlan
+        case eveningWrapUp
         case breakpoint
 
         var testDescription: String { rawValue }
@@ -40,12 +43,13 @@ struct JarvisPanelGalleryTests {
                 from: DateComponents(year: 2026, month: 10, day: 9, hour: hour, minute: minute))!
         }
 
-        @MainActor var height: CGFloat {
-            switch self {
-            case .stepCue, .stepCueMustDo, .stepCheckIn: JarvisPanelController.cueHeight
-            case .breakpoint: JarvisPanelController.size.height
-            }
+        /// The morning plan reads its steps from the Today gallery's morning.
+        @MainActor func container() async throws -> DependencyContainer {
+            if self == .morningPlan { return try await TodayFixture.morning.container() }
+            return DependencyContainer()
         }
+
+        var now: Date { self == .morningPlan ? TodayFixture.morning.now : Self.at(12) }
 
         @MainActor func fill(_ model: JarvisPanelModel) {
             switch self {
@@ -66,6 +70,29 @@ struct JarvisPanelGalleryTests {
                     reminderID: "letter", title: "Write to the case worker about the bus ticket",
                     start: Self.at(11, 12), minutes: 20, areaName: "Inbox", isMustDo: false,
                     next: "Companion work at 11:35", phase: .end)
+            case .morningPlan:
+                model.card = TodayFixture.morning.state.cards.first
+            case .eveningWrapUp:
+                model.card = DayCard(
+                    id: "eveningWrapUp-1", kind: .eveningWrapUp, createdAt: Self.at(21),
+                    isFallback: false,
+                    body: .eveningWrapUp(
+                        EveningWrapUpCard(
+                            line:
+                                "The letter is out, a school is chosen and the streak held — a tidy day.",
+                            done: [
+                                "Write to the case worker", "Choose the language school",
+                                "Duolingo lesson", "Answer mail",
+                            ],
+                            leftovers: [
+                                Leftover(
+                                    reminderID: "companion", title: "Companion work, cloud model",
+                                    suggestion: .tomorrow),
+                                Leftover(
+                                    reminderID: "chair", title: "Find a used work chair",
+                                    suggestion: .later),
+                            ],
+                            tomorrowFirst: "07:30 All Hands")))
             case .breakpoint:
                 model.card = DayCard(
                     id: "breakpoint-1", kind: .breakpoint, createdAt: Self.at(15, 44),
@@ -105,32 +132,67 @@ struct JarvisPanelGalleryTests {
         }
     }
 
+    @Test func thePanelFitsWhatItSays() {
+        #expect(JarvisPanelController.height(forContent: 40) == JarvisPanelController.minimumHeight)
+        #expect(JarvisPanelController.height(forContent: 200) == 324)
+        #expect(
+            JarvisPanelController.height(forContent: 2000) == JarvisPanelController.size.height)
+    }
+
+    @Test func thePlansStepsAreTheTasksItPlacedAmongTheEvents() async throws {
+        let container = try await TodayFixture.morning.container()
+        let card = try #require(TodayFixture.morning.state.cards.first)
+        guard case .morningPlan(let plan) = card.body else {
+            Issue.record("expected a Morning Plan card")
+            return
+        }
+        let steps = PlanStep.ahead(
+            plan: plan, agenda: container.agenda, now: TodayFixture.morning.now)
+        #expect(
+            steps.map(\.title) == [
+                "Answer mail", "Review PR #612", "Standup", "Lunch with Sam", "Write the cache ADR",
+            ])
+        #expect(steps.last?.kind == .task(isMustDo: true))
+    }
+
+    /// Lay the panel out once to learn its height, as the panel does, then
+    /// draw it at that height.
     private func render(_ shown: Shown, dark: Bool) async throws -> NSBitmapImageRep {
-        let container = DependencyContainer()
+        let container = try await shown.container()
         let model = JarvisPanelModel()
         shown.fill(model)
-        let size = NSSize(width: JarvisPanelController.size.width, height: shown.height)
+        var content: CGFloat = 0
         let window = NSWindow(
-            contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless],
-            backing: .buffered, defer: false)
+            contentRect: NSRect(origin: .zero, size: JarvisPanelController.size),
+            styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         defer { window.close() }
-        let host = NSHostingView(
-            rootView: JarvisPanelView(
-                model: model, thread: container.dayThread, close: {}, expand: {}, act: { _ in },
-                choose: { _ in }, send: {}, capture: {}, mic: {}
-            )
-            .frame(width: size.width, height: size.height)
-            .background(
-                Color(nsColor: .windowBackgroundColor),
-                in: RoundedRectangle(cornerRadius: 28, style: .continuous)))
-        window.contentView = host
+        func host(height: CGFloat) -> NSHostingView<some View> {
+            NSHostingView(
+                rootView: JarvisPanelView(
+                    model: model, thread: container.dayThread, agenda: container.agenda,
+                    liveCard: { _ in nil }, close: {}, expand: {}, act: { _ in },
+                    choose: { _ in }, send: {}, capture: {}, mic: {},
+                    onContentHeight: { content = $0 }, now: { shown.now }
+                )
+                .frame(width: JarvisPanelController.size.width, height: height)
+                .background(
+                    Color(nsColor: .windowBackgroundColor),
+                    in: RoundedRectangle(cornerRadius: 28, style: .continuous)))
+        }
+        window.contentView = host(height: JarvisPanelController.size.height)
         window.layoutIfNeeded()
-        try await Task.sleep(for: .milliseconds(300))
+        try await Task.sleep(for: .milliseconds(200))
+        let height = JarvisPanelController.height(forContent: content)
+        window.setContentSize(NSSize(width: JarvisPanelController.size.width, height: height))
+        let fitted = host(height: height)
+        window.contentView = fitted
         window.layoutIfNeeded()
-        let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-        host.cacheDisplay(in: host.bounds, to: rep)
+        try await Task.sleep(for: .milliseconds(200))
+        window.layoutIfNeeded()
+        let rep = try #require(fitted.bitmapImageRepForCachingDisplay(in: fitted.bounds))
+        fitted.cacheDisplay(in: fitted.bounds, to: rep)
         return rep
     }
 }
