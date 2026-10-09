@@ -75,6 +75,41 @@ nonisolated enum CardAction: Sendable, Equatable {
     case planNow
     /// Wrap up now, whatever the hour.
     case wrapUpNow
+    /// The owner answered a Step Cue.
+    case step(reminderID: String, StepChoice)
+}
+
+/// What the owner chose on a Step Cue.
+nonisolated enum StepChoice: String, Sendable, Equatable {
+    /// Doing it now: the slot starts this minute.
+    case start
+    /// Not yet: the slot moves a quarter of an hour on, and is cued again then.
+    case later
+    /// Not today: due tomorrow, off today's plan.
+    case tomorrow
+    /// Already done.
+    case done
+    /// Closed: nothing changes.
+    case dismiss
+}
+
+/// A planned step whose slot starts now, as the Jarvis Panel shows it.
+nonisolated struct StepCue: Sendable, Equatable {
+    var reminderID: String
+    var title: String
+    var start: Date
+    var minutes: Int
+    var areaName: String
+    var isMustDo: Bool
+    /// What comes after it ("Design review at 15:00").
+    var next: String?
+
+    var end: Date { start.addingTimeInterval(TimeInterval(minutes * 60)) }
+
+    /// One slot, one cue: a task moved to another time is a new slot.
+    static func key(_ placement: Placement) -> String {
+        "\(placement.reminderID)@\(Int(placement.start.timeIntervalSince1970))"
+    }
 }
 
 // MARK: - Effects
@@ -86,6 +121,8 @@ nonisolated enum DayEffect: Sendable, Equatable {
     case runMoment(MomentRequest)
     /// Show a card on a delivery rung (voice is `speak`).
     case presentCard(DayCard, DeliveryRung)
+    /// Put a planned step that starts now on the Jarvis Panel.
+    case presentStep(StepCue)
     /// Take a card off the panel.
     case retractCard(cardID: String)
     /// Say one line aloud.
@@ -156,13 +193,16 @@ nonisolated struct DaySnapshot: Sendable, Equatable {
     var power: PowerState
     /// The owner's Profile facts (for the reflection's "don't propose again").
     var profile: [String]
+    /// The Jarvis Panel is up, with a card or a cue the owner hasn't closed.
+    var panelUp: Bool
 
     init(
         now: Date, calendar: Calendar = .current, settings: DaySettings,
         agenda: AgendaSnapshot, areas: [Area] = [], inboxListID: String? = nil,
         ownerPresent: Bool = true, chatBusy: Bool = false, frontmostAppName: String? = nil,
         frontmostBundleID: String? = nil, frontmostIsGame: Bool = false,
-        lastTerminalFrontAt: Date? = nil, power: PowerState = .nominal, profile: [String] = []
+        lastTerminalFrontAt: Date? = nil, power: PowerState = .nominal, profile: [String] = [],
+        panelUp: Bool = false
     ) {
         self.now = now
         self.calendar = calendar
@@ -178,6 +218,7 @@ nonisolated struct DaySnapshot: Sendable, Equatable {
         self.lastTerminalFrontAt = lastTerminalFrontAt
         self.power = power
         self.profile = profile
+        self.panelUp = panelUp
     }
 
     func facts(state: DayState) -> DayFacts {
@@ -258,6 +299,8 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     /// Event nudges already recorded as delivered (carried: a nudge stays in
     /// Notification Center past midnight).
     var firedNudgeIDs: Set<String> = []
+    /// Planned slots whose start was cued, by `StepCue.key`, with when.
+    var cuedSteps: [String: Date] = [:]
 
     init(day: DayKey, syncedNudgeIDs: Set<String>? = nil) {
         self.day = day
@@ -268,6 +311,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         case day, syncedNudgeIDs, lastPresentAt, morningPlanAt, eveningWrapUpAt, nightReflectionAt
         case running, cards, mustDoID, plan, carryOver, carryOverForNextDay, ledger, agents
         case agentSpokenAt, lastTickAt, lastTriageAt, whereYouWere, deferred, firedNudgeIDs
+        case cuedSteps
     }
 
     /// Every field but the day is optional on disk, so a state saved by an
@@ -294,6 +338,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         whereYouWere = try c.decodeIfPresent(String.self, forKey: .whereYouWere)
         deferred = (try? c.decodeIfPresent(Set<MomentKind>.self, forKey: .deferred)) ?? []
         firedNudgeIDs = (try? c.decodeIfPresent(Set<String>.self, forKey: .firedNudgeIDs)) ?? []
+        cuedSteps = (try? c.decodeIfPresent([String: Date].self, forKey: .cuedSteps)) ?? [:]
     }
 
     /// The next day's state: what must survive the rollover survives.

@@ -481,6 +481,9 @@ nonisolated extension DayEngine {
 
         case .wrapUpNow:
             return run(.eveningWrapUp, trigger: .ownerAsked, snapshot: snapshot, state: &state)
+
+        case .step(let reminderID, let choice):
+            return stepChosen(reminderID, choice, snapshot: snapshot, state: &state)
         }
     }
 

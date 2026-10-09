@@ -239,3 +239,30 @@ line and tomorrow was one sentence on the Now Card. What changed:
   date at midnight while the Day Thread and the day's cards stayed on the
   old one, and a wrap-up after midnight read the new date's tasks as its
   leftovers.
+
+## Amendments (2026-10-09, the plan keeps time)
+
+Nine days of the Companion Trace showed the Morning Plan placing two to four
+tasks a day, and the owner using "Start now" and "Do it at 16:30", but a slot
+lives only in the Day Engine's state (Reminders has no duration), so nothing
+marked its start: a plan was kept only if the owner happened to open Today at
+the right minute. That broke this ADR's own rule that every decision becomes
+an artifact code keeps. Help that lands at the moment of doing works; a list
+the owner must remember to read does not. What changed:
+
+- **The Step Cue.** When a planned step's slot starts and the owner is at the
+  Mac, code puts it on the Jarvis Panel (a shorter panel than a card's): the
+  task, until when and what follows, with Start (the slot starts this minute),
+  In 15 min (it moves on and is cued again then), Tomorrow and Done. No model.
+  Each slot is cued once, within ten minutes of its start; never while away,
+  in quiet hours, a call, a game or a meeting with other people, nor over a
+  panel the owner hasn't closed (it waits a tick, and a card that takes the
+  panel on the same tick goes first). A slot whose reminder rings at the same
+  minute is left to Reminders. Closing it changes nothing.
+- **The panel's buttons are drawn by hand** (capsules, the main one in the
+  accent): the panel is never key, and a system prominent button turns gray
+  in a window that isn't.
+- **The trace measures it**: `cue.presented` (how late, the slot's length,
+  the must-do) and `cue.reaction` (the choice, the time to react).
+- `JarvisPanelGalleryTests` renders the panel's content over fixture cards;
+  `TEST_RUNNER_PANEL_GALLERY_DIR` writes the renders as PNGs.

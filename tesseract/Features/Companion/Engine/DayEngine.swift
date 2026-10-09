@@ -48,6 +48,10 @@ nonisolated enum DayEngine {
                 effects += meetingEnded(snapshot: snapshot, state: &state)
                 effects += triageIfDue(snapshot: snapshot, state: &state)
                 effects += speakForWaitingAgents(snapshot: snapshot, state: &state)
+                // A card that just took the panel keeps it; the step waits a tick.
+                if !effects.contains(where: \.takesPanel) {
+                    effects += stepCueIfDue(snapshot: snapshot, state: &state)
+                }
             } else {
                 effects += prepareMorningPlanIfDue(snapshot: snapshot, state: &state)
             }
@@ -230,5 +234,15 @@ nonisolated enum DayEngine {
         guard ids != state.syncedNudgeIDs else { return [] }
         state.syncedNudgeIDs = ids
         return [.syncNudges(desired)]
+    }
+}
+
+nonisolated extension DayEffect {
+    /// It puts something on the Jarvis Panel, or starts a moment that may.
+    var takesPanel: Bool {
+        switch self {
+        case .presentCard(_, .panel), .presentStep, .runMoment: true
+        default: false
+        }
     }
 }

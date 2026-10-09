@@ -20,8 +20,11 @@ import Observation
 @MainActor
 struct CompanionDelivery {
     var showPanel: (DayCard) -> Void = { _ in }
+    var showStep: (StepCue) -> Void = { _ in }
     var retractPanel: (String) -> Void = { _ in }
     var closePanel: () -> Void = {}
+    /// The panel is up with something the owner hasn't closed.
+    var isPanelUp: () -> Bool = { false }
     var speak: (String) -> Void = { _ in }
     var openApp: (String) -> Void = { _ in }
 }
@@ -219,7 +222,7 @@ final class CompanionRuntime {
             chatBusy: thread.isChatBusy, frontmostAppName: frontmost.name,
             frontmostBundleID: frontmost.bundleID, frontmostIsGame: frontmost.isGame,
             lastTerminalFrontAt: frontmost.lastTerminalFrontAt(now: now()), power: power.state,
-            profile: profile?.facts.map(\.text) ?? [])
+            profile: profile?.facts.map(\.text) ?? [], panelUp: delivery.isPanelUp())
     }
 
     private var daySettings: DaySettings {
@@ -262,6 +265,9 @@ final class CompanionRuntime {
 
         case .presentCard(let card, let rung):
             await present(card, on: rung)
+
+        case .presentStep(let cue):
+            if isActive { delivery.showStep(cue) }
 
         case .retractCard(let cardID):
             delivery.retractPanel(cardID)

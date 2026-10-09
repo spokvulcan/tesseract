@@ -5,9 +5,10 @@
 //  The Jarvis panel: the Breakpoint card (and urgent items) in a Liquid
 //  Glass panel near the top-right, in the style of the macOS 27 Siri panel —
 //  a close button top-left, an expand button top-right that opens Today, the
-//  card, and an "Ask Jarvis" field between + and mic buttons. It never
-//  steals typing from the app in front: it becomes key only when the field
-//  is clicked. Replies go to the Day Thread.
+//  card, and an "Ask Jarvis" field between + and mic buttons. A Step Cue (a
+//  planned step starting now) takes a shorter panel. It never steals typing
+//  from the app in front: it becomes key only when the field is clicked.
+//  Replies go to the Day Thread.
 //
 //  Built with the prototype lab's constraints (tools/jarvis-panel-lab): a
 //  borderless non-activating panel over an `NSGlassEffectView`; every button
@@ -22,6 +23,8 @@ import SwiftUI
 @Observable @MainActor
 final class JarvisPanelModel {
     var card: DayCard?
+    /// A planned step starting now; shown instead of a card.
+    var cue: StepCue?
     var showQuiet = false
     var draft = ""
     var listening = false
@@ -41,6 +44,8 @@ final class JarvisPanelController {
     private let onCapture: (String) -> Void
 
     static let size = NSSize(width: 400, height: 560)
+    /// A Step Cue's panel: the step, its choices and the field.
+    static let cueHeight: CGFloat = 252
 
     init(
         thread: DayThread, voice: AgentVoiceInputController,
@@ -59,10 +64,24 @@ final class JarvisPanelController {
 
     /// Show (or update in place) a card.
     func show(_ card: DayCard) {
+        model.cue = nil
         model.card = card
         model.showQuiet = false
+        present(height: Self.size.height)
+    }
+
+    /// Show a planned step that starts now, in place of whatever is up.
+    func show(_ cue: StepCue) {
+        model.card = nil
+        model.cue = cue
+        present(height: Self.cueHeight)
+    }
+
+    private func present(height: CGFloat) {
         let panel = self.panel ?? makePanel()
         self.panel = panel
+        // A question asked in the panel keeps the room its answer needs.
+        if model.asked == nil || !panel.isVisible { panel.setHeight(height) }
         if !panel.isVisible {
             model.asked = nil
             panel.placeTopRight()
@@ -104,6 +123,9 @@ final class JarvisPanelController {
                 close: { [weak self] in
                     guard let self else { return }
                     if let card = self.model.card { self.onAction(.dismiss(cardID: card.id)) }
+                    if let cue = self.model.cue {
+                        self.onAction(.step(reminderID: cue.reminderID, .dismiss))
+                    }
                     self.close()
                 },
                 expand: { [weak self] in
@@ -111,6 +133,11 @@ final class JarvisPanelController {
                     self?.onExpand()
                 },
                 act: { [weak self] action in self?.onAction(action) },
+                choose: { [weak self] choice in
+                    guard let self, let cue = self.model.cue else { return }
+                    self.onAction(.step(reminderID: cue.reminderID, choice))
+                    self.close()
+                },
                 send: { [weak self] in self?.send() },
                 capture: { [weak self] in self?.capture() },
                 mic: { [weak self] in self?.toggleMic() }))
@@ -121,6 +148,7 @@ final class JarvisPanelController {
         let text = model.draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, thread.canSend else { return }
         thread.send(text)
+        if model.asked == nil { panel?.setHeight(Self.size.height) }
         model.asked = text
         model.draft = ""
     }
@@ -146,12 +174,13 @@ final class JarvisPanelController {
 
 // MARK: - View
 
-private struct JarvisPanelView: View {
+struct JarvisPanelView: View {
     @Bindable var model: JarvisPanelModel
     let thread: DayThread
     let close: () -> Void
     let expand: () -> Void
     let act: (CardAction) -> Void
+    let choose: (StepChoice) -> Void
     let send: () -> Void
     let capture: () -> Void
     let mic: () -> Void
@@ -173,7 +202,9 @@ private struct JarvisPanelView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    if let card = model.card {
+                    if let cue = model.cue {
+                        StepCueContent(cue: cue, choose: choose)
+                    } else if let card = model.card {
                         CardContent(card: card, showQuiet: $model.showQuiet, act: act)
                     }
                     if let asked = model.asked {
@@ -201,7 +232,85 @@ private struct JarvisPanelView: View {
             .padding(14)
         }
         .font(.system(size: 13))
-        .frame(width: JarvisPanelController.size.width, height: JarvisPanelController.size.height)
+        .frame(width: JarvisPanelController.size.width)
+        .frame(maxHeight: .infinity)
+    }
+}
+
+/// A planned step starting now: what it is, until when and what follows,
+/// and the four ways on — start, a quarter of an hour on, tomorrow, done.
+private struct StepCueContent: View {
+    let cue: StepCue
+    let choose: (StepChoice) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Time for").fontWeight(.semibold).foregroundStyle(Color.accentColor)
+                    Spacer()
+                    Text("\(AgendaTime.clock(cue.start))–\(AgendaTime.clock(cue.end))")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                Text(cue.title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(detail)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            // Every button non-focusable: they appear after the panel's
+            // first layout (GlassPanel's macOS 27.0 focus freeze).
+            HStack(spacing: 8) {
+                Button("Start") { choose(.start) }
+                    .buttonStyle(PanelButtonStyle(prominent: true))
+                    .focusable(false)
+                Button("In \(DayEngine.stepLaterMinutes) min") { choose(.later) }
+                    .buttonStyle(PanelButtonStyle())
+                    .focusable(false)
+                    .help("Move it a quarter of an hour on; Jarvis asks again then")
+                Button("Tomorrow") { choose(.tomorrow) }
+                    .buttonStyle(PanelButtonStyle())
+                    .focusable(false)
+                Spacer(minLength: 0)
+                Button("Done") { choose(.done) }
+                    .buttonStyle(PanelButtonStyle())
+                    .focusable(false)
+            }
+        }
+    }
+
+    private var detail: String {
+        var parts = ["\(MomentPrompts.minutesText(cue.minutes))"]
+        if cue.isMustDo { parts.append("your must-do") }
+        parts.append(cue.areaName)
+        var line = parts.joined(separator: " · ")
+        if let next = cue.next { line += ". Then \(next)." }
+        return line
+    }
+}
+
+/// The panel's word buttons: capsules on the glass, the main one in the
+/// accent. Drawn by hand so the main one keeps its color in a panel that is
+/// never key (a system prominent button turns gray there).
+private struct PanelButtonStyle: ButtonStyle {
+    var prominent = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .fontWeight(prominent ? .semibold : .regular)
+            .foregroundStyle(prominent ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+            .padding(.horizontal, 14)
+            .frame(height: 30)
+            .background(
+                prominent ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.primary.opacity(0.1)),
+                in: Capsule()
+            )
+            .opacity(configuration.isPressed ? 0.7 : 1)
+            .contentShape(Capsule())
     }
 }
 
