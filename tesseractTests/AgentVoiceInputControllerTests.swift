@@ -100,7 +100,9 @@ struct AgentVoiceInputControllerTests {
         controller.finishCapture()
         while !engine.isAwaiting { await Task.yield() }
         engine.completeWithSuccess()
-        let deadline = Date().addingTimeInterval(5)
+        // Milliseconds alone; the full suite's parallel model tests can hold
+        // the main actor for seconds.
+        let deadline = Date().addingTimeInterval(30)
         while rejected.values.isEmpty, Date() < deadline { await Task.yield() }
 
         #expect(rejected.values == [TranscriptionPostProcessor().process("hello world")])
