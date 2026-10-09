@@ -122,6 +122,7 @@ nonisolated enum MomentPrompts {
             lines.append(
                 "It's the week's last day: look back on the week too. "
                     + weekLine(facts)
+                    + (facts.mustDoLine.map { " \($0)" } ?? "")
                     + (facts.weekFocus.map { " This week's focus was: \($0)." } ?? ""))
         }
         lines.append("")

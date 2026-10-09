@@ -36,6 +36,12 @@ nonisolated enum DayEngine {
         var effects: [DayEffect] = []
         let today = DayKey(for: snapshot.now, calendar: snapshot.calendar)
         if state.day != today { state = state.rolledOver(to: today) }
+        // The must-do seen done, for the week's look-back.
+        if let mustDo = state.mustDoID, state.mustDoDoneAt == nil,
+            snapshot.agenda.doneToday.contains(where: { $0.id == mustDo })
+        {
+            state.mustDoDoneAt = snapshot.now
+        }
         let waitingBefore = waitingCount(state, now: snapshot.now)
 
         switch signal {

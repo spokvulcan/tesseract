@@ -103,6 +103,11 @@ struct MomentPromptsTests {
         #expect(sunday.contains("It's the week's last day: look back on the week too."))
         #expect(sunday.contains("This week: 3 done — Work 2, Daily 1."))
         #expect(sunday.contains("This week's focus was: the job search."))
+        var withMustDos = Self.weekFacts(day: 4)
+        withMustDos.mustDoDays = ["2026-10-01": true, "2026-10-02": false, "2026-10-03": true]
+        #expect(
+            MomentPrompts.eveningWrapUp(facts: withMustDos, leftovers: []).contains(
+                "The must-do got done on 2 of the 3 days it was set."))
         #expect(sunday.contains(#""focus": "<next week's one focus, a few words>""#))
         // Saturday: an ordinary evening.
         let saturday = MomentPrompts.eveningWrapUp(facts: Self.weekFacts(day: 3), leftovers: [])

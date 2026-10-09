@@ -34,6 +34,8 @@ nonisolated struct DayFacts: Sendable, Equatable {
     var doneThisWeek: [AgendaReminder]
     /// The week's one focus, set by the last week's look-back.
     var weekFocus: String?
+    /// The last days' must-dos, today's included: done or not, by day.
+    var mustDoDays: [String: Bool] = [:]
 
     init(
         now: Date, calendar: Calendar = .current, events: [AgendaEvent] = [],
@@ -84,6 +86,14 @@ nonisolated struct DayFacts: Sendable, Equatable {
     var isWeekReview: Bool {
         let weekday = calendar.component(.weekday, from: startOfToday)
         return weekday == (calendar.firstWeekday + 5) % 7 + 1
+    }
+
+    /// "The must-do got done on 4 of the 6 days it was set."
+    var mustDoLine: String? {
+        guard !mustDoDays.isEmpty else { return nil }
+        let done = mustDoDays.values.filter { $0 }.count
+        let set = mustDoDays.count
+        return "The must-do got done on \(done) of the \(set) day\(set == 1 ? "" : "s") it was set."
     }
 
     /// The week's done reminders by Area, the most first.

@@ -352,6 +352,36 @@ struct WeekFocusTests {
     }
 }
 
+struct MustDoDaysTests {
+
+    @Test func eachDaysMustDoIsKeptForTheWeek() {
+        var state = DayState(day: DayKey(rawValue: "2026-09-30"))
+        state.syncedNudgeIDs = []
+        state.mustDoID = "R1"
+        var agenda = AgendaSnapshot.empty
+        agenda.access = .full
+        agenda.doneToday = [
+            AgendaReminder(
+                id: "R1", title: "Spec", listID: "w", listTitle: "Work", isCompleted: true,
+                completedAt: DayEngineMomentTests.local(30, 15))
+        ]
+        let seen = DayEngine.decide(
+            .tick,
+            snapshot: DaySnapshot(
+                now: DayEngineMomentTests.local(30, 15, 1), settings: DaySettings(),
+                agenda: agenda, ownerPresent: false),
+            state: state)
+        #expect(seen.state.mustDoDoneAt == DayEngineMomentTests.local(30, 15, 1))
+        let next = seen.state.rolledOver(to: DayKey(rawValue: "2026-10-01"))
+        #expect(next.mustDoDays == ["2026-09-30": true])
+        #expect(next.mustDoDoneAt == nil)
+        // A week and more later, the day has left the record.
+        var later = next
+        later.day = DayKey(rawValue: "2026-10-08")
+        #expect(later.rolledOver(to: DayKey(rawValue: "2026-10-09")).mustDoDays.isEmpty)
+    }
+}
+
 struct DayStateStoreTests {
 
     @Test @MainActor func aSavedDayComesBackAndOldFilesStillLoad() throws {

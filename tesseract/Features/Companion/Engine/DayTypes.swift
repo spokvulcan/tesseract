@@ -251,10 +251,15 @@ nonisolated struct DaySnapshot: Sendable, Equatable {
     }
 
     func facts(state: DayState) -> DayFacts {
-        DayFacts(
+        var facts = DayFacts(
             snapshot: agenda, areas: areas, inboxListID: inboxListID, now: now,
             calendar: calendar, mustDoID: state.mustDoID, plan: state.plan,
             weekFocus: state.weekFocus)
+        facts.mustDoDays = state.mustDoDays
+        if state.mustDoID != nil {
+            facts.mustDoDays[state.day.rawValue] = state.mustDoDoneAt != nil
+        }
+        return facts
     }
 
     /// Minutes after local midnight.
@@ -356,6 +361,11 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     /// set (carried a week).
     var weekFocus: String?
     var weekFocusSetAt: Date?
+    /// When today's must-do was seen done.
+    var mustDoDoneAt: Date?
+    /// The last days' must-dos, by day: done or not (days with none are
+    /// absent). Carried a week, for the week's look-back.
+    var mustDoDays: [String: Bool] = [:]
     /// A moment the app quit in the middle of, until the engine picks it up.
     var interrupted: MomentKind?
     /// The Morning Plan was run again once after a quit cut it short.
@@ -374,7 +384,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         case agentSpokenAt, lastTickAt, lastTriageAt, whereYouWere, deferred, firedNudgeIDs
         case cuedSteps, startedSteps, interrupted, morningPlanResumed, windDownAt
         case draft, draftForNextDay, departures, heldSteps, satDownAt, weekFocus
-        case weekFocusSetAt
+        case weekFocusSetAt, mustDoDoneAt, mustDoDays
     }
 
     /// Every field but the day is optional on disk, so a state saved by an
@@ -414,6 +424,8 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         satDownAt = try? c.decodeIfPresent(Date.self, forKey: .satDownAt)
         weekFocus = try? c.decodeIfPresent(String.self, forKey: .weekFocus)
         weekFocusSetAt = try? c.decodeIfPresent(Date.self, forKey: .weekFocusSetAt)
+        mustDoDoneAt = try? c.decodeIfPresent(Date.self, forKey: .mustDoDoneAt)
+        mustDoDays = (try? c.decodeIfPresent([String: Bool].self, forKey: .mustDoDays)) ?? [:]
     }
 
     /// The day as a relaunch finds it: the moment in flight never finished,
@@ -436,6 +448,10 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         next.draft = draftForNextDay
         // Quiet hours that begin just before 04:00 are still the same night.
         next.windDownAt = windDownAt
+        // Whether this day's must-do got done, kept a week for the look-back.
+        var days = mustDoDays
+        if mustDoID != nil { days[self.day.rawValue] = mustDoDoneAt != nil }
+        next.mustDoDays = days.filter { $0.key > Self.weekBefore(day) }
         // The week's focus holds until the next look-back (a week, a day's grace).
         if let setAt = weekFocusSetAt, let start = day.date(),
             start.timeIntervalSince(setAt) < 8 * 24 * 3600
@@ -450,6 +466,14 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         next.whereYouWere = whereYouWere
         next.firedNudgeIDs = firedNudgeIDs
         return next
+    }
+
+    /// The day key a week before `day`: older must-dos leave the record.
+    static func weekBefore(_ day: DayKey) -> String {
+        guard let date = day.date(),
+            let earlier = Calendar.current.date(byAdding: .day, value: -7, to: date)
+        else { return "" }
+        return DayKey(for: earlier.addingTimeInterval(12 * 3600)).rawValue
     }
 
     /// Cards the owner hasn't dismissed.

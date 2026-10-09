@@ -366,6 +366,9 @@ the owner must remember to read does not. What changed:
   next week's one thing, in a few words. Code keeps the focus a week
   (`DayState.weekFocus`); it opens each day's thread, the Morning Plan is
   asked to let the must-do serve it, and Today shows it beside the date.
+  The look-back also counts the week's must-dos ("The must-do got done on 4
+  of the 6 days it was set"): the engine notes when the day's must-do is seen
+  done and keeps each day's outcome a week (`DayState.mustDoDays`).
 - **An online meeting reads as its service.** A Zoom event's location is
   its link with the password; it showed under the event on the Day Line, in
   its nudge, in the agenda tool and in the plan's list of events to leave
