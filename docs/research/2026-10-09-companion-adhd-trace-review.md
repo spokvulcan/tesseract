@@ -99,6 +99,36 @@ The trace measures the new behaviour: `cue.presented` / `cue.reaction`,
 `card.reaction` with `kept` apart from `dismissed`, `night.wind-down`,
 `nudge.scheduled` for `nudge.leave.*`.
 
+## Trying it
+
+What a day on this branch should feel like, and where to look if it doesn't:
+
+- **Morning.** The first sit-down after the night brings the plan to the
+  panel (whatever the time, until the evening); with its first step due, the
+  main button is Start Now. After a night at the Mac past midnight, the plan
+  is asked to keep the day light.
+- **Each step.** A planned slot comes to the panel as it starts (Start, In 15
+  min, Tomorrow, Done); missed while away, it comes on return ("Still time
+  for"); put off twice, it is offered as five minutes. A started step counts
+  down in the menu bar and checks in at its end; Done is answered for a
+  moment, with what comes next.
+- **From any app.** The menu bar counts down the step under way, or the last
+  half hour to the next meeting or time to leave; its menu opens on the day
+  (now or next, Open Today, Write a Thought Down…).
+- **When the day slides.** Two or more slid steps fit back in with one click
+  on the Now Card.
+- **Evening and night.** The Wrap-up waits for a step under way; on the
+  week's last day it also asks about up to five long-overdue tasks and names
+  next week's focus. Quiet hours begin with one wind-down banner, and a done
+  day's Now Card says how far off tomorrow is.
+- **After a relaunch** a moment should restore the thread from the prefix
+  cache in seconds; the trace report's "cold prefills" line shows whether it
+  does.
+
+After a week, `scripts/companion-trace-report.py 7` shows the cue choices
+(later, startSmall, start), late cues, fitted slots, the night before each
+day, and the cold prefills.
+
 ## Recommendations not built
 
 1. **Cold prefills after a relaunch: found and fixed.** The Day Opening is
