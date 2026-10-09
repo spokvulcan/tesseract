@@ -157,9 +157,9 @@ nonisolated enum DayEngine {
     ) -> [DayEffect] {
         let away = snapshot.now.timeIntervalSince(awayFrom)
         let hour = snapshot.minuteOfDay / 60
-        if away >= DaySettings.overnightGap, hour >= snapshot.settings.morningStartHour,
-            hour < snapshot.settings.morningEndHour
-        {
+        let afterTheNight =
+            away >= DaySettings.overnightGap && hour >= snapshot.settings.morningStartHour
+        if afterTheNight, hour < snapshot.settings.morningEndHour {
             state.satDownAt = snapshot.now
             if state.morningPlanAt == nil {
                 return morningPlan(trigger: .firstPresence, snapshot: snapshot, state: &state)
@@ -168,12 +168,30 @@ nonisolated enum DayEngine {
             let prepared = presentPreparedMorningPlan(
                 awayFrom: awayFrom, snapshot: snapshot, state: state)
             if !prepared.isEmpty { return prepared }
+        } else if afterTheNight, snapshot.minuteOfDay < snapshot.settings.eveningMinutes,
+            noPlanSeen(awayFrom: awayFrom, state: state)
+        {
+            // A day that starts late — a weekend, a long night (4 October:
+            // first at the Mac at 14:43, a plan only on asking) — still gets
+            // its plan at the first sit-down, made now: one prepared that
+            // morning is hours out of date, its slots gone by.
+            state.satDownAt = snapshot.now
+            if state.morningPlanAt != nil { state.plan = [] }
+            return morningPlan(trigger: .firstPresence, snapshot: snapshot, state: &state)
         }
         let evening = eveningIfDue(snapshot: snapshot, state: &state)
         if !evening.isEmpty { return evening }
         guard away >= TimeInterval(snapshot.settings.breakpointAwayMinutes * 60) else { return [] }
         return breakpoint(
             awayFrom: awayFrom, trigger: .presenceReturned, snapshot: snapshot, state: &state)
+    }
+
+    /// The owner hasn't seen a plan today: none was made, or only one made
+    /// while they were away and never closed or taken in.
+    private static func noPlanSeen(awayFrom: Date, state: DayState) -> Bool {
+        guard state.morningPlanAt != nil else { return true }
+        guard let card = state.cards.last(where: { $0.kind == .morningPlan }) else { return false }
+        return !card.dismissed && !card.kept && card.createdAt >= awayFrom
     }
 
     /// The Evening Wrap-up is due from the evening time until 03:00, once.

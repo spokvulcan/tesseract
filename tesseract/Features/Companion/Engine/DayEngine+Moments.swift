@@ -138,7 +138,6 @@ nonisolated extension DayEngine {
         ]
     }
 
-    /// Open tasks that belonged to today: due today, or planned today.
     /// What the Evening Wrap-up asks about: today's open tasks, planned or
     /// due today. On the week's last day also what has waited longest — up
     /// to five overdue tasks, oldest first — so the week ends on a clean

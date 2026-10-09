@@ -1891,12 +1891,15 @@ _Avoid_: turn (a chat word), beat, wake.
 
 **Morning Plan**:
 The moment at the day's first sit-down (after an overnight gap of four hours or
-more, within the morning window), or when Today is first opened that day: small
+more — within the morning window, or later in a day that starts late, before
+the evening), or when Today is first opened that day: small
 tasks into the free time before the first meeting, the Must-do placed where it
 fits. A card built by code goes up at once — the day's shape and where it
 starts — and Jarvis's version replaces it in place when he has thought it
 through; when the Mac is awake and on power before the owner sits down, the plan
-is made ahead and comes forward at the sit-down. The first sit-down is the
+is made ahead and comes forward at the sit-down (one made ahead for a sit-down
+after the morning window is made again: its slots have gone by). The first
+sit-down is the
 owner starting the day, so the plan meets them on the panel even before quiet
 hours end. For an event in person it sets a time to leave (Jarvis knows the
 bus takes half an hour; the calendar doesn't): a Nudge fires then, the Now

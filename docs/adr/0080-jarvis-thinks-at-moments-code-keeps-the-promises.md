@@ -305,7 +305,12 @@ the owner must remember to read does not. What changed:
   end at 08:00 — so the plan never reached the panel and waited unseen in
   Today. The day's first sit-down is the owner starting their day, not
   Jarvis reaching out at night: the Morning Plan, made ahead or made then,
-  takes the panel at it (a game or a call still keeps it in Today).
+  takes the panel at it (a game or a call still keeps it in Today). A day
+  that starts late gets it too: on Sunday 4 October the owner was first at
+  the Mac at 14:43, after the morning window, and the plan ran only when
+  they asked for it. The first sit-down after the night now runs the plan
+  until the evening, unless the owner already saw today's plan; one made
+  ahead that morning is made again, its slots gone by.
 - **"Nothing needs you" is no news.** 39 of the 43 Breakpoint cards had
   nothing for the owner, yet each became Jarvis's word on the Now Card for an
   hour, pushing the Morning Plan's line and tips off it after the first

@@ -75,8 +75,11 @@ struct DayEngineMomentTests {
             name: "before 04:00 is still last night", now: local(30, 3, 30),
             awayFrom: local(29, 20), runs: false),
         MorningRow(
-            name: "after the morning window", now: local(30, 13), awayFrom: local(29, 23),
-            runs: false),
+            name: "a day that starts after the morning window", now: local(30, 14, 43),
+            awayFrom: local(29, 23), runs: true),
+        MorningRow(
+            name: "back after a long afternoon away", now: local(30, 18),
+            awayFrom: local(30, 13), runs: true),
     ]
 
     @Test(arguments: morningRows)
@@ -90,6 +93,49 @@ struct DayEngineMomentTests {
             #expect(decision.state.running == .morningPlan)
             #expect(requests.first?.text.contains("R1 · Work · today — Review PR 42") == true)
         }
+    }
+
+    @Test func aPlanPreparedThatMorningIsMadeAgainForALateSitDown() throws {
+        // Prepared at 07:00 while the owner slept in; they sit down at 14:43.
+        let prepared = DayEngine.decide(
+            .tick, snapshot: Self.snapshot(at: Self.local(30, 7), present: false),
+            state: {
+                var state = Self.state()
+                state.lastPresentAt = Self.local(29, 23)
+                return state
+            }())
+        #expect(Self.moments(prepared.effects).first?.trigger == .prepared)
+        var made = prepared.state
+        made.running = nil
+        made.plan = [Placement(reminderID: "R2", start: Self.local(30, 8), minutes: 30)]
+        let late = DayEngine.decide(
+            .presenceReturned(awayFrom: Self.local(29, 23)),
+            snapshot: Self.snapshot(at: Self.local(30, 14, 43)), state: made)
+        let request = try #require(Self.moments(late.effects).first)
+        #expect(request.kind == .morningPlan)
+        #expect(request.trigger == .firstPresence)
+        #expect(late.state.plan.isEmpty)
+        #expect(
+            late.effects.contains { if case .presentCard(_, .panel) = $0 { true } else { false } })
+        #expect(late.effects.contains { if case .retractCard = $0 { true } else { false } })
+    }
+
+    @Test func aPlanSeenThatMorningIsNotMadeAgainAfterALongAbsence() {
+        // Planned at 08:00 with the owner there; away from 09:00 to 14:00.
+        var state = Self.state()
+        state.morningPlanAt = Self.local(30, 8)
+        state.cards = [
+            DayCard(
+                id: "morningPlan-1", kind: .morningPlan, createdAt: Self.local(30, 8),
+                isFallback: false,
+                body: .morningPlan(
+                    MorningPlanCard(
+                        line: "A calm day.", mustDoID: nil, placements: [], suggestions: [])))
+        ]
+        let back = DayEngine.decide(
+            .presenceReturned(awayFrom: Self.local(30, 9)),
+            snapshot: Self.snapshot(at: Self.local(30, 14)), state: state)
+        #expect(Self.moments(back.effects).isEmpty)
     }
 
     @Test func morningPlanRunsOncePerDay() {

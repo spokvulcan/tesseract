@@ -72,6 +72,7 @@ the ideas the changes lean on; it makes no claims beyond them.
 | 3 | A step put off twice is offered as five minutes ("Just five minutes?"), and five minutes in the check-in asks to keep going |
 | 2 | The Morning Plan and the Evening Wrap-up are whole on the panel (steps, tips, leftovers with their choices); the panel shows the live card and fits its content; Looks Good keeps the card instead of dismissing it |
 | 4 | The Morning Plan meets the first sit-down on the panel, quiet hours or not; Step Cues follow after an early sit-down |
+| 4 | A day that starts late (4 October: first at the Mac at 14:43) gets its plan at the first sit-down, made then, instead of only on asking |
 | 1 | A quiet Breakpoint no longer takes Jarvis's word; it is titled "While you were away", so the greeting is said once |
 | — | The Now Card leads with the time left of the step under way, over a draining bar; the menu bar shows it from any app, and counts down the last half hour to the next event or time to leave |
 | 3 | In the evening the Now Card closes the day (what is ahead tonight, or what got done and what is still open) instead of heading it with a slid task |
