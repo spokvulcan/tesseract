@@ -1824,7 +1824,11 @@ Typed or spoken words turned into a reminder without a model: the capture
 hotkey's panel, the + in the Jarvis Panel's field and the Today composer's
 Add task (⌘↩) all go through one door and the
 deterministic capture parser ("call the dentist tomorrow at 10", "after the
-1:1", "#health"). The hotkey is one key — Right ⌥ alone by default: tap to type,
+1:1", "#health"). Days are counted from now, never the real clock a system
+date reader uses: "on Monday" is the coming Monday (said on a Monday, a week
+on), "this Friday" and "by Friday" count today, "next Friday" is next week's;
+"at noon", "Friday morning", "this weekend" (its Saturday) and "next week"
+(its first day) all land. The hotkey is one key — Right ⌥ alone by default: tap to type,
 hold to speak; another key pressed with it cancels, so ⌥-typing works as usual.
 Each surface says what happened in one line — the reminder added, with an undo
 that takes back that one, or why not — and the words leave the field only once

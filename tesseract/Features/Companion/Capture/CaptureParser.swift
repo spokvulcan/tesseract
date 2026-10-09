@@ -6,8 +6,11 @@
 //  call the dentist tomorrow at 10" becomes "Call the dentist", due tomorrow
 //  10:00. Relative timing like "after the 1:1" lands at the end of that
 //  calendar event; "#health" (or a leading "Health:") files it in an Area;
-//  anything without a time lands undated, in the Inbox. Deterministic and
-//  instant, so capture works while the model is busy, unloaded or failing.
+//  anything without a time lands undated, in the Inbox. Days and weekdays
+//  count from `now`: the system date reader counts from the real clock, so
+//  only what it alone knows (a date like "15 October") is left to it.
+//  Deterministic and instant, so capture works while the model is busy,
+//  unloaded or failing.
 //
 
 import Foundation
@@ -69,6 +72,21 @@ nonisolated enum CaptureParser {
         {
             intent.due = date
             intent.dueHasTime = hasTime
+            text = rest
+        }
+
+        if intent.due == nil,
+            let (date, hasTime, rest) = takeWeekday(from: text, now: now, calendar: calendar)
+        {
+            intent.due = date
+            intent.dueHasTime = hasTime
+            text = rest
+        }
+
+        if intent.due == nil, let (date, rest) = takeWeek(from: text, now: now, calendar: calendar)
+        {
+            intent.due = date
+            intent.dueHasTime = false
             text = rest
         }
 
@@ -316,6 +334,10 @@ nonisolated enum CaptureParser {
             meridiem = clock.3?.lowercased()
             rest.removeSubrange(clock.range)
             rest = rest.trimmingCharacters(in: .whitespaces)
+        } else if hourText == nil, takeNoon(&rest) {
+            // "at noon tomorrow": the clock pattern reads digits only.
+            hourText = "12"
+            meridiem = "pm"
         }
         guard let hourText, let said = Int(hourText), said < 24 else {
             return (day, false, rest)
@@ -330,6 +352,117 @@ nonisolated enum CaptureParser {
             date = date.addingTimeInterval(12 * 3600)
         }
         return (date, true, rest)
+    }
+
+    /// "noon" or "midday", with or without "at": taken from `rest`.
+    private static func takeNoon(_ rest: inout String) -> Bool {
+        guard let noon = rest.firstMatch(of: /(?i)\b(?:at\s+)?(?:noon|midday)\b/) else {
+            return false
+        }
+        rest.removeSubrange(noon.range)
+        rest = rest.trimmingCharacters(in: .whitespaces)
+        return true
+    }
+
+    /// "Monday", "on Friday", "this Friday", "by Friday", "next Friday", with
+    /// a part of the day or a clock as a day word takes one ("Friday
+    /// morning", "Monday at 10", "at 3pm on Friday") — counted from `now`,
+    /// as NSDataDetector can't be: it counted from the real clock, so the
+    /// same words gave another date in a test, and "next Monday" said on a
+    /// Friday was ten days on. A weekday alone, or with "on", is its next
+    /// one (said on a Friday, "Friday" is a week on); "this" and "by" count
+    /// today; "next" is next week's.
+    private static func takeWeekday(
+        from text: String, now: Date, calendar: Calendar
+    ) -> (Date, Bool, String)? {
+        let pattern =
+            /(?i)\b(?:(on|this|by|next)\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:'s|’s)?\b(?:\s+(morning|afternoon|evening|night))?/
+        guard
+            let match = text.matches(of: pattern).first(where: { match in
+                match.1 != nil || !followsArticle(text[..<match.range.lowerBound])
+            })
+        else { return nil }
+        let names = [
+            "sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday",
+        ]
+        guard let index = names.firstIndex(of: String(match.2).lowercased()) else { return nil }
+        let today = ownersDay(now, calendar)
+        var ahead = (index + 1 - calendar.component(.weekday, from: today) + 7) % 7
+        switch match.1.map({ String($0).lowercased() }) {
+        case "this", "by":
+            break
+        case "next":
+            // Next week's, by the calendar's own first day of the week.
+            guard let week = calendar.dateInterval(of: .weekOfYear, for: today),
+                let start = calendar.date(byAdding: .day, value: 7, to: week.start),
+                let day = (0..<7).lazy.compactMap({
+                    calendar.date(byAdding: .day, value: $0, to: start)
+                }).first(where: { calendar.component(.weekday, from: $0) == index + 1 }),
+                let days = calendar.dateComponents([.day], from: today, to: day).day
+            else { return nil }
+            ahead = days
+        default:
+            if ahead == 0 { ahead = 7 }
+        }
+        guard let day = calendar.date(byAdding: .day, value: ahead, to: today) else { return nil }
+        var rest = text
+        rest.removeSubrange(match.range)
+        rest = rest.trimmingCharacters(in: .whitespaces)
+        var hour: Int?
+        var minute = 0
+        var meridiem: String?
+        if let part = match.3.map({ String($0).lowercased() }) {
+            hour = ["morning": 9, "afternoon": 15, "evening": 19, "night": 20][part]
+        }
+        if let clock = rest.firstMatch(of: clockPattern), let said = Int(clock.1), said < 24 {
+            meridiem = clock.3?.lowercased()
+            minute = clock.2.flatMap { Int($0) }.flatMap { $0 < 60 ? $0 : nil } ?? 0
+            // Read in the part of the day said with it ("Friday evening at 7",
+            // "Friday morning at 7"), as a day part does.
+            if meridiem == nil, let part = hour {
+                hour = part >= 12 && said < 12 ? said + 12 : said
+            } else {
+                hour = Self.hour(said, meridiem: meridiem)
+            }
+            rest.removeSubrange(clock.range)
+            rest = rest.trimmingCharacters(in: .whitespaces)
+        } else if takeNoon(&rest) {
+            hour = 12
+        }
+        guard let hour else { return (day, false, rest) }
+        guard var date = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day)
+        else { return nil }
+        // "this Friday at 9" said on Friday at 14:00 means tonight.
+        if ahead == 0, date <= now, meridiem == nil, hour < 12 {
+            date = date.addingTimeInterval(12 * 3600)
+        }
+        return (date, true, rest)
+    }
+
+    /// "this weekend" or "at the weekend" (its Saturday, or today if it is
+    /// already the weekend) and "next week" (its first day), undated in
+    /// time: what the owner can only say roughly still gets a day.
+    private static func takeWeek(
+        from text: String, now: Date, calendar: Calendar
+    ) -> (Date, String)? {
+        let today = ownersDay(now, calendar)
+        var day: Date?
+        var found: Range<String.Index>?
+        if let match = text.firstMatch(of: /(?i)\b(?:this|at the|on the|over the)\s+weekend\b/) {
+            let weekday = calendar.component(.weekday, from: today)
+            let ahead = weekday == 1 || weekday == 7 ? 0 : 7 - weekday
+            day = calendar.date(byAdding: .day, value: ahead, to: today)
+            found = match.range
+        } else if let match = text.firstMatch(of: /(?i)\bnext\s+week\b/),
+            let week = calendar.dateInterval(of: .weekOfYear, for: today)
+        {
+            day = calendar.date(byAdding: .day, value: 7, to: week.start)
+            found = match.range
+        }
+        guard let day, let found else { return nil }
+        var rest = text
+        rest.removeSubrange(found)
+        return (day, rest.trimmingCharacters(in: .whitespaces))
     }
 
     private static func takeDetectedDate(
