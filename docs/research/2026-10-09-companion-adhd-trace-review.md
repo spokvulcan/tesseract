@@ -134,8 +134,10 @@ The trace measures the new behaviour: `cue.presented` / `cue.reaction`,
    day, moments and cold prefills, cards by rung, reactions (kept apart from
    dismissed), Step Cues (late ones apart) and the owner's choices — "later"
    and "startSmall" among them, the measure of whether five minutes beats a
-   snooze — the wind-down, event and leave nudges, notifications by source,
-   Triage, and task proposals with what became of them.
+   snooze — the night before (how long the Mac was left, and whether the
+   owner was at it past midnight), the wind-down, event and leave nudges,
+   notifications by source, Triage, and task proposals with what became of
+   them.
 
 ## Appendix: the queries
 
