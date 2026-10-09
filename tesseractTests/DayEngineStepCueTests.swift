@@ -8,7 +8,9 @@
 //  a panel that is up, and not when its reminder rings at the same minute —
 //  and each of the owner's choices (and closing it) does what it says. A
 //  step the owner started checks in when its time is up; "Start now" on
-//  Today counts as started and needs no cue.
+//  Today counts as started and needs no cue. What came due while the owner
+//  couldn't see it is cued late once they can: a start while its slot still
+//  runs, an end that day.
 //
 
 import Foundation
@@ -98,6 +100,7 @@ struct DayEngineStepCueTests {
         #expect(cue.areaName == "Inbox")
         #expect(cue.next == "Reply to Anna about the deck at 11:35")
         #expect(!cue.isMustDo)
+        #expect(!cue.late)
         let fields = try #require(Self.traced(.cuePresented, in: decision.effects))
         #expect(fields["late"] == .int(0))
         #expect(fields["minutes"] == .int(20))
@@ -151,8 +154,8 @@ struct DayEngineStepCueTests {
             name: "the task is already done",
             snapshot: snapshot(at: local(11, 10), open: [deck, dentist], done: [letter])),
         QuietRow(
-            name: "the slot started too long ago (the Mac slept)",
-            snapshot: snapshot(at: local(11, 21))),
+            name: "the slot ended before the owner could see it",
+            snapshot: snapshot(at: local(11, 31))),
         QuietRow(
             name: "the owner switched Step Cues off",
             snapshot: snapshot(at: local(11, 10), stepCues: false)),
@@ -174,6 +177,104 @@ struct DayEngineStepCueTests {
         let cue = try #require(Self.cues(free.effects).first)
         #expect(cue.reminderID == "letter")
         #expect(Self.traced(.cuePresented, in: free.effects)?["late"] == .int(180))
+    }
+
+    // MARK: Late
+
+    @Test func aStartTheOwnerWasAwayForIsCuedLateOnceTheyAreBack() throws {
+        // Away from 11:05; the letter's slot starts at 11:10 and runs to 11:30.
+        let away = DayEngine.decide(
+            .tick, snapshot: Self.snapshot(at: Self.local(11, 10), present: false),
+            state: Self.state())
+        #expect(Self.cues(away.effects).isEmpty)
+        let back = DayEngine.decide(
+            .presenceReturned(awayFrom: Self.local(11, 5)),
+            snapshot: Self.snapshot(at: Self.local(11, 22)), state: away.state)
+        let up = Self.tick(back.state, at: Self.local(11, 22))
+        let cue = try #require(Self.cues(up.effects).first)
+        #expect(cue.reminderID == "letter")
+        #expect(cue.phase == .start)
+        #expect(cue.late)
+        #expect(Self.traced(.cuePresented, in: up.effects)?["late"] == .int(720))
+    }
+
+    @Test func aStartTheMacSleptThroughIsCuedLateWhileItsSlotRuns() throws {
+        // No tick between 11:09 and 11:21: the Mac slept.
+        let cue = try #require(
+            Self.cues(Self.tick(Self.state(), at: Self.local(11, 21)).effects).first)
+        #expect(cue.reminderID == "letter")
+        #expect(cue.late)
+        // Its slot over before anyone saw it: nothing to start.
+        #expect(Self.cues(Self.tick(Self.state(), at: Self.local(11, 31)).effects).isEmpty)
+    }
+
+    @Test func aStartThatCameDuringAMeetingIsCuedOnceItEnds() throws {
+        let sync = AgendaEvent(
+            id: "sync", title: "Sync", start: Self.local(11), end: Self.local(11, 25),
+            calendarID: "c", calendarTitle: "Work", hasOtherAttendees: true)
+        let meeting = DayEngine.decide(
+            .tick, snapshot: Self.snapshot(at: Self.local(11, 10), events: [sync]),
+            state: Self.state())
+        #expect(Self.cues(meeting.effects).isEmpty)
+        let after = DayEngine.decide(
+            .tick, snapshot: Self.snapshot(at: Self.local(11, 26), events: [sync]),
+            state: meeting.state)
+        let cue = try #require(Self.cues(after.effects).first)
+        #expect(cue.reminderID == "letter")
+        #expect(cue.late)
+    }
+
+    @Test func anEndTheOwnerWasAwayForChecksInWhenTheyAreBack() throws {
+        // The letter, started at 11:12, ends at 11:32 with the owner away.
+        let away = DayEngine.decide(
+            .tick, snapshot: Self.snapshot(at: Self.local(11, 32), present: false),
+            state: Self.started())
+        #expect(Self.cues(away.effects).isEmpty)
+        let back = Self.tick(away.state, at: Self.local(12, 40))
+        let cue = try #require(Self.cues(back.effects).first)
+        #expect(cue.phase == .end)
+        #expect(cue.reminderID == "letter")
+        #expect(cue.late)
+        // Once is enough.
+        #expect(Self.cues(Self.tick(back.state, at: Self.local(12, 41)).effects).isEmpty)
+    }
+
+    @Test func aLateCheckInWaitsForAStepStartedMeanwhile() throws {
+        // The letter (11:12–11:32) ended with the owner away; back at 11:40,
+        // they start the deck from Today before any cue went up.
+        let away = DayEngine.decide(
+            .tick, snapshot: Self.snapshot(at: Self.local(11, 32), present: false),
+            state: Self.started())
+        let deck = DayEngine.decide(
+            .cardAction(.place(reminderID: "deck", start: Self.local(11, 40), minutes: 25)),
+            snapshot: Self.snapshot(at: Self.local(11, 40)), state: away.state)
+        #expect(Self.cues(Self.tick(deck.state, at: Self.local(11, 41)).effects).isEmpty)
+        // The deck's time is up: its check-in first, then the letter's.
+        let up = Self.tick(deck.state, at: Self.local(12, 5))
+        let first = try #require(Self.cues(up.effects).first)
+        #expect(first.reminderID == "deck")
+        #expect(!first.late)
+        let answered = DayEngine.decide(
+            .cardAction(.step(reminderID: "deck", .done)),
+            snapshot: Self.snapshot(at: Self.local(12, 6)), state: up.state)
+        let next = DayEngine.decide(
+            .tick,
+            snapshot: Self.snapshot(
+                at: Self.local(12, 7), open: [Self.letter, Self.dentist], done: [Self.deck]),
+            state: answered.state)
+        let second = try #require(Self.cues(next.effects).first)
+        #expect(second.reminderID == "letter")
+        #expect(second.phase == .end)
+        #expect(second.late)
+    }
+
+    @Test func aCueOnThePanelWhenTheAppQuitIsCuedAgainAfterTheRelaunch() throws {
+        let relaunched = Self.cued().relaunched()
+        #expect(relaunched.cueOnPanel == nil)
+        let cue = try #require(
+            Self.cues(Self.tick(relaunched, at: Self.local(11, 14)).effects).first)
+        #expect(cue.reminderID == "letter")
+        #expect(!cue.late)
     }
 
     @Test func aCueACardTakesThePanelFromComesBackOnceThePanelIsFree() throws {
@@ -395,6 +496,7 @@ struct DayEngineStepCueTests {
             ).first)
         #expect(deck.reminderID == "deck")
         #expect(deck.phase == .start)
+        #expect(deck.late)
     }
 
     @Test func aStartedStepIsNotInterruptedByTheNextStart() {

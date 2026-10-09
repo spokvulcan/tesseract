@@ -127,6 +127,9 @@ nonisolated struct StepCue: Sendable, Equatable {
     /// What comes after it ("Design review at 15:00").
     var next: String?
     var phase: Phase = .start
+    /// Shown well after its moment — the owner was away, busy or behind
+    /// another panel — so it says so ("Still time for", "How did it go?").
+    var late = false
 
     var end: Date { start.addingTimeInterval(TimeInterval(minutes * 60)) }
 
@@ -357,11 +360,6 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     /// Slots the owner started (Start on a cue, Start now on Today), by
     /// `StepCue.key`: their end checks in.
     var startedSteps: Set<String> = []
-    /// Cues held back, by `StepCue.key` (a start whose time came while a
-    /// started step ran) or `StepCue.endKey` (a cue a card took the panel
-    /// from): they come once the owner and the panel are free, while their
-    /// slot still runs.
-    var heldSteps: Set<String> = []
     /// The cue on the panel now, by its key, until the owner answers it.
     var cueOnPanel: String?
     /// Tasks the Night Reflection proposed, until the owner decides (kept
@@ -396,7 +394,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         case running, cards, mustDoID, plan, carryOver, carryOverForNextDay, ledger, agents
         case agentSpokenAt, lastTickAt, lastTriageAt, whereYouWere, deferred, firedNudgeIDs
         case cuedSteps, startedSteps, interrupted, morningPlanResumed, windDownAt
-        case draft, draftForNextDay, departures, heldSteps, satDownAt, weekFocus
+        case draft, draftForNextDay, departures, satDownAt, weekFocus
         case weekFocusSetAt, mustDoDoneAt, mustDoDays, cueOnPanel, taskProposals
     }
 
@@ -433,7 +431,6 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         draft = (try? c.decodeIfPresent([String].self, forKey: .draft)) ?? []
         draftForNextDay = (try? c.decodeIfPresent([String].self, forKey: .draftForNextDay)) ?? []
         departures = (try? c.decodeIfPresent([Departure].self, forKey: .departures)) ?? []
-        heldSteps = (try? c.decodeIfPresent(Set<String>.self, forKey: .heldSteps)) ?? []
         satDownAt = try? c.decodeIfPresent(Date.self, forKey: .satDownAt)
         weekFocus = try? c.decodeIfPresent(String.self, forKey: .weekFocus)
         weekFocusSetAt = try? c.decodeIfPresent(Date.self, forKey: .weekFocusSetAt)
@@ -445,14 +442,20 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     }
 
     /// The day as a relaunch finds it: the moment in flight never finished,
-    /// so it is recorded as interrupted for the engine to pick up, and a card
-    /// it was refining keeps the version code built.
+    /// so it is recorded as interrupted for the engine to pick up, a card it
+    /// was refining keeps the version code built, and a Step Cue left on the
+    /// panel is cued again.
     func relaunched() -> DayState {
         var state = self
         // One still waiting from an earlier launch is kept.
         state.interrupted = running ?? interrupted
         state.running = nil
         for index in state.cards.indices { state.cards[index].isRefining = false }
+        // The cue on the panel went with the app: it comes back by its rules.
+        if let key = state.cueOnPanel {
+            state.cuedSteps[key] = nil
+            state.cueOnPanel = nil
+        }
         return state
     }
 

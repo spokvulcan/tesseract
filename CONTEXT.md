@@ -1854,12 +1854,14 @@ Done. A Morning Plan's slots and the owner's own "Do it at 16:30" live only in
 the day's state, so without it nothing marks their start. A step the owner
 started (Start on a cue, or Start now on Today) checks in when its time is up:
 Done, 15 more min (from now, if answered late), Tomorrow; while it runs, no
-other start interrupts it — one that comes meanwhile is held, named by the
-check-in, and cued once the owner is free — and the menu bar shows its time
+other cue interrupts it — what comes due meanwhile waits, named by the
+check-in, and is cued once the owner is free — and the menu bar shows its time
 left beside the glyph ("25m"), so the time can be seen from any app. Built by code, no model; each start and
-end once, within ten minutes; never while away, in quiet hours (but not the
-morning's end of them once the owner sat down to start the day), a call, a
-game or a meeting, nor over a panel that is up; a slot whose reminder rings
+end once, as soon as the owner can see it; never while away, in quiet hours
+(but not the morning's end of them once the owner sat down to start the
+day), a call, a game or a meeting, nor over a panel that is up. What came due
+meanwhile is cued late — a start while its slot still runs, an end that day —
+and says so ("Still time for", "How did it go?"). A slot whose reminder rings
 at the same minute is left to Reminders. It chimes softly as it appears, with
 the app's sounds on. Closing it changes nothing; a toggle in Settings (Your
 Day) turns Step Cues off.

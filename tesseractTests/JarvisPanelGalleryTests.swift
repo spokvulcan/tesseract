@@ -3,8 +3,9 @@
 //  tesseractTests
 //
 //  The Jarvis Panel's content, rendered with the app's view over fixture
-//  cards — a Step Cue (one for the must-do, with a long title, and one at
-//  the end of a started step), the Morning Plan with its steps over the
+//  cards — a Step Cue (one for the must-do, with a long title, one at the
+//  end of a started step, and both shown late, the owner back from away),
+//  the Morning Plan with its steps over the
 //  Today gallery's morning, the Evening Wrap-up with its leftovers, and a
 //  Breakpoint card — each at the height the panel fits to it. With
 //  PANEL_GALLERY_DIR set (TEST_RUNNER_PANEL_GALLERY_DIR through xcodebuild),
@@ -32,6 +33,8 @@ struct JarvisPanelGalleryTests {
         case stepCue
         case stepCueMustDo
         case stepCheckIn
+        case stepCueLate
+        case stepCheckInLate
         case morningPlan
         case eveningWrapUp
         case breakpoint
@@ -70,6 +73,16 @@ struct JarvisPanelGalleryTests {
                     reminderID: "letter", title: "Write to the case worker about the bus ticket",
                     start: Self.at(11, 12), minutes: 20, areaName: "Inbox", isMustDo: false,
                     next: "Companion work at 11:35", phase: .end)
+            case .stepCueLate:
+                model.cue = StepCue(
+                    reminderID: "letter", title: "Write to the case worker about the bus ticket",
+                    start: Self.at(11, 10), minutes: 40, areaName: "Inbox", isMustDo: false,
+                    next: "Companion work at 11:55", late: true)
+            case .stepCheckInLate:
+                model.cue = StepCue(
+                    reminderID: "letter", title: "Write to the case worker about the bus ticket",
+                    start: Self.at(11, 12), minutes: 20, areaName: "Inbox", isMustDo: false,
+                    next: nil, phase: .end, late: true)
             case .morningPlan:
                 model.card = TodayFixture.morning.state.cards.first
             case .eveningWrapUp:

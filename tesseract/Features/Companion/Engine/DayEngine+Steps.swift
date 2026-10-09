@@ -11,20 +11,23 @@
 //  15 more min, Tomorrow. Help lands at the moment of doing, not in a list
 //  the owner has to remember to read, and a started step never just slides.
 //
-//  No model. Each start and each end is cued once, within ten minutes;
-//  never while the owner is away, in quiet hours, a call, a game or a
-//  meeting, never over a panel the owner hasn't closed, and no start while a
-//  step the owner started is running. A slot whose reminder rings at the
-//  same minute is left to Reminders. Closing a cue changes nothing.
+//  No model. Each start and each end is cued once, as soon as the owner can
+//  see it: never while they are away, in quiet hours, a call, a game or a
+//  meeting, never over a panel they haven't closed, and nothing while a step
+//  they started is running. What came due meanwhile waits for them — a start
+//  while its slot still runs, an end that day — and says it is late. A slot
+//  whose reminder rings at the same minute is left to Reminders. Closing a
+//  cue changes nothing.
 //
 
 import Foundation
 
 nonisolated extension DayEngine {
 
-    /// A cue is for a slot's start or end: past this, the Now Card on Today
-    /// has the step, and a panel would only interrupt.
-    static let stepCueWindow: TimeInterval = 10 * 60
+    /// A cue shown this long after its moment is late, and says so: the
+    /// owner was away, in a meeting or a game, or behind another panel.
+    /// Dropping it instead let the plan slide unseen.
+    static let stepCueLate: TimeInterval = 10 * 60
     /// "In 15 min" moves a slot this far; "15 more min" makes it this much
     /// longer.
     static let stepLaterMinutes = 15
@@ -38,39 +41,26 @@ nonisolated extension DayEngine {
         guard snapshot.settings.stepCues, !snapshot.panelUp,
             DeliveryLadder.rungs(for: .normal, snapshot: snapshot, sittingDown: started)
                 .contains(.panel),
-            !inMeeting(snapshot)
+            !inMeeting(snapshot),
+            // A step the owner started is still running: a focus session isn't
+            // interrupted. What comes due meanwhile waits, its check-in names
+            // what is under way, and it is cued once the owner is free.
+            focus(snapshot: snapshot, state: state) == nil
         else { return [] }
         // A step that is over comes first: it closes what the next one opens.
         return stepEndIfDue(snapshot: snapshot, state: &state)
             ?? stepStartIfDue(snapshot: snapshot, state: &state) ?? []
     }
 
-    /// The first slot starting now, for an open task not yet cued.
+    /// The first slot under way, for an open task not yet cued.
     private static func stepStartIfDue(snapshot: DaySnapshot, state: inout DayState)
         -> [DayEffect]?
     {
         let now = snapshot.now
         let facts = snapshot.facts(state: state)
-        // A slot starting now, or one held back by a focus session and still
-        // running.
         let starting = state.plan.filter { slot in
             slot.start <= now && now < end(of: slot)
-                && (now.timeIntervalSince(slot.start) < stepCueWindow
-                    || state.heldSteps.contains(StepCue.key(slot)))
                 && state.cuedSteps[StepCue.key(slot)] == nil
-        }
-        // A step the owner started is still running: a focus session isn't
-        // interrupted. What would start meanwhile is held, its check-in names
-        // it, and it is cued once the owner is free.
-        let focused = state.plan.contains { slot in
-            state.startedSteps.contains(StepCue.key(slot)) && slot.start <= now
-                && now < end(of: slot) && facts.task(slot.reminderID) != nil
-        }
-        guard !focused else {
-            for slot in starting where facts.task(slot.reminderID) != nil {
-                state.heldSteps.insert(StepCue.key(slot))
-            }
-            return nil
         }
         for slot in starting.sorted(by: { $0.start < $1.start }) {
             // Done, or gone from Reminders: nothing to start.
@@ -82,13 +72,13 @@ nonisolated extension DayEngine {
             }
             state.cueOnPanel = StepCue.key(slot)
             return present(
-                cue(task, slot: slot, phase: .start, facts: facts, state: state),
+                cue(task, slot: slot, phase: .start, facts: facts, state: state, now: now),
                 late: now.timeIntervalSince(slot.start))
         }
         return nil
     }
 
-    /// A card took the panel from the cue on it: the cue is held, to come
+    /// A card took the panel from the cue on it: the cue is uncued, to come
     /// back by the rules above once the panel is free again.
     static func holdCueUnderCard(
         _ effects: [DayEffect], snapshot: DaySnapshot, state: inout DayState
@@ -99,10 +89,10 @@ nonisolated extension DayEngine {
         else { return }
         state.cueOnPanel = nil
         state.cuedSteps[key] = nil
-        state.heldSteps.insert(key)
     }
 
-    /// The first slot the owner started whose time is up, its task still open.
+    /// A slot the owner started whose time is up, its task still open: the
+    /// one that ended last first, the step they were just on.
     private static func stepEndIfDue(snapshot: DaySnapshot, state: inout DayState)
         -> [DayEffect]?
     {
@@ -110,16 +100,14 @@ nonisolated extension DayEngine {
         let facts = snapshot.facts(state: state)
         let ended = state.plan.filter { slot in
             state.startedSteps.contains(StepCue.key(slot)) && end(of: slot) <= now
-                && (now.timeIntervalSince(end(of: slot)) < stepCueWindow
-                    || state.heldSteps.contains(StepCue.endKey(slot)))
                 && state.cuedSteps[StepCue.endKey(slot)] == nil
         }
-        for slot in ended.sorted(by: { $0.start < $1.start }) {
+        for slot in ended.sorted(by: { end(of: $0) > end(of: $1) }) {
             guard let task = facts.task(slot.reminderID) else { continue }
             state.cuedSteps[StepCue.endKey(slot)] = now
             state.cueOnPanel = StepCue.endKey(slot)
             return present(
-                cue(task, slot: slot, phase: .end, facts: facts, state: state),
+                cue(task, slot: slot, phase: .end, facts: facts, state: state, now: now),
                 late: now.timeIntervalSince(end(of: slot)))
         }
         return nil
@@ -139,12 +127,14 @@ nonisolated extension DayEngine {
 
     private static func cue(
         _ task: AgendaReminder, slot: Placement, phase: StepCue.Phase, facts: DayFacts,
-        state: DayState
+        state: DayState, now: Date
     ) -> StepCue {
-        StepCue(
+        let moment = phase == .start ? slot.start : end(of: slot)
+        return StepCue(
             reminderID: task.id, title: task.title, start: slot.start, minutes: slot.minutes,
             areaName: facts.areaName(of: task), isMustDo: state.mustDoID == task.id,
-            next: nextStep(after: slot, facts: facts), phase: phase)
+            next: nextStep(after: slot, facts: facts), phase: phase,
+            late: now.timeIntervalSince(moment) >= stepCueLate)
     }
 
     private static func end(of slot: Placement) -> Date {

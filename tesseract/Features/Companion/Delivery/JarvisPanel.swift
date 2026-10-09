@@ -301,7 +301,7 @@ private struct StepCueContent: View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(cue.phase == .start ? "Time for" : "Time's up")
+                    Text(heading)
                         .fontWeight(.semibold)
                         .foregroundStyle(Color.accentColor)
                     Spacer()
@@ -346,6 +346,16 @@ private struct StepCueContent: View {
         Button(title) { choose(choice) }
             .buttonStyle(PanelButtonStyle(prominent: prominent))
             .focusable(false)
+    }
+
+    /// A late cue (the owner was away or busy) says so, without blame.
+    private var heading: String {
+        switch (cue.phase, cue.late) {
+        case (.start, false): "Time for"
+        case (.start, true): "Still time for"
+        case (.end, false): "Time's up"
+        case (.end, true): "How did it go?"
+        }
     }
 
     private var detail: String {

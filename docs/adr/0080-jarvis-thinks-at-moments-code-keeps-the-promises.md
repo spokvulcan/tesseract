@@ -254,20 +254,26 @@ the owner must remember to read does not. What changed:
   Mac, code puts it on the Jarvis Panel (a shorter panel than a card's): the
   task, until when and what follows, with Start (the slot starts this minute),
   In 15 min (it moves on and is cued again then), Tomorrow and Done. No model.
-  Each slot is cued once, within ten minutes of its start; never while away,
+  Each slot is cued once, as soon as the owner can see it; never while away,
   in quiet hours (but the morning's end of them is over once the owner sat
   down to start the day), a call, a game or a meeting with other people, nor
-  over a
-  panel the owner hasn't closed (it waits a tick, and a card that takes the
-  panel on the same tick goes first). A slot whose reminder rings at the same
-  minute is left to Reminders. Closing it changes nothing.
+  over a panel the owner hasn't closed (it waits a tick, and a card that
+  takes the panel on the same tick goes first). What came due meanwhile is
+  cued late, once they can see it — a start while its slot still runs, an
+  end that day — and says so ("Still time for", "How did it go?"): a cue
+  first lived only ten minutes past its moment, so a slot that started while
+  the owner was away, in a meeting or behind another panel slid unseen. A
+  cue on the panel when the app quits is cued again after the relaunch. A
+  slot whose reminder rings at the same minute is left to Reminders. Closing
+  it changes nothing.
 - **A started step checks in when its time is up.** A step the owner started
   (Start on a cue, or Start now on Today, which needs no cue of its own) is
   put back on the panel at its end while its task is open: Done, 15 more min
   (fifteen minutes from now, or from its end if that is still ahead; it checks
-  in again), Tomorrow. While it runs, no other step's start interrupts it: a
-  start that comes meanwhile is held, the check-in names it, and it is cued
-  once the owner is free, while its slot still runs.
+  in again), Tomorrow. While it runs, no other cue interrupts it: what comes
+  due meanwhile waits (the check-in names a step already under way) and is
+  cued once the owner is free; of two check-ins, the step that ended last
+  comes first.
 - **The panel's buttons are drawn by hand** (capsules, the main one in the
   accent): the panel is never key, and a system prominent button turns gray
   in a window that isn't.
