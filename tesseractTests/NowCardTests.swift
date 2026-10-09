@@ -280,6 +280,7 @@ struct NowCardTests {
         #expect(card.headline == "Pay rent")
         #expect(card.detail == "Slid past 10:30. One more slid too.")
         #expect(card.actions.map(\.title) == ["Fit both in", "Done", "Tomorrow"])
+        #expect(card.actions.first?.help == "Pay rent at 12:00 · Call the dentist at 12:15")
         #expect(
             card.offeredPlacements == [
                 Placement(reminderID: "rent", start: Self.local(30, 12), minutes: 15),

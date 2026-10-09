@@ -97,6 +97,7 @@ struct NowCardView: View {
                     }
                 }
                 .disabled(needsJarvis && thinking)
+                .help(action.help ?? "")
                 .focusable(false)
             }
         }

@@ -42,6 +42,8 @@ nonisolated struct NowAction: Sendable, Equatable, Identifiable {
 
     var kind: Kind
     var title: String
+    /// What the click will do, in full, for the tooltip.
+    var help: String? = nil
     var id: String { title }
 }
 
@@ -224,7 +226,12 @@ nonisolated enum NowCardBuilder {
                 let all =
                     fitted.count < slid.count
                     ? "\(fitted.count)" : fitted.count == 2 ? "both" : "all \(fitted.count)"
-                let fit = NowAction(kind: .placeAll(fitted), title: "Fit \(all) in")
+                let titles = Dictionary(
+                    slid.map { ($0.id, $0.reminder.title) }, uniquingKeysWith: { first, _ in first }
+                )
+                let help = fitted.map { "\(titles[$0.reminderID] ?? "") at \(clock($0.start))" }
+                    .joined(separator: " · ")
+                let fit = NowAction(kind: .placeAll(fitted), title: "Fit \(all) in", help: help)
                 actions = [fit, done, tomorrow]
             } else if let slot = TimelineBuilder.firstFreeSlot(minutes: task.minutes, facts: facts)
             {
