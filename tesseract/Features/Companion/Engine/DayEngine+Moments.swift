@@ -620,6 +620,9 @@ nonisolated extension DayEngine {
         case .step(let reminderID, let choice):
             return stepChosen(reminderID, choice, snapshot: snapshot, state: &state)
 
+        case .breakCue(let choice):
+            return breakChosen(choice, snapshot: snapshot, state: &state)
+
         case .taskProposal(let id, let add):
             guard let proposal = state.taskProposals.first(where: { $0.id == id }) else {
                 return []

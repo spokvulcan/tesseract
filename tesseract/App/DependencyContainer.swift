@@ -267,6 +267,8 @@ final class DependencyContainer: ObservableObject {
                 // like a timer, with the app's sounds on.
                 if self?.settingsManager.playSounds == true { NSSound(named: "Glass")?.play() }
             },
+            showBreak: { [weak self] cue in self?.jarvisPanel.show(cue) },
+            retractBreak: { [weak self] in self?.jarvisPanel.retractBreak() },
             retractPanel: { [weak self] cardID in self?.jarvisPanel.retract(cardID: cardID) },
             closePanel: { [weak self] in self?.jarvisPanel.close() },
             isPanelUp: { [weak self] in self?.jarvisPanel.isShowing ?? false },

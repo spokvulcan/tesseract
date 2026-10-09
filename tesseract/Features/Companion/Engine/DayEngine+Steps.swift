@@ -52,11 +52,12 @@ nonisolated extension DayEngine {
 
     // MARK: - The cue
 
-    static func stepCueIfDue(snapshot: DaySnapshot, state: inout DayState) -> [DayEffect] {
+    /// A Step Cue or a Break Cue, whichever is due, by the same rules.
+    static func cueIfDue(snapshot: DaySnapshot, state: inout DayState) -> [DayEffect] {
         // Once the owner sat down to start the day, the morning's end of
         // quiet hours doesn't hold the plan back.
         let started = DeliveryLadder.dayStarted(state.satDownAt, snapshot: snapshot)
-        guard snapshot.settings.stepCues, !snapshot.panelUp,
+        guard !snapshot.panelUp,
             DeliveryLadder.rungs(for: .normal, snapshot: snapshot, sittingDown: started)
                 .contains(.panel),
             !inMeeting(snapshot),
@@ -65,9 +66,12 @@ nonisolated extension DayEngine {
             // what is under way, and it is cued once the owner is free.
             focus(snapshot: snapshot, state: state) == nil
         else { return [] }
+        let steps = snapshot.settings.stepCues
         // A step that is over comes first: it closes what the next one opens.
-        return stepEndIfDue(snapshot: snapshot, state: &state)
-            ?? stepStartIfDue(snapshot: snapshot, state: &state) ?? []
+        // A break comes between it and the next step: the time to take one.
+        if steps, let end = stepEndIfDue(snapshot: snapshot, state: &state) { return end }
+        if let rest = breakCueIfDue(snapshot: snapshot, state: &state) { return rest }
+        return steps ? stepStartIfDue(snapshot: snapshot, state: &state) ?? [] : []
     }
 
     /// The first slot under way, for an open task not yet cued.
@@ -101,12 +105,13 @@ nonisolated extension DayEngine {
     static func holdCueUnderCard(
         _ effects: [DayEffect], snapshot: DaySnapshot, state: inout DayState
     ) {
-        guard let key = state.cueOnPanel, snapshot.panelUp,
+        guard state.cueOnPanel != nil || state.breakCuedAt != nil, snapshot.panelUp,
             effects.contains(where: { if case .presentCard(_, .panel) = $0 { true } else { false } }
             )
         else { return }
+        if let key = state.cueOnPanel { state.cuedSteps[key] = nil }
         state.cueOnPanel = nil
-        state.cuedSteps[key] = nil
+        state.breakCuedAt = nil
     }
 
     /// A slot the owner started whose time is up, its task still open: the

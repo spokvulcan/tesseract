@@ -478,6 +478,10 @@ final class SettingsManager {
         didSet { SettingsCatalogue.companionStepCues.write(companionStepCues, to: store) }
     }
 
+    var companionBreakCues: Bool {
+        didSet { SettingsCatalogue.companionBreakCues.write(companionBreakCues, to: store) }
+    }
+
     var companionTriageRulesJSON: String {
         didSet {
             SettingsCatalogue.companionTriageRulesJSON.write(companionTriageRulesJSON, to: store)
@@ -857,6 +861,7 @@ final class SettingsManager {
         self.companionQuietEndMinutes = SettingsCatalogue.companionQuietEndMinutes.load(from: store)
         self.companionWindDown = SettingsCatalogue.companionWindDown.load(from: store)
         self.companionStepCues = SettingsCatalogue.companionStepCues.load(from: store)
+        self.companionBreakCues = SettingsCatalogue.companionBreakCues.load(from: store)
         self.companionTriageRulesJSON = SettingsCatalogue.companionTriageRulesJSON.load(from: store)
         self.companionThreadCeilingTokens = SettingsCatalogue.companionThreadCeilingTokens.load(
             from: store)
@@ -1025,6 +1030,7 @@ final class SettingsManager {
         companionQuietEndMinutes = SettingsCatalogue.companionQuietEndMinutes.default
         companionWindDown = SettingsCatalogue.companionWindDown.default
         companionStepCues = SettingsCatalogue.companionStepCues.default
+        companionBreakCues = SettingsCatalogue.companionBreakCues.default
         companionTriageRulesJSON = SettingsCatalogue.companionTriageRulesJSON.default
         companionThreadCeilingTokens = SettingsCatalogue.companionThreadCeilingTokens.default
         captureHotkeyKeyCode = SettingsCatalogue.captureHotkeyKeyCode.default

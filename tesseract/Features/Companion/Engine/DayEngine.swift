@@ -19,7 +19,8 @@
 //  Split by concern: this file dispatches signals and holds the triggers;
 //  `DayEngine+Moments` runs moments and turns replies into cards;
 //  `DayEngine+Breakpoints` holds Breakpoints, Triage, notifications,
-//  coding agents and the governor.
+//  coding agents and the governor; `DayEngine+Steps` and `DayEngine+Breaks`
+//  put Step Cues and Break Cues on the panel.
 //
 
 import Foundation
@@ -54,14 +55,15 @@ nonisolated enum DayEngine {
             if snapshot.ownerPresent {
                 state.lastPresentAt = snapshot.now
                 state.lastActiveAt = snapshot.now
+                if state.sittingSince == nil { state.sittingSince = snapshot.now }
                 effects += waitingPlanIfFree(snapshot: snapshot, state: &state)
                 effects += eveningIfDue(snapshot: snapshot, state: &state)
                 effects += meetingEnded(snapshot: snapshot, state: &state)
                 effects += triageIfDue(snapshot: snapshot, state: &state)
                 effects += speakForWaitingAgents(snapshot: snapshot, state: &state)
-                // A card that just took the panel keeps it; the step waits a tick.
+                // A card that just took the panel keeps it; a cue waits a tick.
                 if !effects.contains(where: \.takesPanel) {
-                    effects += stepCueIfDue(snapshot: snapshot, state: &state)
+                    effects += cueIfDue(snapshot: snapshot, state: &state)
                 }
                 effects += windDownIfDue(snapshot: snapshot, state: &state)
             } else {
@@ -80,9 +82,9 @@ nonisolated enum DayEngine {
             if snapshot.ownerPresent {
                 // Starting up counts as sitting down: measure the gap from
                 // the last time the owner was seen.
-                effects += ownerReturned(
-                    awayFrom: state.lastPresentAt ?? .distantPast, snapshot: snapshot,
-                    state: &state)
+                let awayFrom = state.lastPresentAt ?? .distantPast
+                effects += backFromAway(awayFrom: awayFrom, snapshot: snapshot, state: &state)
+                effects += ownerReturned(awayFrom: awayFrom, snapshot: snapshot, state: &state)
                 state.lastPresentAt = snapshot.now
             }
             state.lastTickAt = snapshot.now
@@ -98,8 +100,10 @@ nonisolated enum DayEngine {
                 state.cuedSteps[key] = nil
                 state.cueOnPanel = nil
             }
+            state.breakCuedAt = nil
 
         case .presenceReturned(let awayFrom):
+            effects += backFromAway(awayFrom: awayFrom, snapshot: snapshot, state: &state)
             effects += ownerReturned(awayFrom: awayFrom, snapshot: snapshot, state: &state)
             state.lastPresentAt = snapshot.now
 
@@ -403,7 +407,7 @@ nonisolated extension DayEffect {
     /// It puts something on the Jarvis Panel, or starts a moment that may.
     var takesPanel: Bool {
         switch self {
-        case .presentCard(_, .panel), .presentStep, .runMoment: true
+        case .presentCard(_, .panel), .presentStep, .presentBreak, .runMoment: true
         default: false
         }
     }

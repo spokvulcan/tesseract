@@ -21,6 +21,9 @@ import Observation
 struct CompanionDelivery {
     var showPanel: (DayCard) -> Void = { _ in }
     var showStep: (StepCue) -> Void = { _ in }
+    var showBreak: (BreakCue) -> Void = { _ in }
+    /// Take the Break Cue off the panel, if it is up.
+    var retractBreak: () -> Void = {}
     var retractPanel: (String) -> Void = { _ in }
     var closePanel: () -> Void = {}
     /// The panel is up with something the owner hasn't closed.
@@ -240,7 +243,7 @@ final class CompanionRuntime {
             quietStartMinutes: settings.companionQuietStartMinutes,
             quietEndMinutes: settings.companionQuietEndMinutes,
             windDown: settings.companionWindDown, stepCues: settings.companionStepCues,
-            rules: rules)
+            breakCues: settings.companionBreakCues, rules: rules)
     }
 
     private func dayOpening() -> String {
@@ -280,6 +283,12 @@ final class CompanionRuntime {
 
         case .presentStep(let cue):
             if isActive { delivery.showStep(cue) }
+
+        case .presentBreak(let cue):
+            if isActive { delivery.showBreak(cue) }
+
+        case .retractBreak:
+            delivery.retractBreak()
 
         case .retractCard(let cardID):
             delivery.retractPanel(cardID)

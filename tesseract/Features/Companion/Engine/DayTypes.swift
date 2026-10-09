@@ -79,6 +79,8 @@ nonisolated enum CardAction: Sendable, Equatable {
     case wrapUpNow
     /// The owner answered a Step Cue.
     case step(reminderID: String, StepChoice)
+    /// The owner answered a Break Cue.
+    case breakCue(BreakChoice)
     /// The owner took a card in on the panel (Looks Good, Good Night): it
     /// leaves the panel and stays in Today.
     case keep(cardID: String)
@@ -183,6 +185,27 @@ nonisolated struct StepCue: Sendable, Equatable {
     }
 }
 
+/// What the owner chose on a Break Cue.
+nonisolated enum BreakChoice: String, Sendable, Equatable {
+    /// Up from the Mac now: the time at it starts again from here.
+    case taking
+    /// Not yet: asked again in half an hour.
+    case later
+    /// Closed: not asked again for two hours.
+    case dismiss
+}
+
+/// Two hours at the Mac with no break, as the Jarvis Panel shows it.
+nonisolated struct BreakCue: Sendable, Equatable {
+    /// When the owner sat down: the last return from five minutes away or
+    /// more.
+    var since: Date
+    /// How long they have been at it.
+    var minutes: Int
+    /// The day's how-manyth Break Cue, from 1: each says something different.
+    var number: Int
+}
+
 // MARK: - Effects
 
 nonisolated enum DayEffect: Sendable, Equatable {
@@ -196,6 +219,10 @@ nonisolated enum DayEffect: Sendable, Equatable {
     case presentCard(DayCard, DeliveryRung)
     /// Put a planned step that starts now on the Jarvis Panel.
     case presentStep(StepCue)
+    /// Suggest a break on the Jarvis Panel.
+    case presentBreak(BreakCue)
+    /// Take the Break Cue off the panel: the owner took one meanwhile.
+    case retractBreak
     /// Take a card off the panel.
     case retractCard(cardID: String)
     /// Say one line aloud.
@@ -341,6 +368,8 @@ nonisolated struct DaySettings: Sendable, Equatable {
     /// Put a planned step on the panel at its start, and check in at the end
     /// of one the owner started.
     var stepCues: Bool = true
+    /// Suggest a break after two hours at the Mac without one.
+    var breakCues: Bool = true
     /// The owner's notification rules.
     var rules: [TriageRule] = []
 
@@ -451,6 +480,15 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     var morningPlanWaiting = false
     /// When tonight's wind-down banner went out.
     var windDownAt: Date?
+    /// When the owner sat down at the Mac: the last return from five minutes
+    /// away or more (carried: 04:00 is no break).
+    var sittingSince: Date?
+    /// No Break Cue before this: "In 30 min", or one closed (carried).
+    var breakNotBefore: Date?
+    /// The Break Cue on the panel, since when, until the owner answers it.
+    var breakCuedAt: Date?
+    /// Break Cues shown today: each says something different.
+    var breakCues = 0
 
     init(day: DayKey, syncedNudgeIDs: Set<String>? = nil) {
         self.day = day
@@ -465,7 +503,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         case draft, draftForNextDay, departures, satDownAt, weekFocus
         case weekFocusSetAt, mustDoDoneAt, mustDoDays, cueOnPanel, taskProposals
         case putOff, smallStarts, lastActiveAt, nightMeasured, morningPlanWaiting, cutShort
-        case runningRequest, runningSince
+        case runningRequest, runningSince, sittingSince, breakNotBefore, breakCuedAt, breakCues
     }
 
     /// Every field but the day is optional on disk, so a state saved by an
@@ -518,12 +556,16 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         nightMeasured = (try? c.decodeIfPresent(Bool.self, forKey: .nightMeasured)) ?? false
         morningPlanWaiting =
             (try? c.decodeIfPresent(Bool.self, forKey: .morningPlanWaiting)) ?? false
+        sittingSince = try? c.decodeIfPresent(Date.self, forKey: .sittingSince)
+        breakNotBefore = try? c.decodeIfPresent(Date.self, forKey: .breakNotBefore)
+        breakCuedAt = try? c.decodeIfPresent(Date.self, forKey: .breakCuedAt)
+        breakCues = (try? c.decodeIfPresent(Int.self, forKey: .breakCues)) ?? 0
     }
 
     /// The day as a relaunch finds it: the moment in flight never finished,
     /// so it is recorded as interrupted for the engine to pick up, a card it
-    /// was refining keeps the version code built, and a Step Cue left on the
-    /// panel is cued again.
+    /// was refining keeps the version code built, and a Step or Break Cue
+    /// left on the panel is cued again.
     func relaunched() -> DayState {
         var state = self
         // One still waiting from an earlier launch is kept.
@@ -537,6 +579,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
             state.cuedSteps[key] = nil
             state.cueOnPanel = nil
         }
+        state.breakCuedAt = nil
         return state
     }
 
@@ -555,6 +598,10 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         }
         // Quiet hours that begin just before 04:00 are still the same night.
         next.windDownAt = windDownAt
+        // At the Mac across 04:00: the same sitting.
+        next.sittingSince = sittingSince
+        next.breakNotBefore = breakNotBefore
+        next.breakCuedAt = breakCuedAt
         // Whether this day's must-do got done, kept a week for the look-back.
         var days = mustDoDays
         if mustDoID != nil { days[self.day.rawValue] = mustDoDoneAt != nil }

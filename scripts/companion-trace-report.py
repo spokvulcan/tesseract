@@ -7,7 +7,8 @@ Usage: scripts/companion-trace-report.py [days]   (default: the last 7)
 Reads ~/Library/Application Support/CompanionTrace/trace-*.jsonl (one file per
 day, ADR-0080) and prints, per day: moments (and how many ran with a cold
 prefix cache), cards by delivery rung, card reactions by action ("kept" apart
-from "dismissed"), Step Cues by phase and the owner's choices, the wind-down,
+from "dismissed"), Step and Break Cues by phase and the owner's choices (a
+Break Cue's prefixed "break"), the wind-down,
 nudges (event and leave), notifications by source, Triage, and the tasks the
 Night Reflection proposed and what the owner decided. A Step Cue shown ten
 minutes or more after its moment counts as late. The night before is how long
@@ -70,7 +71,8 @@ def summarise(path):
             if fields.get("late", 0) >= 600:
                 cues[phase + " late"] += 1
         elif event == "cue.reaction":
-            choices[fields.get("action", "?")] += 1
+            action = fields.get("action", "?")
+            choices[("break " + action) if fields.get("phase") == "break" else action] += 1
         elif event == "nudge.scheduled":
             kind = "leave" if str(fields.get("id", "")).startswith("nudge.leave.") else "event"
             nudges[kind + " scheduled"] += 1
@@ -103,7 +105,7 @@ def summarise(path):
         "prefill seconds": round(prefill),
         "cards": dict(cards),
         "reactions": dict(reactions),
-        "step cues": dict(cues),
+        "cues": dict(cues),
         "cue choices": dict(choices),
         "nudges": dict(nudges),
         "notifications": dict(sources),

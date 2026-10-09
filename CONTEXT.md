@@ -1883,6 +1883,20 @@ owner's own doesn't — so its check-in is the heads-up to wrap up; where In 15 
 nothing; a toggle in Settings (Your Day) turns Step Cues off.
 _Avoid_: reminder (Reminders' own alarm), nudge (an event's OS notification).
 
+**Break Cue**:
+Two hours at the Mac with no break of five minutes or more, put on the Jarvis
+Panel: how long and since when, one small thing to do (stand up, water, look
+away — a different one each time that day), with Taking 5 (the two hours
+start again) and In 30 min (asked again then); closing it holds it for two
+hours. Five minutes away is a break whatever the cue said, and one still on
+the panel then comes down. Built by code, no model, by the Step Cue's
+manners: never while away, in quiet hours, a call, a game or a meeting, nor
+over a panel that is up, nor into a step the owner started — a step's
+check-in comes first and the next step's start after it, so the break lands
+between steps. A toggle in Settings (Your Day) turns Break Cues off.
+_Avoid_: break reminder, Pomodoro (no timer the owner sets), Breakpoint (the
+card on coming back).
+
 **Day Engine**:
 The Companion's pure decider: signals (the clock, presence, a meeting ending,
 notifications, an app coming forward, coding agents, the agenda, a moment's

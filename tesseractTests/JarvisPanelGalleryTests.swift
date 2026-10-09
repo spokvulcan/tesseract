@@ -44,6 +44,7 @@ struct JarvisPanelGalleryTests {
         case stepCueSmall
         case stepCheckInSmall
         case stepCheckInMeeting
+        case breakCue
         case morningPlan
         case eveningWrapUp
         case eveningWrapUpWeek
@@ -115,6 +116,8 @@ struct JarvisPanelGalleryTests {
                     minutes: 70, areaName: "Work", isMustDo: true,
                     next: "Design review at 15:00", nextAt: Self.at(15), phase: .end,
                     resumeAt: Self.at(16))
+            case .breakCue:
+                model.rest = BreakCue(since: Self.at(9, 55), minutes: 125, number: 1)
             case .morningPlan:
                 model.card = TodayFixture.morning.state.cards.first
             case .eveningWrapUp:

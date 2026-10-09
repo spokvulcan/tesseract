@@ -68,11 +68,13 @@ struct CompanionSettingsPane: View {
                     value: $settings.companionNudgeLeadMinutes, in: 0...60, step: 5)
                 Toggle("Bring Planned Steps When They Start", isOn: $settings.companionStepCues)
                     .disabled(!settings.companionHeartbeatEnabled)
+                Toggle("Suggest a Break After Two Hours", isOn: $settings.companionBreakCues)
+                    .disabled(!settings.companionHeartbeatEnabled)
             } header: {
                 Text("Your Day")
             } footer: {
                 Text(
-                    "When a step Jarvis planned (or you placed) starts, it comes to you on the Jarvis panel — Start, In 15 min, Tomorrow or Done — and one you started checks in when its time is up. If you're away, it waits for you. The menu bar counts down the step you're on, and the last half hour before your next event."
+                    "When a step Jarvis planned (or you placed) starts, it comes to you on the Jarvis panel — Start, In 15 min, Tomorrow or Done — and one you started checks in when its time is up. If you're away, it waits for you. The menu bar counts down the step you're on, and the last half hour before your next event. After two hours at the Mac with no break, Jarvis suggests one between steps; five minutes away counts."
                 )
             }
 

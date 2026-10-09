@@ -5,9 +5,9 @@
 //  One day walked through the Day Engine signal by signal, the way the loop
 //  feeds it: the first sit-down and its plan, Looks Good, a Step Cue started,
 //  an absence over its end and the late check-in, the must-do put off twice
-//  and started small, kept going and done, the menu bar's clock along the
-//  way, and the evening. Each rule has its own tests; this walk is where
-//  they meet.
+//  and started small, kept going and done, a break after two hours at the
+//  Mac, the menu bar's clock along the way, and the evening. Each rule has
+//  its own tests; this walk is where they meet.
 //
 
 import Foundation
@@ -68,8 +68,10 @@ struct DayWalkTests {
                     reminder.isCompleted = true
                     reminder.completedAt = now
                     done.append(reminder)
-                case .presentStep, .presentCard(_, .panel):
+                case .presentStep, .presentBreak, .presentCard(_, .panel):
                     panelUp = true
+                case .retractBreak:
+                    panelUp = false
                 default:
                     continue
                 }
@@ -90,6 +92,10 @@ struct DayWalkTests {
 
     static func cue(_ effects: [DayEffect]) -> StepCue? {
         effects.lazy.compactMap { if case .presentStep(let cue) = $0 { cue } else { nil } }.first
+    }
+
+    static func rest(_ effects: [DayEffect]) -> BreakCue? {
+        effects.lazy.compactMap { if case .presentBreak(let cue) = $0 { cue } else { nil } }.first
     }
 
     static func moment(_ effects: [DayEffect]) -> MomentRequest? {
@@ -186,6 +192,18 @@ struct DayWalkTests {
                 == MenuBarClock(kind: .event, title: "Standup", until: Self.at(11)))
         // Nothing more is cued: both steps are done.
         #expect(Self.cue(world.send(.tick, at: Self.at(11, 30))) == nil)
+
+        // 11:40: two hours at the Mac since the owner came back at 09:40 — a
+        // break. Taking 5; a walk to the kitchen counts as one, and the two
+        // hours start again from the return.
+        let rest = try #require(Self.rest(world.send(.tick, at: Self.at(11, 40))))
+        #expect(rest.since == Self.at(9, 40))
+        #expect(rest.minutes == 120)
+        world.answer(.breakCue(.taking), at: Self.at(11, 41))
+        world.send(.presenceLeft, at: Self.at(11, 45))
+        world.send(.presenceReturned(awayFrom: Self.at(11, 42)), at: Self.at(11, 49))
+        #expect(world.state.sittingSince == Self.at(11, 49))
+        #expect(Self.rest(world.send(.tick, at: Self.at(13, 48))) == nil)
 
         // 21:00: the Evening Wrap-up, with nothing left over.
         let evening = try #require(Self.moment(world.send(.tick, at: Self.at(21))))

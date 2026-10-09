@@ -6,7 +6,8 @@
 //  Glass panel near the top-right, in the style of the macOS 27 Siri panel —
 //  a close button top-left, an expand button top-right that opens Today, the
 //  card, and an "Ask Jarvis" field between + and mic buttons. A Step Cue (a
-//  planned step starting now) takes a shorter panel. It never steals typing
+//  planned step starting now) and a Break Cue (two hours at the Mac) take a
+//  shorter panel. It never steals typing
 //  from the app in front: it becomes key only when the field is clicked.
 //  Replies go to the Day Thread.
 //
@@ -28,6 +29,8 @@ final class JarvisPanelModel {
     /// A step just marked done on its cue: said for a moment, then the
     /// panel closes.
     var done: StepCue?
+    /// Two hours at the Mac without a break; shown instead of a card.
+    var rest: BreakCue?
     var showQuiet = false
     var draft = ""
     var listening = false
@@ -88,6 +91,7 @@ final class JarvisPanelController {
     func show(_ card: DayCard) {
         model.cue = nil
         model.done = nil
+        model.rest = nil
         model.card = card
         model.showQuiet = false
         present()
@@ -97,8 +101,24 @@ final class JarvisPanelController {
     func show(_ cue: StepCue) {
         model.card = nil
         model.done = nil
+        model.rest = nil
         model.cue = cue
         present()
+    }
+
+    /// Suggest a break, in place of whatever is up.
+    func show(_ cue: BreakCue) {
+        model.card = nil
+        model.cue = nil
+        model.done = nil
+        model.rest = cue
+        present()
+    }
+
+    /// Take the Break Cue down: the owner took a break meanwhile.
+    func retractBreak() {
+        guard isShowing, model.rest != nil else { return }
+        close()
     }
 
     /// Done on a cue is said for a moment — the win, and what comes next —
@@ -164,6 +184,7 @@ final class JarvisPanelController {
     /// answered as closed, so the engine knows it is off the panel.
     private func leaveCue() {
         if let cue = model.cue { onAction(.step(reminderID: cue.reminderID, .dismiss)) }
+        if model.rest != nil { onAction(.breakCue(.dismiss)) }
     }
 
     private func makePanel() -> GlassPanel {
@@ -209,6 +230,7 @@ final class JarvisPanelController {
                     if let cue = self.model.cue {
                         self.onAction(.step(reminderID: cue.reminderID, .dismiss))
                     }
+                    if self.model.rest != nil { self.onAction(.breakCue(.dismiss)) }
                     self.close()
                 },
                 expand: { [weak self] in
@@ -226,6 +248,11 @@ final class JarvisPanelController {
                     guard let self, let cue = self.model.cue else { return }
                     self.onAction(.step(reminderID: cue.reminderID, choice))
                     if choice == .done { self.acknowledge(cue) } else { self.close() }
+                },
+                chooseBreak: { [weak self] choice in
+                    guard let self, self.model.rest != nil else { return }
+                    self.onAction(.breakCue(choice))
+                    self.close()
                 },
                 send: { [weak self] in self?.send() },
                 capture: { [weak self] in self?.capture() },
@@ -318,6 +345,7 @@ struct JarvisPanelView: View {
     /// Take the card in: off the panel, still in Today.
     let keep: () -> Void
     let choose: (StepChoice) -> Void
+    var chooseBreak: (BreakChoice) -> Void = { _ in }
     let send: () -> Void
     let capture: () -> Void
     /// Undo the reminder the + button just added.
@@ -347,6 +375,8 @@ struct JarvisPanelView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     if let cue = model.cue {
                         StepCueContent(cue: cue, choose: choose)
+                    } else if let rest = model.rest {
+                        BreakCueContent(cue: rest, choose: chooseBreak)
                     } else if let done = model.done {
                         StepDoneContent(cue: done, now: now())
                     } else if let shown = model.card {
@@ -501,6 +531,53 @@ private struct StepCueContent: View {
         var line = parts.joined(separator: " · ")
         if let next = cue.next { line += ". Then \(next)." }
         return line
+    }
+}
+
+/// Two hours at the Mac: how long and since when, one small thing to do —
+/// a different one each time that day — and Taking 5 or In 30 min.
+private struct BreakCueContent: View {
+    let cue: BreakCue
+    let choose: (BreakChoice) -> Void
+
+    static let ideas = [
+        "Stand up, stretch, and get a glass of water. It will all be here when you're back.",
+        "Look out of a window for a minute, roll your shoulders, and drink some water.",
+        "A short walk, even to the kitchen and back, resets your focus.",
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Time for a break")
+                        .fontWeight(.semibold)
+                        .foregroundStyle(Color.accentColor)
+                    Spacer()
+                    Text("since \(AgendaTime.clock(cue.since))")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                Text("\(MomentPrompts.minutesText(cue.minutes)) at the Mac")
+                    .fontWeight(.semibold)
+                Text(Self.ideas[max(cue.number - 1, 0) % Self.ideas.count])
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            // Non-focusable, like every button here (GlassPanel's macOS 27.0
+            // focus freeze).
+            HStack(spacing: 8) {
+                Button("Taking 5") { choose(.taking) }
+                    .buttonStyle(PanelButtonStyle(prominent: true))
+                    .focusable(false)
+                    .help("Step away for a few minutes; the two hours start again")
+                Button("In \(DayEngine.breakLaterMinutes) min") { choose(.later) }
+                    .buttonStyle(PanelButtonStyle())
+                    .focusable(false)
+                    .help("Jarvis asks again in half an hour")
+                Spacer(minLength: 0)
+            }
+        }
     }
 }
 

@@ -386,6 +386,20 @@ the owner must remember to read does not. What changed:
   A done day's Now Card says it too, whenever Today is looked at within half
   a day of tomorrow's start ("Next: Put the bins out, tomorrow at 07:30 —
   6 h 50 min from now.").
+- **The Break Cue.** The Companion kept the plan's time and the night's,
+  but not the hours at the Mac: deep in something, the owner forgets water
+  and standing up (hyperfocus is the other side of ADHD). After two hours at
+  the Mac with no break of five minutes or more, code puts a Break Cue on
+  the panel: how long and since when, one small thing to do, Taking 5 (the
+  two hours start again) and In 30 min; closing it holds it for two hours.
+  Five minutes away is a break whatever the cue said, and a cue still up
+  then comes down. No model; the Step Cue's manners (never while away, in
+  quiet hours, a call, a game or a meeting, nor over a panel that is up),
+  and never into a step the owner started: a step's check-in comes first and
+  the next step's start after it, so the break lands between steps. A
+  setting turns it off; `cue.presented` and `cue.reaction` carry it with
+  the phase "break" (a reaction "away": up from the Mac with the cue on the
+  panel).
 - **After a night past midnight, the plan keeps the day light.** The
   wind-down speaks as quiet hours begin; the morning after a late night still
   got a full plan, with commitments from 07:15. When the owner was last at

@@ -32,13 +32,16 @@ nonisolated enum CompanionTraceEvent: String, Sendable, Equatable, CaseIterable 
     /// The owner acted on a card or one of its items. Carries the time to react.
     case cardReaction = "card.reaction"
 
-    // MARK: - cue.*: the plan keeping its own time
+    // MARK: - cue.*: the plan (and the body) keeping time
 
     /// A planned step's slot started and code put it on the panel (a Step
-    /// Cue). Carries how late it went up and the slot's length.
+    /// Cue). Carries how late it went up and the slot's length — or, with
+    /// phase "break", two hours at the Mac put a Break Cue up: how long.
     case cuePresented = "cue.presented"
     /// The owner answered a Step Cue (start, later, resume after a meeting,
-    /// tomorrow, done or dismiss). Carries the time to react.
+    /// tomorrow, done or dismiss), or a Break Cue (phase "break": taking,
+    /// later, dismiss, or away — up from the Mac with it on the panel).
+    /// Carries the time to react.
     case cueReaction = "cue.reaction"
 
     // MARK: - nudge.*: OS-scheduled notifications for events and reminders
