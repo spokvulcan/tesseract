@@ -35,9 +35,9 @@ pins; it rejoins this table's carry list only if that experiment is revived.
 ## DFlash2 tree verification: a chain with leaf siblings (2026-10-08)
 
 The gitlink advances from `1563459` to `efe2a16` (with the speed ruler,
-tesseract `9634d712`), then to `c0e5216`, `a363526` and `6c23b42`, on branch
-`perf/goal-2026-10-08` (fast-forward; `pin-upstream-mlx-swift` unchanged).
-Six commits, on the fork's `perf/goal-2026-10-08`:
+tesseract `9634d712`), then to `c0e5216`, `a363526`, `6c23b42` and `a5ce452`,
+on branch `perf/goal-2026-10-08` (fast-forward; `pin-upstream-mlx-swift`
+unchanged). Seven commits, on the fork's `perf/goal-2026-10-08`:
 
 - `efe2a16` `feat(dflash2): expose the selector's whole lattice for analysis
   and tree search`. `DFlash2DraftModel.proposeLattice` returns the
@@ -119,6 +119,10 @@ Six commits, on the fork's `perf/goal-2026-10-08`:
   `TurboQuantKVCache.verifyAttention` takes the `DFlash2TreeLayout`. A tree
   of other than 8 rows (a drafter with another block size) takes the
   dequantizing fallback, which keeps the ancestry mask.
+- `a5ce452` `chore(deps): pin mlx-swift to 3425495`: the mlx gitlink
+  `2394c0d0`, a 128 x 32 tile for large-M 4-bit QMM, bitwise with qmm_t
+  (tesseract ledger G6, `docs/mlx-core-fork.md`), in lockstep with
+  `Vendor/tesseract-speech`.
 
 Validation, `DFlash2TreeTests`:
 

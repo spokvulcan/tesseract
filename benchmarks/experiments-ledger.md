@@ -4447,8 +4447,9 @@ Fork: `affine_qmm_t_tall` (`kernels/quantized.h`, its JIT copy in
 dispatched from `qmm()` for transposed non-batched affine 4-bit gs64 with
 M ≥ 128, N % 32 == 0, K % 64 == 0, bf16 or f16; `MLX_QMM_TALL=0` keeps qmm_t.
 spokvulcan/mlx `pin-tesseract` 2394c0d02, spokvulcan/mlx-swift
-`pin-tesseract` 3425495 — **committed locally, not pushed** (the Package.swift
-pins move after the owner pushes; the DerivedData checkout builds it).
+`pin-tesseract` 3425495, pushed and pinned later the same day (vendor
+`a5ce452`, `docs/mlx-core-fork.md`); until then the DerivedData checkout
+built it.
 
 In-app A/B, one build, `MLX_QMM_TALL=0` (A) vs default (B) alternated ABAB,
 30 s cool-downs, ruler prefill on the frozen prompts
@@ -4686,9 +4687,9 @@ The tree adds no new class of departure to the shipping scheme.
 ### G10 — the bank: one Release build against the baseline's behaviour
 
 One Release build of `84d94f24` (`bank-84d94f24.app`). It carries vendor
-`c0e5216` and, from the DerivedData checkout, the unpushed mlx `2394c0d0` /
-mlx-swift `3425495` (G6). Two arms of that build, alternated four times
-with 30 s cool-downs and the quiet-GPU gate:
+`c0e5216` and, from the DerivedData checkout, the then-unpushed mlx
+`2394c0d0` / mlx-swift `3425495` (G6). Two arms of that build, alternated
+four times with 30 s cool-downs and the quiet-GPU gate:
 
 - **base**: `MLX_QMM_TALL=0 DFLASH2_TREE=0`, the baseline's kernels and
   rounds. Its decode streams equal the session baseline's on all four

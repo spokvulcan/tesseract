@@ -121,19 +121,26 @@ re-resolution: both checkouts clean at `db60fb7` / `e90cd38a`, diff from
 `3c6990d9` equal to the benched patch; vendor suites pass; a PARO smoke
 leg of both arms matched its reference streams.
 
-### Pending push (2026-10-08): a 128 x 32 tile for large-M 4-bit QMM
+### Carried since 2026-10-08: a 128 x 32 tile for large-M 4-bit QMM
 
 mlx `e90cd38a` -> `2394c0d0`, mlx-swift `db60fb7` -> `3425495` (gitlink plus
-the kernel in `mlx-generated/quantized.cpp`), **committed in the local
-working copies only**; the Package.swift pins move once both are pushed.
-`affine_qmm_t_tall` serves transposed, non-batched affine 4-bit gs64 QMMs
-with M >= 128: four simdgroups stacked along M share one double-buffered
-dequantized 32-column weight tile, and each 8x8 output fragment runs the
-same f32 MMA sequence on the same values as `affine_qmm_t`, so its output
-is bitwise identical. Qwen3.8-27B prefill +8.8% at 2K and +12.0% at 8K with
-identical cache digests (ledger G6). `MLX_QMM_TALL=0` keeps qmm_t. The
-benched text is the DerivedData checkout's diff from `e90cd38a`, applied
-verbatim to `~/projects/mlx` (`git apply` of that diff).
+the kernel in `mlx-generated/quantized.cpp`); both Package.swift pins
+(`Vendor/mlx-swift-lm` `a5ce452`, `Vendor/tesseract-speech`) moved in
+lockstep. `affine_qmm_t_tall` serves transposed, non-batched affine 4-bit
+gs64 QMMs with M >= 128: four simdgroups stacked along M share one
+double-buffered dequantized 32-column weight tile, and each 8x8 output
+fragment runs the same f32 MMA sequence on the same values as
+`affine_qmm_t`, so its output is bitwise identical. Qwen3.8-27B prefill
++8.8% at 2K and +12.0% at 8K with identical cache digests (ledger G6).
+`MLX_QMM_TALL=0` keeps qmm_t. The benched text was the DerivedData
+checkout's diff from `e90cd38a`, applied verbatim to `~/projects/mlx`;
+before the push the commits' three mlx files and the generated kernel were
+the same blobs as that checkout's. Verified after re-resolution: the app's
+and the vendor's DerivedData checkouts are clean at `3425495` / `2394c0d0`;
+the vendor suite passes (XCTest 708, Swift Testing 957); the clean Release
+build's prefill digests at 2K, 8K and 32K equal ledger G10's, and at 8K the
+tile measured +8.6% (`MLX_QMM_TALL=0` against the default, two alternated
+rounds each, with the machine in use).
 
 ## Why mlx-core is still on v0.31.1 (attempted 2026-07-27)
 
