@@ -1206,6 +1206,24 @@ nonisolated struct DFlash2BenchRunner {  // swiftlint:disable:this type_body_len
         }
         defer { try? handle?.close() }
 
+        if Self.arguments.contains("--bench-ruler") {
+            try await engine.llmActor.withModelContainer { container in
+                try await container.perform { context in
+                    let draft = try DFlash2Support.loadDrafter(directory: draftDir)
+                    _ = stackSameInputProjections(in: draft)
+                    if Self.arguments.contains("--bench-lattice") {
+                        try await DFlash2Ruler.sweepLattices(
+                            context: context, draft: draft, modelDirectory: modelDir,
+                            emit: emit)
+                    } else {
+                        try await DFlash2Ruler.run(context: context, draft: draft, emit: emit)
+                    }
+                }
+            }
+            emit("[dflash2-bench] === summary ===")
+            return
+        }
+
         let results = try await engine.llmActor.withModelContainer { container in
             try await container.perform { context in
                 try await Self.benchAll(context: context, draftDir: draftDir, emit: emit)

@@ -161,7 +161,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         # The app runs with / as its working directory: hand it absolute paths.
-        --bench-prompt-file|--bench-image|--bench-json|--bench-logits-file|--bench-output|--bench-model|--bench-replay-request|--bench-corpus)
+        --bench-prompt-file|--bench-image|--bench-json|--bench-logits-file|--bench-output|--bench-model|--bench-replay-request|--bench-corpus|--bench-fixture-dir|--bench-lattice)
             if [ $# -lt 2 ]; then
                 echo "$1 needs a path" >&2
                 exit 1
@@ -206,8 +206,15 @@ sleep 0.5
 mkdir -p "$BENCH_DIR"
 rm -f "$LOG_FILE"
 
+# `open` starts the app from launchd's environment, so forward the knobs a
+# run is configured by (MLX_*, DFLASH2_*) explicitly.
+OPEN_ENV=()
+while IFS= read -r assignment; do
+    OPEN_ENV+=(--env "$assignment")
+done < <(env | grep -E '^(MLX_|DFLASH2_)[A-Za-z0-9_]*=' || true)
+
 # Launch with -W (wait for app to exit), backgrounded so we can tail
-open -W "$APP" --args --benchmark --bench-sweep "$SWEEP" --bench-source-revision "$SOURCE_REV" "${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"}" "${PROMPT_ARGS[@]+"${PROMPT_ARGS[@]}"}" "$@" &
+open -W ${OPEN_ENV[@]+"${OPEN_ENV[@]}"} "$APP" --args --benchmark --bench-sweep "$SWEEP" --bench-source-revision "$SOURCE_REV" "${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"}" "${PROMPT_ARGS[@]+"${PROMPT_ARGS[@]}"}" "$@" &
 OPEN_PID=$!
 
 # Wait for log file to appear (up to 180s for model loading — a 16 GB

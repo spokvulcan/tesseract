@@ -1,0 +1,11 @@
+[ruler] blocks 8 max tokens 512 prefill step 1024 thermal fair gpu 12.93 TFLOP/s
+[ruler] travel run0: 47.8 tok/s, 336/1221 accepted, 2.91 tok/round, 60.9 ms/round
+[ruler] summary run0: 51.4 tok/s, 348/1140 accepted, 3.13 tok/round, 61.1 ms/round
+[ruler] math run0: 116.0 tok/s, 436/560 accepted, 6.45 tok/round, 55.2 ms/round
+[ruler] code run0: 91.6 tok/s, 413/714 accepted, 5.05 tok/round, 54.8 ms/round
+[ruler] prefill prefill-2k.txt run0: 2048 tokens in 9.49 s = 215.8 tok/s (split 0, peak 18.2 GB)
+[ruler] prefill prefill-8k.txt run0: 8192 tokens in 35.40 s = 231.4 tok/s (split 6144, peak 20.1 GB)
+[ruler] prefill prefill-32k.txt run0: 32768 tokens in 162.28 s = 201.9 tok/s (split 30720, peak 26.5 GB)
+[ruler] gpu reference start 12.93, after-decode 12.71, end 12.67 TFLOP/s
+[ruler] report /private/tmp/claude-501/-Users-owl-projects-tesseract/e4337090-9933-472b-a5de-ed30c1a558bf/scratchpad/bank/final-4.json
+[dflash2-bench] === summary ===

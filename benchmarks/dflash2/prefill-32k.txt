@@ -1,0 +1,2350 @@
+# Tesseract Architecture
+
+This document describes the architecture of Tesseract Agent, a privacy-focused, fully offline AI assistant for macOS.
+
+For development guidelines and build commands, see [CLAUDE.md](./CLAUDE.md).
+For domain vocabulary, see [CONTEXT.md](./CONTEXT.md); for decision records, see `docs/adr/`.
+
+---
+
+## Overview
+
+Tesseract Agent runs entirely on-device on Apple Silicon. It provides dictation (speech-to-text), text-to-speech, an LLM-powered agent with tool-calling capabilities, and a local OpenAI-compatible HTTP server accelerated by a tiered KV prefix cache. All inference uses local models: WhisperKit (CoreML) for ASR, MLX for LLM and TTS, with the TTS codec's conv stack on the Neural Engine through Core ML where the chip allows (ADR-0075).
+
+**Key Principles:**
+- Privacy-first: No audio or text data leaves the device
+- Offline: All models run locally on Apple Silicon
+- Non-sandboxed: the agent left the App Sandbox for cross-process Accessibility perception (ADR-0047); Hardened Runtime and Developer-ID notarization unchanged
+- Responsive: Real-time audio feedback, streaming inference
+
+---
+
+## System Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                          Tesseract Agent                             │
+├──────────────────────────────────────────────────────────────────────┤
+│  App Layer                                                           │
+│  ┌──────────────┐ ┌──────────────────────────┐ ┌──────────────────┐  │
+│  │ TesseractApp │ │ DependencyContainer      │ │ AppDelegate      │  │
+│  │ Window scene │ │ (Composition Root)       │ │ (AppKit bridge)  │  │
+│  └──────────────┘ └──────────────────────────┘ └──────────────────┘  │
+├──────────────────────────────────────────────────────────────────────┤
+│  Coordinators (@Observable, @MainActor)                              │
+│  ┌────────────────┐ ┌────────────────┐ ┌──────────────────────────┐  │
+│  │  Dictation     │ │  Speech        │ │  Agent                   │  │
+│  │  Coordinator   │ │  Coordinator   │ │  Coordinator             │  │
+│  └────────────────┘ └────────────────┘ └──────────────────────────┘  │
+├──────────────────────────────────────────────────────────────────────┤
+│  Engines (@Observable, @MainActor)                                   │
+│  ┌────────────────┐ ┌────────────────┐ ┌──────────────────────────┐  │
+│  │ Transcription  │ │ SpeechEngine   │ │  Agent                   │  │
+│  │ Engine         │ │ Presenter      │ │  Engine                  │  │
+│  └────────────────┘ └────────────────┘ └──────────────────────────┘  │
+├──────────────────────────────────────────────────────────────────────┤
+│  Model adapters behind ports (actor-isolated inference)              │
+│  ┌──────────────────────┐ ┌──────────────────────┐ ┌──────────────┐  │
+│  │ SpeechRecognizer     │ │ SpeechEngine (pkg)   │ │ LLMActor     │  │
+│  │ WhisperKit (ASR)     │ │ Qwen3 TTS (MLX, ANE) │ │ MLX LLM      │  │
+│  └──────────────────────┘ └──────────────────────┘ └──────────────┘  │
+├──────────────────────────────────────────────────────────────────────┤
+│  Platform Adapters (AppKit)                                          │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌────────────┐  │
+│  │ HotkeyMgr    │ │ TextInjector │ │ MenuBarMgr   │ │ Panel      │  │
+│  │ (CGEventTap) │ │ (Clipboard)  │ │ (NSStatusBar)│ │ Controllers│  │
+│  └──────────────┘ └──────────────┘ └──────────────┘ └────────────┘  │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Directory Structure
+
+Representative, not exhaustive — trust the file system over this listing.
+
+```
+tesseract/
+├── App/                         # Application lifecycle
+│   ├── TesseractApp.swift       # SwiftUI App entry (Window scene)
+│   ├── AppDelegate.swift        # macOS lifecycle, single instance, window management
+│   ├── AppBindings.swift        # App Bindings: launch sequence + subscription rules
+│   ├── AppTerminationCoordinator.swift # Teardown ordering (closure-struct steps)
+│   └── DependencyContainer.swift# Composition root, pure wiring
+│
+├── Core/                        # Shared services
+│   ├── Audio/
+│   │   ├── AudioCaptureEngine.swift   # @Observable, AVAudioEngine recording
+│   │   ├── AudioMeter.swift           # MeterFrame + real-time FFT meter tap
+│   │   ├── AudioDeviceManager.swift   # Input device enumeration
+│   │   └── AudioConverter.swift       # Format conversion
+│   ├── Permissions/
+│   │   └── PermissionsManager.swift   # Mic & Accessibility checks
+│   ├── SettledWidth.swift       # Settled Width policy + modifier (pure value, unit-tested)
+│   ├── StorageEnvironment.swift # Storage roots: the owner's, or per-process scratch under tests (ADR-0073)
+│   ├── ViewModifiers.swift      # Scoped dependency injection
+│   └── Logging.swift            # Unified logging (Log enum)
+│
+├── Platform/                    # AppKit bridge code
+│   ├── HotkeyManager.swift           # Global hotkey listener (CGEventTap)
+│   ├── ObjCExceptions.swift           # NSException → thrown error seam (wraps AVFAudio graph steps)
+│   ├── ObjCExceptionCatcher.h/.m      # The one Objective-C file: the @try behind ObjCExceptions
+│   ├── TextInjector.swift             # Clipboard-based paste injection
+│   ├── InAppReplacer.swift            # Puts a Lens fix back in the app (ADR-0085)
+│   ├── TextExtractor.swift            # Selected text extraction
+│   ├── MenuBarManager.swift           # Status bar menu (NSStatusItem)
+│   ├── OverlayPlacement.swift         # Overlay canvas frame math (pure value, unit-tested)
+│   ├── OverlayScreenLocator.swift     # Screen detection for overlays
+│   └── SpeechOverlayPanel.swift       # Speech Overlay: read-along words over every app
+│
+├── Features/                    # Feature modules
+│   ├── Dictation/
+│   │   ├── DictationCoordinator.swift # Thin composer over Voice Capture Session
+│   │   ├── DictationFeed.swift        # Overlay Feed: phases, beats, Live Preview, hold, meter
+│   │   ├── Proofread/                 # Proofread Pass (ADR-0034): policy, verdicts, MLX adapter
+│   │   ├── Corrections/               # Correction Pair flywheel (#289): value + bounded store
+│   │   ├── LearnedWords/              # Learned Words (ADR-0085): store, matcher, sounds-alike key
+│   │   ├── Lens/                      # Lens (ADR-0085/0086): the one dictation overlay, Live Preview, the fix
+│   │   ├── CatchRecord/               # Catch Record (PRD #612): the Dictation page's model, chart, tiles, takes
+│   │   └── Views/                     # Main window shell, the Dictation page, the history sheet
+│   ├── Speech/                        # engine v2 lives in Vendor/tesseract-speech
+│   │   ├── SpeechCoordinator.swift    # @Observable orchestrator; drains engine events
+│   │   ├── SpeechEnginePresenter.swift# @Observable residency mirror of the pkg engine
+│   │   ├── AudioPlayback.swift        # @MainActor playback port (seam)
+│   │   ├── AudioPlaybackManager.swift # AVFoundation adapter (real pause/resume)
+│   │   ├── WordHighlightSurface.swift # Spoken-word highlight port (ADR-0004)
+│   │   ├── ReadAlong/                 # Read-Along: the one heard-word clock (ADR-0076/0077)
+│   │   ├── Reader/                    # Reader: TextKit 2 text view, bookmark, document store
+│   │   ├── Overlay/                   # Speech Overlay: one scrolling feed, island or captions
+│   │   ├── Voices/                    # Voice library and designer (VoiceDesign checkpoints)
+│   │   └── Views/                     # Speech page: control bar, display settings
+│   ├── Transcription/
+│   │   ├── TranscriptionEngine.swift  # @Observable facade over SpeechRecognizer
+│   │   ├── SpeechRecognizer.swift     # Model port (seam) for ASR
+│   │   ├── WhisperKitSpeechRecognizer.swift  # CoreML adapter
+│   │   ├── TranscriptionHistory.swift # @Observable, JSON persistence; entries keep catches and app
+│   │   └── TranscriptionPostProcessor.swift
+│   ├── Agent/
+│   │   ├── ChatSession.swift          # @Observable spine; folds agent events into ChatItems (ADR-0024)
+│   │   ├── AgentRunController.swift   # Foreground run: LLM gate + isGenerating + cancel
+│   │   ├── LivePart.swift             # Throttled observable box for the one streaming part
+│   │   ├── AgentVoiceInputController.swift  # Composer push-to-talk (leaf)
+│   │   ├── ComposerDraftController.swift # Composer draft: text + image queue/drop/Quick Look (leaf)
+│   │   ├── AgentEngine.swift          # @Observable, wraps LLMActor (chat path)
+│   │   ├── AgentFactory.swift         # Bootstrap: packages, tools, prompt
+│   │   ├── LLMActor.swift             # MLX LLM inference actor
+│   │   ├── Speculation.swift          # Speculation: resident drafters + the per-request Speculation Plan (ADR-0079)
+│   │   ├── LLMGate.swift              # One LLM generation at a time, FIFO (ADR-0081)
+│   │   ├── InferenceArbiter.swift     # LLM gate + model identity + residency facade
+│   │   ├── Core/                      # Agent loop, state reducer, accumulator
+│   │   ├── Tools/                     # Built-in + extension tools
+│   │   ├── Commands/                  # Slash command registry + parser
+│   │   ├── Context/                   # System prompt, skills, compaction
+│   │   ├── ParoQuant/                 # PARO-quantized weight loading
+│   │   └── Views/                     # Chat UI
+│   ├── Companion/                     # Jarvis: the owner's day (ADR-0080)
+│   │   ├── Agenda/                    # Reminders + Calendar port (EventKit, in-memory), facade, tools, Areas
+│   │   ├── Capture/                   # Capture parser, capture door, hotkey panel
+│   │   ├── Engine/                    # Day Engine (pure decider), Delivery Ladder, governor, nudges
+│   │   ├── Moments/                   # Moments, cards, prompts, card parsing, fallbacks
+│   │   ├── Thread/                    # Day Thread: one conversation per day on its own agent
+│   │   ├── Loop/                      # Companion runtime: gather → decide → perform, day state
+│   │   ├── Today/                     # The Today page: the Now Card, today's and tomorrow's steps
+│   │   ├── Delivery/                  # Jarvis panel, banners and nudges, glyph state
+│   │   ├── Perception/                # Notification Center watcher, seen ledger, owner rules
+│   │   ├── CodingAgents/              # Agent signals, Claude Code hooks (Config Merge)
+│   │   ├── Profile/ Recall/           # Profile + proposals, remember/forget/recall, FTS index, embedder
+│   │   ├── Presence/                  # Idle monitor, frontmost app, power
+│   │   ├── Trace/                     # Companion Trace (closed vocabulary, JSONL per day)
+│   │   └── Voice/ VoiceOverlay/       # Voice session (the voice rung)
+│   ├── Server/                        # Local OpenAI-compatible HTTP server
+│   │   ├── HTTPServer.swift           # HTTP/1.1 server
+│   │   ├── CompletionHandler.swift    # HTTP framing edge: LLM gate, validation, start
+│   │   ├── CompletionDelivery.swift   # One delivery script; Delivery Sink seam (JSON body, SSE)
+│   │   ├── ServerInferenceService.swift   # Dispatcher: Completion Route → two arms
+│   │   ├── CompletionRoute.swift      # Pure cache-aware vs standard decision
+│   │   ├── ServerCompletion.swift     # Actor-confined cache-aware execution module
+│   │   ├── CacheClaim.swift          # Cache Claim: a request's lane, pins and Leaf Lease; check-out, check-in, rewind; one conclusion (ADR-0069)
+│   │   ├── LeafLease.swift           # Scalar lease identity, shared tree/writer exclusion, exact recurrent rewind
+│   │   ├── PrefixCacheManager.swift   # Radix-tree KV snapshot cache (RAM tier)
+│   │   ├── SSDSnapshotStore.swift     # SSD tier: writer queue + body I/O
+│   │   ├── SnapshotLedger.swift       # SSD tier: manifest/budget/LRU authority
+│   │   ├── SnapshotPayload.swift      # Snapshot Payload: a snapshot's SSD byte form, built by Deferred Payload Extraction
+│   │   ├── PrefillPlanner.swift       # Tokenizer-affine pre-prefill decisions
+│   │   ├── RequestKeyingPhase.swift   # Request Keying: a request's keys and facts, derived once (Keyed Request, ADR-0070)
+│   │   ├── ConversationRender.swift   # Conversation Render module: the one chat-template application, Emitted Path Resolve, Generation Prompt probe
+│   │   ├── LeafStorePhase.swift       # Leaf Store phase: fast path vs boundary path (+Report, +Executors)
+│   │   ├── LeafAdmission.swift        # Leaf Admission: the one way a leaf enters the prefix cache (ADR-0078)
+│   │   ├── LeafStoreCounters.swift    # Boundary-turn tally by reason, logged at unload
+│   │   ├── LeafAdmissionBuilder.swift # GPU-free leaf-snapshot routing
+│   │   ├── LiveLeafCapture.swift      # Pure fast-path eligibility (live vs boundary)
+│   │   ├── EmittedPathIndex.swift     # Emitted Path Index: rendered-bytes hash → fed ids per fingerprint (ADR-0063)
+│   │   ├── EmittedPathResolve.swift   # Resolve composition + per-request Emitted Path telemetry
+│   │   ├── EmittedPathRegistration.swift # Register a finished turn's path behind the fidelity gate
+│   │   ├── EvictionPolicy.swift       # Pure eviction scoring (production alpha = 0)
+│   │   ├── AlphaTuner.swift           # Retained replay implementation; disabled in production (#504)
+│   │   └── Telemetry/                 # Prompt-cache telemetry store
+│   ├── Settings/
+│   │   ├── SettingsManager.swift      # @Observable Settings Facade
+│   │   ├── SettingsStore.swift        # Persistence seam + Setting declarations
+│   │   ├── SettingsCatalogue.swift    # Single home for every default
+│   │   ├── SettingsWindowView.swift   # Native Settings scene: TabView of panes
+│   │   └── Panes/                     # One file per Settings pane
+│   └── Models/                        # Model download management
+│
+└── Models/                      # Shared data types
+    ├── DictationError.swift
+    ├── CheckBeforePasting.swift # Which takes wait in the Lens (ADR-0086)
+    ├── NavigationItem.swift     # Sidebar routing enum
+    ├── KeyCombo.swift
+    └── ...
+
+tesseract-ios/                   # The iPhone app's own files (ADR-0066, ADR-0084)
+├── TesseractPhoneApp.swift      # Entry: the Library in a NavigationStack
+├── PhoneContainer.swift         # Composition root (pure wiring)
+├── PhoneReading.swift           # The Library's open texts: a Reader per text
+├── PhoneAudioSession.swift      # Spoken-audio session around the Mac's playback adapter
+├── PhoneIntake.swift            # Files opened in the app, and the Library Inbox taken in
+├── PhonePocket.swift            # Interruptions, routes, heat, lock-screen commands, Now Playing
+├── PhoneVoice.swift             # The neural voice: download, Voice Preparation, Speed Check, which voice reads
+├── PhoneModelFetching.swift     # Model Fetching over a background URLSession
+└── Views/                       # Library, Reader (UITextView on TextKit 2), transport, voices, settings
+
+tesseract-share/                 # "Read in Tesseract": the share extension
+├── ShareViewController.swift    # Reads what was shared, drops its text in the Library Inbox
+└── ExtensionPreprocessing.js    # Runs in Safari: hands over the page's HTML
+```
+
+### The iPhone app
+
+`tesseract-ios` is a second app target in the same project. Release 1 reads
+text aloud (ADR-0084), so the target takes only the read-aloud code:
+
+- **Its own files** live in `tesseract-ios/`: views, adapters, the composition
+  root, and later its Info.plist and entitlements.
+- **Shared files** come from five folders of `tesseract/`, added to the target
+  as their own synchronized groups (the project's "Shared with tesseract-ios"
+  group): `Core`, `Features/Models`, `Features/Settings`, `Features/Speech` and
+  `Models`. A new file in one of them builds in both apps. A Mac-only file
+  there is excluded from `tesseract-ios` by name, in that group's exceptions
+  (File Inspector → Target Membership). Xcode can't exclude a whole folder, so
+  Mac-only code belongs in the Mac-only folders when it can.
+- **Everything else** in `tesseract/` (the app shell, `Platform/`, the agent,
+  server, companion and dictation) is Mac-only and never reaches the phone.
+- **No `#if os`.** Where shared code needs something only the Mac has, the
+  dependency moves behind a port the Mac adapts: the speech code reads its
+  settings through `SpeechSettings`, which the Mac's `SettingsManager`
+  conforms to, and the Settings Catalogue keeps its Mac-only entries in
+  `tesseract/Features/Settings/SettingsCatalogue+Mac.swift`.
+- **The speech package** (`Vendor/tesseract-speech`) builds for iOS. Its
+  second production synthesizer, `SystemVoiceSynthesizer`, puts the
+  **System Voice** (`AVSpeechSynthesizer`) behind the same port as the neural
+  voice, at its 24 kHz frames, so the coordinator, the Read-Along and the
+  Reader can't tell them apart.
+- **Shared logic for the phone lives in the shared folders**, so the Mac test
+  target covers it: the **Library** (`ReaderLibrary`), the phone's Settings
+  Facade (`PhoneSettings`), the **Preset Voices**, a text's language
+  (`TTSLanguage.detected`), and getting text in (`Features/Speech/Intake`:
+  a page's article through swift-readability, a PDF's text through PDFKit,
+  Markdown without its marks, the **Library Inbox**), and reading in the pocket
+  (`Features/Speech/Pocket`: `PocketControls`, which turns a call, lost
+  headphones, the lock screen's buttons or the app leaving the screen into
+  what the Reader does, and the **Thermal Policy**). Whatever stops the audio
+  from outside the app stops the reading at the heard sentence, and playing
+  again reads from it: a stream held paused in the background could not come
+  back once the system stopped its audio engine.
+- **The neural voice** (`PhoneVoice`): Qwen3-TTS 0.6B on the Neural Engine
+  (ADR-0084, ADR-0088). Its catalog entry (`ModelDefinition.phoneVoice`)
+  downloads through the Mac's download manager, over a second **Model
+  Fetching** adapter: a background URLSession that goes on with the screen
+  locked, resumes mid-file and rejoins a transfer after a relaunch (the app
+  delegate hands it the session's events), Wi-Fi only unless the owner
+  allows cellular. A trimming adapter in front of it keeps only the codec's
+  decoder from the file that also holds its encoder. **Voice Preparation**
+  then builds the graphs into Application Support (out of backups), the first
+  time in minutes and afterwards in seconds, and the **Speed Check** times a
+  render. The engine's synthesizer is a `VoiceHandover`: the neural voice for
+  each segment while it is ready, keeps up and the **Thermal Policy** allows
+  it, the **System Voice** otherwise. A segment the neural voice fails before
+  any of its audio is read by the System Voice, which reads on until the app
+  is next in front and the voice prepares again. The speed menu offers the
+  rates the Speed Check allows.
+- **The share extension** (`tesseract-share`, embedded in the app) builds the
+  `Intake` folder and nothing else of the app. In Safari its script hands over
+  the page's HTML, so the app never fetches a page. It never runs the voice:
+  it drops the text in the app group's **Library Inbox**, and the app takes
+  it in when it comes to the front.
+
+CI's `build-ios` job builds the target for any iOS device, unsigned; the
+release pipeline waits for it. The shared code's tests run in the Mac test
+target.
+
+---
+
+## Observation and Data Flow
+
+### State Model
+
+The app uses Swift's Observation framework (`@Observable`) for all primary state types. This replaced the older `ObservableObject` + `@Published` + Combine model.
+
+**SwiftUI views** consume `@Observable` types via `@Environment(Type.self)`:
+
+```swift
+struct GeneralSettingsPane: View {
+    @Environment(SettingsManager.self) private var settings
+
+    var body: some View {
+        // For bindings, use @Bindable:
+        @Bindable var settings = settings
+        Toggle("Play Sounds", isOn: $settings.playSounds)
+    }
+}
+```
+
+**Non-view code** (App Bindings, MenuBarManager) observes `@Observable` state using Swift 6.2's `Observations` async sequence:
+
+```swift
+Task { [weak self] in
+    guard let self else { return }
+    for await state in Observations { self.inputs.dictationState() } {
+        self.effects.pushDictationStateToMenuBar(state)
+    }
+}
+```
+
+The app's long-lived runtime subscriptions *with a rule* (selected
+speech-to-text model auto-load and hot-swap, the lazy LLM reload guard, the
+server enable/port reactions, hotkey re-binding, the dictation-phase rule that
+mirrors the menu bar) live in **App Bindings** (`App/AppBindings.swift`), which
+also owns the launch ordering: start the speech surfaces, install every
+subscription, then run the initial dictation-model load as an owned child
+task so the HTTP server never waits on a model load. Effects leave
+through a closure-struct the composition root wires —
+the launch mirror of `AppTerminationCoordinator`'s teardown steps — which makes
+every rule hermetically testable (`AppBindingsTests`). See `CONTEXT.md` → App
+composition.
+
+### Settings Persistence
+
+`SettingsManager` is the `@Observable @MainActor` **Settings Facade**: it keeps one
+bindable stored property per setting (so SwiftUI `$settings.foo` bindings and
+per-property Observation work), but persistence lives behind a **Settings Store**
+seam injected *below* the facade. Each `didSet` forwards to the store via the
+property's `Setting` in the **Settings Catalogue**; the catalogue is the single
+source of truth for every default (no more `register(defaults:)`). See ADR-0002 and
+`CONTEXT.md` → Language → Settings persistence.
+
+```swift
+protocol SettingsStore {                       // typed, default-on-read; no register(defaults:)
+    func bool(for key: String, default: Bool) -> Bool
+    func set<V>(_ value: V, for key: String)
+    func setOptional(_ value: String?, for key: String)   // nil ⇒ remove the key
+    // … int/double/string/optionalString …
+}
+
+enum SettingsCatalogue {                       // one Setting per persisted primitive; the only home for a default
+    static let playSounds = Setting.bool("playSounds", default: true)
+    // … ~37 settings …
+}
+
+@Observable @MainActor
+final class SettingsManager {
+    private let store: any SettingsStore
+    var playSounds: Bool {                      // declared WITHOUT a default (see below)
+        didSet { SettingsCatalogue.playSounds.write(playSounds, to: store) }
+    }
+    init(store: any SettingsStore = UserDefaultsSettingsStore()) {
+        self.store = store
+        self.playSounds = SettingsCatalogue.playSounds.load(from: store)   // direct first assignment skips didSet
+        // … one per property … then normalizePersistedSelectionsIfNeeded()
+    }
+}
+```
+
+Two adapters make the seam real: `UserDefaultsSettingsStore` (the only production
+Swift that calls `UserDefaults`; owns default-on-read via `object(forKey:) == nil`)
+and `InMemorySettingsStore` (tests — hermetic, parallel-safe; also the test host's
+own container, per ADR-0073). The two genuine side
+effects (launch-at-login via `SMAppService`, dock visibility via `NSApp`) stay in
+the facade's `didSet`, above the store.
+
+**`@Observable` + `didSet` in `init`:** under `@Observable` a property re-assignment
+in `init` *fires* `didSet`; only a *direct, property-named first* assignment skips it
+(via the storage-restrictions init accessor), and only when the property has no
+declaration default. So properties are declared `var foo: Bool` (not `= false`) and
+hydrated by `self.foo = Catalogue.foo.load(...)` — construction performs zero store
+writes and runs no side effects. The lone exception is stale-value migration, which
+runs after hydration and so persists through the store.
+
+`@AppStorage` is NOT compatible with `@Observable` (compiler error), which is why
+the facade keeps explicit stored properties rather than property wrappers.
+
+### Speech Seams (model ports + playback)
+
+The speech features use the same **facade-above / port-below** shape as the Settings
+Store, so the engines' and coordinator's orchestration is testable without models, a
+microphone, or `AVAudioEngine`. Three seams sit *below* the `@Observable @MainActor`
+facades (ADR-0003; vocabulary in `CONTEXT.md` → **Language → Speech model ports and
+playback**):
+
+- **`SpeechRecognizer`** — the ASR model port below `TranscriptionEngine`. The engine
+  keeps the timeout race, lazy load, `.mlmodelc` verification, lifecycle state, and
+  `DictationError` mapping *above* the port; the port is model-only. The engine
+  also runs the Live Preview lane, which skips rather than queues behind the final
+  pass and is cancelled by it. The WhisperKit adapter runs Whisper's audio encoder
+  on the GPU and its text decoder on the Neural Engine (ADR-0086).
+- **TTS (engine v2)** — the TTS engine is the `SpeechEngine` **actor** in the
+  `Vendor/tesseract-speech` package (ADR-0038/0039), consumed through its
+  session/utterance API. Its own ports live in the package: `SpeechSynthesizing`
+  (model port; production adapter `Qwen3Synthesizer` over the package's own
+  `Qwen3TTS` target, first-party since ADR-0071). The engine takes no turn at
+  the LLM gate: speech runs beside the LLM (ADR-0081).
+  `Qwen3Synthesizer` loads only the folder the app hands it (the Model Catalog's
+  Voice Engine folder) and never downloads; the engine checks that folder before
+  any load and throws `modelUnavailable` when it's incomplete.
+  After warm-up it moves the codec's conv stack to the Neural Engine: a Core ML
+  model the package builds from the checkpoint and keeps in the cache directory
+  the app passes (under `StorageEnvironment.caches`). It stays on MLX where the
+  Neural Engine can't run it all (ADR-0074/0075). For the iPhone, the model
+  can move the talker and the code predictor there too
+  (`Qwen3TTSModel.prepareNeuralVoice`, ADR-0084/0088): two more Core ML
+  graphs the package writes (the talker one position per call with its KV
+  cache in Core ML state, the code predictor a whole frame per call with its
+  sampling inside), after which generation runs MLX only on the CPU, for the
+  prompt's embeddings and the codec's front end. A **Preset Voice**
+  (`Voice.preset`) is a CustomVoice checkpoint's own speaker: the engine
+  refuses one the checkpoint doesn't have and never takes a Reference Take
+  for it. Each segment's words are
+  timed by the talker's own attention (ADR-0077): the model streams its
+  Alignment Head's row for every frame, and the adapter's `WordTimer` turns the
+  rows and the frames' loudness into word starts, which the stream carries as
+  `SpeechEvent.words`. The
+  app-side `SpeechEnginePresenter` is the `@Observable @MainActor` residency
+  mirror for views and the arbiter — a presenter, not a facade: orchestration
+  lives in the package engine. It follows the Readiness the engine publishes,
+  so a reload the engine starts by itself, for an utterance on a session that
+  outlived Offload Model, shows as loaded too.
+- **`AudioPlayback`** — a `@MainActor` *sibling* seam (not a model port) below
+  `SpeechCoordinator`, turning generated samples into sound. It is
+  `@MainActor protocol AudioPlayback: AnyObject` (the coordinator calls it
+  *synchronously* while draining engine events), unlike the model ports which are
+  `Sendable nonisolated protocol` actor-backed ports `await`-ed off-main. Its
+  `heardPlaybackTime()` (the head less the output's latency) is the Read-Along's
+  clock; pacing reads the head itself.
+
+```
+DictationCoordinator ─(Transcribing)→ TranscriptionEngine ─(SpeechRecognizer)→ adapter
+SpeechCoordinator   ───────────────→  SpeechEngine (pkg)  ─(SpeechSynthesizing)→ adapter
+SpeechCoordinator   ──(AudioPlayback)────────────────────────────────────────→ adapter
+                       engine/coordinator-facing        actor engine          model-facing port
+```
+
+Each seam has two adapters — a framework-backed one
+(`WhisperKitSpeechRecognizer` in the app; `Qwen3Synthesizer` in the package;
+`AudioPlaybackManager` in the app — the only production code touching
+WhisperKit / MLX / AVFoundation for these features) and a scripted/in-memory
+peer in the tests (`InMemorySpeechRecognizer`, `ScriptedSpeechSynthesizer`,
+`InMemoryAudioPlayback`; the package's contract tests use their own
+`ScriptedSynthesizer`). Coordinator tests run the **real package engine** over
+the scripted synthesizer — replace-don't-layer. The model ports are **actors**
+(so `Sendable` is free); the playback adapters are `@MainActor final class`es.
+The in-memory playback adapter exposes a **non-wall-clock virtual clock**
+(`advance(by:)`) so pacing waits are deterministic. One execution-convention
+trap rides these seams: the app target builds with
+`NonisolatedNonsendingByDefault`, the package does not, so app-side witnesses
+of package protocols spell `@concurrent` explicitly on `async` closure
+parameters.
+
+### Dependency Injection
+
+`DependencyContainer` creates all services lazily and injects them into the SwiftUI hierarchy via scoped modifiers:
+
+```swift
+.injectDependencies(from: container)
+// Expands to:
+//   .injectCoreDependencies(...)       — settings, permissions, container
+//   .injectDictationDependencies(...)  — coordinator, engine, history, pairs, Learned Words, audio, fixInLens
+//   .injectSpeechDependencies(...)     — coordinator, engine presenter
+//   .injectAgentDependencies(...)      — coordinator, engine, conversation store
+//   .injectModelDependencies(...)      — download manager, inference arbiter
+//   .injectServerDependencies(...)     — HTTP server, generation log, cache telemetry
+```
+
+The main window's `ContentView` applies the core scope at its root and each page's scopes at that page, so `MainWindowPageTests` renders every page with the same wiring the app ships. The Settings window applies `injectDependencies` whole.
+
+AppKit consumers (MenuBarManager, panel controllers) receive dependencies via constructor injection — they cannot use `@Environment`.
+
+Under a test runner (the app is the unit-test host) the container keeps everything it stores in a scratch directory per test process, through `StorageEnvironment`, and its settings in memory, and the host opens no windows (ADR-0073). The model folder is the one location left in place.
+
+---
+
+## Core Concepts
+
+### 1. Window Scene
+
+The app uses `Window("Tesseract", id: "main")` — a single-instance window. This avoids the multi-window workarounds needed with `WindowGroup`. Settings live in the sidebar (`NavigationSplitView`), not a separate `Settings` scene.
+
+### 2. State Machines
+
+Coordinators manage user-facing flows as state machines:
+
+- **DictationCoordinator**: idle → recording → processing → idle (text injection happens during processing; a held take skips it and waits in the Lens)
+- **LensModel**: hidden → listening → finishing → landed, or fixing (a held take, a take reopened to fix, or a take opened from the Dictation page) → done → hidden
+- **SpeechCoordinator**: idle → capturingText → generating → streaming/playing (⇄ paused) → idle
+- **ChatSession**: folds the Agent double-loop's events into committed `ChatItem` values plus one streaming `LivePart` (ADR-0024)
+
+### 3. Actor Isolation
+
+Thread safety uses Swift concurrency. The app target builds with
+`SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, so every type is implicitly
+`@MainActor` unless it opts out (`actor`, `nonisolated`).
+
+- **@MainActor** (the implicit default): all coordinators, engines, managers, views
+- **Actors**: `WhisperKitSpeechRecognizer` (CoreML ASR adapter), `SpeechEngine` + `Qwen3Synthesizer` (TTS engine + MLX adapter, TesseractSpeech package), `LLMActor` (MLX LLM), `ContextManager` (compaction)
+- **@unchecked Sendable**: `SampleBuffer`, `AudioLevelRelay` (manual NSLock for real-time audio thread)
+
+Trap: a protocol that an actor adapter satisfies must be declared
+`nonisolated protocol` — otherwise the protocol inherits the MainActor default
+and drags the actor's conformance (including its `init`) onto the main actor.
+The speech model ports (ADR-0003) are the worked example.
+
+### 4. Agent Architecture
+
+**Inference stack**: `LLMActor` → `AgentEngine` → `Agent` (double-loop orchestrator).
+
+**Streaming detokenization**: `AppTokenizerLoader` constructs the tokenizer and
+recognizes its effective decoder configuration for both ordinary and PARO loads.
+The app-owned `LinearStreamingDetokenizer` is shared by the live token loop and
+Emitted Path fidelity replay. Live delivery emits on the naive decoder's token
+steps for recognized ByteLevel configurations and uses naive streaming otherwise;
+replay retains verified segment delivery and its window/fallback paths (ADR-0065).
+
+**Speculative decoding**: `Speculation` owns the drafters (the MTP head inside a
+Qwen3.5-family checkpoint, the DFlash2 draft beside Qwen3.8-27B): `LLMActor`'s
+load attaches them, the Model Session carries them, and each request asks for a
+**Speculation Plan**. The Server Completion and the Raw Generation Start read the
+same plan, and the session builds its iterator from it (ADR-0079).
+`DFlash2Support` and `MTPDrafterSupport` keep the per-family detection, pairing
+and loading. The Qwen3.5 vision class runs the text class's engine, so the
+DFlash2 draft pairs with a vision load too, and image-bearing requests speculate:
+the images are prefilled before the hand-over and the iterator rotates the text
+after them by their rope delta (ADR-0089).
+
+**Agent bootstrap** (`AgentFactory.makeAgent()`): Discovers packages → registers extensions → discovers skills → loads context files → assembles system prompt → wires compaction → creates Agent instance.
+
+**Double-loop** (`Features/Agent/Core/AgentLoop.swift`): Outer loop handles follow-ups, inner loop handles tool calls + steering. No fixed round limit.
+
+**Built-in tools**: `read`, `write`, `edit`, `ls` (all sandboxed via `PathSandbox`), and the
+Companion's tools, registered in every conversation: the agenda tools (`agenda`,
+`add_reminder`, `update_reminder`, `add_event`, `move_event`), `notification_rule`, and
+`remember` / `forget` / `recall`.
+
+**Extensibility**: Packages, Extensions (tool plugins), Skills (markdown with YAML frontmatter), slash commands (built-in + skills + extensions).
+
+**Image input**: The chat composer shows image affordances only when the selected
+agent model is vision-capable and the global "Use vision models when available"
+setting is on. File picker, paste, and window-level drag/drop all flow through
+`ImageIngest`: supported raster types only, 10 MB per image, typed rejections,
+and an eight-image pending queue. Committed and pending images materialize into a
+conversation-wide Quick Look preview set, while the server-side cache keys images
+by **Image Digest** rather than UI attachment identity. Vocabulary: `CONTEXT.md`
+→ Vision capability and mode, Image-aware prefix caching.
+
+### 5. The LLM Gate
+
+Models run side by side; memory, not the GPU, is what they share (ADR-0081).
+Only the language model is serialized: it is one container with one prefix
+cache, so chat turns, the Companion's moments, HTTP requests, `/compact`,
+reloads and offload take turns at the **LLM Gate**. `LLMGate` is the pure FIFO
+mechanism (atomic handoff, cancellation-safe); `InferenceArbiter` composes it with
+the LLM's identity (load, reload-on-mismatch) in `withLLM`, so the model cannot
+change under a running generation, and mirrors residency (`.llm`/`.tts`) for
+Offload Model. Speech, dictation, the proofreader and the embedder never take the
+gate: MLX's process-wide evaluation lock keeps concurrent use safe, so a voice
+reply interleaves with a generation instead of waiting for it. Whisper's audio
+encoder runs on the GPU too, and a generation slows while it decodes (ADR-0086).
+The proofreader still *skips* while the LLM generates (ADR-0034), so a dictation
+never waits.
+LLM consumers depend on the single-member `InferenceArbitrating` seam; tests
+inject `InMemoryInferenceArbiter`. The menu bar's Models section shows what is
+loaded and what each model is doing, with the app's memory. Vocabulary:
+CONTEXT.md → LLM gate.
+
+### 6. HTTP Server and Prefix Cache
+
+`Features/Server/` hosts a local OpenAI-compatible HTTP server (`HTTPServer`,
+`CompletionHandler`) that drives the same `LLMActor` through the LLM gate. The
+public surface is `/health`, `/v1/models`, `/v1/chat/completions`, plus
+integration endpoints under `/integrations/opencode/`. `/v1/models` lists
+downloaded agent models only, with the app version as `server_version`; `/v1/chat/completions` honors `request.model` for
+downloaded in-catalog models, falls back to the selected agent model when the
+field is omitted, and returns OpenAI-shaped `model_not_found` for unknown or
+undownloaded IDs.
+`ServerInferenceService` is the dispatcher: it owns the **Completion Route**
+(`CompletionRoute`, the pure request-shape decision) and composes two arms —
+the cache-aware **Server Completion** module (`ServerCompletion`, an
+actor-confined module stored in `LLMActor`; ADR-0015) and the agent engine's
+managed fallback.
+Both paths use `ManagedGenerationDriver` and `GenerationStreamLoop` to parse
+raw model output, forward reasoning and tool calls, honor cancellation, and
+publish terminal metrics. The parser starts where the request's **Generation
+Prompt** left the model, inside a think block or outside it: Conversation
+Render measures what the template appends to open the assistant turn, and
+each request checks that measurement against the tokens it fed (ADR-0070).
+On the cache-aware arm, Request Keying derives each request's facts once,
+into a Keyed Request (or an unkeyed one) that every later phase reads. Reasoning stays as emitted by the model: native
+`reasoning_effort` shapes the prompt, while the ordinary generation-token limit
+bounds output. There is no thinking-length or repetition intervention, forced
+think closure, or continuation restart (ADR-0060 amendment).
+Repeated prompts are accelerated by a tiered KV prefix cache
+(`PrefixCacheManager`): a radix tree of KV-cache snapshots in RAM, spilled to SSD
+(`SSDSnapshotStore` + `SnapshotLedger`), with eviction scoring
+(`EvictionPolicy`) fixed at `alpha = 0` (recency within the eligible set).
+`AlphaTuner` remains in source but is not attached to production caches: its
+replay allocated multi-gigabyte synthetic arrays and blocked MainActor
+([#504](https://github.com/spokvulcan/tesseract/issues/504)). The Budget Floor,
+pressure response and SSD demotion remain active. Each keyed request holds one
+Cache Claim (`CacheClaim`, ADR-0069): its reserve lane, its Restore Pins and,
+after a Leaf Handoff, its Leaf Lease, concluded exactly once inside the
+request's LLM gate turn. Vocabulary: CONTEXT.md → Prefix cache snapshot
+lifecycle, SSD snapshot ledger, Prefill orchestration, Eviction tuning.
+Verification gates: docs/testing.md → Loaded-model verification.
+An image request takes the same arm: `RequestKeyingPhase` prepares it (the
+processor expands each image into its pad run) and builds the
+`CacheKeySpace`, the image table that maps prompt tokens to the Cache Key
+Path and gives the rope delta up to any offset. `PrefillPlanner` detects
+boundaries in key space and captures nothing below the Minimum Warm Offset,
+where the last image's run ends. `ServerCompletion` restores with a
+`PositionAnchor` (the delta as the vendor's `qwen35.ropeDeltas` state) or
+runs the Image Span through the vision container's windowed `prepare`, then
+chunk-prefills the Text Tail. `StateThreadedTokenIterator` threads that state
+through decode; when the Speculation Plan engages DFlash2, the draft's
+iterator takes over at the plan's `prefillSplit` with
+`keySpace.positionAnchorDelta(upTo:)`. The agent chat's
+`RawGenerationStart` (a tool result's screenshot) hands the whole prompt over
+and the target prefills the images itself (ADR-0007, ADR-0089).
+`Features/Server/Integrations/` configures external clients against the live
+server: the server itself serves a setup script whose one-liner runs the
+**Config Merge** (`OpenCodeConfigMerge`, a pure function over an
+`IntegrationSnapshot` of port + downloaded models + capabilities) — OpenCode is
+the first adapter. HTTP requests load the vision variant for vision-capable
+models unconditionally (ADR-0008), so a generated config never advertises what
+the server won't serve. Vocabulary: CONTEXT.md → Client integrations.
+
+### 7. The Companion
+
+Jarvis thinks at moments; code keeps the promises (ADR-0080, `CONTEXT.md` →
+Companion: the day). **Today** is the main window's first page. Apple
+Reminders and Calendar are the single source of truth, behind one **Agenda**
+port (`EventKitAgendaStore`; `InMemoryAgendaStore` for the test host and every
+test) whose six tools ride every conversation. The capture hotkey is one key
+(Right ⌥ alone: tap to type, hold to speak), detected from modifier flags by
+`ModifierKeyDetector` beside the key-combo matcher.
+
+The **Day Engine** is a pure decider: `CompanionRuntime` gathers a
+`DaySnapshot` (agenda, presence, the app in front, power), feeds one
+`DaySignal` at a time, persists the returned `DayState`, and performs the
+`DayEffect`s — scheduling OS nudges, running a moment, putting a card on a
+rung, changing Reminders, writing the **Companion Trace**. A **Moment** is one
+generation over the day's **Day Thread** (`DayThread`, its own agent with the
+same system prompt and tools as every chat, so all share one cached prefix);
+its JSON card is validated, retried once, or replaced by a deterministic card.
+Cards reach the owner through the **Delivery Ladder**: the glyph, the **Jarvis
+Panel** (`Platform/GlassPanel.swift`, a borderless non-activating panel over
+`NSGlassEffectView`), a banner, or voice. The system prompt carries no time;
+every user message carries a stored **Now Tag**. Other apps' banners are sorted
+by code on arrival (`NotificationSources`: a person, an app's news, or noise —
+the system's banners and games, recognised by `AppIdentityResolver`), so only
+people reach a model; moments take their turn at the LLM Gate like any chat.
+
+Tests never touch EventKit or a model: the engine is covered by decision
+tables, the tools run against the in-memory Agenda, and cards parse canned
+replies (`docs/testing.md` → Companion).
+
+### 8. Platform Adapters
+
+All AppKit bridging lives in `Platform/`. These are the features that SwiftUI cannot cover:
+
+- Global hotkeys (CGEventTap)
+- Clipboard text injection (CGEvent Cmd+V simulation)
+- Putting a Lens fix back in the app: the changed text selected back through
+  Accessibility and pasted over, or erased with backspaces and the fix pasted,
+  never in a password field (`InAppReplacer`)
+- Always-on-top overlay panels (NSPanel)
+- Menu bar status item (NSStatusItem)
+- The Speech Overlay: the words being read, over every app (a separate panel)
+
+The one dictation overlay is the **Lens** (PRD #612, ADR-0085, ADR-0086), in a `GlassPanel` at the bottom center of the screen, built at launch so the first press shows it at once. It follows the Overlay Feed itself (phases, beats, the Live Preview, the take's app, the hold), so no App Bindings rule pushes to it. The panel never becomes key while the owner talks; it takes the keyboard only while a held take waits or a take is being fixed, and gives it back before anything pastes. The Overlay Variant registry, the classic pill and its fixed-frame panel are gone; `OverlayPlacement` and `OverlayScreenLocator` remain for the Companion's voice overlay.
+
+### 9. The Dictation Page (the Catch Record)
+
+The Dictation page is the **Catch Record** (PRD #612): what the Learned Words
+caught this week, what they are, and today's takes, each one click from a fix
+in the Lens. `DictationContentView` reads the Learned Word, Correction Pair and
+transcription history stores from the environment and builds a `CatchRecord`
+from their values (`tesseract/Features/Dictation/CatchRecord/`). `CatchRecord`
+is a pure value: seven days of catches and fixes, one tile per Learned Word
+still known, today's takes, the page's sentence and the line under it, and the
+runs that mark a caught or fixed word. The page and `CatchRecordTests` read the
+same thing. On it:
+
+- `CatchWeekChart`: the week in Swift Charts, Caught and You fixed stacked per
+  day with a legend (design language §5).
+- `LearnedWordTile`: one Learned Word (heard forms, the fix that taught it as a
+  before-and-after strip, the apps it is left alone in), with Forget in its
+  context menu. Forget returns the store's receipt, and the page's Undo line
+  hands it back.
+- `TodayTakeRow`: one of today's takes, its catches marked by `CaughtText`; a
+  click opens it in the Lens.
+
+The toolbar holds the record button, History, and Export Corrections (the
+Correction Pairs as JSONL). History presents `TranscriptionHistorySheet`: the
+full history by day, its catches marked the same way, where an entry's context
+menu opens it in the Lens, copies it or deletes it. The page and the sheet
+reach the Lens through `FixInLensAction`, an environment value that
+`injectDictationDependencies` wires to `LensController.openFromPage`; its
+default does nothing, so a preview or a test needs no Lens. Each
+`TranscriptionEntry` keeps its catches and the app the take went to, so a take
+opened from the page shows what was caught and a fix can leave a word alone in
+that app; entries written before that decode with neither.
+
+Gone with the old page: its custom-glass recording button
+(`RecordingButtonView`), the history's side-by-side Correction Pair editor and
+its Flag as Wrong button, and the focus request that opened that editor from
+the retired pill (`requestFocus(pairID:)` and `focusEntryID` on
+`TranscriptionHistory`). Fixing a take happens only in the Lens.
+
+---
+
+## Data Flow
+
+### Recording to Text Injection
+
+```
+1. User presses hotkey (Option+Space)
+   └─► HotkeyManager.onHotkeyDown()
+       └─► DictationCoordinator.startRecording()
+           ├─► AudioCaptureEngine.startCapture()
+           └─► Live Preview pump (ADR-0086), 300 ms after each decode lands
+               ├─► LivePreviewAssembler: the audio since the last confirmed segment
+               ├─► TranscriptionEngine.transcribePartial → TranscriptionResult
+               ├─► all but the last two segments confirmed; the rest is the tail
+               └─► regex cleanup + Learned Words → DictationFeed → Lens (listening)
+   Shift tapped while the key is held
+   └─► HotkeyManager onShiftTap → DictationCoordinator.shiftTapped(): the take will wait
+
+2. User releases hotkey
+   └─► DictationCoordinator.stopRecordingAndProcess()
+       ├─► the preview pump and its decode in flight are cancelled
+       ├─► AudioCaptureEngine.stopCapture() → AudioData
+       └─► TranscriptionEngine.transcribe(audioData): the full pass over the whole take
+           └─► SpeechRecognizer port → WhisperKit inference → TranscriptionResult
+
+3. Post-processing
+   └─► TranscriptionPostProcessor → Learned Words → Proofread Pass (opt-in)
+       ├─► TranscriptionHistory.add: the text, its catches and the app
+       ├─► TextInjector.inject() (not for a held take)
+       │   ├─► Copy to clipboard
+       │   └─► Simulate Cmd+V
+       └─► Lens: the take lands and the words the preview had wrong settle
+           (LensSettle), or a held take waits: Return pastes it, Esc keeps it
+
+4. Fixing a word after the paste (Control+Option+Space, ADR-0085)
+   └─► Lens opens on the last take; the owner types the word meant
+       ├─► LensFix picks the words it replaces and decides what the fix teaches
+       ├─► LearnedWordStore learns it (or leaves a word alone in that app)
+       ├─► CorrectionPairStore marks the take gold with the fix
+       ├─► TranscriptionHistory.replaceText: the entry's new text and catches
+       └─► InAppReplacer puts the fix in the app, only while the pasted
+           text is still the last thing typed there
+
+5. Fixing a word from the Dictation page (the Catch Record)
+   └─► a click on one of today's takes (or Fix a Word in the history sheet)
+       └─► FixInLensAction (the fixInLens environment value)
+           └─► LensController.openFromPage(take): refused while a take is
+               recorded or a fix is put back; a take open in the Lens is kept
+               (a held one waits for Control+Option+Space, with its fixes)
+               ├─► the Lens opens the take as the history keeps it
+               ├─► the same fix as step 4, recorded as made from the page
+               └─► nothing is pasted back; if it is the take Control+Option+Space
+                   reopens, the reopen starts from the fixed text
+```
+
+A silent capture stops before step 2's transcription. Learned Words apply inside
+the Voice Capture Session, so Voice Input and the Companion's captures gain them
+too.
+
+### Audio Format Pipeline
+
+```
+Microphone (48kHz stereo) → [Voice Processing: AEC+AGC+NS, armed for the app's lifetime]
+  → AVAudioEngine tap, one per take (device rate, mono float32) → SampleBuffer (thread-safe)
+  │   └─► heartbeat per buffer → live-input check (every 0.5 s while the take is open)
+  → Resample to 16kHz (anti-aliased, AudioConverter) → WhisperKit
+  └─► RawCapture (native rate, pre-resample) → Capture Dump (bounded WAV ring)
+
+TTS samples → SpeechCoordinator → AudioPlayback (AudioPlaybackManager, its own AVAudioEngine)
+```
+
+Every capture — dictation, Voice Input, a voice-session take — installs its
+own tap on the kept engine at the device rate and removes it at the stop. A
+dead input is caught while the take is open: the **live-input check**
+restarts an input that never delivered a buffer (once per take), and marks
+one that went quiet dead for the capture's owner. Speech plays on its own
+engine and never overlaps a voice-session capture: the session is
+half-duplex, so the mic closes before a reply speaks and opens after it
+stops (ADR-0082).
+
+---
+
+## Decisions and Rationale
+
+Key architectural decisions (durable records live in `docs/adr/`):
+
+- **`Window` not `WindowGroup`**: Product intent is a single main window. `Window` eliminates 5 workarounds for multi-window suppression.
+- **`@Observable` not `ObservableObject`**: Observation framework tracks property access precisely (no coarse object-wide invalidation). Better SwiftUI performance.
+- **No `@AppStorage` in `@Observable`**: Compiler incompatibility. All settings use manual `UserDefaults` with `didSet`.
+- **No `SettingsManager.shared` singleton**: Injected via `DependencyContainer`. AppKit consumers get it via constructor injection.
+- **Speech model ports below the engines/coordinator**: `SpeechRecognizer`, the TesseractSpeech package's `SpeechSynthesizing`, and the `@MainActor` `AudioPlayback` sibling seam make the speech engines' and coordinator's orchestration testable without models, a mic, or `AVAudioEngine` — same facade-above / port-below shape as the Settings Store. See ADR-0003/0038 and `CONTEXT.md` → Speech model ports and playback.
+- **`Observations` async sequence for non-view code**: Replaces Combine `$property.sink` for observing `@Observable` types outside SwiftUI views.
+- **`AgentFactory` separate from container**: Container wires dependencies; factory orchestrates multi-step bootstrap.
+- **The Overlay Feed is the one signal surface**: The Lens renders from the shared `DictationFeed` (typed phases/errors, outcome beats, the Live Preview, the hold, level + spectrum); the dictation pipeline never learns what draws it. The Lens replaced the Overlay Variant registry and its Setting (PRD #612).
+- **The Lens streams, the paste stays a full pass** (ADR-0086): the Live Preview decodes the take with the same Whisper model while it is recorded, only for show; release cancels it, and what pastes is Whisper's full pass over the whole take. Whisper's audio encoder runs on the GPU, which halves the wait after release.
+- **App Bindings owns the launch sequence and subscription rules**: Carved out of the composition root behind a closure-struct interface — the launch mirror of `AppTerminationCoordinator`. One dictation-state subscription feeds the menu bar (no second path, no race), and the initial selected speech-to-text model load runs as an owned child task so the HTTP server is reachable immediately at launch. It also heals a missing dictation-model selection onto a downloaded variant and hot-swaps when the user changes the selection. The container stays pure wiring and passes the deletion test. See `CONTEXT.md` → App composition.
+- **Defer Agent package extraction**: Don't extract `Features/Agent` into a separate Swift package until dependency boundaries are clearer.
+- **Defer separate Settings scene**: Keep settings in the main window sidebar.
+- **Defer UI automation**: Invest in coordinator unit tests first.
+
+
+# Tesseract
+
+Tesseract is a privacy-first, fully offline AI assistant for macOS — dictation,
+text-to-speech, and a tool-calling LLM agent, all running on-device on Apple
+Silicon. Those constraints (no cloud, one GPU, sandboxed) shape most of the
+language below.
+
+This file is the domain glossary — terms only, no implementation detail.
+Structure lives in `ARCHITECTURE.md`; decisions in `docs/adr/`; rationale in git
+history.
+
+## Language
+
+### Prefix cache snapshot lifecycle
+
+**Prefix-View Checkpoint**:
+An interior snapshot owning only its whole-state layers, their metadata and its
+token offset; its attention rows come from a resident descendant leaf. It owns
+no attention bytes and is never an eviction victim. A transient boundary is a
+request-local Prefix-View Checkpoint: it is never admitted as a tree body and
+resolves its Backing Leaf only when consumed after the turn. The live leaf a
+think-stripping turn checks in to back it is released once the canonical leaf
+is admitted, so a boundary turn leaves one resident leaf (ADR-0068 amendment).
+_Avoid_: shared KV, copy-on-write checkpoint, partial leaf.
+
+**Backing Leaf**:
+The resident, unleased, full-body descendant chosen at **Snapshot Resolution**
+for one **Prefix-View Checkpoint** restore, including a **Warm Body**. It is never
+recorded on the view node. A hit served through the view credits the Backing
+Leaf's recency and hit count as a direct hit would, and while it alone keeps
+the view alive its terminal **Recovery Cost** spans the view's prefix as well
+(ADR-0068 amendment).
+_Avoid_: parent body, permanent backer, shared owner.
+
+**View Materialization**:
+Producing live cache objects from a **Prefix-View Checkpoint** by copying its
+whole-state layers and the **Backing Leaf**'s leading attention rows, with warm
+attention dequantized after slicing. The result
+belongs to the request or an SSD payload, never to a new tree body.
+_Avoid_: view promotion, alias restore, materialization on backer departure.
+
+**Hot Leaf**:
+A movable fp16 leaf body eligible for **Leaf Handoff**: a leased leaf or the
+most recently checked-in leaf of a path in the **Hot Leaf Set**. It is exempt from compression.
+_Avoid_: warm leaf, pinned leaf.
+
+**Hot Leaf Set**:
+The bounded set of paths whose most recently checked-in leaves stay exempt
+from compression, ordered by check-in rather than lookup recency. Leased
+leaves are exempt independently of this set and its path limit.
+_Avoid_: Budget Floor, hottest snapshots.
+
+**Warm Body**:
+A RAM-tier body with quantized attention layers, restored by copy through
+dequantization and never checked out by move.
+_Avoid_: quantized live cache, compressed leaf lease.
+
+**Stored Form**:
+The per-partition dtype policy for bodies at rest, warm and on SSD: fp16 or
+quantized at a given bit width and group size. It is part of cache partition identity.
+A partition with a **KV Scheme** stores the scheme's TurboQuant layers.
+_Avoid_: live KV dtype, per-segment compression choice.
+
+**KV Scheme**:
+How a request holds its full-attention KV once its prompt is prefilled: full
+precision, or TurboQuant (`turbo8v4`: 8-bit affine keys, `turbo0v4`: bf16 keys,
+both with 4-bit values). The KV Cache Compression setting picks it for a model
+that supports it (Qwen3.8-27B). It is a request fact and part of cache partition
+identity (ADR-0083): the prompt prefills unquantized, the cache converts after
+prefill (inside the iterator on a DFlash2 turn and on an **Unkeyed
+Completion**, where the iterator runs the prefill), and the turn's leaf
+stores compressed layers that only a request of the same scheme restores.
+_Avoid_: kvBits (the unrelated affine quantization the product never sets), KV
+quantization (ambiguous between the two).
+
+**Snapshot State**:
+The per-radix-node lifecycle value: a six-case enum (`empty`, `ramOnly`,
+`pendingWrite`, `pendingDropped`, `committed`, `ssdOnly`) encoding which tier(s)
+hold a node's KV-cache snapshot and its write phase, owning both the RAM body and
+the **Snapshot Ref**. Distinct from the on-disk **Snapshot Ref**, which carries no
+phase.
+_Avoid_: storage-ref lifecycle, slot, residency; state (unrelated to MLX layer
+state and `@Observable` view state).
+
+**Snapshot Ref**:
+The immutable on-disk identity of a snapshot — what it is and where on disk it
+lives, never the write phase (that phase is the **Snapshot State** case carrying
+it).
+_Avoid_: SnapshotStorageRef, storage ref, descriptor.
+
+**Snapshot Admission**:
+The write side of the prefix cache: an already-validated value pairing captured
+snapshots with payloads and per-snapshot RAM-only vs RAM+SSD storage intent.
+Built only at the MLX extraction edge so invalid write shapes are
+unrepresentable; the read-side counterpart is **Snapshot Resolution**.
+_Avoid_: capturedPayloads plumbing, payload alignment, storeSnapshots payloads.
+
+**Deferred Payload Extraction**:
+Building a snapshot's SSD payload without copying its bytes: the extraction edge
+fixes the byte total (slicing and evaluating a **Leaf Extension Admission**'s
+suffix on the Metal-affine caller), and the SSD writer borrows no-copy host views
+of evaluated contiguous arrays on its own task right before the file write. Each
+view retains its array until its layer's bytes have been written, then releases
+it. Header and blobs go directly to the file in bounded chunks, without a full
+output buffer. **Snapshot Admission**, eviction and **Snapshot Demotion** on the
+MainActor and a **Leaf Admission** on the inference thread never pay a full-KV
+host copy. A full payload's arrays are the body's own and exclude checkout until
+the write releases them, except for a Prefix-View Checkpoint's full-format
+payload. View and extension payloads retain no body array: their attention
+prefix or suffix and their whole-state layers are independent evaluated copies
+the extraction edge *detaches* there.
+_Avoid_: lazy payload, async extraction, background asData, payload streaming.
+
+**Snapshot Payload**:
+The SSD tier's byte form of one snapshot: the whole body, a **Leaf Extension
+Admission**'s suffix past its base, or a **Prefix-View Checkpoint**'s
+materialized prefix, each array under a stable dtype name that is part of the
+on-disk contract. **Deferred Payload Extraction** builds it, and whether an
+extension is worth writing instead of the whole body is its rule too.
+_Avoid_: SSD payload (unqualified); serialized snapshot, wire format (the
+container framing around the payload is separate).
+
+**Layer Kind**:
+The one fact a snapshot layer carries about how its arrays relate to the token
+axis — *sliceable attention* or *whole-state* — derived once, from the vendor
+cache class and the array shapes, when the layer state is built (captured,
+moved, deserialized, or hydrated from a **Segment Chain**), and read by every
+consumer that slices, composes, trims or rebuilds. Sliceable attention
+(`KVCacheSimple`, `QuantizedKVCache`) has arrays that cover the snapshot's
+offset along the token axis, so a token-range slice is exact; whole-state is
+recurrent, rotating and chunked state, plus any attention layer whose arrays
+fail that shape guard, which then rides whole. The extraction edge slices the
+former into a **Leaf Extension Admission** and detaches the latter whole;
+check-out eligibility hands off only trimmable sliceable attention beside
+recurrent whole-state; **Leaf Rewind** trims the former and rebuilds the latter.
+**Capacity Compaction** (#534) rebuilds sliceable attention at the offset's
+rows plus one growth step, on **Leaf Rewind** and at check-in, when the rows a
+generation grew into but no longer addresses exceed the smaller of a quarter
+of the body and 64 MB (the 2026-09-21 profile: a cancelled long generation
+retains 50–117 MB, an ordinary check-in 5–17 MB); whole-state and quantized
+layers are untouched. _Avoid_: trim (trim moves the offset, the arrays stay).
+_Avoid_: demoted (a mis-shaped attention layer *is* whole-state — **Snapshot
+Demotion** is the RAM-to-SSD move); layer type; class-name matching (a consumer
+reads the kind, never re-derives it); sliceable class (the class alone is not
+the kind — the shape guard is part of it).
+
+**Snapshot Admission Path**:
+The validated token path carried by a **Snapshot Admission** — the proof that a
+snapshot may be stored at a given token offset, checked before any cache mutation.
+_Avoid_: promptTokens, storedTokens (both name unrelated token fields), offset
+guard.
+
+**Leaf Admission**:
+The one way a leaf enters the prefix cache, whichever producer made it: a
+finished turn, a boundary re-prefill, a **Speculative Canonical Prefill**, or a
+salvaged cancelled prefill. The producer brings the cache to its final state and
+says whose it is. The admission decides move or copy, checks a leased leaf in
+through its **Cache Claim** before anything is extracted, builds the **Snapshot
+Payload** and the **Snapshot Admission**, and classifies what the admission
+evicted and superseded. Its extension base is settled before the **Model
+Session** is entered; every other step runs inside it.
+_Avoid_: leaf write ("write" is the SSD tier's word, as in **Guarantee-Class
+Write**); Leaf Store (the phase that decides whether a turn stores a leaf, and
+which); **Leaf Admission Builder** (the boundary route's plan, which a Leaf
+Admission carries out); admission tail (the retired hand-sequenced shape).
+
+**Snapshot Resolution**:
+The read side of the prefix cache: resolve a token path to the best usable
+snapshot, returning a hit or a miss. The read-side counterpart to **Snapshot
+Admission**; distinct from `restoreCache`, the later model-affine step that applies
+a resolved snapshot into a live cache (resolution picks *which*, restore
+*applies* it). Owned by the **Prefix Cache Manager** as its single read-side
+entry, never a free-standing module reaching back across the manager's mutation
+seam. The lookup-then-hydrate *choosing* — the Hydration Gate outcome, the
+promote-on-success vs typed-cleanup-on-failure fork, the gate-fallback shapes —
+now lives in a pure decision ladder (`SnapshotResolutionLadder`) the manager
+consults; ownership is unmoved, the manager still performs every effect (the
+awaits, the tree/ledger mutations, the hydration call, pin placement, telemetry)
+and the ladder holds no references at all.
+_Avoid_: a standalone "hydrator" module (the retired shape that reached back into
+the manager — resolution is manager-owned); a ladder holding references to the
+manager/tree/ledger/hydrating handle (the retired hydrator's shape again — the
+ladder takes plain facts, returns decision values); **Snapshot Hydrating** (a
+different concept: the off-main handle, not the choose step); restore/restoreCache
+(the apply step, not the choose step).
+
+**Snapshot Hydrating**:
+The narrow off-main handle that **Snapshot Resolution** depends on to materialize
+a body-absent snapshot from SSD, satisfied by the concrete `SSDSnapshotStore` and
+an in-memory test peer — the second adapter that made the seam real. Carries only
+`loadSync`, `loadSyncPrefix`, and `recordHit`; a consumer needing broader SSD
+access reaches for the concrete store instead. The ADR-0001 off-MainActor
+hydration discipline lives at this seam.
+_Avoid_: widening it before a second caller needs a member; the concrete store's
+full surface; mock/stub (the in-memory peer is a real adapter).
+
+**Leaf Handoff**:
+Transferring a conversation's KV cache objects between their only two possible
+owners — the radix tree and a running generation — by move, never by copy and
+never by alias: the finished turn's live cache becomes the leaf as it is, and
+the request that extends that leaf takes the objects back as its live cache.
+A boundary turn's re-prefilled cache moves in the same way: it is the
+request's own by construction, so the capture takes it rather than copying it.
+Only at quiescent points; only for a leaf hit at its full offset that every
+layer can return from (**Leaf Rewind**); anything else restores by copy as
+before — except a check-out refused only for a pending full payload, which is
+worth the **Pending-Payload Wait** first.
+_Avoid_: copy-on-write restore (the alias ADR-0023 rejected — a handoff shares
+nothing between two owners); zero-copy (the SSD write still copies); cache
+sharing (one owner at a time, never two).
+
+**Leaf Lease**:
+The part of a **Cache Claim** that owns the leaf the request took by **Leaf
+Handoff**, from check-out to check-in: while it holds, the tree may not drop the
+body, demote it, clear the RAM tier of it, promote it into an SSD write, or let
+the SSD writer read from it. Ends only at check-in or **Leaf Rewind**; nothing
+else ends it, not even the claim's tripwire. The leased bytes stay counted even
+while the tree holds no body.
+_Avoid_: **Restore Pin** (the weak hold of a copy restore: it protects a path,
+it does not own a body); **Cache Claim** for the lease alone (the lease is one
+part of a claim); LLM gate (the inference arbiter's turn-taking, a different
+resource); lock, refcount (one owner needs neither).
+
+**Leaf Rewind**:
+Returning a leaf taken by **Leaf Handoff** to its exact pre-check-out state when
+the turn is cancelled, fails, or is intervened: the attention layers are trimmed
+back to the leaf offset and the recurrent layers' state is restored from the
+independent copy saved at check-out, including lengths, padding and state-slot
+metadata, then the leaf is checked back in unchanged.
+_Avoid_: **Think-Strip Rewind** (a render-caused prefix invalidation,
+unrelated); rollback (the vendor's speculative-decoding checkpoint, which aliases
+and is not used here); discard (the pre-handoff cancel outcome, which loses the
+conversation's cache).
+
+**Cache Claim**:
+One request's whole hold on the prefix cache: its lane in the **Active-Inference
+Reserve**, its **Restore Pins**, and, when it takes the leaf by **Leaf Handoff**, its
+**Leaf Lease**. **Snapshot Resolution** opens it, and it concludes exactly once,
+inside the request's **LLM Gate** turn. The claim is where the request learns whether it
+takes the leaf or restores by copy, and why; a claim that took the leaf ends only
+by check-in or **Leaf Rewind**, and the leaf is back before the pins and the lane
+are let go. Every keyed request holds one, a miss included; a **Speculative
+Canonical Prefill** pass holds its own, which never takes a leaf. A claim dropped
+without concluding, or concluded twice, is a bug its tripwire reports, not a
+leak an age-out trims.
+_Avoid_: Cache Turn (a turn is the conversation's generation turn); **Leaf Lease**
+or **Restore Pin** for the whole (each is one part of a claim); restore (the claim
+decides handoff or copy, and plan application performs the copy); lock, refcount.
+
+**State Effect**:
+The topology-only outcome of a **Snapshot State** transition: `settled`,
+`becameEmpty` (the sole trigger for the tree's self-heal node removal), or
+`ignored(reason)`. Carries no telemetry payload.
+_Avoid_: transition result, mutation outcome.
+
+**dropRef**:
+The forgiving SSD-writer callback edge that drops a *pending* **Snapshot Ref**.
+_Avoid_: clear ref, remove ref.
+
+**Committed Ref Cleanup**:
+The strict cleanup edge for a *committed* **Snapshot Ref** after a failed SSD
+hydration. Distinct from **dropRef** (pending refs) and **Explicit Ref Discard**
+(already-deleted backing).
+_Avoid_: generic ref clear, storage-ref cleanup.
+
+**Explicit Ref Discard**:
+The strict cleanup edge used when the SSD backing was already explicitly deleted or
+cancelled (e.g. leaf supersession); unlike **Committed Ref Cleanup**, may discard
+any ref-bearing state, not just a committed one.
+_Avoid_: hydration cleanup, generic ref clear.
+
+**canEvictNode**:
+The structural invariant query on **Snapshot State**: true iff the node holds no
+live **Snapshot Ref**, so removing it cannot orphan an SSD-resident snapshot.
+Distinct from **hasResidentBody** — a node can be removable yet hold a useful RAM
+body, and vice versa.
+_Avoid_: canRemove, isOrphanable.
+
+**hasResidentBody**:
+The RAM-budget query on **Snapshot State**: true iff the node holds a droppable RAM
+body. Distinct from **canEvictNode** (the SSD-ref orphan invariant).
+_Avoid_: body-removable, resident snapshot.
+
+### SSD snapshot ledger
+
+**Snapshot Ledger**:
+The in-memory authority over the SSD prefix-cache tier — which snapshots are
+resident, the byte budget, recency, and the durability of that record — and the
+type-protected, terminal-loss-scored eviction cut that decides what stays. It
+only decides and records *what changed*; the separate SSD store performs the
+file effects.
+_Avoid_: Snapshot Manifest Store; SSD store (the writer/body-I/O that composes the
+ledger — say "snapshot ledger" vs "SSD store"); eviction effects as ledger work
+(those are the store's).
+
+**SSD Residency**:
+One coherent read of the SSD tier's observable state — resident descriptors,
+the accounted byte total, extension-transfer shields, partition metas —
+captured under a single ledger lock hold. The typed observation surface for
+diagnostics and tests; the only sanctioned way to *read* the tier from
+outside (driving hooks for tests remain separate and effect-only).
+_Avoid_: ForTesting reads (the retired ad-hoc accessors this replaces);
+manifest dump (residency is the in-memory authority's view, not the disk
+file's).
+
+**Survival Gate**:
+The SSD admission pre-check that admits an incoming chain only if it would survive
+the eviction its own write triggers, skipping the write otherwise. It decides
+*whether* a write happens at all (unlike the **Leaf Extension Admission** worth-it
+gate, which decides the *shape* of a write already happening); it bites only under
+budget contention, and end-of-turn leaf writes bypass it.
+_Avoid_: judicious admission (the Marconi-paper mechanism this derives, not
+copies); admission policy (vague); write filter.
+
+**Adaptive Write Eagerness**:
+The admission-time skip of a non-guarantee SSD write while RAM comfortably holds
+the body and the node has not proven reuse — the copy would be pure redundancy,
+and **Recoverable Eviction**'s demote-before-drop persists it later if RAM ever
+needs the bytes back. Reuse re-earns the write: crossing the hit-count threshold
+issues a one-shot deferred-class promotion write off the lookup path. The
+end-of-turn leaf (guarantee class) is never deferred.
+_Avoid_: write throttling (a rate limiter — explicitly not built); lazy writes
+(the guarantee class is never lazy); HiCache write_through_selective (the
+precedent it extends with RAM-tier health, not the mechanism itself).
+
+**Storage Activity Gate**:
+The shared busy signal between the inference path and the SSD writer: while a
+hydration read or a prefill is in flight, deferred-class writes wait (bounded by
+a holdup ceiling; flushes force-drain), because concurrent large-block reads and
+writes on one NVMe device collapse total bandwidth. Guarantee- and
+write-through-class writes ignore it — durability outranks bandwidth.
+_Avoid_: I/O scheduler (it delays one write class, it does not schedule I/O);
+write lock (nothing blocks the inference side).
+
+**Endurance Ledger**:
+The persistent bytes-written / bytes-deleted counters for the SSD tier, keyed by
+write class and delete reason, bucketed hourly and daily, accumulated from the
+same diagnostics events the JSONL file sink records — so the counters reconcile
+with `ssdAdmit accepted` sums by construction. "Measure before throttle": it
+exists so a future write limiter would be justified by field data. Also buffers
+the panel's sparing notable events (partition invalidations).
+_Avoid_: write throttle, SSD protection (no such knob ships); telemetry store
+(the window-scoped event buffer — this ledger is eager and survives restarts).
+
+**Stale-Partition GC**:
+The warm-start reclaim of partitions unused past a fixed gap measured *relative
+to the tier's freshest partition's use stamp* — never the wall clock, so an idle
+tier ages together and survives any break, while an abandoned kv-config or
+template-digest variant of a still-active model ages out. "Use" is admission or
+an SSD hit; warm start itself never refreshes a stamp, and legacy stamp-less
+partitions are grace-stamped without inflating the anchor.
+_Avoid_: TTL, expiry (absolute-clock framings); cache eviction (that is the
+byte-budget LRU cut — GC is staleness, not space).
+
+**Warm-Start Plan**:
+The pure decision the **Snapshot Ledger** makes from a decoded manifest before
+touching disk: which partitions and descriptors to keep, the grace-stamp
+mutations, the **Stale-Partition GC** anchor cut with its typed invalidation
+reasons, the seed byte total, the persist-needed flag, and the file deletions as
+root-relative paths. The ledger performs it — install under the lock, persist per
+the flag, delete off the hot path — but decides none of it (ADR-0055; sibling to
+the **Eviction Candidate Policy**). The reused **Warm-Start Outcome** is the
+partitioned view it returns to the manager.
+_Avoid_: warm-start outcome as the whole decision (that value is only the
+manager-facing partition view the plan wraps); manifest rebuild (the corrupt-file
+directory walk that *feeds* a plan, not the plan itself); TTL/expiry framings
+(staleness is anchor-relative, see the Stale-Partition GC avoids).
+
+### SSD leaf extension
+
+**Snapshot Segment**:
+One on-disk file holding a token range of a persisted leaf — either a full
+snapshot from offset zero or the suffix a later leaf added past its base — with
+exactly one owner. Sliceable attention state stores only the suffix range;
+non-sliceable state rides whole in every segment.
+_Avoid_: delta file; diff; chunk (collides with prefill chunks); partial snapshot.
+
+**Segment Chain**:
+The ordered **Snapshot Segment**s that together materialize one committed leaf
+snapshot — the single unit the **Snapshot Ledger** admits, evicts, deletes, and
+hydrates. Bytes and budget are chain totals; one manifest entry owns the whole
+chain, with no cross-entry references, and any broken link condemns it all.
+_Avoid_: parent/child snapshots; snapshot lineage; delta chain.
+
+**Leaf Extension Admission**:
+A leaf **Snapshot Admission** whose SSD payload carries only the suffix past its
+base — the deepest SSD-backed ancestor leaf it supersedes — so a turn's write
+scales with new tokens, not conversation length. On acceptance the base's
+**Segment Chain** *transfers* to the new leaf rather than being deleted; a
+near-full suffix admits full instead, and a lost base degrades the leaf to
+RAM-only until the next turn self-heals with a full write.
+_Avoid_: delta admission (the design-phase working name); incremental write;
+suffix write-through.
+
+**Chain-Prefix Restore**:
+Hydrating only the leading **Snapshot Segment**s of a **Segment Chain**, up to a
+historical leaf boundary, to recreate a superseded ancestor's snapshot without its
+identity. The restore point is a tree-side reference resolving through the chain's
+single owning entry — never a second manifest entry — so every former extension
+boundary stays a zero-extra-bytes restore point for divergent futures.
+_Avoid_: partial hydration (suggests arbitrary offsets; restore points are segment
+boundaries only); chain split; sub-snapshot; cross-entry reference (the one-owner
+invariant still holds).
+
+### Image-aware prefix caching
+
+**Image Digest**:
+The exact-byte content identity of one image for prefix-cache keying — a hash over
+its raw encoded bytes as received. A re-encoded or resized variant of the same
+picture is a *different* digest: always a miss, never a wrong hit.
+_Avoid_: perceptual/pixel hash (digest is exact-byte, not visual), attachment ID
+(the UI's diffing UUID, not content identity), image fingerprint (collides with
+`ModelFingerprint`).
+
+**Cache Key Path**:
+The token sequence the radix tree is keyed on for one request — the prepared prompt
+tokens with each image's placeholder run swapped, length-for-length, for
+pseudo-tokens derived from that image's **Image Digest** (drawn from a range no
+vocabulary occupies). Same length and offsets as the model-facing prompt tokens but
+different values at image runs; the model never sees it.
+_Avoid_: prompt tokens (the model-facing sequence; identical only for text-only
+requests), token path (ambiguous near images), virtual/hash/key tokens.
+
+**Cache Key Space**:
+The per-request authority that holds the request's image table and reconciles the
+two token spaces — it produces the **Cache Key Path** and translates any
+render-space token sequence into key space, so everything that touches the radix
+tree shares one space, and collapses its key path back to render space (one pad
+per image) for the **Emitted Path Index**, which never holds an image's identity
+or run. Failing to build it yields an **Unkeyed Completion**; a later
+translation failure degrades only the consuming feature, not the request.
+_Avoid_: key path splice (a shallower predecessor), space converter, token mapper,
+render fixup.
+
+**Conversation Render**:
+The token-only rendering contract — family message-forming plus chat-template
+application, no pixel work — shared by the request edge, the planner's
+re-render, the leaf probes, the speculative future-shared-prefix probe pair and
+the stable-prefix detector's probe pair, identical to the shape prepare uses, so
+a probe render cannot drift from prepare's. Since 2026-09 a module, not a
+convention: one per-request value (`ConversationRender`) built at **Request
+Keying** where instance truth lives — image-agnostic, every render one pad per
+image — whose render verbs own the whole choreography — cache eligibility, the
+Render+Token Cache resolve, the template fallback, the no-generation-prompt
+merged context — so a call site can no longer wire an ingredient wrong (the
+issue #439 defect class). The two probe pairs use its cache-free probe verbs
+(cancellable, no cache telemetry). The render cache stays the implementation
+below it, and no server source outside the two applies the chat template
+(source-shape-tested); the processor `prepare` a bypassing request falls back
+to and the agent hand-off suffix, a plain-text encode past the last end-of-turn
+marker, stay outside by design. The **Generation Prompt** the planner once
+spelled by hand is measured inside it (ADR-0070).
+_Avoid_: re-render (unqualified), probe tokenization, per-call-site
+`applyChatTemplate` (the rendering it standardizes, not a synonym for it);
+RenderTokenSource (the dissolved predecessor — eligibility as a free-standing
+value each call site wired by hand); per-site resolve-or-fallback ladders (the
+retired shape).
+
+**Position Anchor**:
+The M-RoPE continuation state a warm-restored conversation resumes generation at —
+the restore offset plus the rope delta the cached prefix accumulated —
+reconstructed per request from the image table, never persisted. Vision-container
+only; a text prefix has no anchor (delta zero), and an image landing in the
+restored remainder is positioned *from* the anchor rather than recomputed cold.
+_Avoid_: rope delta (the vendor-internal ingredient, not the concept), position
+offset (collides with cache/token offsets), mrope state.
+
+**Unkeyed Completion**:
+A **Server Completion** served with zero cache participation — no lookup, no
+admission — because no valid **Cache Key Path** could be built (typed reasons:
+unrecognized placeholder family, placeholder-run count ≠ image count). It is correct
+serving, discovered after prepare, never a route bounce and never an error.
+_Avoid_: prefix-cache bypass (a route decision, not this), fallback completion,
+in-actor `nil` return (a retired pattern), degraded mode (unqualified).
+
+### Vision capability and mode
+
+**Vision-Capable Model**:
+A model whose on-disk config declares image input (the Qwen3.5-family
+`vision_config`); text-only checkpoints do not. Fixed for a downloaded model —
+distinct from **Vision Mode**, which is whether that capability is currently
+loaded. Every **PARO Checkpoint** in the catalog declares image input.
+_Avoid_: "vision model" (ambiguous with the loaded container), "multimodal" (there
+is no audio/video input path), "supports images" as a per-request flag, Text-Only
+Override (retired by ADR-0089: no catalog entry withholds the image input its
+checkpoint declares).
+
+**Vision Mode**:
+Whether a **Vision-Capable Model** is currently loaded as its image-able VLM
+container rather than its text-only one — a load-state of the loaded model, never a
+property of the model itself. The HTTP server always loads the VLM container; the
+chat loads it unless the user opts out globally.
+_Avoid_: "vision enabled" as a per-message attribute, conflating it with
+**Vision-Capable Model**, per-turn vision toggle (retired).
+
+**Image Input Availability**:
+The chat-composer verdict on whether image affordances appear: the selected model
+is a **Vision-Capable Model** *and* the global "use vision when available" setting
+is on. A UI/input decision, not a load request and not a property of an attachment.
+_Avoid_: per-turn vision toggle (retired), disabled-but-accepted images, attachment
+capability.
+
+**Vision Token Budget**:
+The per-image ceiling on vision tokens (hence image patches) a processed image may
+contribute, bounding the vision tower's quadratic global attention; a default the
+app sets, raisable per request. It governs only the processed grid the tower sees,
+so the same picture keeps the same **Image Digest** while its placeholder run
+shrinks. Distinct from the request-wide *patch guard*, which prices a turn's
+combined patches and rejects an over-budget many-image turn before the tower runs.
+_Avoid_: "max pixels" (the processor knob it rides, not the concept), "image
+downscaling" (the mechanism), "resolution cap" (names the input, not the
+vision-token unit), conflating the per-image budget with the request-wide patch
+guard.
+
+**Appshot**:
+A hotkey-invoked capture of the frontmost window — whatever window that is,
+Tesseract's own included — staged as a pending composer image identified by its
+source app name and window title. Image-only: no accessibility text is read from
+the captured window.
+_Avoid_: snapshot (owned by the prefix cache lifecycle), "capture" unqualified
+(dictation vocabulary for voice), screenshot (generic any-pixels; an Appshot is
+the frontmost window specifically).
+
+### Model catalog
+
+**Model Catalog**:
+The read-model answering which models exist and which are usable — the join of the
+static model-definition table with live download state, answering
+downloaded-in-a-category, is-this-downloaded, and the **Vision-Capable Model**
+check. The one home for the category-filter × downloaded join callers used to
+re-derive inline.
+_Avoid_: "model registry" (registry collides; this is a read-model), the raw
+statuses dict (that is download state, not the catalog), download facade, model
+list.
+
+**Catalogue vs download state**:
+What models *exist* is the static definition table — category and identity, no
+runtime input; what is *on disk* is per-id download status. The **Model Catalog**
+is their join; raw download status (downloading, verifying, error, progress) stays
+directly readable for download UI and is not a catalog question.
+
+**Model Fetching**:
+The narrow hub port below the model download lifecycle — list a repo's files,
+fetch one file — satisfied by the HuggingFace-backed production adapter and a
+scripted in-memory test peer. Disk stays outside the seam: file checks and
+status computation run against the real file system.
+_Avoid_: hub client (one adapter, not the seam), download client/backend, model
+fetcher; widening it past the two verbs before a second consumer needs a
+member.
+
+**Vision Capability Memo**:
+The per-model-id cache of the **Vision-Capable Model** disk probe, held once and
+shared by every caller; a known answer is cached permanently while an undownloaded
+model answers `false` uncached so a later download re-probes. Distinct from
+**Vision Mode**: this memoizes intrinsic capability, not load-state.
+_Avoid_: vision toggle (a **Vision Mode** concept), per-view capability flag.
+
+**Model Completeness**:
+When a catalog entry's folder counts as downloaded. The default is any file
+with the entry's required extension, at any depth. The Voice Engine uses the
+speech engine's own checkpoint rule instead (`Qwen3Checkpoint`: talker weights,
+text tokenizer, speech tokenizer), so the catalog can't show a folder as
+downloaded that the engine refuses to load.
+_Avoid_: "has weights" (one nested `.safetensors` is not a checkpoint), verify
+(that compares sizes against the hub listing, a separate step).
+
+**Retired Checkpoint**:
+A directory in the model store that an earlier catalog entry downloaded and
+that no entry lists or loads anymore. Removed once at launch, because the
+Models page shows only catalog entries and offers no way to delete it. The one
+today is the Voice Engine's bf16: the entry downloaded it while `SpeechEngine`
+loaded q6. The entry and the engine now read one spec,
+`ModelDefinition.textToSpeechModelSpec`.
+_Avoid_: orphaned model, legacy download (both suggest the user chose it).
+
+### Prefill orchestration
+
+_The Prefill Plan entry and the terms after it name the design ADR-0087
+proposes. Until it is built, plan application still derives the shape, the
+Capture Schedule, the split and the Maximum Advance inline._
+
+**Prefill Plan**:
+Everything one keyed request's prefill does that is decidable before the
+**Cache Claim** check-out, decided by the Prefill Planner as one value: its
+**Cache Opening**, the **Image Span** and **Text Tail** it forwards, where the
+**Position Anchor** is seeded, its **Capture Schedule**, its **Decode
+Handover** and its **Maximum Advance** (ADR-0087). It carries offsets, ranges
+and enums only, never snapshots, token arrays or the Speculation Plan's
+drafters; plan application carries it out inline and re-derives none of it.
+_Avoid_: prefill config; generation params (a separate notion); checkpoint plan
+(an input the plan filters, not the plan); the stable-prefix offset as one of
+its fields (it reaches the plan only through the checkpoint plan); restore
+point (a **Chain-Prefix Restore** term).
+
+**Cache Opening**:
+How a keyed request's cache opens before its prefill: cold, from a fresh
+cache; restore, where the **Cache Claim** is asked for the resolved snapshot
+and a restore that yields no cache falls back to the planner's cold prefill
+(ADR-0069 amendment); or whole prompt, where the Speculation Plan's iterator
+prefills the whole prompt into a fresh cache.
+_Avoid_: restore mode (what the restore turned out to be, an execution
+report); opening, unqualified (the Companion's **Day Opening**); restore
+shape (the five shapes are products of the opening and the forward).
+
+**Minimum Warm Offset**:
+The end of a request's last image run in its **Cache Key Space**, or zero for
+a text-only request. Below it a prefill must forward an **Image Span**; at or
+past it the remainder is text, and no checkpoint below it is captured.
+_Avoid_: image prefix end (true only of a cold span); warm offset clamp; warm
+as in **Warm Body** (here it means the first offset a restore can continue
+from as text, not a compressed tier).
+
+**Image Span**:
+The key-space range an image-bearing prefill forwards through the anchored
+vision continuation: from the restore offset, or zero, to the **Minimum Warm
+Offset**. It carries only the images whose runs fall inside it and skips the
+pixel rows of the images already cached.
+_Avoid_: image prefix (only the cold span); vision prefix; restore point (a
+**Chain-Prefix Restore** term).
+
+**Text Tail**:
+The text a prefill forwards after any **Image Span**: from the restore offset
+(zero when cold), or from the **Minimum Warm Offset** after a span, to the end
+of the prompt. The app's chunked prefill runs all of it, or only up to the
+split under a speculative **Decode Handover**. Its start is the one offset
+checkpoints are based at, the split counts from and salvage measures its
+progress from.
+_Avoid_: execution base offset (plan application's local, which ADR-0087
+replaces); prefill base offset (the cached-token count, which differs after a
+span); suffix, unqualified; the tail (in ADR-0059 and ADR-0079, the
+speculative iterator's own prefill from the split).
+
+**Capture Schedule**:
+The checkpoints one prefill captures: the planned checkpoints past what is
+cached and at or past the **Minimum Warm Offset**, plus the prefill's
+**Transient Boundaries**, a planned type winning at a shared offset. The
+chunked prefill also cuts its chunks at these offsets.
+_Avoid_: checkpoint plan (the resolution-side input it filters); capture map
+(its executor form).
+
+**Transient Boundary**:
+A **Prefix-View Checkpoint** captured at the end of the last message or the
+last user message, to synthesize this turn's leaf or seed a **Speculative
+Canonical Prefill**. Of the two boundary offsets, a prefill captures the ones
+past what is cached, at or past the **Minimum Warm Offset**, inside the
+prompt and off every planned checkpoint; a text-only request under a
+**Preserve-Thinking Render** captures none.
+_Avoid_: boundary checkpoint (a telemetry field); boundary helper, helper
+checkpoint (the older name in ADR-0019, ADR-0064 and ADR-0068, and today's
+local); planned checkpoint.
+
+**Decode Handover**:
+Where a prefill hands the prompt to the decode iterator: autoregressive, where
+the app prefills the whole **Text Tail** and the standard iterator decodes from
+its last token; or speculative at a split, where the app's capturing prefill
+runs to the split and the **Speculation Plan**'s iterator prefills the rest. A
+keyed split never precedes the **Minimum Warm Offset**, so the iterator takes
+text only.
+Any generation path can name its own.
+_Avoid_: decode route, speculation route (route belongs to the **Prefill
+Strategy** and the **Completion Route**); decode handoff (handoff is the
+**Leaf Handoff**'s word for moving a leaf between owners).
+
+**Maximum Advance**:
+How far one turn may grow its cache past what it restored: its new prompt
+tokens, plus the output ceiling, plus the speculative allowance; unbounded
+without a ceiling. The **Cache Claim** judges check-out eligibility against
+it, and the **Active-Inference Reserve** prices the turn's growth at it.
+_Avoid_: max tokens (output only); LeafCheckout.maximumAdvance (retired).
+
+**Prefill Strategy**:
+The chunked-vs-single-shot route for one raw-generation prompt (the agent chat
+arm), decided once from the prompt's shape —
+token dimensionality, sequence length, media presence, step size. 2D text-only
+prompts longer than one step chunk through the app driver; everything else goes
+single-shot to the token iterator (ADR-0044).
+_Avoid_: **Prefill Plan** (the server path's richer pre-prefill value); chunking
+flag; VLM path (the model class is one input, not the route).
+
+**Leaf Admission Builder**:
+The GPU-free routing decision for storing one leaf snapshot on the boundary path,
+in two steps: the reusable-prefix probe that finds the token path a future
+continuation will share, then a capture-from-boundary plan or a typed skip
+reason. A turn the fast path takes (Live Leaf Capture) never enters it. It
+decides; the boundary executor re-prefills and a **Leaf Admission** does the
+capture and admit.
+_Avoid_: leaf store mode (one input, not the whole story); capture port (it returns
+a decision, not a capture).
+
+**Emitted Path**:
+The token path a conversation prefix actually took through the model on this
+server — the prompt ids as fed plus the generated ids, ending with the canonical
+end-of-turn id; kept in render space, each image's fed run collapsed to the
+template's single pad, so the path names no image. The truth for every
+assistant turn the server generated; a canonical re-encoding of such a turn is
+not it.
+_Avoid_: **Cache Key Path** (the prompt as keyed, which the Emitted Path begins
+with); generated tokens (only the tail); canonical path, stored path (the
+re-render's encoding, which the Emitted Path replaces for server-generated
+turns).
+
+**Emitted Path Index**:
+The per-model-fingerprint map from a rendered prefix — the template's bytes from
+the start of the render through a server-generated assistant message's
+end-of-turn marker — to that prefix's **Emitted Path**. Keyed on the whole
+prefix so the same text after a different history is a different key; bounded in
+bytes, evicted least-recently-used, cleared on model unload; last writer wins on
+a same key. Image-agnostic: the render bytes carry one placeholder per image and
+the path one pad, and an image's identity and run enter through the request's
+own **Cache Key Space** and grids after the resolve.
+_Avoid_: token cache (the Render+Token Cache holds canonical encodes and never an
+emitted id); session table, lineage store (nothing is keyed by client or
+session); the tree (KV lives there — the index is provenance and outlives the
+leaf it points at).
+
+**Emitted Path Resolve**:
+The one way a request's tokens are built: render to bytes, find the deepest
+end-of-turn marker the **Emitted Path Index** knows, take that entry's path,
+canonically encode only the bytes after the marker, concatenate. Its output is
+both the model input and the **Cache Key Space** input; anything unindexed
+encodes canonically and is a safe miss. For an image-bearing request the
+**Request Keying** edge then expands each pad into the run the processor placed
+for that image, so the model input is the resolve's list at prepared length.
+_Avoid_: tokenize (the resolve may not tokenize an indexed prefix at all);
+render-and-encode (the per-call-site spellings it replaces); lookup (the tree's
+read side, which consumes the resolve's output).
+
+**Live Leaf Capture**:
+Storing a finished turn's leaf straight from the live decode cache at the
+cache's own offset, under the **Emitted Path**, with no re-prefill. By
+construction for a turn the **Emitted Path Index** registers: the path the leaf
+is keyed on is the path the model fed, so nothing is compared against a
+re-render; only structural eligibility (an intervened turn, no fed ids, an
+offset outside the live path) sends a turn to the boundary path.
+_Avoid_: cache reuse (too broad — the prompt hit is also reuse); proven
+append-stability (the ADR-0062 shape — a per-turn comparison the index made
+unnecessary); preserve-thinking fast path (the render mode makes a turn
+indexable; the index makes it exact).
+
+**Append-Stable Render**:
+The property of a chat-template render under which a finished turn's canonical
+re-render equals the token path the model was fed — prompt plus emitted ids —
+followed only by template glue. A property some templates have and the cache no
+longer depends on: with the **Emitted Path Index** a server-generated turn is
+keyed on what the model fed whether or not the re-render would have matched.
+_Avoid_: preserve-thinking (a render mode that usually has the property, not the
+property); canonical render (the re-render itself, which may or may not be
+append-stable); a cache invariant (it was one under ADR-0062; it is a template
+observation now).
+
+**Think-Strip Rewind**:
+The prefix invalidation a thinking template causes when a new real user message
+arrives and the template strips the `<think>` blocks it had kept in the assistant
+turns since the previous user query, forcing everything past that divergence point
+to re-prefill. It is bounded — not removed — by the canonical-leaf probe.
+_Avoid_: cache miss after tools (the felt symptom, not the mechanism); template
+drift (the render is deterministic); client mutation; **Leaf Rewind** (returning
+a checked-out leaf to its prior state — an ownership mechanism, not a template
+artifact).
+
+**Client Prefix Divergence**:
+A deep prefix-cache loss caused by the client changing early tokens of its own
+prompt mid-session (e.g. OpenCode re-injecting the live content of an AGENTS.md
+the session itself is editing) — the tokens genuinely differ, so the re-prefill
+is correct, and the loss is attributed at lookup, never "fixed" with fuzzy
+matching. See `docs/prompt-cache-client-divergence.md`.
+_Avoid_: cache bug, server-side loss (it is neither); **Think-Strip Rewind** (the
+tail-local cousin — a template artifact, not a client prefix change).
+
+**Tool Stretch**:
+The span of assistant turns and tool results since the last real user message — the
+region a thinking template renders with `<think>` kept, and the exact span a
+**Think-Strip Rewind** re-renders. A longer stretch means a larger rewind.
+_Avoid_: agentic loop, tool session (client-side vocabulary); turn (a stretch spans
+many turns).
+
+**Stretch Abandonment**:
+The event that a **Tool Stretch**'s continuation never arrives — the client aborts
+the in-flight stream, or no follow-up lands within a short idle window after a
+tool-calls finish — signaling the next request is likely a real user message and
+seeding **Speculative Canonical Prefill**.
+_Avoid_: cancellation invalidating the cache (nothing is invalidated); interrupt
+handling (UI vocabulary); abandoned request (the stretch is abandoned, not one
+request).
+
+**Speculative Canonical Prefill**:
+The post-turn countermeasure to the **Think-Strip Rewind**: after a final answer or
+a **Stretch Abandonment**, re-prefilling the think-stripped render of the completed
+span in the background so the next user turn restores at full depth instead of the
+rewind point.
+_Avoid_: cache warming (this targets one known future path, not general
+pre-population); background generation (it prefills, never decodes).
+
+**Rewind Telemetry**:
+The three numbers that make a **Think-Strip Rewind** observable without reproducing
+it — the divergence offset, the restore floor, and their gap (the rewind size).
+_Avoid_: cache miss (a rewind is a partial hit at a deeper-than-zero floor); latency
+spike (the symptom, not the measured cause).
+
+**Preserve-Thinking Render**:
+A render mode, declared by a template that natively supports it, that keeps
+`<think>` blocks in every assistant turn so the render is append-stable and the
+**Think-Strip Rewind** cannot occur. Whether it is the template's default or a
+per-model choice is the template's business; being part of the template context,
+the flag is part of the cache partition, and retained reasoning permanently
+occupies context.
+_Avoid_: think retention hack (vendor-sanctioned where the template declares it);
+template patching (vendor templates are never edited); global setting (per-model).
+
+**Generation Prompt**:
+What the chat template appends after the last message to open the assistant
+turn under one render context — on the Qwen3.5/3.8 templates an open `<think>`
+block by default, a closed empty one when the request turns thinking off.
+Measured from the template, never spelled by hand; whether generation starts
+inside a think block, whether the turn carries one the template will later
+strip, and where the last-message boundary sits are all read from it
+(ADR-0070).
+_Avoid_: prompt-starts-thinking (the retired load-time guess, blind to a
+request's kwargs); generation-prompt string (a hand-spelled copy of it);
+assistant header (only its family-specific first part).
+
+### Reasoning effort
+
+**Reasoning Effort**:
+The native thinking-depth level of an effort-declaring chat template
+(`low`/`medium`/`xhigh`; Qwen3.8 is the first): a template kwarg whose value is
+prose injected into the request's *first system block* — so each level is a
+distinct prefix from token 0 and its own cache partition. The wire accepts the
+union of the OpenAI and Qwen vocabularies mapped to native levels; the kwarg
+is emitted only when it differs from the template's own default (`xhigh` for
+Qwen3.8), so omitted-or-default keeps the canonical render. Capability is
+template introspection, never model name (ADR-0060).
+_Avoid_: thinking level (Pi's client-side vocabulary); a sampling parameter (it
+changes the prompt, not the sampler); erroring on effort for a
+non-declaring model (it is ignored with a log line).
+
+### Server completion
+
+**Server Completion**:
+The actor-confined module that owns one cache-aware HTTP completion on the LLM
+actor's isolation, executing what the prefill-orchestration decisions produce
+(resolution, restore, suffix prefill, the stream drive, admission, and the leaf
+capture). It is the model-affine execution stage, distinct from the HTTP framing
+edge and the output-projection stage.
+_Avoid_: CompletionHandler (the HTTP framing edge); CompletionProjection (the
+terminal output rules) — both are real types, say which; server engine; HTTP
+generation pipeline.
+
+**Completion Phase Map**:
+The six named phases of one cache-aware **Server Completion** (ADR-0033):
+**Request Keying** (conversation → the identities later phases key on, or the
+**Unkeyed Completion** degrade), resolution + plan (the Prefill Planner;
+under ADR-0087, proposed, it decides the whole **Prefill Plan**), plan
+application (inline by decision; under ADR-0087 it only carries the plan
+out), the stream
+drive (the Managed Generation Driver, shared with the agent), the leaf store,
+and trace accumulation. Phases are implementation structure inside the
+module's seam — the dispatcher's interface is unchanged — and each phase
+returns values; the completion module owns effects, except a leaf's: the leaf
+store decides which leaf, and its **Leaf Admission** stores it (ADR-0078).
+_Avoid_: pipeline stages (the Generation* family owns "stream" vocabulary);
+new entry points (ADR-0015's seam is untouched); extracting plan application
+(recorded shallow — see ADR-0033); shape logic in plan application (the
+inline derivation ADR-0087 removes).
+
+**Keyed Request**:
+What **Request Keying** yields for a request it can key: its identities (the
+partition, the **Cache Key Space**, the **Conversation Render**) together with
+every per-request fact later phases read, each derived once there — the
+**Generation Prompt**, whether it is text-only by instance truth (no image
+reached the model, whatever the request carried), the prefill step. Its
+counterpart is the **Unkeyed Completion**, which carries the same facts and no
+keys (ADR-0070).
+_Avoid_: request context, keyed turn; a fact re-derived at a call site (the
+defect class the value exists to end); the request's own image list as
+"text-only" (request intent, not instance truth).
+
+**Completion Trace Accumulator**:
+The fold of one cache-aware **Server Completion**'s trace facts into the terminal
+trace record — the terminal-vs-recovered eviction tally paired with its correlated
+diagnostics emission (so tally and log lines cannot drift), the restored-offset
+rule, and the admitted-snapshot projections. The drive feeds facts; the value
+decides what the record contains.
+_Avoid_: telemetry store (the window-scoped event buffer); trace logger (it
+derives, the diagnostics context logs).
+
+**Completion Route**:
+The dispatcher's pure decision for one server inference request — cache-aware versus
+standard-with-named-reason — computed from request shape alone, never from model
+state. Image-bearing requests route cache-aware; only video/audio (or undecodable
+images) yield a no-usable-conversation reason.
+_Avoid_: prefix-cache bypass (the retired in-actor `nil` returns); fallback flag;
+image bypass (decodable images are keyed, not bypassed).
+
+**Model Session**:
+The scoped, Metal-affine model handle **Server Completion** enters for one batch of
+model verbs (prepare, cache creation, restore, prefill, decode iteration, snapshot
+capture) — one session is one Metal-affine batch, so the ADR-0015 affinity
+discipline lives at this seam. Two adapters make it real: the container-backed
+production adapter and the toy-model-backed test peer that runs the module's
+sequencing without a downloaded model.
+_Avoid_: session (unqualified); Generation Session (the Generation* family is the
+token-stream vocabulary, not the model handle); Inference Session (collides with
+**Inference Arbiter**); model surface / perform wrapper (the mechanism, not the
+concept); widening it before a second consumer needs a member.
+
+**Raw Generation Start**:
+The one script that starts a whole-prompt-from-zero generation over a **Model
+Session** for an agent chat turn: tokenize through the session's agent-edge verb (the **Conversation
+Render**'s agent edge when eligible, the processor otherwise), emit the lookup and prefill progress
+events, decode through the session's **Speculation Plan** when it has one, else run
+the **Prefill Strategy** route, start the token-event loop, wrap
+the handles. It is the **Model Session**'s second consumer (ADR-0016 amendment);
+`LLMActor` keeps only the lifecycle around it. Never consults the prefix cache.
+_Avoid_: raw arm (the three retired `LLMActor` copies); standard path (the
+pre-cache name).
+
+**Stream Lifecycle Driver**:
+The module owning one streaming completion's transport-lifecycle race — the
+disconnect watch, the idle keepalive, and the drive as first-finisher-wins —
+behind injected transport closures, sitting below the ADR-0015 dispatcher seam.
+It is the reason a client abort cancels a long prefill promptly (and an idle
+prefill keeps proxies from timing out): `CompletionHandler` builds the SSE
+envelope and hands the race to the driver rather than constructing a task group
+inline; since **Completion Delivery** both transports run under it.
+_Avoid_: SSE framing (`SSEWriter`'s); the event pump (`CompletionDelivery.pump`);
+keepalive timer (one task inside it, not the module).
+
+**Completion Delivery**:
+The one script that carries a started HTTP completion from its first
+generation event to the client's last byte — register the dashboard cancel,
+record the cache lookup, open the response, drive the stream under the
+**Stream Lifecycle Driver**, project the terminal accumulator, emit the
+diagnostic, surface the malformed→text fallback, record the session replay,
+log and complete. It runs once for both transports; the streaming and
+non-streaming arms of `CompletionHandler` were two hand copies of it. Two
+rules it fixes: every drive runs under the driver (a dropped client cancels
+generation on either transport), and the replay record and `complete` follow
+only a fully delivered response.
+_Avoid_: completion pipeline; response writer (the sink's job); the two arms
+(retired).
+
+**Delivery Sink**:
+The transport adapter one **Completion Delivery** writes to — open, one
+per-event side effect, the Wire-Valid Close, the terminal envelope — behind
+which the script sees only "still connected". Two production adapters make
+the seam real (the single-JSON-body sink and the SSE sink, which owns the
+**Argument Transcoder** and the `[DONE]` sentinel); a recording peer makes it
+the test surface.
+_Avoid_: writer (`HTTPResponseWriter` is the socket, not the seam); output
+channel; transport (the driver's probe closures, which the sink exposes).
+
+### Streaming detokenization
+
+**Live Delivery**:
+The delivery of generated text and tool-call source deltas while generation is
+still in progress, preserving the reference decoder's chunk bytes and token-step
+timing, including its withholding of incomplete Unicode.
+_Avoid_: **Verified Replay** (reconstruction after generation); immediate delivery
+(which obscures incomplete-Unicode withholding).
+
+**Verified Replay**:
+The reconstruction of a completed turn's emitted chunks for **Emitted Path**
+fidelity, with each segment checked before its reconstructed chunks are accepted.
+_Avoid_: live audit (already-delivered text cannot be repaired); **Live Delivery**.
+
+**ByteLevel Decoding Capability**:
+Established compatibility of a tokenizer with incremental byte decoding that
+preserves reference chunks and their release steps, including literal added-token
+boundaries.
+_Avoid_: model-family support; sample-probe match (neither establishes the
+compatibility contract).
+
+### Streaming tool calls
+
+**Argument Transcoder**:
+The server-side component that converts model-native in-flight tool-call text
+(Qwen `<function=…>` XML, or the JSON wrapper body) into OpenAI
+`function.arguments` **Argument Fragment**s, incrementally. It engages only after
+the function name is locked and only for formats it understands (per-format
+strategies behind one seam); every other format keeps the atomic
+name-then-full-arguments emission. When engaged, its fragments are authoritative
+for the streamed wire — the parser's final tool call is a diagnostic
+cross-check, never re-sent.
+_Avoid_: tool-call streamer (the deltas already stream internally; this
+transcodes), converter (ToolCallConverter is the non-streaming id/JSON adapter),
+parser (upstream — it produces the deltas the transcoder consumes).
+
+**Argument Fragment**:
+One streamed piece of a tool call's `function.arguments` on the OpenAI wire. The
+concatenation of a call's fragments is the canonical arguments JSON: it must
+parse, and no strict prefix of it may parse (clients finalize on the first
+parseable accumulation). Schema-typed non-string parameter values are emitted
+whole at parameter close; string values stream progressively.
+_Avoid_: chunk (prefill vocabulary), delta (the internal parser event —
+`.toolCallDelta` carries raw model text, a fragment carries transcoded JSON).
+
+**Wire-Valid Close**:
+The closure rule for a tool call already on the streamed wire: there is no
+retraction, so any termination — malformation, cancel,
+max-tokens — synthesizes closers so the accumulated **Argument Fragment**s still
+parse as JSON, then the stream finishes with the appropriate finish reason. The
+malformed→text fallback survives only where nothing was streamed yet.
+_Avoid_: error recovery (the client's tool-error loop handles semantics; this
+only guarantees wire validity), abort (the stream ends validly, not abruptly).
+
+### Client integrations
+
+**Integration**:
+A supported external client (OpenCode is the first) paired with Tesseract's recipe
+for pointing it at the local server; each Integration is one adapter, and the set
+is open-ended.
+_Avoid_: connector, plugin, client config (the generated artifact, not the concept).
+
+**Setup One-liner**:
+The single copyable terminal command, served by the running server itself, that
+configures an Integration end-to-end and reflects live server state each time it
+runs.
+_Avoid_: install command, onboarding script.
+
+**Config Merge**:
+The server-side operation that regenerates Tesseract's own block in a client's
+config file while leaving everything else byte-for-byte intact — distinct from a
+deep merge, which would interleave fields.
+_Avoid_: config write, config sync, deep merge (explicitly not the policy).
+
+**Request Model Selection**:
+The contract governing which model a `/v1/chat/completions` request runs on: an
+absent `request.model` uses the selected agent model, a downloaded in-catalogue ID
+overrides it, and anything else is rejected as `model_not_found` — so `/v1/models`
+advertises exactly the downloaded agent models a client may pick.
+_Avoid_: ignoring `request.model`, advertising undownloaded catalogue models,
+treating the selected agent model as the server's only routable model.
+
+### Agent browser and MCP
+
+**Agent Browser**:
+The app-owned WebKit browser that agents drive — the single web-access path for
+every Tesseract web capability, always rendered in visible windows so the user
+can watch and intervene.
+_Avoid_: headless browser (visibility is the point), webview, computer use.
+
+**Agent Profile**:
+The persistent credential silo behind the **Agent Browser** — only the logins the
+user deliberately performs inside it, never imported from and never shared with
+the user's personal browsers. Curating what it is logged into *is* the security
+model.
+_Avoid_: cookie import, session sync, real/default profile.
+
+**Browser Session**:
+One MCP client's private set of tabs over the shared **Agent Profile**; sessions
+never see each other's tabs while login state is common to all.
+_Avoid_: shared tab set, global browser state.
+
+**Ephemeral Page**:
+A cookieless page outside the **Agent Profile** — the anonymous mode backing
+plain fetch and search, so casual reads don't carry the agent's identity.
+_Avoid_: incognito, private browsing.
+
+**Page Read**:
+The default read path — a readability-distilled markdown extraction of the
+current page, paginated under a hard token cap.
+_Avoid_: page source, raw HTML dump.
+
+**Page Map**:
+The interaction representation — a pruned accessibility-tree outline with stable
+element refs, requested only when the agent must act on the page rather than
+read it.
+_Avoid_: snapshot (collides with the prefix-cache Snapshot vocabulary), a11y
+dump, DOM tree.
+
+**Browser MCP Server**:
+The MCP endpoint the running app serves so external agents can drive the
+**Agent Browser**; Tesseract's own agent consumes it through its **MCP Client**,
+speaking the same protocol over an in-process transport (not the loopback
+socket, so browser-use in chat never depends on the inference server running).
+It is the _sole_ web-access surface — search, fetch, and interactive browsing all
+live here, with no standalone web tools beside it — and is governed by two
+independently-default-on switches: **Web Access** (its tools reach the in-app
+agent over the in-process transport, no port opened) and **HTTP exposure** (its
+loopback listener admits outside clients).
+_Avoid_: standalone server, stdio server, plugin API, web\_search/web\_fetch (the
+retired standalone tools).
+
+**MCP Client**:
+The in-app agent's client for Model Context Protocol servers (#190): it connects
+to configured HTTP servers — and to the app's own **Browser MCP Server**
+in-process — so their tools materialize in the agent's registry alongside
+built-ins, namespaced by server. Dogfooding the browser server through it
+(ADR-0027) keeps one honest tool surface.
+_Avoid_: plugin loader, tool proxy, RPC bridge.
+
+**Connected Server**:
+One configured MCP server the **MCP Client** talks to — URL, display name,
+enabled flag, optional headers. The **Browser MCP Server** is the pre-registered
+first entry (default-on; governed by the Web Access and HTTP-exposure switches
+above); user servers are added deliberately and persist through the
+**Settings Catalogue**.
+_Avoid_: integration, plugin, AgentExtension (that is the in-app tool-source type).
+
+**Tool Consent**:
+The explicit user approval a user-added **Connected Server** requires before its
+tools reach the agent — no third-party tool surfaces silently. Adding a server
+is the consent gate; disabling one instantly withdraws its tools.
+_Avoid_: allowlist, sandbox policy, capability grant.
+
+### Settings persistence
+
+**Settings Store**:
+The persistence seam between what a setting *means* and where its bytes live: a
+typed key-value port with default-on-read semantics, sitting *below* the
+**Settings Facade**, never as the module's public interface.
+_Avoid_: SettingsManager (that is the **Settings Facade** above it), UserDefaults
+(one adapter), preferences store; not the prefix-cache `SnapshotStore` — say
+"settings store".
+
+**Settings Store Adapter**:
+A concrete **Settings Store**. Exactly two — a `UserDefaults`-backed production one
+and an in-memory test one — and having two genuine implementations is what keeps
+the seam real.
+_Avoid_: backend, provider, mock (the in-memory one is a peer, not a mock).
+
+**Setting**:
+The single immutable declaration of one persisted setting: its key, its one
+canonical default, and its codec to a stored primitive.
+_Avoid_: preference, key, default (a **Setting** *has* those; it is none of them).
+
+**Settings Catalogue**:
+The table of all **Setting** declarations — the one home for every default, so
+default drift between initial load and reset is unrepresentable.
+_Avoid_: defaults dictionary, schema, registry.
+
+**Settings Facade**:
+The bindable, observable surface that SwiftUI reads and writes — one property per
+setting, forwarding persistence down to the **Settings Store** and hosting the few
+non-persistence side effects (launch-at-login, dock visibility) that have nowhere
+lower to live.
+_Avoid_: settings service, settings model, Settings Store (the seam beneath it).
+
+### Speech model ports and playback
+
+**Speech Recognizer**:
+The model-only ASR port below the `TranscriptionEngine` facade — load, transcribe,
+cancel a model, nothing more. Everything orchestral (timeout race, lazy load,
+lifecycle, error mapping) lives above it in the engine.
+_Avoid_: Transcribing (the engine-facing port the dictation coordinator swaps — a
+different seam, one layer up), WhisperKitSpeechRecognizer (one adapter),
+transcriber, ASR backend.
+
+**Speech Synthesizer**:
+The model-only TTS port below the `SpeechEngine` facade, faithful to the model
+surface (one-shot/streaming generate, **Reference Take** capture and
+conditioning, token offsets). The synthesis counterpart of **Speech
+Recognizer**.
+_Avoid_: SpeechEngine (the facade above it, not the port), Qwen3SpeechSynthesizer
+(one adapter), TTS backend.
+
+**Speech Model Adapter**:
+A concrete **Speech Recognizer** or **Speech Synthesizer** — the framework-backed
+production actor and its in-memory test peer. Exactly two of each.
+_Avoid_: mock, stub, model wrapper, WhisperActor/TTSActor (pre-seam names).
+
+**Audio Playback**:
+The main-actor sibling port below `SpeechCoordinator` that turns generated samples
+into sound — a collaborator seam, not a model port, and the distinction from
+**Speech Synthesizer** (which makes the samples) is the whole point.
+_Avoid_: AudioPlaybackManager (one adapter), AVAudioEngine (used inside it), player.
+
+**Streaming Scheduler**:
+The pure push-scheduling decider (ADR-0054) that the **Audio Playback** adapter
+and the in-memory peer both drive: the buffer counters, the start gate, finish
+detection, and the stream epoch that makes a stale buffer completion ignorable
+after a stop/restart. Verdicts out, every AVAudioEngine effect stays in the
+adapter — a policy/performer value machine like the capture engine's lifecycle
+and duck. Voice-session replies play through the same adapter (ADR-0082).
+_Avoid_: playback scheduler (AVAudioPlayerNode's own scheduling), stream pump
+(retired **Segment Playback** vocabulary), duplicating the fold per adapter (the
+pre-#395 shape).
+
+**Playback Diagnostics Dump**:
+The pure value that turns one TTS playback's captured samples plus conditions into
+the on-disk diagnostic artifact bytes (WAV + metadata) — the playback-side sibling
+of the dictation **Capture Dump**. The playback adapter feeds it and writes what it
+returns; encoding is byte-testable without an audio engine.
+_Avoid_: capture dump (the dictation ring buffer), WAV encoder (one part of it),
+debug recording.
+
+### Speech word timeline
+
+**Word Timeline**:
+The pure, immutable words of one spoken segment on a character line: where each
+word starts and ends when the words are joined by single spaces, and which word a
+character count falls in. For a segment without **Word Timing** the
+**Read-Along** places the heard character and the timeline names the word.
+Words split the way the engine, the **Word Timer** and the **Reader** split
+them: on whitespace and newlines.
+_Avoid_: WordPacing, pacing model (the retired fold the notch drove), word
+highlighter, overlay panel (a different, dictation surface).
+
+**Read-Along**:
+The one clock that says which word of the speech now playing is being heard,
+followed by both the **Reader** and the **Speech Overlay** (ADR-0076). It is the
+production **Word Highlight Surface**: segment scripts arrive seconds ahead under
+lookahead pacing, but a segment starts only when the heard time reaches its
+**Segment Window**. Inside a segment, the heard word is the last one whose
+**Word Timing** start has passed (ADR-0077); a segment without timing spreads
+its characters evenly over its audio. The word never moves back within an
+utterance. It samples the heard time (the playback head less the output's
+latency) 30 times a second and publishes only when the heard word changes.
+_Avoid_: TTS Word Tracker (retired with the notch: it switched text on arrival
+and ran ahead of the voice), karaoke, word state machine.
+
+**Word Timing**:
+When each spoken word's sound starts, found by the engine from the voice model's
+own attention (ADR-0077): the **Word Timer** follows the talker's **Alignment
+Head** through the segment's text and moves starts past the pauses the audio
+shows. It rides the **Utterance** stream as word starts, each after the audio
+it starts in. No transcription model runs.
+_Avoid_: forced alignment (a second model run on the audio), token offsets and
+the K1 invariant (the retired one-text-token-per-frame assumption), word
+tracker.
+
+**Alignment Head**:
+The talker attention head whose attention sits on the text token being
+spoken, frame by frame: layer 3, head 0 in the 1.7B checkpoints; layer 6,
+head 5 in the 0.6B. A property of a checkpoint family, measured once
+(`docs/research/2026-09-27-word-timing-from-attention.md`) and carried by the
+model spec.
+_Avoid_: alignment layer, the probe (the mechanism that reads the head).
+
+**Word Timer**:
+The engine's pure follower of the **Alignment Head** for one segment: a
+forward-only path over the text's tokens, decided 8 frames behind generation,
+with each start moved to where the sound resumes after a pause. It counts frames
+as the silence cap kept them.
+_Avoid_: aligner (suggests a separate model), DTW (it decides as it goes).
+
+**Segment Window**:
+The single playback-time base a **Read-Along** places one long-form segment
+against — one value, so a time-base/duration-base disagreement is
+unrepresentable.
+_Avoid_: segmentTimeBase / segmentDurationBase (the old coupled pair this replaced),
+segment offset, time base.
+
+**Segment Playback**:
+Retired in engine v2 (ADR-0038): its stream-drain became the caller's
+`for try await` over an **Utterance**, its boundary poll became **Segment
+Script**'s `startFrame`, its pause poll became demand-based pacing. Kept here
+until the last v1 reference dies.
+_Avoid_: chunk loop, stream pump, playback driver, a config-flag loop.
+
+**Word Highlight Surface**:
+The main-actor port that `SpeechCoordinator` drives to render spoken-word
+highlighting (show, switch, time words, mark complete, dismiss). The production adapter is
+the **Read-Along**; a recording test peer makes the segment-boundary switch
+assertable. In engine v2 its switch timing comes from **Segment Script**
+ground truth, not playback bookkeeping.
+_Avoid_: notch overlay / TTSNotchPanelController (retired adapter, not the seam),
+highlight view, the **Lens** (the separate dictation overlay).
+
+### Speech page (ADR-0076)
+
+**Reader**:
+The Speech page: the owner's text of any length, its **Bookmark**, and the
+reading in progress. It starts speech from the bookmark or a selection, follows
+the **Read-Along**, and maps each heard word to a range of the text by counting
+words forward from where the previous segment ended. Nothing walks the whole
+document, so a book costs what a page costs.
+_Avoid_: composer (retired with the old page), player, speech editor.
+
+**Bookmark**:
+Where reading resumes: an offset into the **Reader**'s text, saved beside it.
+It follows the sentence being heard, moves with edits before it, and returns to
+the start once the text has been read to the end.
+_Avoid_: cursor (the text view's insertion point), playhead (audio time),
+progress.
+
+**Speech Overlay**:
+The floating panel that shows the words being read over every app, as an island
+at the top of the screen or captions at the bottom, following the **Read-Along**.
+It shows one continuous feed of the reading: the heard line on top, the next
+below, the column moving up a line as the voice reaches it; text is never
+swapped in place (ADR-0077). In its automatic scope it hides while the Speech
+page is in front. Replaced the TTS notch.
+_Avoid_: notch, TTS notch panel (retired), the **Lens** (the dictation overlay),
+pages (its retired two-line pages).
+
+**Voice Source**:
+Which voices the speech checkpoint offers: designed from a description
+(VoiceDesign) or a fixed list of **Preset Voices** (CustomVoice). The Speech
+page offers designing a voice only for a designed source.
+_Avoid_: voice mode, voice type, voice provider.
+
+### Speech engine v2 (ADR-0038)
+
+**Speech Session**:
+The voice-identity owner at the engine boundary: opened from a `SessionProfile`
+and a **Voice**, it holds the voice's **Reference Take** (per its policy),
+admits utterances one at a time, and dies by `close()`. Sessions survive engine
+unload as ingredient values.
+_Avoid_: generation session (an LLM concept), voice handle, session manager.
+
+**Utterance**:
+One admitted text→speech run: admission-time facts (sample rate, frames/s,
+segment count) plus the single event stream that is simultaneously the audio
+transport, the timing channel, the backpressure channel, and the cancellation
+token. Dropping it stops generation; cancelling the consuming task surfaces
+`CancellationError` untranslated.
+_Avoid_: speech stream (one field of it), generation handle, request.
+
+**Segment Script**:
+The per-segment value announced on the stream before its audio: text slice and
+the utterance-global `startFrame` — the **Segment Window** as ground truth from
+the generation loop, ending the estimator era. Its words' starts follow as
+**Word Timing** (ADR-0077).
+_Avoid_: segment metadata, offsets payload, token offsets (retired).
+
+**Reference Take**:
+One short rendering of a voice, kept as its codec frames plus the text they
+speak, that every later segment of the voice continues so it stays the same
+person (ADR-0072). It is the first segment a session renders, or the one
+"Try another take" renders; it is never encoded from audio.
+_Avoid_: voice anchor (the retired 48-frame KV prefix), reference audio, voice
+sample, seed.
+
+**Pinned Voice**:
+Voice identity as a serializable value: the description, its **Reference
+Take**, and a {model, precision, schema} fingerprint. A few KB, stored per
+designed voice so the voice survives relaunch. Restore validates the
+fingerprint and schema or throws; a seed is never voice identity (#339).
+_Avoid_: voice anchor, seed, voice id.
+
+**Preset Voice**:
+A fixed-timbre named speaker of a CustomVoice checkpoint: chosen from the
+checkpoint's own list, never designed, needing no **Reference Take**; the
+phone's voice identity. Distinct from **Pinned Voice**, which is designed from
+a description and holds a take.
+_Avoid_: speaker id (the wire field), custom voice (the checkpoint family, not
+the identity), voice preset, fallback voice (the system synthesizer that plays
+while a Preset Voice loads is not a voice identity at all).
+
+**Readiness**:
+The engine lifecycle ladder — `.unloaded` / `.loaded` / `.warm(priming:)` —
+driven by one idempotent `prepare` verb; warmup and voice-prefix priming are
+rungs, not separate APIs.
+_Avoid_: engine state (the observable presenter concept above the seam), load
+status.
+
+**Pacing Policy**:
+The demand-based backpressure contract: `.eager` or `.lookahead(segments: n)` —
+at most n undelivered segments beyond the in-flight one; the engine parks until
+the consumer pulls. Pause is its consequence, not an API.
+_Avoid_: throttling, playhead clock (rejected design), lookahead buffer.
+
+### Generation accumulation
+
+**Generation Accumulator**:
+The one value that folds an `AgentGeneration` event stream into a single assistant
+turn's accumulated state — text, optional thinking, finalized tool calls, the raw
+malformed-tool-call buffer. A pure value with no
+side effects and no output type; each caller supplies its own loop and its own
+**Generation Projection**. (`thinking == nil` means no `<think>` block ever opened;
+`""` means one opened but is empty so far — never collapse the optionality.) Its
+`surfacesMalformedBuffer` query is the single home of the malformed→text fallback
+predicate (empty text, no successful tool calls, non-empty malformed buffer), a
+derived `Bool` — not an output shape — consumed by both **Generation Projection**s.
+_Avoid_: StreamResult, event handler, GenerationFold (names the fold's *operation*,
+not the value — and "fold" also means a reducer); ToolCallParser (the upstream
+source of the events, not the accumulator).
+
+**Generation Projection**:
+The per-caller step that maps **Generation Accumulator** state to one caller's output
+shape (`AssistantMessage`, **CompletionProjection**, the leaf-store message, bare
+text). It covers both *terminal* projection (the committed message / final response)
+and *intermediate* per-event projection for streaming callers (a snapshot + delta per
+event, as the agent path's **AssistantMessageProjection** emits). It is where caller
+intent lives, kept out of the shared fold; it is a concept, not a single type.
+_Avoid_: conversion, adapter (not a seam adapter), output builder.
+
+**CompletionProjection**:
+The server's concrete **Generation Projection** — the one home for the rules both
+HTTP completion paths (streaming SSE, non-streaming JSON) share when building a
+response from a terminal accumulator, so the two paths differ only in framing. It
+applies the malformed→text fallback whose predicate lives once on the accumulator
+(`surfacesMalformedBuffer`), shared with **AssistantMessageProjection**.
+_Avoid_: StreamResult (the dissolved server per-path capsule; a same-named *private*
+agent-loop type still exists, so do not reuse it for the server), response builder,
+envelope (the per-path framing it feeds).
+
+**AssistantMessageProjection**:
+The agent path's concrete **Generation Projection** — the sibling to
+**CompletionProjection** that the agent stream driver composes directly (no port).
+A stateful value owning the turn's tool-call *identity* (`ToolCallInfo` with stable
+ids, which the accumulator's raw `[ToolCall]` lacks): `step` maps each folded event
+to the driver's next action (a per-event snapshot + delta, the malformed event, or
+nothing), `snapshot` is the raw partial turn (per-event / cancel / error), and
+`finalize` applies the shared `surfacesMalformedBuffer` fallback for the terminal
+message. Pure — every emit and log stays in the driver.
+_Avoid_: StreamResult, message builder, AssistantMessageFactory; CompletionProjection
+(the server sibling — say which path).
+
+### Generation stream loop
+
+**Generation Stream Loop**:
+The one home that consumes a single raw model generation stream into the agent's
+`AgentGeneration` event stream for one assistant turn, preserving the model’s
+reasoning and owning the parser lifecycle and external cancellation. Caller side effects and projections stay with the callers;
+terminal info and diagnostics come back on its outcome.
+_Avoid_: managed generation (the **Managed Generation Driver** above it, not this
+loop); stream consumer / generation pump; GenerationFold (the fold is the
+**Generation Accumulator**); ToolCallParser (upstream); agent loop — this consumes
+one turn's raw stream, whereas the agent double-loop orchestrates turns and tool
+calls above it (say "stream loop" vs "agent loop").
+
+**Managed Generation Driver**:
+The one module that drives a raw model stream through the **Generation Stream
+Loop** for both consumers — the agent turn and the cache-aware **Server
+Completion**: loop construction, late-bound cancel bridging, stream-termination cancel wiring, and
+the terminal-info re-yield into the caller's sink. Callers keep their own task
+envelopes, diagnostics, and projections.
+_Avoid_: wrapManagedGeneration (the `AgentEngine` call site); stream driver (the
+agent's projection-composing layer above); generation manager.
+
+### Chat rewrite vocabulary (ADR-0024)
+
+The canonical terms of the rewritten chat; they replaced the Chat Transcript
+projection family.
+
+**Content Part**:
+The typed, ordered unit of assistant message content — text, thinking, or tool
+call — a verbatim Swift mirror of pi-ai's content model. Stream events address a
+part by its content index within the message.
+_Avoid_: block, segment, chunk; Chat Row (a render atom, not a model unit);
+part (unqualified) when ambiguity with tool-result content is possible.
+
+**Live Part**:
+The single observable box holding the one **Content Part** currently streaming —
+the only mutable render state during generation; a token delta invalidates only
+its view, and at part end it commits into immutable value rows.
+_Avoid_: streaming bubble, stream message; partial message (in the pi-mono event
+protocol "partial" is the whole-message snapshot carried by every event, not the
+live box).
+
+**Chat Session**:
+The single store holding the event fold for the active **Conversation** —
+messages, the **Live Part**, and run phase — and the sole agent-event subscriber.
+Leaf controllers (composer draft, voice, pills) live outside it, owned by views.
+_Avoid_: coordinator, dispatcher, view model; session (unqualified); Conversation
+(the persisted document a Chat Session folds live).
+
+**Workspace**:
+The user-facing name of the agent tool sandbox root — the directory file tools
+resolve paths against. Tool rows render their targets workspace-relative and say
+"workspace" for the root itself.
+_Avoid_: sandbox (the enforcement mechanism, not the place); root / home
+directory; "." as a user-facing label.
+
+**Tool Row Title**:
+The verb + target grammar of a tool-call row — an imperative verb (Read, Write,
+Edit, List, Load skill, Search, Fetch) plus a **Workspace**-relative target;
+unknown tools fall back to the raw tool name.
+_Avoid_: progressive verbs ("Reading…" — implies still running, which the
+spinner owns); bare tool names for known tools; filename-only targets.
+
+**Open Tool Call**:
+The chat-side partial tool-call **Content Part** — born with a stable id and
+real name the moment the streaming parser locks the tool name, its arguments
+accumulating raw fragments until the call parses (the normalized-JSON guarantee
+applies only to committed parts). Lives only in the live message; if the turn
+ends without a parsed call (malformed, truncated, aborted) it vanishes without
+trace.
+_Avoid_: fragment (the server wire term); pending tool call (the
+executing-phase set); partial part (ambiguous with the whole-message "partial"
+snapshot).
+
+**Tool Clock**:
+The single per-call wall clock: starts when the **Open Tool Call** is born,
+ticks live in whole seconds (appearing once elapsed reaches 1s), runs
+continuously through writing, waiting, and execution, and freezes into the
+row's duration badge at execution end. The badge therefore reads "time from
+first visible to result."
+_Avoid_: execution duration (the pre-2026-07 badge semantics — execution-only);
+generation time / write time (phases of the one clock, never shown separately).
+
+**Row Rhythm**:
+The single vertical spacing between every pair of transcript rows — between
+messages and within them alike, one shared constant, deliberately without
+clustering exceptions (a run of consecutive tool rows is *not* grouped tighter).
+_Avoid_: separate item-spacing / part-spacing knobs; section gap.
+
+**Prose Accent Palette**:
+The named color roles applied to assistant markdown syntax — heading, strong,
+emphasis, inline code, link, list marker, blockquote bar — so document
+structure reads at a glance; colors taken exactly from OpenCode's default
+theme, dark and light variants alike, plus the neutral inline-code chip
+behind the code accent. With the **Code Accent Palette**, one of the two
+sanctioned exceptions to the otherwise monochrome chat content layer.
+_Avoid_: coloring body prose, quoted blockquote prose, or user messages;
+per-view ad-hoc colors outside the named roles.
+
+**Code Accent Palette**:
+The named color roles for code and diffs in the transcript — syntax-highlight
+token roles (mapped from syntect scopes in Tool Panels, from the markdown
+renderer's tokenizer in assistant-prose code blocks) plus the semantic diff
+tints (added-green, removed-red) — with dark and light variants derived from
+system semantic colors. The second sanctioned color exception to the
+monochrome chat content layer; diff tints are semantic like error red, never
+decoration.
+_Avoid_: stock .tmTheme colors; using diff green/red outside added/removed
+semantics.
+
+**Markdown Gallery**:
+The always-shipped instrument window for the chat's markdown rendering: an
+editable source pane, pre-filled with the canonical all-construct document,
+rendered live through the chat's own markdown stack in light, dark, or both
+appearances side by side. Markdown chrome is judged and tuned here, against
+the canonical document, in the exact render path the transcript uses.
+_Avoid_: debug-only gating (the dev loop runs Release builds); a second
+preview-only render path (the gallery renders through the chat's, or it
+proves nothing).
+
+**Tool Panel**:
+The specialized expanded body of a tool-call row: a per-tool derived rendering
+(diff, file slice with real line offsets, listing, search-result list, rendered
+page markdown, image thumbnails) that replaces raw arguments/result JSON in the
+UI. Unknown (external MCP) tools fall back to the generic panel — pretty-printed
+arguments plus result text. The exact wire payloads stay persisted in the
+transcript model; the panel is only a projection of them.
+_Avoid_: expanded view / detail section (the pre-2026
+
+Question: summarize the key architectural decisions in one paragraph.
+Answer:

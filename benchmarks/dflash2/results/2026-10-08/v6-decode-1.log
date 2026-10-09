@@ -1,0 +1,13 @@
+[ruler] blocks 8 max tokens 512 prefill step 1024 thermal nominal gpu 12.81 TFLOP/s
+[ruler] travel run0: 41.3 tok/s, 316/1358 accepted, 2.62 tok/round, 63.6 ms/round
+[ruler] travel ar: 23.0 tok/s (512 tokens in 22.21 s), identity DIVERGED at +234
+[ruler] summary run0: 49.3 tok/s, 341/1188 accepted, 3.01 tok/round, 61.1 ms/round
+[ruler] summary ar: 21.1 tok/s (512 tokens in 24.26 s), identity DIVERGED at +131
+[ruler] math run0: 109.6 tok/s, 431/595 accepted, 6.07 tok/round, 54.9 ms/round
+[ruler] math ar: 23.0 tok/s (512 tokens in 22.28 s), identity DIVERGED at +8
+[ruler] code run0: 92.6 tok/s, 410/707 accepted, 5.06 tok/round, 54.7 ms/round
+[ruler] code ar: 23.3 tok/s (512 tokens in 21.93 s), identity DIVERGED at +317
+[ruler] gpu reference start 12.81, after-decode 12.57, end 12.41 TFLOP/s
+[ruler] report /Users/owl/projects/tesseract/benchmarks/dflash2/results/2026-10-08/v6-decode-1.json
+[ruler] identity DIVERGED on at least one fixture
+[dflash2-bench] === summary ===

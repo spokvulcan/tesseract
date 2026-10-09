@@ -1,0 +1,17 @@
+[ruler] blocks 8 max tokens 512 prefill step 1024 thermal nominal gpu 12.93 TFLOP/s
+[ruler] travel run0: 52.8 tok/s, 353/1106 accepted, 3.23 tok/round, 61.4 ms/round
+[ruler] summary run0: 48.0 tok/s, 340/1199 accepted, 2.98 tok/round, 62.1 ms/round
+[ruler] math run0: 113.3 tok/s, 432/567 accepted, 6.33 tok/round, 55.8 ms/round
+[ruler] code run0: 91.0 tok/s, 411/711 accepted, 5.03 tok/round, 55.2 ms/round
+[ruler] gpu reference start 12.93, after-decode 12.75, end 12.77 TFLOP/s
+[ruler] travel ar: 23.6 tok/s (512 tokens in 21.69 s), identity DIVERGED at +38
+[ruler] travel forced AR: 9 departure(s) +38 (271 vs argmax 14235, 4.00 ulp) +64 (524 vs argmax 12995, 2.00 ulp) +79 (6088 vs argmax 5471, 0.00 ulp) +98 (30 vs argmax 13, 0.00 ulp) +101 (883 vs argmax 3165, 1.00 ulp) +133 (4929 vs argmax 25598, 2.00 ulp) +439 (27584 vs argmax 16821, 0.00 ulp) +474 (6127 vs argmax 4171, 3.00 ulp) +486 (496 vs argmax 6970, 2.00 ulp)
+[ruler] summary ar: 21.8 tok/s (512 tokens in 23.44 s), identity DIVERGED at +7
+[ruler] summary forced AR: 13 departure(s) +7 (59987 vs argmax 328, 1.00 ulp) +22 (2255 vs argmax 5790, 2.00 ulp) +40 (1581 vs argmax 11, 0.00 ulp) +106 (874 vs argmax 799, 0.00 ulp) +343 (248046 vs argmax 198, 7.00 ulp) +361 (248045 vs argmax 248046, 7.00 ulp) +365 (248045 vs argmax 248046, 10.00 ulp) +369 (248045 vs argmax 248046, 19.00 ulp) +373 (248045 vs argmax 248046, 6.00 ulp) +402 (353 vs argmax 6558, 1.00 ulp) +408 (3478 vs argmax 1379, 0.00 ulp) +458 (554 vs argmax 83441, 1.00 ulp) +504 (10969 vs argmax 64839, 1.00 ulp)
+[ruler] math ar: 23.6 tok/s (512 tokens in 21.72 s), identity DIVERGED at +305
+[ruler] math forced AR: 1 departure(s) +305 (25 vs argmax 2972, 1.00 ulp)
+[ruler] code ar: 23.6 tok/s (512 tokens in 21.70 s), identity DIVERGED at +64
+[ruler] code forced AR: 8 departure(s) +64 (14890 vs argmax 27396, 2.00 ulp) +99 (4138 vs argmax 4252, 2.00 ulp) +105 (1921 vs argmax 2570, 1.00 ulp) +161 (198 vs argmax 1368, 3.00 ulp) +219 (2713 vs argmax 364, 0.00 ulp) +423 (4479 vs argmax 264, 0.00 ulp) +453 (48142 vs argmax 6907, 2.00 ulp) +460 (264 vs argmax 5081, 2.00 ulp)
+[ruler] report /private/tmp/claude-501/-Users-owl-projects-tesseract/e4337090-9933-472b-a5de-ed30c1a558bf/scratchpad/abab-turbo/tree-check.json
+[ruler] identity DIVERGED on at least one fixture
+[dflash2-bench] === summary ===

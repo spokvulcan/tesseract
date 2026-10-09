@@ -13,6 +13,28 @@ struct ANELab {
         let args = Array(CommandLine.arguments.dropFirst())
         let only = args.first { !$0.hasPrefix("--") }
         let target: MLProgramPackage.Target = args.contains("--coreml7") ? .coreML7 : .coreML8
+        if args.contains("--prefill-placement") {
+            for tokens in [64, 128, 256, 1024] {
+                for (name, build) in prefillProbes(tokens: tokens) {
+                    let report = try await placement(name: name, build, target: target)
+                    print("\(name) T=\(tokens): \(report)")
+                }
+            }
+            return
+        }
+        if args.contains("--prefill") {
+            // Prefill-shaped throughput: T tokens through 5120 -> 17408 -> 5120.
+            for tokens in [32, 64, 96, 128, 160, 192] {
+                for (name, build) in prefillProbes(tokens: tokens) where only == nil || name.contains(only!) {
+                    let ms = try await latency(
+                        name: name, build, inputShape: [1, 5120, 1, tokens].map { NSNumber(value: $0) })
+                    let flops = 2.0 * 2 * 5120 * 17408 * Double(tokens) * Double(prefillLayers)
+                    print("\(name) T=\(tokens): \(String(format: "%.2f", ms)) ms median, "
+                        + String(format: "%.2f TFLOP/s", flops / ms / 1e9))
+                }
+            }
+            return
+        }
         if args.contains("--time") {
             for (name, build) in timed where only == nil || name.contains(only!) {
                 let ms = try await latency(name: name, build)
@@ -283,6 +305,30 @@ struct ANELab {
             f.symmetricWeight(data: random(o * i), scale: half(0.001, count: o), shape: [o, i, 1, 1], blockShape: [o, 1, 1, 1]) } }),
     ]
 
+    static let prefillLayers = 2
+
+    static func prefillStack(
+        _ f: MILFunctionBuilder, tokens: Int, weight: (MILFunctionBuilder, Int, Int) -> MILVar
+    ) {
+        var x = f.input("x", .fp16([1, 5120, 1, tokens]))
+        for _ in 0 ..< prefillLayers {
+            let up = f.op("conv", convInputs(f, x, weight(f, 17408, 5120)), .fp16([1, 17408, 1, tokens]))
+            let act = f.op("silu", [("x", [up])], up.type)
+            let down = f.op("conv", convInputs(f, act, weight(f, 5120, 17408)), .fp16([1, 5120, 1, tokens]))
+            x = f.op("add", [("x", [x]), ("y", [down])], x.type)
+        }
+        f.output(f.op("add", [("x", [x]), ("y", [f.half(0)])], x.type, name: "y"))
+    }
+
+    static func prefillProbes(tokens: Int) -> [(String, Build)] {
+        [
+            ("prefill-fp16", { f in prefillStack(f, tokens: tokens) { f, o, i in
+                f.weight(MLXRandom.normal([o, i, 1, 1]).asType(.float16) * 0.01, shape: [o, i, 1, 1]) } }),
+            ("prefill-int8-channel", { f in prefillStack(f, tokens: tokens) { f, o, i in
+                f.symmetricWeight(data: random(o * i), scale: half(0.001, count: o), shape: [o, i, 1, 1], blockShape: [o, 1, 1, 1]) } }),
+        ]
+    }
+
     static func heavy(_ f: MILFunctionBuilder, weight: (MILFunctionBuilder, Int, Int) -> MILVar) {
         var x = f.input("x", .fp16([1, 1024, 1, 1]))
         for _ in 0 ..< 16 {
@@ -295,7 +341,7 @@ struct ANELab {
     }
 
     /// Median latency of one prediction on the Neural Engine, after warm-up.
-    static func latency(name: String, _ build: Build) async throws -> Double {
+    static func latency(name: String, _ build: Build, inputShape: [NSNumber] = [1, 1024, 1, 1]) async throws -> Double {
         let fm = FileManager.default
         let package = fm.temporaryDirectory.appendingPathComponent("ane-lab-\(name)-\(UUID().uuidString).mlpackage")
         defer { try? fm.removeItem(at: package) }
@@ -310,7 +356,7 @@ struct ANELab {
         let configuration = MLModelConfiguration()
         configuration.computeUnits = .cpuAndNeuralEngine
         let model = try await MLModel.load(contentsOf: compiled, configuration: configuration)
-        let x = try MLMultiArray(shape: [1, 1024, 1, 1], dataType: .float16)
+        let x = try MLMultiArray(shape: inputShape, dataType: .float16)
         let input = try MLDictionaryFeatureProvider(dictionary: ["x": MLFeatureValue(multiArray: x)])
         for _ in 0 ..< 10 { _ = try await model.prediction(from: input) }
         var times: [Double] = []

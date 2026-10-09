@@ -32,6 +32,119 @@ the parked Gemma 4 12B multimodal stack (audio encoder + encoder-free
 `gemma4_unified` processor + suppress_tokens) that tesseract draft PR #359
 pins; it rejoins this table's carry list only if that experiment is revived.
 
+## DFlash2 tree verification: a chain with leaf siblings (2026-10-08)
+
+The gitlink advances from `1563459` to `efe2a16` (with the speed ruler,
+tesseract `9634d712`), then to `c0e5216`, `a363526`, `6c23b42` and `a5ce452`,
+on branch `perf/goal-2026-10-08` (fast-forward; `pin-upstream-mlx-swift`
+unchanged). Seven commits, on the fork's `perf/goal-2026-10-08`:
+
+- `efe2a16` `feat(dflash2): expose the selector's whole lattice for analysis
+  and tree search`. `DFlash2DraftModel.proposeLattice` returns the
+  selector's top-K candidates, unary scores, bigram edges and greedy path for
+  a block; `propose` shares the same `blockLogits`. Decode is bitwise
+  unchanged (tesseract ledger G7).
+- `b0bb588` `feat(kernels): per-row rope positions, conv windows and a tree scan`.
+  `attentionNormRope` takes `[B * L]` positions, one per row
+  (`ROW_POS`); `gatedDeltaConvNormQKV(windows:)` convolves each row over a
+  table of input rows instead of `s ..< s + K`
+  (`gdn_conv_norm_qkv_tree`); `gatedDeltaOutput(q:k:v:gates:state:commits:)`
+  runs a row whose int32 `commits` flag is 0 on a copy of the state
+  (`gated_delta_step_y_tree`), so it scans from its parent's state and leaves
+  the chain's alone (`testGatedDeltaTreeOutputMatchesEachPath`: every row
+  equals the chain scan of its path bit for bit).
+- `c0e5216` `feat(dflash2): verify a chain with leaf siblings in one pass`.
+  `dflash2TreeProposal` keeps the top `S - 1` of the greedy chain's nodes and
+  each position's next-best candidates by path log-probability (local
+  scores over a temperature, 1.25 by default: the selector's calibration on
+  Qwen3.8-27B); a sibling never outscores its parent, so the kept set is a
+  chain prefix with leaves on it. `DFlash2TreeLayout` carries depths,
+  ancestry, commit flags, the chain's rows and the cache slots (anchor and
+  chain at their depths, leaves after). Qwen 3.5's verify runs it with an
+  ancestry mask, per-row rope at depth, conv windows along the ancestry and
+  the tree scan; keys and values land in slot order, so a chain row reads
+  the same keys in the same slots as in a chain block.
+  `dflash2TreeAcceptance` takes the chain while each node is the target's
+  argmax at its parent, then one leaf at the first miss; the commit gathers
+  the path's cache rows (`DFlash2AttentionCache.gatherRows`) and recurrent
+  captures (`GatedDeltaCapture.gathering`) and replays them as a chain.
+  TurboQuant caches take the tree through slot masks in the verify kernel
+  (`turbo_verify_p1_*_tree`, `treeAncestry`) and gather their compressed
+  rows. The iterator drafts full-width greedy rounds as trees when the
+  drafter, target and cache support them (`dflash2SupportsTree`); a logit
+  processor, sampling, or a capped last round stays a chain.
+  `DFLASH2_TREE=0` turns trees off, `DFLASH2_TREE_RANKS` and
+  `DFLASH2_TREE_TEMPERATURE` tune them.
+
+- `d12e9ef` `fix(dflash2): tree rows read their own key at their depth`.
+  A leaf cached its key past the chain, and both verify attention kernels
+  place a key in the reduction by its index, so a leaf's softmax and P·V
+  summed in another order than a chain block's. One bf16 ulp then carried
+  the stream away from the chain's at a later tie (tesseract ledger G11).
+  `dflash2TreeAttention` runs bit-exact JIT copies (`fastmath_`) of MLX's
+  `sdpa_vector` and of the two-pass MMA kernel and its merge. In them each
+  tree row sees keys up to its depth index and reads its own key and value
+  there, from its slot. The MMA copy patches the leaf's K and V tile row
+  and reruns that column group's MMAs for the leaf row only.
+  `DFlash2AttentionCache.dflash2Attention` takes the tree layout. Tree
+  rounds now reproduce chain rounds bit for bit; the four Qwen3.8-27B
+  fixtures decode the chain's streams token for token.
+- `a363526` `perf(dflash2): run only the leaf partitions with the tree code`.
+  The tree code's registers cost every partition occupancy (20–25% over
+  MLX's MMA kernel). A tree block's rows start in the 15 keys before the
+  visible end, so only the partitions from there on can hold a leaf's own
+  index. Those run as their own launch, encoded first; the rest run a copy
+  without the tree code; the merge reads each partition from the launch
+  that wrote it. Attention over 16 layers at the Qwen3.8-27B verify shape:
+  6.23 ms against MLX's 5.24 at 6K keys, 11.44 against 11.07 at 16K
+  (`benchDFlash2TreeAttention`, `TEST_RUNNER_TREE_ATTENTION_BENCH=1`).
+- `6c23b42` `fix(turboquant): tree rows read their own key at their depth`.
+  The same redirect in TurboQuant's verify kernel
+  (`turbo_verify_p1_{rawk,affk}_tree`), which masked each row by its
+  ancestry and so read a leaf's key at its slot. It now takes each row's
+  depth and slot. In the 32-key block that holds a leaf's index, the
+  leaf's key row is dequantized from its slot into the K tile and that
+  column group's MMAs rerun. The leaf row keeps its score, then adds its
+  own P·V against the V tile patched with its value, while the main P·V
+  gives it zero probabilities. No copy of an MLX kernel is needed: the
+  tree variant is the fork's own kernel. Its blocks before the first
+  leaf's index run the chain variant's loop body under the depth mask;
+  with the tree code in every block's loop, each block ran 16–21% slower
+  even with no leaf to patch. Over 16 layers in sequence at the verify
+  shape, the tree variant costs +0.34 ms over the chain variant at 608
+  keys, +0.14 ms at 6K and +0.03 ms at 16K (`benchDFlash2TreeAttention`,
+  which now runs its layers in sequence and adds the turbo8v4 arms). Two
+  launches split as in `a363526` did not overlap, and lost to this at
+  every length.
+  `TurboQuantKVCache.verifyAttention` takes the `DFlash2TreeLayout`. A tree
+  of other than 8 rows (a drafter with another block size) takes the
+  dequantizing fallback, which keeps the ancestry mask.
+- `a5ce452` `chore(deps): pin mlx-swift to 3425495`: the mlx gitlink
+  `2394c0d0`, a 128 x 32 tile for large-M 4-bit QMM, bitwise with qmm_t
+  (tesseract ledger G6, `docs/mlx-core-fork.md`), in lockstep with
+  `Vendor/tesseract-speech`.
+
+Validation, `DFlash2TreeTests`:
+
+- acceptance cases and proposal invariants;
+- a Qwen 3.5 tree verify whose chain rows equal a chain block of their path
+  bit for bit. Its leaf rows matched only up to their own key's reduction
+  order at `c0e5216`, and bit for bit since `d12e9ef`;
+- the same tree over TurboQuant caches tracks the bf16 cache (cos > 0.95),
+  and the row gather moves compressed rows unchanged;
+- since `d12e9ef`, the kernel copies equal `scaledDotProductAttention` bit
+  for bit at N = 315 to 6,149.
+- since `6c23b42`, over TurboQuant caches every tree row's float32 verify
+  output equals the chain variant's on a block of its path bit for bit
+  (raw and 8-bit keys, 312 to 6,151 keys); a Qwen 3.5 tree verify gives
+  each row its path's chain logits bit for bit; trees of 4 and 16 rows
+  take the dequantizing path.
+
+Serialized `MLXLMTests` green: XCTest 708 (10 skipped) and Swift Testing 952
+tests in 75 suites at `c0e5216`, 953 at `d12e9ef`, 954 at `a363526`, 957 at
+`6c23b42`. Loaded-model gates: tesseract ledger G9, G11 and G12. Upstream: not filed; it builds on #607
+(DFlash2).
+
 ## Vision on the text engine, DFlash2 over images (2026-10-07, ADR-0089)
 
 The gitlink advances from `109c6a8` to `1563459` on

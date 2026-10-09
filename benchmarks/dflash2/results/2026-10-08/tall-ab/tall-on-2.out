@@ -1,0 +1,15 @@
+Reusing Release binary (--no-build): /Users/owl/Library/Developer/Xcode/DerivedData/tesseract-buwysfpnwmzyucelgewutuddcvgv/Build/Products/Release/Tesseract Agent.app
+Running benchmark (sweep: quick)...
+App: /Users/owl/Library/Developer/Xcode/DerivedData/tesseract-buwysfpnwmzyucelgewutuddcvgv/Build/Products/Release/Tesseract Agent.app
+Source: reused-binary
+Waiting for benchmark to start...
+Tailing benchmark log...
+───────────────────────────────────────
+[ruler] blocks 8 max tokens 512 prefill step 1024 thermal nominal gpu 12.85 TFLOP/s
+[ruler] prefill prefill-2k.txt run0: 2048 tokens in 9.48 s = 216.0 tok/s (split 0, peak 18.2 GB)
+[ruler] prefill prefill-8k.txt run0: 8192 tokens in 36.21 s = 226.2 tok/s (split 6144, peak 20.1 GB)
+[ruler] gpu reference start 12.85, end 12.54 TFLOP/s
+[ruler] report /Users/owl/projects/tesseract/benchmarks/dflash2/results/2026-10-08/tall-ab/tall-on-2.json
+[dflash2-bench] === summary ===
+
+───────────────────────────────────────

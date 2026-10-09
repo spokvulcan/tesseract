@@ -1,0 +1,17 @@
+[ruler] blocks 8 max tokens 512 prefill step 1024 thermal nominal gpu 12.89 TFLOP/s
+[ruler] travel run0: 52.8 tok/s, 334/1241 accepted, 2.88 tok/round, 54.5 ms/round
+[ruler] summary run0: 48.9 tok/s, 336/1219 accepted, 2.92 tok/round, 59.9 ms/round
+[ruler] math run0: 109.3 tok/s, 428/595 accepted, 6.04 tok/round, 55.1 ms/round
+[ruler] code run0: 85.4 tok/s, 404/770 accepted, 4.67 tok/round, 54.5 ms/round
+[ruler] gpu reference start 12.89, after-decode 12.81, end 12.77 TFLOP/s
+[ruler] travel ar: 23.7 tok/s (512 tokens in 21.56 s), identity DIVERGED at +38
+[ruler] travel forced AR: 7 departure(s) +38 (271 vs argmax 14235, 4.00 ulp) +64 (524 vs argmax 12995, 2.00 ulp) +143 (430 vs argmax 4849, 1.00 ulp) +158 (65607 vs argmax 3034, 0.00 ulp) +361 (4087 vs argmax 303, 0.00 ulp) +372 (13553 vs argmax 1691, 0.00 ulp) +450 (3487 vs argmax 7431, 2.00 ulp)
+[ruler] summary ar: 21.7 tok/s (512 tokens in 23.59 s), identity DIVERGED at +7
+[ruler] summary forced AR: 14 departure(s) +7 (59987 vs argmax 328, 1.00 ulp) +22 (2255 vs argmax 5790, 2.00 ulp) +40 (1581 vs argmax 11, 0.00 ulp) +106 (874 vs argmax 799, 0.00 ulp) +219 (18973 vs argmax 264, 0.00 ulp) +265 (93630 vs argmax 264, 0.00 ulp) +353 (38385 vs argmax 77505, 1.00 ulp) +367 (248045 vs argmax 760, 0.00 ulp) +389 (198 vs argmax 248046, 20.00 ulp) +397 (198 vs argmax 248068, 12.00 ulp) +400 (760 vs argmax 1596, 13.00 ulp) +420 (353 vs argmax 6558, 1.00 ulp) +426 (3478 vs argmax 1379, 0.00 ulp) +462 (77505 vs argmax 5144, 1.00 ulp)
+[ruler] math ar: 22.8 tok/s (512 tokens in 22.48 s), identity DIVERGED at +305
+[ruler] math forced AR: 1 departure(s) +305 (25 vs argmax 2972, 1.00 ulp)
+[ruler] code ar: 23.2 tok/s (512 tokens in 22.08 s), identity DIVERGED at +64
+[ruler] code forced AR: 6 departure(s) +64 (14890 vs argmax 27396, 2.00 ulp) +99 (4138 vs argmax 4252, 2.00 ulp) +165 (16018 vs argmax 271, 0.00 ulp) +171 (68230 vs argmax 1690, 0.00 ulp) +222 (5790 vs argmax 381, 0.00 ulp) +225 (13 vs argmax 6136, 1.00 ulp)
+[ruler] report /private/tmp/claude-501/-Users-owl-projects-tesseract/e4337090-9933-472b-a5de-ed30c1a558bf/scratchpad/abab-turbo/chain-check.json
+[ruler] identity DIVERGED on at least one fixture
+[dflash2-bench] === summary ===

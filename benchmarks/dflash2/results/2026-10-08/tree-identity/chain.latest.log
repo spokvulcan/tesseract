@@ -1,0 +1,17 @@
+[ruler] blocks 8 max tokens 512 prefill step 1024 thermal nominal gpu 12.74 TFLOP/s
+[ruler] travel run0: 33.5 tok/s, 316/1358 accepted, 2.62 tok/round, 78.3 ms/round
+[ruler] travel ar: 21.1 tok/s (512 tokens in 24.24 s), identity DIVERGED at +234
+[ruler] travel forced AR: 6 departure(s) +234 (3809 vs argmax 16213, 2.00 ulp) +243 (6618 vs argmax 16213, 1.00 ulp) +284 (381 vs argmax 6970, 1.00 ulp) +324 (39 vs argmax 284, 1.00 ulp) +356 (16219 vs argmax 28622, 1.00 ulp) +399 (2236 vs argmax 24118, 1.00 ulp)
+[ruler] summary run0: 36.7 tok/s, 341/1188 accepted, 3.01 tok/round, 82.2 ms/round
+[ruler] summary ar: 20.3 tok/s (512 tokens in 25.27 s), identity DIVERGED at +131
+[ruler] summary forced AR: 6 departure(s) +131 (383 vs argmax 2397, 1.00 ulp) +160 (42903 vs argmax 66690, 1.00 ulp) +180 (26 vs argmax 39018, 1.00 ulp) +238 (5617 vs argmax 174991, 1.00 ulp) +400 (748 vs argmax 318, 0.00 ulp) +491 (9463 vs argmax 28109, 1.00 ulp)
+[ruler] math run0: 73.5 tok/s, 431/595 accepted, 6.07 tok/round, 82.0 ms/round
+[ruler] math ar: 21.7 tok/s (512 tokens in 23.57 s), identity DIVERGED at +8
+[ruler] math forced AR: 2 departure(s) +8 (5154 vs argmax 3299, 0.00 ulp) +214 (694 vs argmax 13, 0.00 ulp)
+[ruler] code run0: 75.3 tok/s, 410/707 accepted, 5.06 tok/round, 67.3 ms/round
+[ruler] code ar: 23.3 tok/s (512 tokens in 21.97 s), identity DIVERGED at +317
+[ruler] code forced AR: 1 departure(s) +317 (364 vs argmax 7624, 2.00 ulp)
+[ruler] gpu reference start 12.74, after-decode 5.41, end 6.39 TFLOP/s
+[ruler] report /private/tmp/claude-501/-Users-owl-projects-tesseract/e4337090-9933-472b-a5de-ed30c1a558bf/scratchpad/ident/chain.json
+[ruler] identity DIVERGED on at least one fixture
+[dflash2-bench] === summary ===

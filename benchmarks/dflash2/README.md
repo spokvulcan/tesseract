@@ -82,6 +82,55 @@ and alternates the two kernels. Run it without another GPU workload. Its
 component timings must not be reported as whole-model generation speedups.
 See [FINDINGS.md](FINDINGS.md) for this investigation and saved results.
 
+## The speed ruler
+
+`scripts/dflash2-ruler.sh` measures the 500/100 goal in one Release run and
+writes one JSON report (ledger, session 2026-10-08):
+
+```sh
+scripts/dflash2-ruler.sh --bench-check --bench-json /tmp/ruler.json
+```
+
+Decode runs first: each of `travel`, `summary`, `math` and `code` prefills
+the production way (the app driver's pipelined 1,024-token chunks up to the
+speculative split, then the DFlash2 iterator's capture prefill of the tail)
+and decodes 512 greedy tokens at block 8. Then cold prefill is timed on
+`prefill-2k.txt`, `prefill-8k.txt` and `prefill-32k.txt` (exactly 2,048 /
+8,192 / 32,768 templated tokens), first chunk to first sampled token, with a
+digest of the cache's bits so two builds can be shown to prefill
+identically. Every timed run waits `--bench-cooldown` seconds (default 30)
+first: sustained load throttles this machine's GPU by ~16%.
+
+| Option | Purpose |
+| --- | --- |
+| `--bench-fixtures summary,code` / `none` | Decode these fixtures only |
+| `--bench-prefill prefill-8k.txt` / `none` | Prefill these prompts only |
+| `--bench-runs N` | DFlash2 runs per fixture |
+| `--bench-check` | `TokenIterator` AR reference per fixture after the timed runs, and the same AR teacher-forced along run 0's stream |
+| `--bench-round-timings` | Each round's milliseconds and accepted drafts |
+| `--bench-kv-scheme turbo8v4` | The app's KV Cache Compression (attention layers compress once prefill ends); default bf16 |
+| `--bench-lattice DIR` | Dump the drafter's lattice at every anchor (offline policy replay) |
+
+`MLX_*` and `DFLASH2_*` variables reach the app (`bench.sh` forwards them
+through `open --env`), so an env-switch A/B runs as two arms of one build.
+`scripts/dflash2-ruler-report.py A=a1.json A=a2.json B=b1.json B=b2.json
+--require-identity` prints medians per arm, deltas and stream identity.
+
+Identity. The baseline's own stream leaves AR's argmax at bf16 ties (two
+logits within 0–2 ulps), so `--bench-check` reports DIVERGED on every
+fixture at 512 tokens. The forced check says which positions those are: at
+each one the record holds the stream's token, AR's argmax and the gap in
+bf16 ulps. Every change must reproduce the first arm's streams exactly,
+tree verification included, under bf16 and turbo8v4 (each tree row reads
+its own key where a chain block holds it; ledger G11, G12). Moving round
+boundaries can still change a verify pass's key partitions, which depend
+on its length: 2,048-key span buckets in the two-pass kernel and the
+one-pass/two-pass switch at 1,024 keys under bf16, 512-key buckets in
+turbo8v4's verify kernel. A stream that parts from the first arm's for
+that reason, at a tie, passes `--require-identity` when every forced
+departure is at most 2 ulps (ledger G9). Under turbo8v4 it cannot: the
+compressed cache leaves bf16 AR's argmax by more than ties.
+
 ## Before and after a change
 
 Bench the base commit and the change on one prompt, from two Release builds:

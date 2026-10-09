@@ -1,0 +1,36 @@
+{
+  "blockSize" : 8,
+  "cooldownSeconds" : 30,
+  "fixtures" : [
+
+  ],
+  "gpuReference" : [
+    {
+      "label" : "start",
+      "teraflops" : 12.465399758160878
+    },
+    {
+      "label" : "end",
+      "teraflops" : 12.51690724028636
+    }
+  ],
+  "maxNewTokens" : 512,
+  "model" : "models\/mlx-community_Qwen3.8-27B-4bit",
+  "prefill" : [
+    {
+      "file" : "prefill-32k.txt",
+      "peakGB" : 26.48643022,
+      "promptTokens" : 32768,
+      "run" : 0,
+      "seconds" : 178.409637542,
+      "sha256" : "c1810b332f6a875cc1a2f04fd72ba23b964d35d1aa128c6860436f385a2e1d32",
+      "split" : 30720,
+      "stateDigest" : "bf37d99c179954a2-t1596",
+      "tokensPerSecond" : 183.66720795722694
+    }
+  ],
+  "prefillStepSize" : 1024,
+  "sourceRevision" : "reused-binary",
+  "thermalEnd" : "fair",
+  "thermalStart" : "nominal"
+}
