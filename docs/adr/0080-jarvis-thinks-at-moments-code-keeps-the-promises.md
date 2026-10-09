@@ -257,7 +257,11 @@ the owner must remember to read does not. What changed:
 - **The Step Cue.** When a planned step's slot starts and the owner is at the
   Mac, code puts it on the Jarvis Panel (a shorter panel than a card's): the
   task, until when and what follows, with Start (the slot starts this minute),
-  In 15 min (it moves on and is cued again then), Tomorrow and Done. No model.
+  In 15 min (it moves on and is cued again then), Tomorrow and Did it (done
+  already: first "Done", but alone at the row's end, where a dialog's OK
+  sits, it read as closing the cue — the day's first must-do was answered
+  Done eighteen seconds into a two-and-a-half-hour slot and reopened
+  later; "Already done" didn't fit the row). No model.
   Each slot is cued once, as soon as the owner can see it; never while away,
   in quiet hours (but the morning's end of them is over once the owner sat
   down to start the day), a call, a game or a meeting with other people, nor

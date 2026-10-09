@@ -1858,9 +1858,11 @@ _Avoid_: wake (retired), alert (unqualified).
 A planned step put on the Jarvis Panel when its slot starts and the owner is at
 the Mac: the task, until when and what follows, with Start (the slot starts
 this minute), In 15 min (it moves on and is cued again then), Tomorrow and
-Done. A Morning Plan's slots and the owner's own "Do it at 16:30" live only in
-the day's state, so without it nothing marks their start. A step the owner
-started (Start on a cue, or Start now on Today) checks in when its time is up:
+Did it (done already; not "Done", which at the row's end, a dialog's OK, read
+as closing the cue). A Morning Plan's slots and the owner's own "Do it at
+16:30" live only in the day's state, so without it nothing marks their start.
+A step the owner started (Start on a cue, or Start now on Today) checks in
+when its time is up:
 Done, 15 more min (from now, if answered late), Tomorrow; while it runs, no
 other cue interrupts it — what comes due meanwhile waits, named by the
 check-in, and is cued once the owner is free — and the menu bar shows its time

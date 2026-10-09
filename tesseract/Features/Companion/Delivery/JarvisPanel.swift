@@ -491,7 +491,10 @@ private struct StepCueContent: View {
                     }
                     choice("Tomorrow", .tomorrow)
                     Spacer(minLength: 0)
-                    choice("Done", .done)
+                    // Not "Done": alone at the row's end, where a dialog's OK
+                    // sits, it read as closing the cue.
+                    choice("Did it", .done)
+                        .help("Done already: it's ticked off")
                 case .end where cue.small:
                     if let resumeAt = cue.resumeAt {
                         choice("Go on at \(AgendaTime.clock(resumeAt))", .resume, prominent: true)

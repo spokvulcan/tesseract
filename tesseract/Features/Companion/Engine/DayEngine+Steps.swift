@@ -6,7 +6,7 @@
 //  "Do it at 16:30" live in the day's state, not in Reminders, so no alarm
 //  marks them. When a planned step's slot starts and the owner is at the
 //  Mac, code puts it on the Jarvis Panel — the Step Cue — with one-click
-//  choices: Start, In 15 min, Tomorrow, Done. A step the owner started (Start
+//  choices: Start, In 15 min, Tomorrow, Did it. A step the owner started (Start
 //  on a cue, or Start now on Today) checks in when its time is up: Done,
 //  15 more min, Tomorrow. Help lands at the moment of doing, not in a list
 //  the owner has to remember to read, and a started step never just slides.
