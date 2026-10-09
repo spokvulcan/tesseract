@@ -509,6 +509,15 @@ struct MustDoDaysTests {
             state: state)
         #expect(morning.state.day == DayKey(rawValue: "2026-10-01"))
         #expect(morning.state.mustDoDays == ["2026-09-30": true])
+        // Done only the next morning, before the Mac woke: not that day's.
+        agenda.doneThisWeek = [Self.spec(doneAt: DayEngineMomentTests.local(31, 8, 30))]
+        let late = DayEngine.decide(
+            .tick,
+            snapshot: DaySnapshot(
+                now: DayEngineMomentTests.local(31, 9), settings: DaySettings(), agenda: agenda,
+                ownerPresent: false),
+            state: state)
+        #expect(late.state.mustDoDays == ["2026-09-30": false])
     }
 }
 

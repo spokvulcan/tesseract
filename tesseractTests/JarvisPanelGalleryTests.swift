@@ -189,18 +189,22 @@ struct JarvisPanelGalleryTests {
     }
 
     @Test func aStepMarkedDoneIsCreditedAndPointsOn() {
+        let now = Shown.at(11, 30)
         var cue = StepCue(
             reminderID: "letter", title: "Write to the case worker", start: Shown.at(11, 10),
-            minutes: 20, areaName: "Inbox", isMustDo: false, next: "Design review at 15:00")
-        #expect(cue.doneLine == "Next: Design review at 15:00.")
+            minutes: 20, areaName: "Inbox", isMustDo: false, next: "Design review at 15:00",
+            nextAt: Shown.at(15))
+        #expect(cue.doneLine(now: now) == "Next: Design review at 15:00.")
         cue.isMustDo = true
         #expect(
-            cue.doneLine
+            cue.doneLine(now: now)
                 == "That's the must-do — the rest is a bonus.\nNext: Design review at 15:00.")
+        // The cue sat on the panel past what came next: that goes unsaid.
+        #expect(cue.doneLine(now: Shown.at(15, 5)) == "That's the must-do — the rest is a bonus.")
         cue.next = nil
-        #expect(cue.doneLine == "That's the must-do — the rest is a bonus.")
+        #expect(cue.doneLine(now: now) == "That's the must-do — the rest is a bonus.")
         cue.isMustDo = false
-        #expect(cue.doneLine == nil)
+        #expect(cue.doneLine(now: now) == nil)
     }
 
     @Test func thePanelFitsWhatItSays() {

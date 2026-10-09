@@ -95,7 +95,8 @@ final class JarvisPanelController {
     }
 
     /// Done on a cue is said for a moment — the win, and what comes next —
-    /// then the panel closes, unless something else took it meanwhile.
+    /// then the panel closes, unless something else took it meanwhile or
+    /// the owner turned to Jarvis (typing, asking, speaking).
     private func acknowledge(_ cue: StepCue) {
         model.cue = nil
         model.done = cue
@@ -103,7 +104,9 @@ final class JarvisPanelController {
             try? await Task.sleep(for: Self.doneLinger)
             guard let self, self.model.done == cue else { return }
             self.model.done = nil
-            self.close()
+            let turnedToJarvis =
+                self.model.listening || self.model.asked != nil || !self.model.draft.isEmpty
+            if !turnedToJarvis { self.close() }
         }
     }
 
@@ -272,7 +275,7 @@ struct JarvisPanelView: View {
                     if let cue = model.cue {
                         StepCueContent(cue: cue, choose: choose)
                     } else if let done = model.done {
-                        StepDoneContent(cue: done)
+                        StepDoneContent(cue: done, now: now())
                     } else if let shown = model.card {
                         CardContent(
                             card: liveCard(shown.id) ?? shown, agenda: agenda, now: now(),
@@ -414,6 +417,7 @@ private struct StepCueContent: View {
 /// next — a moment's word before the panel closes.
 private struct StepDoneContent: View {
     let cue: StepCue
+    let now: Date
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -424,7 +428,7 @@ private struct StepDoneContent: View {
                 .fontWeight(.semibold)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
-            if let line = cue.doneLine {
+            if let line = cue.doneLine(now: now) {
                 Text(line)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -435,9 +439,10 @@ private struct StepDoneContent: View {
 
 extension StepCue {
     /// What the panel says once the step is done: the must-do credited (the
-    /// Now Card's word too), then, on its own line, what comes next.
-    var doneLine: String? {
-        let next = next.map { "Next: \($0)." }
+    /// Now Card's word too), then, on its own line, what comes next — unless
+    /// that has started since the cue went up (it sat on the panel).
+    func doneLine(now: Date) -> String? {
+        let next = nextAt.map({ $0 < now }) == true ? nil : next.map { "Next: \($0)." }
         guard isMustDo else { return next }
         return ["That's the must-do — the rest is a bonus.", next].compactMap(\.self)
             .joined(separator: "\n")

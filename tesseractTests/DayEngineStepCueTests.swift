@@ -614,14 +614,19 @@ struct DayEngineStepCueTests {
     }
 
     @Test func fifteenMoreMinutesAnsweredLateCountsFromNow() throws {
-        // The check-in went up at 11:32; it is answered only at 11:50.
+        // The check-in went up at 11:32; it is answered only at 11:50: a
+        // fresh quarter of an hour from now, not a block stretched back to
+        // 11:12.
         let up = Self.tick(Self.started(), at: Self.local(11, 32))
         let longer = DayEngine.decide(
             .cardAction(.step(reminderID: "letter", .extend)),
             snapshot: Self.snapshot(at: Self.local(11, 50)), state: up.state)
         let slot = try #require(longer.state.plan.first { $0.reminderID == "letter" })
-        #expect(slot.start == Self.local(11, 12))
-        #expect(slot.minutes == 53)
+        #expect(slot.start == Self.local(11, 50))
+        #expect(slot.minutes == 15)
+        #expect(
+            DayEngine.focus(snapshot: Self.snapshot(at: Self.local(11, 55)), state: longer.state)?
+                .end == Self.local(12, 5))
         #expect(Self.cues(Self.tick(longer.state, at: Self.local(11, 51)).effects).isEmpty)
         let again = try #require(
             Self.cues(Self.tick(longer.state, at: Self.local(12, 5)).effects).first)
@@ -751,6 +756,32 @@ struct DayEngineStepCueTests {
             Self.cues(Self.tick(going.state, at: Self.local(11, 31)).effects).first)
         #expect(next.phase == .end)
         #expect(!next.small)
+    }
+
+    @Test func aStartWhoseSlotWentMeanwhileStillStarts() throws {
+        // The letter's cue is up; a re-plan took its slot away meanwhile.
+        var cued = Self.cued()
+        cued.plan.removeAll { $0.reminderID == "letter" }
+        let started = DayEngine.decide(
+            .cardAction(.step(reminderID: "letter", .start)),
+            snapshot: Self.snapshot(at: Self.local(11, 12)), state: cued)
+        let slot = try #require(started.state.plan.first { $0.reminderID == "letter" })
+        #expect(slot.start == Self.local(11, 12))
+        #expect(slot.minutes == DayEngine.lostSlotMinutes)
+        #expect(
+            DayEngine.focus(snapshot: Self.snapshot(at: Self.local(11, 20)), state: started.state)?
+                .reminderID == "letter")
+        let small = DayEngine.decide(
+            .cardAction(.step(reminderID: "letter", .startSmall)),
+            snapshot: Self.snapshot(at: Self.local(11, 12)), state: cued)
+        #expect(small.state.plan.first { $0.reminderID == "letter" }?.minutes == 5)
+        // Done meanwhile: nothing to start.
+        let gone = DayEngine.decide(
+            .cardAction(.step(reminderID: "letter", .start)),
+            snapshot: Self.snapshot(
+                at: Self.local(11, 12), open: [Self.deck, Self.dentist], done: [Self.letter]),
+            state: cued)
+        #expect(!gone.state.plan.contains { $0.reminderID == "letter" })
     }
 
     // MARK: Saved state

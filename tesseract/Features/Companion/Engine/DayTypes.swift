@@ -144,8 +144,10 @@ nonisolated struct StepCue: Sendable, Equatable {
     var minutes: Int
     var areaName: String
     var isMustDo: Bool
-    /// What comes after it ("Design review at 15:00").
+    /// What comes after it ("Design review at 15:00"), and when it starts
+    /// (nil: a step already under way).
     var next: String?
+    var nextAt: Date? = nil
     var phase: Phase = .start
     /// Shown well after its moment — the owner was away, busy or behind
     /// another panel — so it says so ("Still time for", "How did it go?").

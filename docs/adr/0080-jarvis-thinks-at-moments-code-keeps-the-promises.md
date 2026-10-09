@@ -267,8 +267,10 @@ the owner must remember to read does not. What changed:
   slot whose reminder rings at the same minute is left to Reminders. Closing
   it changes nothing. Done is answered for a moment before the panel closes
   — "Done", the must-do credited ("the rest is a bonus"), and what comes
-  next — the win said aloud and the next step named at the moment one ends;
-  a card or cue that arrives meanwhile takes the panel at once. Starting is
+  next (unless that has started since the cue went up) — the win said aloud
+  and the next step named at the moment one ends; a card that arrives
+  meanwhile takes the panel at once, a cue waits for it to close, and the
+  panel stays if the owner turned to Jarvis (typing, asking, speaking). Starting is
   the hard part: a step put off twice in a day ("In 15 min") is offered as
   "Just five minutes?" with Start 5 min, and five minutes in its check-in
   asks to keep going ("five minutes counts"); Keep going adds a quarter of
@@ -277,8 +279,10 @@ the owner must remember to read does not. What changed:
 - **A started step checks in when its time is up.** A step the owner started
   (Start on a cue, or Start now on Today, which needs no cue of its own) is
   put back on the panel at its end while its task is open: Done, 15 more min
-  (fifteen minutes from now, or from its end if that is still ahead; it checks
-  in again), Tomorrow. While it runs, no other cue interrupts it: what comes
+  (fifteen minutes from its end, or from now if answered late — ten minutes
+  or more after its end it is a fresh quarter hour from now, not a block
+  stretched back to its first start; it checks in again), Tomorrow. A Start
+  whose slot went meanwhile (a re-plan) still starts, half an hour from now. While it runs, no other cue interrupts it: what comes
   due meanwhile waits (the check-in names a step already under way) and is
   cued once the owner is free; of two check-ins, the step that ended last
   comes first.
@@ -420,7 +424,8 @@ the owner must remember to read does not. What changed:
   today's tasks, so a task left overdue stayed "carried" on Today from day
   to day with nothing ever asking about it (the same few overdue reminders
   showed in the agenda listings across days). On the week's last day the
-  Wrap-up also asks about up to five overdue tasks, oldest first, each with
+  Wrap-up also asks about up to five overdue tasks not in today's plan (one
+  planned today is today's, whatever its date), oldest first, each with
   the day it has waited since ("Waiting since Thu 1 Oct", under "Still
   open"); Jarvis is told that "later" (no date) and "drop" are kind
   answers for what has waited a week, and without the model the card

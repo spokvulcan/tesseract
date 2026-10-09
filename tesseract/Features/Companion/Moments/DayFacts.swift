@@ -142,6 +142,14 @@ nonisolated struct DayFacts: Sendable, Equatable {
 
     func task(_ id: String) -> AgendaReminder? { openTasks.first { $0.id == id } }
 
+    /// Overdue and not in today's plan: what the week's look-back asks about
+    /// as waiting since an earlier day. A task planned today is today's,
+    /// whatever its date.
+    func isWaiting(_ reminder: AgendaReminder) -> Bool {
+        (reminder.due ?? .distantFuture) < startOfToday
+            && !plan.contains { $0.reminderID == reminder.id }
+    }
+
     func areaName(of reminder: AgendaReminder) -> String {
         if reminder.listID == inboxListID { return "Inbox" }
         return areas.first { $0.id == reminder.listID }?.name ?? reminder.listTitle

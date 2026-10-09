@@ -39,8 +39,10 @@ nonisolated enum DayEngine {
         let waitingBefore = waitingCount(state, now: snapshot.now)
         if state.day != today {
             // Done on the phone while the Mac slept through 04:00: it counts
-            // for the day it was the must-do of.
-            noteMustDoDone(snapshot: snapshot, state: &state)
+            // for the day it was the must-do of — if done within that day.
+            noteMustDoDone(
+                snapshot: snapshot, state: &state,
+                before: state.day.end(calendar: snapshot.calendar))
             state = state.rolledOver(to: today)
         }
 
@@ -141,11 +143,15 @@ nonisolated enum DayEngine {
         return Decision(state: state, effects: effects)
     }
 
-    /// The must-do seen done, for the week's look-back.
-    private static func noteMustDoDone(snapshot: DaySnapshot, state: inout DayState) {
+    /// The must-do seen done, for the week's look-back; with `before`, only
+    /// if it was done by then.
+    private static func noteMustDoDone(
+        snapshot: DaySnapshot, state: inout DayState, before: Date? = nil
+    ) {
         guard let mustDo = state.mustDoID, state.mustDoDoneAt == nil,
-            (snapshot.agenda.doneToday + snapshot.agenda.doneThisWeek)
-                .contains(where: { $0.id == mustDo })
+            (snapshot.agenda.doneToday + snapshot.agenda.doneThisWeek).contains(where: {
+                $0.id == mustDo && ($0.completedAt ?? .distantPast) < (before ?? .distantFuture)
+            })
         else { return }
         state.mustDoDoneAt = snapshot.now
     }

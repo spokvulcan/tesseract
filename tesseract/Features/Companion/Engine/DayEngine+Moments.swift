@@ -152,7 +152,7 @@ nonisolated extension DayEngine {
         guard facts.isWeekReview else { return today }
         let asked = Set(today.map(\.id))
         let waiting = facts.dueOrOverdue
-            .filter { ($0.due ?? .distantFuture) < facts.startOfToday && !asked.contains($0.id) }
+            .filter { facts.isWaiting($0) && !asked.contains($0.id) }
             .sorted { ($0.due ?? .distantPast) < ($1.due ?? .distantPast) }
         return today + waiting.prefix(waitingAsked)
     }

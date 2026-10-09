@@ -151,6 +151,13 @@ struct DeliveryLadderTests {
             now: at(13, 30), settings: settings, agenda: .empty, ownerPresent: true)
         #expect(!DeliveryLadder.quietHoursAreNight(settings))
         #expect(!DeliveryLadder.dayStarted(at(7, 10), snapshot: afternoon))
+        // An evening window has a bedtime but no morning end: it holds.
+        settings.quietStartMinutes = 20 * 60
+        settings.quietEndMinutes = 23 * 60
+        let evening = DaySnapshot(
+            now: at(21, 0), settings: settings, agenda: .empty, ownerPresent: true)
+        #expect(DeliveryLadder.quietHoursAreNight(settings))
+        #expect(!DeliveryLadder.dayStarted(at(9, 30), snapshot: evening))
     }
 
     @Test func aGameInFrontGetsNoPanelAndNoVoice() {

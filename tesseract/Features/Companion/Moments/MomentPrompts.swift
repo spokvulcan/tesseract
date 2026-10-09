@@ -107,7 +107,7 @@ nonisolated enum MomentPrompts {
         } else {
             lines.append("Done today: " + facts.doneToday.map(\.title).joined(separator: "; "))
         }
-        let waiting = leftovers.filter { ($0.due ?? .distantFuture) < facts.startOfToday }
+        let waiting = leftovers.filter(facts.isWaiting)
         let today = leftovers.filter { !waiting.contains($0) }
         if today.isEmpty {
             lines.append("Nothing left over from today.")

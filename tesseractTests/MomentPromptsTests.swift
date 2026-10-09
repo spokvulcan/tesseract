@@ -154,6 +154,20 @@ struct MomentPromptsTests {
         #expect(
             FallbackCards.eveningWrapUp(facts: saturday, leftovers: DayEngine.leftovers(saturday))
                 .leftoversHeading == "Left from today")
+        // A task planned today is today's, whatever its date: on an
+        // ordinary evening it is a leftover like any other, not one waiting.
+        var tuesday = Self.weekFacts(day: 6)
+        tuesday.dueOrOverdue = [task("bank", due: 5)]
+        tuesday.plan = [Placement(reminderID: "bank", start: at(6, 15), minutes: 30)]
+        let planned = DayEngine.leftovers(tuesday)
+        #expect(planned.map(\.id) == ["bank"])
+        let ordinary = MomentPrompts.eveningWrapUp(facts: tuesday, leftovers: planned)
+        #expect(ordinary.contains("Still open from today (id — title):\n- bank — Bank"))
+        #expect(!ordinary.contains("Waiting since"))
+        let plain = FallbackCards.eveningWrapUp(facts: tuesday, leftovers: planned)
+        #expect(plain.leftovers.first?.suggestion == .tomorrow)
+        #expect(plain.leftovers.first?.since == nil)
+        #expect(plain.leftoversHeading == "Left from today")
         // A leftover saved before it could have waited still loads.
         let saved = #"{"reminderID": "x", "title": "X", "suggestion": "tomorrow"}"#
         #expect(try JSONDecoder().decode(Leftover.self, from: Data(saved.utf8)).since == nil)

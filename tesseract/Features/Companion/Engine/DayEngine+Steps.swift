@@ -37,6 +37,8 @@ nonisolated extension DayEngine {
     static let stepLaterMinutes = 15
     /// "Start 5 min": a step put off twice is offered this small a start.
     static let smallStartMinutes = 5
+    /// Started from a cue whose slot went meanwhile (a re-plan): this long.
+    static let lostSlotMinutes = 30
 
     // MARK: - The cue
 
@@ -136,10 +138,11 @@ nonisolated extension DayEngine {
         state: DayState, now: Date
     ) -> StepCue {
         let moment = phase == .start ? slot.start : end(of: slot)
+        let next = nextStep(after: slot, facts: facts)
         return StepCue(
             reminderID: task.id, title: task.title, start: slot.start, minutes: slot.minutes,
             areaName: facts.areaName(of: task), isMustDo: state.mustDoID == task.id,
-            next: nextStep(after: slot, facts: facts), phase: phase,
+            next: next?.0, nextAt: next?.1, phase: phase,
             late: now.timeIntervalSince(moment) >= stepCueLate,
             putOff: state.putOff[task.id] ?? 0,
             small: state.smallStarts.contains(StepCue.key(slot)))
@@ -157,18 +160,19 @@ nonisolated extension DayEngine {
         }
     }
 
-    /// The day's next step once this slot ends: an open task already under
-    /// way (one a focus session held back), else the next event or task.
-    private static func nextStep(after slot: Placement, facts: DayFacts) -> String? {
+    /// The day's next step once this slot ends, and when it starts: an open
+    /// task already under way (one a focus session held back; no time),
+    /// else the next event or task.
+    private static func nextStep(after slot: Placement, facts: DayFacts) -> (String, Date?)? {
         let slotEnd = end(of: slot)
         for row in TimelineBuilder.build(facts: facts).rows {
             let at = AgendaTime.clock(row.start, calendar: facts.calendar)
             switch row.kind {
             case .event(let event) where row.start >= slotEnd:
-                return "\(event.title) at \(at)"
+                return ("\(event.title) at \(at)", row.start)
             case .task(let task) where !task.isDone && task.id != slot.reminderID:
-                if row.start >= slotEnd { return "\(task.reminder.title) at \(at)" }
-                if (row.end ?? row.start) > slotEnd { return task.reminder.title }
+                if row.start >= slotEnd { return ("\(task.reminder.title) at \(at)", row.start) }
+                if (row.end ?? row.start) > slotEnd { return (task.reminder.title, nil) }
             default:
                 continue
             }
@@ -247,6 +251,15 @@ nonisolated extension DayEngine {
         let cuedAt = state.cuedSteps.filter { $0.key.hasPrefix("\(reminderID)@") }.values.max()
         if state.cueOnPanel?.hasPrefix("\(reminderID)@") == true { state.cueOnPanel = nil }
         var effects: [DayEffect] = []
+        // A start whose slot went meanwhile (a re-plan) still starts: the
+        // task, if still open, gets a slot from now.
+        if choice == .start || choice == .startSmall,
+            !state.plan.contains(where: { $0.reminderID == reminderID }),
+            snapshot.facts(state: state).task(reminderID) != nil
+        {
+            state.plan.append(
+                Placement(reminderID: reminderID, start: minute, minutes: lostSlotMinutes))
+        }
         switch choice {
         case .start:
             if let slot = moveSlot(reminderID, to: minute, state: &state) {
@@ -266,15 +279,24 @@ nonisolated extension DayEngine {
             _ = moveSlot(reminderID, to: later, state: &state)
             state.putOff[reminderID, default: 0] += 1
         case .extend:
-            // A quarter of an hour on from now, or from its end if that is
-            // still ahead: a late answer doesn't make it already over.
+            // A quarter of an hour on from its end, or from now if that has
+            // gone by: a late answer doesn't make it already over. Answered
+            // late — the owner was away — it is a fresh block from now, not
+            // one stretched back to its first start.
             if let index = state.plan.firstIndex(where: { $0.reminderID == reminderID }) {
                 let slot = state.plan[index]
-                let from = max(end(of: slot), minute)
-                let until = from.addingTimeInterval(TimeInterval(stepLaterMinutes * 60))
-                state.plan[index].minutes = Int(until.timeIntervalSince(slot.start) / 60)
+                let quarter = TimeInterval(stepLaterMinutes * 60)
                 // Going on past five minutes: no longer a small start.
                 state.smallStarts.remove(StepCue.key(slot))
+                if minute.timeIntervalSince(end(of: slot)) >= stepCueLate {
+                    state.plan[index].start = minute
+                    state.plan[index].minutes = stepLaterMinutes
+                    markStartedIfNow(state.plan[index], snapshot: snapshot, state: &state)
+                    state.plan.sort { $0.start < $1.start }
+                } else {
+                    let until = max(end(of: slot), minute).addingTimeInterval(quarter)
+                    state.plan[index].minutes = Int(until.timeIntervalSince(slot.start) / 60)
+                }
             }
         case .tomorrow:
             state.plan.removeAll { $0.reminderID == reminderID }

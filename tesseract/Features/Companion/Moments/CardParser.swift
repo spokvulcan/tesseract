@@ -313,7 +313,7 @@ nonisolated enum FallbackCards {
             leftovers: leftovers.map { reminder in
                 // One that has waited since an earlier day is kept without a
                 // date by default: another tomorrow only rebuilds the pile.
-                let since = reminder.due.flatMap { $0 < facts.startOfToday ? $0 : nil }
+                let since = facts.isWaiting(reminder) ? reminder.due : nil
                 return Leftover(
                     reminderID: reminder.id, title: reminder.title,
                     suggestion: since == nil ? .tomorrow : .later, since: since)
