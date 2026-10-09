@@ -452,9 +452,15 @@ private struct StepCueContent: View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(heading)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(Color.accentColor)
+                    // The must-do wears Today's star.
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                        if cue.isMustDo {
+                            Image(systemName: "star.fill").font(.system(size: 11))
+                        }
+                        Text(cue.heading)
+                    }
+                    .fontWeight(.semibold)
+                    .foregroundStyle(Color.accentColor)
                     Spacer()
                     Text("\(AgendaTime.clock(cue.start))–\(AgendaTime.clock(cue.end))")
                         .foregroundStyle(.secondary)
@@ -464,7 +470,7 @@ private struct StepCueContent: View {
                     .fontWeight(.semibold)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
-                Text(detail)
+                Text(cue.detail)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
@@ -530,30 +536,6 @@ private struct StepCueContent: View {
             .focusable(false)
     }
 
-    /// A late cue (the owner was away or busy) says so, without blame; a
-    /// step put off twice is offered small, and a small start asks to go on.
-    private var heading: String {
-        if cue.offersSmallStart { return "Just five minutes?" }
-        switch (cue.phase, cue.late) {
-        case (.start, false): return "Time for"
-        case (.start, true): return "Still time for"
-        case (.end, false): return cue.small ? "Five minutes in" : "Time's up"
-        case (.end, true): return "How did it go?"
-        }
-    }
-
-    private var detail: String {
-        if cue.offersSmallStart { return "Starting is the hard part: five minutes, then decide." }
-        if cue.phase == .end, cue.small, !cue.late {
-            return "Keep going, or leave it there — five minutes counts."
-        }
-        var parts = ["\(MomentPrompts.minutesText(cue.minutes))"]
-        if cue.isMustDo { parts.append("your must-do") }
-        parts.append(cue.areaName)
-        var line = parts.joined(separator: " · ")
-        if let next = cue.next { line += ". Then \(next)." }
-        return line
-    }
 }
 
 /// Two hours at the Mac: how long and since when, one small thing to do —
@@ -644,6 +626,36 @@ private struct StepDoneContent: View {
 }
 
 extension StepCue {
+    /// The cue's heading. A late cue (the owner was away or busy) says so,
+    /// without blame; a step put off twice is offered small, and a small
+    /// start asks to go on. The must-do is named at its start: the day's
+    /// one goal, not one more step.
+    var heading: String {
+        if offersSmallStart { return "Just five minutes?" }
+        let mustDo = isMustDo ? " your must-do" : ""
+        switch (phase, late) {
+        case (.start, false): return "Time for" + mustDo
+        case (.start, true): return "Still time for" + mustDo
+        case (.end, false): return small ? "Five minutes in" : "Time's up"
+        case (.end, true): return "How did it go?"
+        }
+    }
+
+    /// How long, the Area and what follows; the must-do here once its
+    /// heading no longer names it.
+    var detail: String {
+        if offersSmallStart { return "Starting is the hard part: five minutes, then decide." }
+        if phase == .end, small, !late {
+            return "Keep going, or leave it there — five minutes counts."
+        }
+        var parts = [MomentPrompts.minutesText(minutes)]
+        if isMustDo, phase == .end { parts.append("your must-do") }
+        parts.append(areaName)
+        var line = parts.joined(separator: " · ")
+        if let next { line += ". Then \(next)." }
+        return line
+    }
+
     /// What the panel says once the step is done: the must-do credited (the
     /// Now Card's word too), then, on its own line, what comes next — unless
     /// that has started since the cue went up (it sat on the panel).

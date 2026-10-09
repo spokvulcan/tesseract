@@ -261,7 +261,9 @@ the owner must remember to read does not. What changed:
   already: first "Done", but alone at the row's end, where a dialog's OK
   sits, it read as closing the cue — the day's first must-do was answered
   Done eighteen seconds into a two-and-a-half-hour slot and reopened
-  later; "Already done" didn't fit the row). No model.
+  later; "Already done" didn't fit the row). The must-do's cue wears
+  Today's star and names it at its start ("Time for your must-do"), where
+  it was a word in the gray detail. No model.
   Each slot is cued once, as soon as the owner can see it; never while away,
   in quiet hours (but the morning's end of them is over once the owner sat
   down to start the day), a call, a game or a meeting with other people, nor

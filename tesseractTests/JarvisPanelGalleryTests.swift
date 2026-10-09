@@ -230,6 +230,25 @@ struct JarvisPanelGalleryTests {
         #expect(cue.doneLine(now: now) == nil)
     }
 
+    @Test func theMustDoIsNamedAtItsStart() {
+        var cue = StepCue(
+            reminderID: "adr", title: "Write the cache ADR", start: Shown.at(14), minutes: 90,
+            areaName: "Work", isMustDo: true, next: nil)
+        #expect(cue.heading == "Time for your must-do")
+        #expect(cue.detail == "1 h 30 min · Work")
+        cue.late = true
+        #expect(cue.heading == "Still time for your must-do")
+        // At its end the heading is the check-in's; the detail names it.
+        cue.late = false
+        cue.phase = .end
+        #expect(cue.heading == "Time's up")
+        #expect(cue.detail == "1 h 30 min · your must-do · Work")
+        cue.isMustDo = false
+        cue.phase = .start
+        #expect(cue.heading == "Time for")
+        #expect(cue.detail == "1 h 30 min · Work")
+    }
+
     @Test func thePanelFitsWhatItSays() {
         #expect(JarvisPanelController.height(forContent: 40) == JarvisPanelController.minimumHeight)
         #expect(JarvisPanelController.height(forContent: 200) == 324)
