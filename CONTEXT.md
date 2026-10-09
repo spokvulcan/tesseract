@@ -1812,7 +1812,8 @@ _Avoid_: project, category, domain.
 The Reminders list where captures without a home land, undated. On Today each
 item carries an offer: a free half hour today, clear of the Now Card's offer
 and the items above it ("At 16:30"), or Tomorrow (due tomorrow, for the next
-Morning Plan to place) once today has no room or it is evening.
+Morning Plan to place) once today has no room or it is evening. Empty, it says
+how to catch a thought from any app, naming the capture hotkey.
 
 **Capture**:
 Typed or spoken words turned into a reminder without a model: the capture

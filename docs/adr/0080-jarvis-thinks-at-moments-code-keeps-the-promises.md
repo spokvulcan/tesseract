@@ -359,6 +359,10 @@ the owner must remember to read does not. What changed:
   "1h 5m"), refreshed on its own clock, with the step in the tooltip; it
   goes back to the glyph alone when the step ends or is done
   (`DayEngine.focus`, pushed through `CompanionPresence`).
+- **The capture hotkey is taught where it pays.** In ten days it was never
+  used; tasks came through Today's composer and the agent's tools. An empty
+  Inbox now says "Tap Right ⌥ in any app to write a thought down, or hold it
+  to say one" (the configured key, by name).
 - **Once the must-do is done, the rest is a bonus.** Finishing the day's one
   thing that mattered most changed nothing on Today: the next free-time card
   offered the next task at the same weight. Now it says "The must-do is done;

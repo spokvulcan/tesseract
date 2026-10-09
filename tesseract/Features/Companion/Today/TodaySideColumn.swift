@@ -35,6 +35,7 @@ struct TodaySideColumn: View {
 private struct InboxSection: View {
     @Environment(Agenda.self) private var agenda
     @Environment(CompanionRuntime.self) private var runtime
+    @Environment(SettingsManager.self) private var settings
     let facts: DayFacts
     let isEvening: Bool
 
@@ -55,6 +56,11 @@ private struct InboxSection: View {
             }
             if items.isEmpty {
                 Text("Inbox is clear.").foregroundStyle(.secondary)
+                // Where the one-key capture is taught: it went unused for
+                // ten days of the trace.
+                Text(captureHint)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             ForEach(shown) { reminder in
                 let slot = slots[reminder.id] ?? .tomorrow
@@ -74,6 +80,14 @@ private struct InboxSection: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// How to catch a thought from any app: the capture hotkey, by name.
+    private var captureHint: String {
+        let key = settings.captureHotkey
+        return key.isSingleModifier
+            ? "Tap \(key.displayString) in any app to write a thought down, or hold it to say one."
+            : "Press \(key.displayString) in any app to write a thought down."
     }
 
     private func title(of slot: InboxSlot) -> String {
