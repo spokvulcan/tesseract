@@ -6,8 +6,9 @@
 //  moves it on. Built by code from the Timeline, so it is there the moment
 //  Today opens and never waits on the model: the meeting they're in, the
 //  task whose slot is now, a task that slid and the next free slot for it,
-//  free time and what fits in it, what's next, and once the day is done,
-//  how tomorrow starts. Jarvis proposes; the owner says yes in one click.
+//  free time and what fits in it, what's next; in the evening, the day
+//  closing (never a slid task at midnight); and once the day is done, how
+//  tomorrow starts. Jarvis proposes; the owner says yes in one click.
 //  Pure: the day's facts in, a card out.
 //
 
@@ -61,7 +62,7 @@ nonisolated enum NowCardBuilder {
         let evening = isEvening(
             facts.now, eveningMinutes: context.eveningMinutes, calendar: facts.calendar)
         var card = focus(
-            timeline: timeline, facts: facts, evening: evening, inboxCount: context.inboxCount)
+            timeline: timeline, facts: facts, evening: evening, context: context)
         if context.companionOn, !context.planned, !evening {
             card.actions.append(NowAction(kind: .planDay, title: "Plan my day"))
         }
@@ -82,7 +83,7 @@ nonisolated enum NowCardBuilder {
     // MARK: - The focus
 
     private static func focus(
-        timeline: TodayTimeline, facts: DayFacts, evening: Bool, inboxCount: Int
+        timeline: TodayTimeline, facts: DayFacts, evening: Bool, context: Context
     ) -> NowCard {
         let now = facts.now
         func clock(_ date: Date) -> String { AgendaTime.clock(date, calendar: facts.calendar) }
@@ -132,7 +133,52 @@ nonisolated enum NowCardBuilder {
                 span: DateInterval(start: task.start ?? now, end: end(of: task)))
         }
 
-        // A task that slid: offer the next free slot (tomorrow, in the evening).
+        let openAnytime = timeline.anytime.filter { !$0.isDone }
+
+        // The next step. A task can start early.
+        func nextStep(_ next: TimelineRow) -> NowCard {
+            let minutes = max(1, Int(next.start.timeIntervalSince(now) / 60))
+            var actions: [NowAction] = []
+            if case .task(let task) = next.kind {
+                actions = [
+                    NowAction(
+                        kind: .place(
+                            reminderID: task.id, start: minute(now, facts.calendar),
+                            minutes: task.minutes),
+                        title: "Start now"),
+                    NowAction(kind: .complete(reminderID: task.id), title: "Done"),
+                ]
+            }
+            return NowCard(
+                headline: title(of: next),
+                detail: "At \(clock(next.start)), in \(MomentPrompts.minutesText(minutes)).",
+                actions: actions)
+        }
+
+        // The evening closes the day: what is still ahead tonight, or else
+        // what got done — never a slid task at the top at midnight. What is
+        // still open goes to the Evening Wrap-up.
+        if evening {
+            if let next = ahead.first { return nextStep(next) }
+            let open = timed + openAnytime.filter { !$0.isCarried || $0.isMustDo }
+            if !open.isEmpty {
+                let names = open.prefix(2).map(\.reminder.title).joined(separator: ", ")
+                let more = open.count > 2 ? " and \(open.count - 2) more" : ""
+                let done = timeline.doneCount
+                // Wrapped up, what's open has its place: look ahead instead.
+                let detail =
+                    context.wrappedUp
+                    ? lookAhead(timeline.tomorrow, clock: clock)
+                    : done > 0 ? "Still open: \(names)\(more)." : "\(names)\(more)."
+                return NowCard(
+                    headline: done > 0
+                        ? "\(done) of \(timeline.totalCount) done today."
+                        : "\(open.count) left for today",
+                    detail: detail, actions: [])
+            }
+        }
+
+        // A task that slid: offer the next free slot, or tomorrow.
         let slid = timed.filter(\.isSlid)
         if let task = slid.first, let start = task.start {
             var detail = "Slid past \(clock(start))."
@@ -141,9 +187,7 @@ nonisolated enum NowCardBuilder {
             let done = NowAction(kind: .complete(reminderID: task.id), title: "Done")
             let tomorrow = NowAction(kind: .tomorrow(reminderID: task.id), title: "Tomorrow")
             var actions = [tomorrow, done]
-            if !evening,
-                let slot = TimelineBuilder.firstFreeSlot(minutes: task.minutes, facts: facts)
-            {
+            if let slot = TimelineBuilder.firstFreeSlot(minutes: task.minutes, facts: facts) {
                 let place = NowAction(
                     kind: .place(reminderID: task.id, start: slot, minutes: task.minutes),
                     title: "Do it at \(clock(slot))")
@@ -151,8 +195,6 @@ nonisolated enum NowCardBuilder {
             }
             return NowCard(headline: task.reminder.title, detail: detail, actions: actions)
         }
-
-        let openAnytime = timeline.anytime.filter { !$0.isDone }
 
         // Free time now: what fits in it. With nothing to fit and nothing
         // after it, the day is done, not free.
@@ -180,6 +222,7 @@ nonisolated enum NowCardBuilder {
                     ])
             }
             let next = ahead.first.map { "Then \(title(of: $0))." }
+            let inboxCount = context.inboxCount
             let inbox =
                 inboxCount > 0
                 ? " \(inboxCount) Inbox item\(inboxCount == 1 ? "" : "s") could use a time." : ""
@@ -188,25 +231,8 @@ nonisolated enum NowCardBuilder {
                 detail: next.map { $0 + inbox }, actions: [])
         }
 
-        // Not free, nothing on now: the next step. A task can start early.
-        if let next = ahead.first {
-            let minutes = max(1, Int(next.start.timeIntervalSince(now) / 60))
-            var actions: [NowAction] = []
-            if case .task(let task) = next.kind {
-                actions = [
-                    NowAction(
-                        kind: .place(
-                            reminderID: task.id, start: minute(now, facts.calendar),
-                            minutes: task.minutes),
-                        title: "Start now"),
-                    NowAction(kind: .complete(reminderID: task.id), title: "Done"),
-                ]
-            }
-            return NowCard(
-                headline: title(of: next),
-                detail: "At \(clock(next.start)), in \(MomentPrompts.minutesText(minutes)).",
-                actions: actions)
-        }
+        // Not free, nothing on now: the next step.
+        if let next = ahead.first { return nextStep(next) }
 
         // Nothing timed is left: what's still open today.
         let left = openAnytime.filter { !$0.isCarried || $0.isMustDo }

@@ -294,6 +294,14 @@ the owner must remember to read does not. What changed:
   into "how long" each time. It now leads with the time left ("40 min left,
   until 15:00 · then Design review at 15:00") over a short accent bar that
   drains as the minutes go (`NowCard.span`).
+- **The evening closes the day.** The owner's most frequent manual fix was
+  taking planned tasks off the plan by hand — five of six times between 23:52
+  and 00:24 — because at night the Now Card still led with a slid task
+  ("Slid past 11:10", Tomorrow, Done). In the evening window the card now
+  shows what is still ahead tonight, or else counts what got done and names
+  what is still open ("1 of 3 done today." · "Still open: …"), with the
+  Evening Wrap-up as the way to settle it; once wrapped up, it looks at
+  tomorrow.
 - **The trace measures it**: `cue.presented` (start or end, how late, the
   slot's length, the must-do) and `cue.reaction` (the choice, the time to
   react).

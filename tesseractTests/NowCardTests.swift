@@ -4,8 +4,9 @@
 //
 //  The Now Card from the Timeline's fixture day: the meeting the owner is
 //  in, the task whose slot is now, a task that slid and the slot offered for
-//  it, free time and what fits in it, the next step, what's left, a done
-//  day and how tomorrow starts, and the plan and wrap-up offers. Also the
+//  it, free time and what fits in it, the next step, what's left, the
+//  evening closing the day, a done day and how tomorrow starts, and the plan
+//  and wrap-up offers. Also the
 //  Inbox's slot offer and how long a card's line stays fresh.
 //
 
@@ -74,10 +75,30 @@ struct NowCardTests {
                 == .place(reminderID: "dentist", start: Self.local(30, 12), minutes: 15))
     }
 
-    @Test func inTheEveningASlidTaskIsOfferedTomorrowAndTheWrapUp() {
+    @Test func inTheEveningTheDayClosesInsteadOfASlidTask() {
         let card = Self.card(Self.day(now: Self.local(30, 21, 30)))
-        #expect(card.headline == "Call the dentist")
-        #expect(card.actions.map(\.title) == ["Tomorrow", "Done", "Wrap up the day"])
+        #expect(card.headline == "1 of 3 done today.")
+        #expect(card.detail == "Still open: Call the dentist, Pay rent.")
+        #expect(card.actions.map(\.title) == ["Wrap up the day"])
+    }
+
+    @Test func onceWrappedUpTheEveningLooksAtTomorrow() {
+        let card = Self.card(Self.day(now: Self.local(30, 23, 50)), Self.context(wrappedUp: true))
+        #expect(card.headline == "1 of 3 done today.")
+        #expect(card.detail == "Nothing on tomorrow yet.")
+        #expect(card.actions.isEmpty)
+    }
+
+    @Test func aStepStillAheadTonightComesFirst() {
+        var facts = Self.day(now: Self.local(30, 21, 30))
+        facts.dueOrOverdue.append(
+            AgendaReminder(
+                id: "lesson", title: "Language lesson", listID: "life", listTitle: "Life",
+                due: Self.local(30, 22), dueHasTime: true))
+        let card = Self.card(facts)
+        #expect(card.headline == "Language lesson")
+        #expect(card.detail == "At 22:00, in 30 min.")
+        #expect(card.actions.map(\.title) == ["Start now", "Done", "Wrap up the day"])
     }
 
     @Test func freeTimeOffersTheMustDoFirst() {
