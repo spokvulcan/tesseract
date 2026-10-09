@@ -84,6 +84,25 @@ struct CaptureParserTests {
         Row(
             said: "don't forget to renew the passport in 3 days", title: "Renew the passport",
             due: Calendar.current.startOfDay(for: local(33, 12)), hasTime: false),
+        // A bare 1 to 7 o'clock is the afternoon, not an alarm before dawn.
+        Row(
+            said: "call Anna tomorrow at 3", title: "Call Anna", due: local(31, 15),
+            hasTime: true),
+        Row(said: "ring the bank at 4", title: "Ring the bank", due: local(30, 16), hasTime: true),
+        // A clock said apart from its day keeps both.
+        Row(said: "call mom tonight at 9", title: "Call mom", due: local(30, 21), hasTime: true),
+        Row(
+            said: "call Anna at 3pm tomorrow", title: "Call Anna", due: local(31, 15),
+            hasTime: true),
+        // "after I …" is a clause, not an event: no due, the words kept.
+        Row(
+            said: "call mom after I get home", title: "Call mom after I get home", due: nil,
+            hasTime: false),
+        // A phrasal verb keeps its preposition; a possessive day word goes whole.
+        Row(said: "log in to the portal", title: "Log in to the portal", due: nil, hasTime: false),
+        Row(
+            said: "tomorrow's meeting prep", title: "Meeting prep",
+            due: Calendar.current.startOfDay(for: local(31, 12)), hasTime: false),
     ]
 
     @Test(arguments: rows)
@@ -98,6 +117,17 @@ struct CaptureParserTests {
     @Test func fillerAloneIsNothingToCapture() {
         #expect(parse("   ") == nil)
         #expect(parse("remind me to") == nil)
+    }
+
+    @Test func pastMidnightTomorrowIsTheComingDay() throws {
+        // 01:00 on Thursday 1 October is still Wednesday's night: tomorrow
+        // morning is Thursday 09:00, not Friday's.
+        let intent = try #require(
+            CaptureParser.parse(
+                "call the bank tomorrow morning", now: Self.local(31, 1), events: [],
+                areas: Self.areas))
+        #expect(intent.title == "Call the bank")
+        #expect(intent.due == Self.local(31, 9))
     }
 
     @Test func anAnchorRemembersItsEvent() throws {

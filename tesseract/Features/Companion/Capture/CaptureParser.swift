@@ -146,6 +146,10 @@ nonisolated enum CaptureParser {
         }
         // Try the longest phrase first, then shorter ones: "after the 1:1 tomorrow".
         let words = String(match.1).split(separator: " ").map(String.init)
+        // "after I get home", "after we talk": a clause, not an event — its
+        // one-letter words would match any title holding that letter.
+        let opener = words.first?.lowercased().trimmingCharacters(in: .punctuationCharacters) ?? ""
+        guard !clauseOpeners.contains(opener) else { return nil }
         for count in stride(from: min(words.count, 5), through: 1, by: -1) {
             let phrase = words.prefix(count).joined(separator: " ")
                 .trimmingCharacters(in: .punctuationCharacters)
@@ -158,6 +162,42 @@ nonisolated enum CaptureParser {
             }
         }
         return nil
+    }
+
+    /// Words that open a clause after "after", never an event's name.
+    private static let clauseOpeners: Set<String> = [
+        "i", "i'm", "im", "i've", "a", "an", "we", "you", "he", "she", "it", "they", "that",
+        "this",
+    ]
+
+    /// An hour said without am/pm: 1 to 7 is the afternoon or evening ("call
+    /// Anna tomorrow at 3" is 15:00, not an alarm before dawn); 8 to 12 as said.
+    static func hour(_ hour: Int, meridiem: String?) -> Int {
+        switch meridiem {
+        case "pm": return hour < 12 ? hour + 12 : hour
+        case "am": return hour == 12 ? 0 : hour
+        default: return (1...7).contains(hour) ? hour + 12 : hour
+        }
+    }
+
+    /// "at 9", "at 9:30", "at 9pm" anywhere in the text (a Regex is not
+    /// Sendable, so one is made per use).
+    private static var clockPattern: Regex<(Substring, Substring, Substring?, Substring?)> {
+        /(?i)\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/
+    }
+
+    /// The words before end in an article — "the Today page" names a thing,
+    /// not a day. A whole word: "call Anna tomorrow" ends in "a", not "a ".
+    private static func followsArticle(_ before: Substring) -> Bool {
+        guard let last = before.split(whereSeparator: \.isWhitespace).last else { return false }
+        return ["the", "a", "an"].contains(last.lowercased())
+    }
+
+    /// The owner's day (until 04:00 still yesterday's), for "tomorrow": at
+    /// 01:00 on Saturday, tomorrow is Saturday.
+    private static func ownersDay(_ now: Date, _ calendar: Calendar) -> Date {
+        DayKey(for: now, calendar: calendar).date(calendar: calendar)
+            ?? calendar.startOfDay(for: now)
     }
 
     private static let numberWords: [String: Int] = [
@@ -210,18 +250,32 @@ nonisolated enum CaptureParser {
         ]
         for (regex, dayOffset, hour) in parts {
             guard let match = text.firstMatch(of: regex) else { continue }
-            let day =
-                calendar.date(byAdding: .day, value: dayOffset, to: calendar.startOfDay(for: now))
-                ?? now
-            guard var date = calendar.date(bySettingHour: hour, minute: 0, second: 0, of: day)
+            let base = dayOffset > 0 ? ownersDay(now, calendar) : calendar.startOfDay(for: now)
+            let day = calendar.date(byAdding: .day, value: dayOffset, to: base) ?? now
+            var rest = text
+            rest.removeSubrange(match.range)
+            rest = rest.trimmingCharacters(in: .whitespaces)
+            // A clock said with it ("tonight at 9") sets the time, read in
+            // that part of the day.
+            var hour = hour
+            var minute = 0
+            if let clock = rest.firstMatch(of: clockPattern), let said = Int(clock.1), said < 24 {
+                let meridiem = clock.3?.lowercased()
+                hour =
+                    meridiem != nil
+                    ? Self.hour(said, meridiem: meridiem)
+                    : (hour >= 12 && said < 12 ? said + 12 : said)
+                minute = clock.2.flatMap { Int($0) }.flatMap { $0 < 60 ? $0 : nil } ?? 0
+                rest.removeSubrange(clock.range)
+                rest = rest.trimmingCharacters(in: .whitespaces)
+            }
+            guard var date = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day)
             else {
                 continue
             }
             // Already past this part of today: an hour from now instead.
             if date <= now { date = now.addingTimeInterval(3600) }
-            var rest = text
-            rest.removeSubrange(match.range)
-            return (date, rest.trimmingCharacters(in: .whitespaces))
+            return (date, rest)
         }
         return nil
     }
@@ -236,32 +290,39 @@ nonisolated enum CaptureParser {
         // "the Today page" names a thing, not a day: skip a day word that
         // follows an article, as the detector's path does.
         let pattern =
-            /(?i)\b((?:the )?day after tomorrow|tomorrow|today)\b(?:,?\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b)?/
+            /(?i)\b((?:the )?day after tomorrow|tomorrow|today)(?:'s|’s)?\b(?:,?\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b)?/
         guard
             let match = text.matches(of: pattern).first(where: { match in
-                let before = text[..<match.range.lowerBound].lowercased()
                 let word = String(match.1).lowercased()
                 return word.hasPrefix("the ")
-                    || !["the ", "a ", "an "].contains { before.hasSuffix($0) }
+                    || !followsArticle(text[..<match.range.lowerBound])
             })
         else { return nil }
         let word = String(match.1).lowercased()
         let offset = word.hasSuffix("after tomorrow") ? 2 : word == "tomorrow" ? 1 : 0
-        guard
-            let day = calendar.date(
-                byAdding: .day, value: offset, to: calendar.startOfDay(for: now))
-        else { return nil }
+        let base = offset > 0 ? ownersDay(now, calendar) : calendar.startOfDay(for: now)
+        guard let day = calendar.date(byAdding: .day, value: offset, to: base) else { return nil }
         var rest = text
         rest.removeSubrange(match.range)
         rest = rest.trimmingCharacters(in: .whitespaces)
-        guard let hourText = match.2, var hour = Int(hourText), hour < 24 else {
+        // The clock right after the day word, or one said elsewhere ("at 3pm
+        // tomorrow").
+        var hourText = match.2.map(String.init)
+        var minuteText = match.3.map(String.init)
+        var meridiem = match.4?.lowercased()
+        if hourText == nil, let clock = rest.firstMatch(of: clockPattern) {
+            hourText = String(clock.1)
+            minuteText = clock.2.map(String.init)
+            meridiem = clock.3?.lowercased()
+            rest.removeSubrange(clock.range)
+            rest = rest.trimmingCharacters(in: .whitespaces)
+        }
+        guard let hourText, let said = Int(hourText), said < 24 else {
             return (day, false, rest)
         }
-        let minute = match.3.flatMap { Int($0) } ?? 0
+        let minute = minuteText.flatMap { Int($0) } ?? 0
         guard minute < 60 else { return nil }
-        let meridiem = match.4?.lowercased()
-        if meridiem == "pm", hour < 12 { hour += 12 }
-        if meridiem == "am", hour == 12 { hour = 0 }
+        let hour = Self.hour(said, meridiem: meridiem)
         guard var date = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day)
         else { return nil }
         // "today at 9" said at 14:00 means tonight, as a bare clock does.
@@ -283,9 +344,7 @@ nonisolated enum CaptureParser {
         // that follows an article.
         let result = detector.matches(in: text, options: [], range: range).first { match in
             guard let found = Range(match.range, in: text) else { return false }
-            let before = text[..<found.lowerBound].lowercased()
-            let followsArticle = ["the ", "a ", "an "].contains { before.hasSuffix($0) }
-            return !(followsArticle && !text[found].contains(" "))
+            return !(followsArticle(text[..<found.lowerBound]) && !text[found].contains(" "))
         }
         guard let result, var date = result.date, let matchRange = Range(result.range, in: text)
         else { return nil }
@@ -296,6 +355,11 @@ nonisolated enum CaptureParser {
             || phrase.firstMatch(of: /\bat\s+\d/) != nil
         if hasTime {
             let saidMeridiem = phrase.contains("am") || phrase.contains("pm")
+            // A bare 1 to 7 o'clock is the afternoon or evening.
+            let detectedHour = calendar.component(.hour, from: date)
+            if !saidMeridiem, (1...7).contains(detectedHour) {
+                date = date.addingTimeInterval(12 * 3600)
+            }
             // "at 9" said at 14:00 means 21:00 today, not this morning.
             if date <= now, !saidMeridiem, calendar.isDate(date, inSameDayAs: now) {
                 let evening = date.addingTimeInterval(12 * 3600)
@@ -318,14 +382,13 @@ nonisolated enum CaptureParser {
         from text: String, now: Date, calendar: Calendar
     ) -> (Date, String)? {
         guard
-            let match = text.firstMatch(of: /(?i)\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/),
-            var hour = Int(match.1), hour < 24
+            let match = text.firstMatch(of: clockPattern),
+            let said = Int(match.1), said < 24
         else { return nil }
         let minute = match.2.flatMap { Int($0) } ?? 0
         guard minute < 60 else { return nil }
         let meridiem = match.3?.lowercased()
-        if meridiem == "pm", hour < 12 { hour += 12 }
-        if meridiem == "am", hour == 12 { hour = 0 }
+        let hour = Self.hour(said, meridiem: meridiem)
         guard var date = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: now)
         else { return nil }
         if date <= now {
@@ -347,7 +410,9 @@ nonisolated enum CaptureParser {
         var changed = true
         while changed {
             changed = false
-            for dangling in [" at", " on", " by", " for", " in", " from", ","] {
+            // Only what a removed time leaves ("call mom at"): "log in" and
+            // "pay for" keep their words.
+            for dangling in [" at", " on", " by", ","] {
                 if title.lowercased().hasSuffix(dangling) {
                     title = String(title.dropLast(dangling.count))
                         .trimmingCharacters(in: .whitespaces)
