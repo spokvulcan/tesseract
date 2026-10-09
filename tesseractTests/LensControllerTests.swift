@@ -62,6 +62,7 @@ final class FakePasteBack {
 }
 
 @MainActor
+@Suite(.timeLimit(.minutes(1)))
 struct LensControllerTests {
 
     private struct Fixture {
@@ -103,12 +104,6 @@ struct LensControllerTests {
 
     private func press(_ f: Fixture, _ keyCode: Int) -> Bool {
         f.controller.handleKey(keyCode: keyCode, modifiers: [])
-    }
-
-    private func waitUntil(_ condition: () -> Bool) async {
-        for _ in 0..<200 where !condition() {
-            await Task.yield()
-        }
     }
 
     // MARK: - Reopening
@@ -206,7 +201,7 @@ struct LensControllerTests {
 
         #expect(press(f, kVK_Return))
         #expect(f.presenter.events == ["show+key", "release"])
-        await waitUntil { f.controller.model.phase == .done }
+        await observe(until: { f.controller.model.phase == .done })
 
         #expect(f.pasteBack.replaced.count == 1)
         #expect(f.pasteBack.replaced.first?.from == "Ask cloud why. ")
@@ -227,7 +222,7 @@ struct LensControllerTests {
         f.controller.model.typed = "claude"
 
         #expect(press(f, kVK_Return))
-        await waitUntil { f.controller.model.phase == .done }
+        await observe(until: { f.controller.model.phase == .done })
 
         #expect(f.controller.model.result?.line == "Terminal already has the old text")
         #expect(f.controller.model.result?.detail == "you typed in Terminal since")
@@ -248,7 +243,7 @@ struct LensControllerTests {
         f.controller.model.typed = "claude"
 
         #expect(press(f, kVK_Return))
-        await waitUntil { f.controller.model.phase == .done }
+        await observe(until: { f.controller.model.phase == .done })
         #expect(f.pasteBack.replaced.first?.keysAllowed == 10)
     }
 
@@ -260,7 +255,7 @@ struct LensControllerTests {
         #expect(press(f, kVK_Return))
         // The put-back is in flight: the hotkey must not cancel or reopen.
         f.controller.fixHotkeyPressed()
-        await waitUntil { f.controller.model.phase == .done }
+        await observe(until: { f.controller.model.phase == .done })
         #expect(f.controller.model.result?.line == "Fixed in Terminal")
     }
 
@@ -283,7 +278,7 @@ struct LensControllerTests {
         f.controller.fixHotkeyPressed()
         f.controller.model.typed = "claude"
         #expect(press(f, kVK_Return))
-        await waitUntil { f.controller.model.phase == .done }
+        await observe(until: { f.controller.model.phase == .done })
 
         #expect(f.controller.lastTake?.pasted == false)
         #expect(f.controller.model.result?.line == "The fix could not be pasted into Terminal")
@@ -368,7 +363,7 @@ struct LensControllerTests {
         f.controller.fixHotkeyPressed()
         f.controller.model.typed = "claude"
         #expect(press(f, kVK_Return))
-        await waitUntil { f.controller.model.phase == .done }
+        await observe(until: { f.controller.model.phase == .done })
 
         f.controller.undo()
         #expect(f.words.word(heard: "cloud") == nil)
@@ -387,7 +382,7 @@ struct LensControllerTests {
         #expect(press(f, kVK_Tab))
 
         feed.setPhase(.recording)
-        await waitUntil { f.controller.model.phase == .listening }
+        await observe(until: { f.controller.model.phase == .listening })
         // The keyboard goes back before the new take can paste.
         #expect(Array(f.presenter.events.suffix(2)) == ["release", "show"])
         // The fix made with ⇥ stays with the take.
@@ -407,16 +402,16 @@ struct LensControllerTests {
 
         feed.setTargetApp(Self.terminal)
         feed.setPhase(.recording)
-        await waitUntil { f.controller.model.phase == .listening }
+        await observe(until: { f.controller.model.phase == .listening })
         #expect(f.presenter.events == ["release", "show"])
         #expect(f.controller.model.liveApp == Self.terminal)
 
         feed.setPreview(preview("Ask cloud why this", confirmed: 2))
-        await waitUntil { f.controller.model.preview != nil }
+        await observe(until: { f.controller.model.preview != nil })
         #expect(f.controller.model.liveTokens.count == 4)
 
         feed.setPhase(.processing)
-        await waitUntil { f.controller.model.phase == .finishing }
+        await observe(until: { f.controller.model.phase == .finishing })
         // The words stay up while the full pass runs.
         #expect(f.controller.model.preview?.text == "Ask cloud why this")
 
@@ -438,7 +433,7 @@ struct LensControllerTests {
 
         f.controller.model.typed = "claude"
         #expect(press(f, kVK_Return))
-        await waitUntil { f.controller.model.phase == .done }
+        await observe(until: { f.controller.model.phase == .done })
         #expect(f.pasteBack.pastes == ["Ask Claude why. "])
         #expect(f.controller.model.result?.line == "Pasted into Terminal")
         #expect(f.controller.lastTake?.pasted == true)
@@ -472,7 +467,7 @@ struct LensControllerTests {
                 pairID: nil, text: "Ship it.", catches: [], app: Self.terminal, pasted: false,
                 held: true))
         #expect(press(f, kVK_Return))
-        await waitUntil { f.controller.model.phase == .done }
+        await observe(until: { f.controller.model.phase == .done })
         #expect(f.controller.model.result?.line == "Couldn't paste the take")
         #expect(f.controller.lastTake?.held == true)
     }
@@ -482,10 +477,10 @@ struct LensControllerTests {
         let feed = DictationFeed()
         f.controller.watch(feed)
         feed.setPhase(.recording)
-        await waitUntil { f.controller.model.phase == .listening }
+        await observe(until: { f.controller.model.phase == .listening })
 
         feed.setPhase(.error(.noSpeechDetected))
-        await waitUntil { f.controller.model.phase == .done }
+        await observe(until: { f.controller.model.phase == .done })
         #expect(f.controller.model.result?.line == "Didn't hear anything")
     }
 
@@ -496,10 +491,10 @@ struct LensControllerTests {
         f.controller.onInsertRawAnyway = { inserted += 1 }
         f.controller.watch(feed)
         feed.setPhase(.recording)
-        await waitUntil { f.controller.model.phase == .listening }
+        await observe(until: { f.controller.model.phase == .listening })
         feed.setPhase(.processing)
         feed.emit(.rejected(raw: "asdf", reason: "unintelligible"))
-        await waitUntil { f.controller.model.canInsertRaw }
+        await observe(until: { f.controller.model.canInsertRaw })
         #expect(f.controller.model.result?.line == "Didn't catch that")
 
         f.controller.insertRawAnyway()
@@ -513,7 +508,7 @@ struct LensControllerTests {
         f.controller.watch(feed)
 
         feed.setPhase(.error(.microphoneBusy))
-        await waitUntil { f.controller.model.phase == .done }
+        await observe(until: { f.controller.model.phase == .done })
         #expect(f.controller.model.result?.line == "The microphone is in use")
         #expect(f.presenter.events.last == "show")
     }
@@ -540,7 +535,7 @@ struct LensControllerTests {
         #expect(press(f, kVK_Tab))
 
         feed.setPhase(.recording)
-        await waitUntil { f.controller.model.phase == .listening }
+        await observe(until: { f.controller.model.phase == .listening })
         #expect(f.controller.model.text.isEmpty)
         #expect(f.controller.model.receipts.isEmpty)
         #expect(f.controller.model.fixedTokens.isEmpty)
@@ -558,7 +553,7 @@ struct LensControllerTests {
         let feed = DictationFeed()
         controller.watch(feed)
         feed.setPhase(.recording)
-        await waitUntil { controller.model.phase == .listening }
+        await observe(until: { controller.model.phase == .listening })
         #expect(controller.model.holdHint == nil)
     }
 
@@ -800,7 +795,7 @@ struct LensControllerTests {
         #expect(press(f, kVK_Tab))
 
         feed.setPhase(.recording)
-        await waitUntil { f.controller.model.phase == .listening }
+        await observe(until: { f.controller.model.phase == .listening })
         #expect(f.controller.lastTake?.text == "Ask Claude why.")
         #expect(f.controller.lastTake?.pasted == true)
     }

@@ -11,6 +11,7 @@ import Testing
 /// path must be the one that produced it (this is where the alphabet meets
 /// a real vocabulary), and neither guard may fire. Skipped unless the model
 /// directory is on disk.
+@Suite(.cpuBound)
 struct LinearStreamingDetokenizerRealTests {
 
     private nonisolated static var modelDirectory: URL {
@@ -26,7 +27,7 @@ struct LinearStreamingDetokenizerRealTests {
     }
 
     private static func loadTokenizer() async throws -> any MLXLMCommon.Tokenizer {
-        try await AppTokenizerLoader().load(from: modelDirectory)
+        try await RealTokenizers.app(from: modelDirectory)
     }
 
     private static let samples: [String] = [
@@ -59,10 +60,15 @@ struct LinearStreamingDetokenizerRealTests {
     }
 
     private static func checkLiveChunks(in directory: URL) async throws {
-        let tokenizer = try await AppTokenizerLoader().load(from: directory)
+        let tokenizer = try await RealTokenizers.app(from: directory)
+        // Some 500 tokens without a newline. The naive reference re-decodes the
+        // whole run on every token, so its cost grows with the square of the
+        // run: at 400 repetitions this one sample took 13 s. Thousands of
+        // tokens are covered, against the text itself, by
+        // `aLongRunWithoutNewlinesStaysUnderTheTailBudget`.
         let longCall =
             "<tool_call>{\"name\":\"write\",\"arguments\":{\"text\":\""
-            + String(repeating: "a newline-free file body with café and 😀 ", count: 400)
+            + String(repeating: "a newline-free file body with café and 😀 ", count: 40)
             + "\"}}</tool_call>"
         for sample in samples + [longCall] {
             let tokens = tokenizer.encode(text: sample, addSpecialTokens: false)

@@ -114,6 +114,7 @@ final class FakeTranscriptionStore: TranscriptionStoring {
 }
 
 @MainActor
+@Suite(.timeLimit(.minutes(1)))
 struct DictationCoordinatorTests {
 
     // MARK: - Helpers
@@ -134,18 +135,18 @@ struct DictationCoordinatorTests {
 
     private struct WaitTimedOut: Error {}
 
-    /// Awaits an `@Observable`-driven condition by yielding (no wall-clock sleep).
+    /// Awaits a condition by yielding (no wall-clock sleep). Some conditions
+    /// read plain locals, so this can't observe; a count of yields can run out
+    /// while the engine's actor waits for a thread, so `waitBackstop` bounds it.
     private func waitUntil(
         _ condition: () -> Bool,
-        attempts: Int = 100_000,
         sourceLocation: SourceLocation = #_sourceLocation
     ) async throws {
-        var n = 0
+        let deadline = ContinuousClock.now + waitBackstop
         while !condition() {
-            n += 1
-            if n > attempts {
+            if ContinuousClock.now >= deadline || Task.isCancelled {
                 Issue.record(
-                    "condition not met within \(attempts) yields", sourceLocation: sourceLocation)
+                    "condition not met within \(waitBackstop)", sourceLocation: sourceLocation)
                 throw WaitTimedOut()
             }
             await Task.yield()

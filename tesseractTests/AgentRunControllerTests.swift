@@ -17,6 +17,7 @@ import Testing
 @testable import Tesseract_Agent
 
 @MainActor
+@Suite(.timeLimit(.minutes(1)))
 struct AgentRunControllerTests {
 
     // MARK: - Doubles
@@ -53,18 +54,8 @@ struct AgentRunControllerTests {
         return peer
     }
 
-    private func waitUntilIdle(
-        _ run: AgentRunController,
-        timeout: Duration = .seconds(3)
-    ) async throws {
-        let deadline = ContinuousClock.now + timeout
-        while run.isGenerating {
-            try await Task.sleep(for: .milliseconds(20))
-            if ContinuousClock.now >= deadline {
-                Issue.record("AgentRunController did not become idle within timeout")
-                return
-            }
-        }
+    private func waitUntilIdle(_ run: AgentRunController) async throws {
+        await observe(until: { !run.isGenerating })
     }
 
     // MARK: - Eager flag
@@ -221,20 +212,12 @@ struct AgentRunControllerTests {
                 contextManager: contextManager, contextWindow: 5_000, summarize: summarize)
         }
 
-        let deadline = ContinuousClock.now + .seconds(3)
-        while await recorder.callCount == 0 {
-            try await Task.sleep(for: .milliseconds(20))
-            if ContinuousClock.now >= deadline {
-                Issue.record("Gated body did not invoke summarize within timeout")
-                break
-            }
-        }
+        // The completion-based clear: `/compact` owns its busy-flag lifecycle by
+        // finishing under the gate, not via a `phase == .idle` event gate — so
+        // once the flag drops, the body has run, `summarize` included.
+        try await waitUntilIdle(run)
         #expect(await recorder.callCount >= 1)
         #expect(peer.gateCalls == [.init()])
-
-        // The completion-based clear: `/compact` owns its busy-flag lifecycle by
-        // finishing under the gate, not via a `phase == .idle` event gate.
-        try await waitUntilIdle(run)
         #expect(run.isGenerating == false)
     }
 
@@ -251,8 +234,8 @@ struct AgentRunControllerTests {
         run.send(CoreMessage.user(UserMessage(content: "Hello")))
         #expect(run.isGenerating == true)
 
-        // The direct body runs on the next main-actor tick — let it reach the agent.
-        for _ in 0..<200 where agent.state.messages.isEmpty { await Task.yield() }
+        // The agent's loop runs off the main actor and posts the message back.
+        await observe(until: { !agent.state.messages.isEmpty })
         #expect(agent.state.messages.contains { $0.asUser?.content == "Hello" })
     }
 

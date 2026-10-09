@@ -1022,7 +1022,7 @@ struct CacheClaimTests {
     private static func eventsThroughTripwire(
         _ capture: TelemetryCapture
     ) async -> [PromptCacheTelemetryEvent] {
-        let deadline = ContinuousClock.now + .seconds(5)
+        let deadline = ContinuousClock.now + waitBackstop
         var seen: [PromptCacheTelemetryEvent] = []
         while ContinuousClock.now < deadline {
             seen += capture.drain()

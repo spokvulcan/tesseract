@@ -66,6 +66,7 @@ private func connectionStaysUp() -> AsyncLatch {
 /// `CompletionDelivery.deliver` — with scripted transport closures, asserting the
 /// first-finisher-wins outcome, the cancel bridge, and keepalive cadence
 /// without opening a socket.
+@Suite(.timeLimit(.minutes(1)))
 struct StreamLifecycleDriverTests {
 
     /// A disconnect mid-drive wins the race, bridges the cancel into

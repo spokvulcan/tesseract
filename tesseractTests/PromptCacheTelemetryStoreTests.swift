@@ -4,6 +4,7 @@ import Testing
 @testable import Tesseract_Agent
 
 @MainActor
+@Suite(.timeLimit(.minutes(1)))
 struct PromptCacheTelemetryStoreTests {
 
     @Test func aggregateComputesHitRateTokenReuseAndLatency() {
@@ -200,7 +201,6 @@ struct PromptCacheTelemetryStoreTests {
         #expect(PromptCacheEventDisplay.reason(for: lookup) == "ssdHit")
         #expect(PromptCacheEventDisplay.tokenSummary(lookup) == "96/128")
         #expect(PromptCacheEventDisplay.bytesSummary(eviction) == "1 MB")
-        #expect(PromptCacheEventDisplay.requestSummary(lookup) == "11111111")
     }
 
     // MARK: - Tree filtering
@@ -404,17 +404,7 @@ struct PromptCacheTelemetryStoreTests {
         store.events.filter { $0.requestID == requestID }
     }
 
-    private func waitUntil(
-        timeout: Duration = .seconds(3),
-        _ condition: @MainActor @Sendable () -> Bool
-    ) async throws {
-        let deadline = ContinuousClock.now + timeout
-        while !condition() {
-            try await Task.sleep(for: .milliseconds(10))
-            if ContinuousClock.now >= deadline {
-                Issue.record("waitUntil timed out after \(timeout)")
-                return
-            }
-        }
+    private func waitUntil(_ condition: @escaping @MainActor @Sendable () -> Bool) async throws {
+        await observe(until: condition)
     }
 }

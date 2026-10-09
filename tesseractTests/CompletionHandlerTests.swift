@@ -582,6 +582,7 @@ struct EchoModelIDTests {
 // MARK: - HTTPServer Integration Tests
 
 @MainActor
+@Suite(.timeLimit(.minutes(1)))
 struct HTTPServerIntegrationTests {
 
     @Test func healthEndpointReturnsOK() async throws {
@@ -730,11 +731,12 @@ struct HTTPServerIntegrationTests {
     @Test func sseWriterDetectsDisconnect() async throws {
         // Verify that SSEWriter.send returns false when the connection fails,
         // and that the handler does not run all 200 iterations.
-        let chunksSent = GateAcquiredSignal()  // reuse as "at least some sent" flag
-        let handlerDone = GateAcquiredSignal()
+        let (stopped, stop) = AsyncStream<Void>.makeStream()
+        let (exits, exit) = AsyncStream<Int>.makeStream()
 
         let server = HTTPServer(port: 0)
         server.route(.GET, "/slow-sse") { _, writer in
+            defer { exit.finish() }
             let sse = SSEWriter(writer)
             try await sse.open()
             var sent = 0
@@ -742,10 +744,12 @@ struct HTTPServerIntegrationTests {
                 let ok = await sse.send(["n": "\(i)"] as [String: String])
                 if !ok { break }
                 sent += 1
-                if sent == 2 { chunksSent.set() }
+                // Every later send meets the stopped server, however long the
+                // test takes to get there.
+                if sent == 1 { for await _ in stopped { break } }
                 try? await Task.sleep(nanoseconds: 10_000_000)
             }
-            handlerDone.set()
+            exit.yield(sent)
         }
         let port = try await startOnRandomPort(server)
 
@@ -762,10 +766,12 @@ struct HTTPServerIntegrationTests {
         try? await readTask.value
         // Server stop cancels connection tasks, causing writes to fail
         server.stop()
+        stop.yield()
 
-        try await Task.sleep(nanoseconds: 500_000_000)
-        // Handler must have exited (not still running all 200 iterations)
-        #expect(handlerDone.isSet)
+        // Handler must have exited on a failed send (not run all 200 iterations)
+        var exitsIterator = exits.makeAsyncIterator()
+        let sent = await exitsIterator.next()
+        #expect(sent.map { $0 < 200 } == true, "chunks sent: \(String(describing: sent))")
     }
 
     // MARK: - Prefill Disconnect
@@ -874,21 +880,28 @@ struct HTTPServerIntegrationTests {
     @Test func midStreamDisconnectBreaksGenerationLoop() async throws {
         // Verify that failed sse.send() breaks the labeled generation loop,
         // not just the switch statement.
-        let loopExited = GateAcquiredSignal()
+        let (stopped, stop) = AsyncStream<Void>.makeStream()
+        let (exits, exit) = AsyncStream<Int>.makeStream()
 
         let server = HTTPServer(port: 0)
         server.route(.GET, "/midstream-disconnect") { _, writer in
+            defer { exit.finish() }
             let sse = SSEWriter(writer)
             try await sse.open()
 
+            var sent = 0
             generation: for i in 1...500 {
                 guard await sse.send(["n": "\(i)"] as [String: String]) else {
                     break generation
                 }
+                sent = i
+                // The client has its three chunks: every later send meets the
+                // stopped server, however long the test takes to get there.
+                if i == 3 { for await _ in stopped { break } }
                 try? await Task.sleep(nanoseconds: 10_000_000)
                 if Task.isCancelled { break generation }
             }
-            loopExited.set()
+            exit.yield(sent)
         }
         let port = try await startOnRandomPort(server)
 
@@ -906,51 +919,25 @@ struct HTTPServerIntegrationTests {
 
         try? await readTask.value
         server.stop()
+        stop.yield()
 
-        try await Task.sleep(nanoseconds: 500_000_000)
         // Loop must have exited — not still running 500 iterations
-        #expect(loopExited.isSet)
+        var exitsIterator = exits.makeAsyncIterator()
+        let sent = await exitsIterator.next()
+        #expect(sent.map { $0 < 500 } == true, "chunks sent: \(String(describing: sent))")
     }
 
     // MARK: - Helpers
 
-    /// Start server on a random available port, return the actual port.
+    /// Start `server` (constructed with port 0) on a port the OS assigns, and
+    /// return it once the listener is ready. Probing for a free port and
+    /// binding it afterwards would race every other server the parallel run
+    /// starts.
     private func startOnRandomPort(_ server: HTTPServer) async throws -> UInt16 {
-        // Port 0 isn't supported by NWListener, so find a free port
-        let port = try findFreePort()
-        await server.updatePort(port)
         await server.start()
-        // Brief pause for listener to become ready
-        try await Task.sleep(nanoseconds: 100_000_000)
+        let port = await ScriptedMCPServer.waitForPort(server)
+        guard port != 0 else { throw PortError() }
         return port
-    }
-
-    private func findFreePort() throws -> UInt16 {
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw PortError() }
-        defer { close(fd) }
-
-        var addr = sockaddr_in()
-        addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_port = 0
-        addr.sin_addr.s_addr = INADDR_LOOPBACK.bigEndian
-
-        let bindResult = withUnsafePointer(to: &addr) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
-        guard bindResult == 0 else { throw PortError() }
-
-        var len = socklen_t(MemoryLayout<sockaddr_in>.size)
-        let nameResult = withUnsafeMutablePointer(to: &addr) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                getsockname(fd, $0, &len)
-            }
-        }
-        guard nameResult == 0 else { throw PortError() }
-
-        return UInt16(bigEndian: addr.sin_port)
     }
 }
 

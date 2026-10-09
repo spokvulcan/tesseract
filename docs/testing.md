@@ -3,6 +3,33 @@
 Tests use the Swift `Testing` framework (not XCTest), in `tesseractTests/`. Run
 before committing changes to server, caching, or agent engine code.
 
+## Running them: `scripts/test.sh`
+
+```bash
+scripts/test.sh                                   # build-for-testing, then the whole target (~25 s)
+scripts/test.sh ChatSessionTests LLMGateTests     # build, then just these suites (~3 s)
+scripts/test.sh --no-build ChatSessionTests       # reuse the last build while iterating
+scripts/test.sh --no-build 'ChatSessionTests/sendMessageRaisesPendingRowUntilTheUserCommit()'
+```
+
+The script runs the built `.xctestrun` directly instead of `-scheme`, which
+skips the 7–10 s xcodebuild spends loading the project on every invocation.
+It prints each failure with its `#expect` details (read from the result
+bundle; xcodebuild's own output leaves them out), then the totals. A filter
+that matches no test (a file name, or a test without its parentheses) exits 3
+instead of passing. Logs and the result bundle stay under
+`DerivedData/<project>/test-runs/`, one directory per run, so several runs can
+share a checkout. `TEST_RUNNER_*` variables reach the tests as usual.
+
+Several agents can run it at once. In stress rounds of four whole-target runs
+and three suite runs started together, all 56 runs passed, including rounds
+where all four whole-target runs overlapped. A whole-target run keeps every core busy,
+though, so at most `TESSERACT_TEST_SLOTS` (default 2) of them proceed at once
+on the machine, across checkouts, and the rest wait for a slot: two at once
+take about 25 s each, four about 30–40 s. Suite runs never wait. A build after
+editing one test file takes about 25 s, half of it xcodebuild re-emitting the
+test module.
+
 ## Unit / integration suites
 
 `AlphaTunerTests.productionCacheKeepsAlphaTunerDisabled` drives toy-backed
@@ -1104,23 +1131,79 @@ limits, and the [review follow-up](../benchmarks/leaf-lease/2026-09-12-review/RE
 for the additional return, admission and flush regressions. The large-model
 approval requirement in the capture baseline still applies to #480.
 
+### Parallel runs share one test host
+
+A parallel run starts every suite at once in one test host, so all of them
+share its Swift cooperative thread pool (one thread per core), its main actor,
+and its process-wide state. Before these rules, a full run failed 50–57 tests
+in a dozen suites, and every one of them passed serially.
+
+- **A suite whose cases compute for seconds without suspending takes
+  `@Suite(.cpuBound)`** (`tesseractTests/CPUBoundTrait.swift`): loading a real
+  tokenizer (the `*RealTests` suites), scanning the app sources. At most a
+  quarter of the cores run such cases at once. Without it, the real-tokenizer
+  suites held every pool thread for about 40 s. Everything else waited for a
+  thread, including `Task.sleep` wake-ups, which resume through the global
+  executor even in main-actor code.
+- **Wait for the state change, not the clock.** Every `@MainActor` suite
+  queues on the one main actor, and one hop onto it can take seconds. A poll
+  against a 3 s deadline then fails a test whose code is fine. The waits live
+  in `tesseractTests/Waiting.swift`:
+  - `await observe(until: { !session.isGenerating })` re-checks whenever the
+    `@Observable` state it reads changes. It has no deadline, so its suite sets
+    `@Suite(.timeLimit(.minutes(1)))` and a real hang still fails.
+  - `waitUntil { … }` polls state that isn't observable: a writer's callback,
+    a file on disk.
+  - Every wall-clock budget is `waitBackstop` (60 s): a backstop for a hang,
+    never a latency budget.
+  - A count of `Task.yield()`s counts main-actor turns. It is a wait only when
+    every step of the work stays on the main actor. An actor hop, a
+    `Task.sleep`, or a detached task crosses the thread pool, and the count can
+    run out first: `Agent.prompt` posts the user message back from its
+    off-main loop.
+  - A negative check ("nothing more happens") keeps its fixed window of yields
+    or milliseconds.
+- **The scheme lets at most 64 test cases run at once**: the Test action sets
+  `SWT_EXPERIMENTAL_MAXIMUM_PARALLELIZATION_WIDTH`. Without it Swift Testing
+  starts all ~3,600 cases together, and the main actor spends about 15 s
+  getting through their first steps. A check that has to stay on the clock
+  pays for that: `BrowserTabNavigationTimeoutTests`'s `elapsed < 5 s`
+  measured 4.5 s. With the cap it measures 0.3 s, and a run takes about 3 s
+  longer. The variable is experimental. If a toolchain drops it, runs start
+  everything at once again, which still passed but with that thin margin.
+- **A real tokenizer is loaded once per process.** Ask for it through
+  `RealTokenizers.huggingFace(from:)` or `RealTokenizers.app(from:)`
+  (`tesseractTests/RealTokenizers.swift`), not the loader directly. A load
+  takes about 2 s in a Debug build, and every test used to pay it: over 40 loads
+  a run.
+- **A test server binds port 0** and reads the port back with
+  `ScriptedMCPServer.waitForPort(_:)`. Another suite can take a probed "free"
+  port before the listener binds it.
+- **Gigabyte-scale work is opt-in.** `SSDSnapshotStoreTests.writerCommitsPayloadPastIntMaxBytes`
+  writes a 2.1 GB payload (held in memory too) only with
+  `TEST_RUNNER_TESSERACT_LARGE_WRITE_TEST=1`. Every run carries a cheap test
+  that pins the writer's chunk bound below `INT_MAX`.
+- **A test process starts on empty storage.** `StorageEnvironment.scratchRoot`
+  is `$TMPDIR/TesseractTestStorage-<pid>`. When it is first resolved, it
+  removes a folder left under its own pid (pids are reused) and the folders of
+  test processes that have exited.
+- **Process-wide state a test counts is injected, not reset in `init`.**
+  Swift Testing runs a suite's `init` as a separate step from its test body,
+  so another suite can run in between. `StablePrefixDetectorMemoTests` passes
+  its own `StablePrefixDetector.Memo`, as the render-cache suites pass their
+  own `RenderTokenCache`.
+
 ### Test-runner caveats
 
-- `-only-testing` filters must target **suite** granularity. A method-granularity
-  filter (`-only-testing:tesseractTests/<Suite>/<testName>`) runs zero Swift Testing
-  tests and still reports `** TEST SUCCEEDED **`. The suite is the `struct` name, not
-  the file name: `tesseractTests/DynamicBudgetCeilingTests.swift` holds nine suites and no suite of
-  that name, so a filter on the file name also runs nothing and still succeeds. Check
-  the `.xcresult` for the suites that actually ran.
-- `xcodebuild test` hides `#expect` failure details from stdout. Read them from
-  the `.xcresult` bundle:
+- `-only-testing` filters name a **suite**, or one test as `<Suite>/<testName>()`
+  with the parentheses. Without them (`<Suite>/<testName>`) the filter runs zero
+  Swift Testing tests and still reports `** TEST SUCCEEDED **`. The suite is the
+  `struct` name, not the file name: `tesseractTests/DynamicBudgetCeilingTests.swift`
+  holds nine suites and no suite of that name, so a filter on the file name also
+  runs nothing and still succeeds. `scripts/test.sh` fails such a run (exit 3).
+- `xcodebuild test` hides `#expect` failure details from stdout (`scripts/test.sh`
+  prints them). Read them from the `.xcresult` bundle:
   `xcrun xcresulttool get test-results tests --path <bundle>.xcresult`.
-- Known flake (not a regression):
-  `WarmStartTests/warmStartRebuildsFromDirectoryWalkAfterCorruption` can fail in
-  any run (solo included). The window: `SnapshotLedger.persistNow` clears
-  `manifestDirty` under the lock but writes the manifest file after unlocking,
-  so the test's `flushManifestForTesting` can no-op while the debounce task's
-  write is still in flight and the `fileExists` check lands first.
 - Speech package tests (`Vendor/tesseract-speech`, needs the
   `Vendor/mlx-swift-lm` submodule checked out). Two suites, no weights:
   - `TesseractSpeechTests`: scripted adapters, no GPU. `EngineContractTests`

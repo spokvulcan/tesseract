@@ -33,7 +33,7 @@ import Testing
 ///
 /// Doc comments legitimately name the calls, so comment lines are dropped
 /// before matching; the pattern requires the open paren of a call.
-@Suite struct ConversationRenderSourceShapeTests {
+@Suite(.cpuBound) struct ConversationRenderSourceShapeTests {
 
     /// The module's verbs: every server template application goes through them.
     private static let moduleFile = "ConversationRender.swift"
@@ -86,6 +86,8 @@ import Testing
     private static func templateCallLines(in source: String) -> [Int] {
         var hits: [Int] = []
         for (index, line) in source.components(separatedBy: "\n").enumerated() {
+            // Both names end in `ChatTemplate`: skip the regex on every other line.
+            guard line.contains("ChatTemplate") else { continue }
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.hasPrefix("//") { continue }
             if line.contains(templateCall) {

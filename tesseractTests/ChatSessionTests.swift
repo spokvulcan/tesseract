@@ -19,24 +19,13 @@ import Testing
 @testable import Tesseract_Agent
 
 @MainActor
+@Suite(.timeLimit(.minutes(1)))
 struct ChatSessionTests {
 
     // MARK: - Fixtures
 
-    // Generous budget: the full bundle runs many suites in parallel, and a
-    // queued run can sit well past 3 s under that load. The loop exits the
-    // moment the session settles, so a passing test never pays the ceiling.
-    private func waitUntilIdle(
-        _ session: ChatSession, timeout: Duration = .seconds(10)
-    ) async throws {
-        let deadline = ContinuousClock.now + timeout
-        while session.isGenerating {
-            try await Task.sleep(for: .milliseconds(20))
-            if ContinuousClock.now >= deadline {
-                Issue.record("ChatSession did not become idle within timeout")
-                return
-            }
-        }
+    private func waitUntilIdle(_ session: ChatSession) async throws {
+        await observe(until: { !session.isGenerating })
     }
 
     /// Feed one raw generation event through a builder and hand every produced
@@ -792,13 +781,8 @@ struct ChatSessionTests {
         live.append("c")
         // Raw always has everything.
         #expect(live.raw == "abc")
-        // displayText catches up once the trailing flush fires. Poll instead of
-        // a single fixed sleep — the parallel test processes can starve the
-        // flush task well past its deadline.
-        let deadline = ContinuousClock.now + .seconds(3)
-        while live.displayText != "abc", ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(20))
-        }
+        // displayText catches up once the trailing flush fires.
+        await observe(until: { live.displayText == "abc" })
         #expect(live.displayText == "abc")
     }
 }

@@ -71,14 +71,11 @@ struct ReaderHarness {
 @MainActor
 struct SpeechReaderTests {
 
-    /// Poll until `condition` holds. The minute is a backstop, not a latency
-    /// budget: every event of an utterance hops between the engine's actors
-    /// and the main actor, and in the first seconds of a parallel run each hop
-    /// can wait that long for a thread behind the other suites' work. A
-    /// member, so it shadows the shared five-second `waitUntil`, which a
-    /// file-level helper loses to for every condition that doesn't await.
+    /// Poll until `condition` holds: every event of an utterance hops between
+    /// the engine's actors and the main actor. A member because its
+    /// conditions may await, which the shared `waitUntil` doesn't take.
     private func waitUntil(
-        timeout: Duration = .seconds(60), _ condition: @MainActor () async -> Bool
+        timeout: Duration = waitBackstop, _ condition: @MainActor () async -> Bool
     ) async -> Bool {
         let deadline = ContinuousClock.now + timeout
         while ContinuousClock.now < deadline {
@@ -211,7 +208,8 @@ struct SpeechReaderTests {
         harness.playback.firePlaybackFinished()
         #expect(await waitUntil { !harness.reader.isReading })
         #expect(harness.reader.bookmark == 0)
-        #expect(await waitUntil { harness.store.load().bookmark == 0 })
+        await harness.reader.flushed()
+        #expect(harness.store.load().bookmark == 0)
         harness.tearDown()
     }
 

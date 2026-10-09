@@ -84,6 +84,7 @@ actor CancellationIgnoringSpeechRecognizer: SpeechRecognizer {
 }
 
 @MainActor
+@Suite(.timeLimit(.minutes(1)))
 struct TranscriptionEngineTests {
 
     // MARK: - Helpers

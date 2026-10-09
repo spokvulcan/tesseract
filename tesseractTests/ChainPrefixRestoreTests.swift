@@ -160,18 +160,6 @@ struct ChainPrefixRestoreRouterTests {
         try? FileManager.default.removeItem(at: url)
     }
 
-    private func waitUntil(
-        timeout: Duration = .seconds(5),
-        _ condition: @MainActor () -> Bool
-    ) async -> Bool {
-        let start = ContinuousClock.now
-        while ContinuousClock.now - start < timeout {
-            if condition() { return true }
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        return condition()
-    }
-
     /// Admit + commit a leaf at `tokens`, returning its node and ref.
     /// `extending` drives the writer's fold against an earlier leaf.
     private func admitCommittedLeaf(

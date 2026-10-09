@@ -8,6 +8,7 @@ import Testing
 /// Each test injects a double per arm and asserts exactly one arm serves
 /// each request, model state is attached, and errors propagate.
 @MainActor
+@Suite(.timeLimit(.minutes(1)))
 struct ServerInferenceServiceTests {
 
     @Test func promptRequestsRouteToPromptInference() async throws {
@@ -639,11 +640,8 @@ struct ServerInferenceServiceTests {
         consumer.cancel()
         _ = await consumer.result
 
-        for _ in 0..<20 {
-            if await probe.cancelCount > 0 { break }
-            await Task.yield()
-        }
-
+        // The start's cancel lands on its own task; wait for it, not for turns.
+        await probe.cancelled()
         #expect(await probe.cancelCount > 0)
     }
 }
@@ -812,6 +810,13 @@ private actor AsyncFlag {
 private actor ControlledInferenceStart {
     private var continuation: AsyncThrowingStream<AgentGeneration, Error>.Continuation?
     private(set) var cancelCount = 0
+    private var cancelWaiters: [CheckedContinuation<Void, Never>] = []
+
+    /// Returns once the start has been cancelled.
+    func cancelled() async {
+        guard cancelCount == 0 else { return }
+        await withCheckedContinuation { cancelWaiters.append($0) }
+    }
 
     func makeStart() -> HTTPServerGenerationStart {
         let stream = AsyncThrowingStream<AgentGeneration, Error> { continuation in
@@ -838,5 +843,7 @@ private actor ControlledInferenceStart {
     private func cancel() {
         cancelCount += 1
         continuation?.finish()
+        for waiter in cancelWaiters { waiter.resume() }
+        cancelWaiters = []
     }
 }

@@ -45,20 +45,6 @@ struct SnapshotDemotionTests {
         PrefixCacheTestFixtures.admitUniformLeaf(manager, tokens: tokens, partitionKey: key)
     }
 
-    /// Poll `condition` on MainActor until true or timeout — the writer's
-    /// commit callback hops back to MainActor asynchronously.
-    private func waitUntil(
-        timeout: Duration = .seconds(5),
-        _ condition: @MainActor () -> Bool
-    ) async -> Bool {
-        let start = ContinuousClock.now
-        while ContinuousClock.now - start < timeout {
-            if condition() { return true }
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        return condition()
-    }
-
     // MARK: - Demote-don't-drop
 
     /// The headline behavior: budget pressure on an unbacked victim ends

@@ -44,6 +44,26 @@ import WebKit
                 "-\(ProcessInfo.processInfo.processIdentifier)"))
     }
 
+    /// A test process starts on an empty scratch folder: one left under its
+    /// own pid, or by a process that has exited, is removed. A live process's
+    /// folder and anything else in the directory stay.
+    @Test func exitedProcessesScratchFoldersAreRemoved() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("scratch-sweep-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let prefix = StorageEnvironment.scratchPrefix
+        for name in ["\(prefix)7", "\(prefix)8", "\(prefix)9", "\(prefix)x", "Other-8"] {
+            try FileManager.default.createDirectory(
+                at: directory.appendingPathComponent(name), withIntermediateDirectories: true)
+        }
+
+        StorageEnvironment.removeExitedScratchRoots(
+            in: directory, ownPID: 7, isAlive: { $0 == 7 || $0 == 9 })
+
+        let left = try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
+        #expect(left == ["Other-8", "\(prefix)9", "\(prefix)x"])
+    }
+
     @MainActor
     @Test func defaultLocationsResolveThroughTheSeam() {
         let settings = SettingsManager(store: InMemorySettingsStore())

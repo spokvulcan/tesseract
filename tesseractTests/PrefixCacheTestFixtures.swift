@@ -4,22 +4,6 @@ import MLXLMCommon
 
 @testable import Tesseract_Agent
 
-/// Poll `condition` on MainActor until true or timeout — the SSD
-/// writer's commit/drop callbacks hop back to MainActor asynchronously.
-/// Shared by every suite that awaits a writer-side transition.
-@MainActor
-func waitUntil(
-    timeout: Duration = .seconds(5),
-    _ condition: @MainActor () -> Bool
-) async -> Bool {
-    let start = ContinuousClock.now
-    while ContinuousClock.now - start < timeout {
-        if condition() { return true }
-        try? await Task.sleep(for: .milliseconds(10))
-    }
-    return condition()
-}
-
 /// Physical address of an `MLXArray`'s backing buffer. Two arrays that
 /// share a Metal allocation report the same address; independent copies
 /// report different ones. `asData(access: .noCopy)` (after `eval`) wraps

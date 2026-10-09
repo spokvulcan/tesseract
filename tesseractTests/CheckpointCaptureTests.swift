@@ -315,24 +315,6 @@ struct CheckpointCaptureTests {
         #expect(result.snapshots.isEmpty)
     }
 
-    // MARK: - 16. defaultExtensionDelegatesToBasePrepare
-
-    @Test(.disabled("Requires LanguageModel mock — Module conformance non-trivial"))
-    func defaultExtensionDelegatesToBasePrepare() {
-        // LanguageModel extension at LanguageModel.swift:219-225 delegates
-        // to prepare() and returns (result, []).
-        // LLMModel (LLMModel.swift:43-69) and Qwen35 VLM are the only overrides.
-    }
-
-    // MARK: - 17. specIteratorStillCallsBasePrepare
-
-    @Test(.disabled("Requires LanguageModel mock — Module conformance non-trivial"))
-    func specIteratorStillCallsBasePrepare() {
-        // SpeculativeTokenIterator.prepare() calls mainModel.prepare()
-        // and draftModel.prepare() — NOT prepareWithCheckpoints().
-        // Verified by code inspection at Evaluate.swift:858,871.
-    }
-
     // MARK: - Additional edge cases
 
     @Test func checkpointAtExactPrefillStepBoundary() throws {

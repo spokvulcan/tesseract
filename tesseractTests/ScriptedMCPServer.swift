@@ -237,13 +237,12 @@ final class ScriptedMCPServer {
         return data
     }
 
+    /// The port `server` listens on once its listener is ready, or 0 if it
+    /// failed to start. The ready callback hops to the main actor, which can
+    /// take seconds in a parallel run, so this waits on the server's
+    /// observable state rather than a deadline.
     static func waitForPort(_ server: HTTPServer) async -> UInt16 {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(3))
-        while clock.now < deadline {
-            if let port = server.boundPort { return port }
-            try? await Task.sleep(for: .milliseconds(10))
-        }
+        await observe(until: { server.boundPort != nil || server.lastStartError != nil })
         return server.boundPort ?? 0
     }
 }

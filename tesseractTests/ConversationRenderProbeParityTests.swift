@@ -369,7 +369,7 @@ private enum ProbeParityFixtures {
 /// `RenderTokenCacheRealTests` default) — skipped otherwise, so it is safe
 /// anywhere.
 @MainActor
-@Suite struct ConversationRenderProbeParityRealTests {
+@Suite(.cpuBound) struct ConversationRenderProbeParityRealTests {
 
     private nonisolated static var modelDirectory: URL {
         let path =
@@ -384,7 +384,7 @@ private enum ProbeParityFixtures {
     }
 
     private static func loadTokenizer() async throws -> any MLXLMCommon.Tokenizer {
-        try await #huggingFaceTokenizerLoader().load(from: modelDirectory)
+        try await RealTokenizers.huggingFace(from: modelDirectory)
     }
 
     private static let renderContexts: [TemplateRenderContext] = [

@@ -13,6 +13,7 @@ import Testing
 /// where no catalog chat model is downloaded. The directory alone doesn't
 /// count: the app creates it at launch, so a CI runner has one with nothing
 /// in it. It prints which models it checked and which it skipped.
+@Suite(.cpuBound)
 struct GenerationPromptCatalogRealTests {
 
     nonisolated static var modelsRoot: URL {
@@ -102,11 +103,12 @@ struct GenerationPromptCatalogRealTests {
 
     /// Off the main actor: each model's tokenizer load and renders take a
     /// second or more in a Debug build, and in a parallel run the main actor
-    /// is every other suite's too.
+    /// is every other suite's too. The models are checked three at a time;
+    /// one after another, the loads made this the slowest test in the target.
     @concurrent
     @Test(.enabled("no catalog chat model is downloaded") { await anyChatModelDownloaded })
     func everyDownloadedCatalogModelMeasures() async throws {
-        var checked: [String] = []
+        var downloaded: [(model: Entry, directory: URL)] = []
         var skipped: [String] = []
         for model in await Self.entries {
             guard let subdirectory = model.subdirectory else { continue }
@@ -115,31 +117,54 @@ struct GenerationPromptCatalogRealTests {
                 skipped.append(model.id)
                 continue
             }
-            let tokenizer = try await AppTokenizerLoader().load(from: directory)
-            let identity = ModelIdentity(directory: directory)
-            let byDefault = try Self.measured(tokenizer, .canonical)
-            let off = try Self.measured(
-                tokenizer, Self.context(enableThinking: false, identity: identity))
-            #expect(byDefault.unknownReason == nil, "\(model.id) default: \(byDefault.traceValue)")
-            #expect(off.unknownReason == nil, "\(model.id) thinking off: \(off.traceValue)")
-            switch model.family {
-            case .thinksWhenAsked:
-                #expect(byDefault.thinkBlock == .closed, "\(model.id): \(byDefault.traceValue)")
-                #expect(off.thinkBlock == .closed, "\(model.id) thinking off: \(off.traceValue)")
-                let on = try Self.measured(
-                    tokenizer, Self.context(enableThinking: true, identity: identity))
-                #expect(on.thinkBlock == .opens, "\(model.id) thinking on: \(on.traceValue)")
-            case .thinksByDefault:
-                #expect(byDefault.thinkBlock == .opens, "\(model.id): \(byDefault.traceValue)")
-                #expect(off.thinkBlock == .closed, "\(model.id) thinking off: \(off.traceValue)")
-            case .measuresOnly:
-                break
+            downloaded.append((model, directory))
+        }
+        let checked = try await withThrowingTaskGroup(of: String.self) { group in
+            var checked: [String] = []
+            var next = 0
+            func startNext() {
+                guard next < downloaded.count else { return }
+                let (model, directory) = downloaded[next]
+                next += 1
+                group.addTask { try await Self.check(model, in: directory) }
             }
-            checked.append(model.id)
+            for _ in 0..<3 { startNext() }
+            while let id = try await group.next() {
+                checked.append(id)
+                startNext()
+            }
+            return checked
         }
         print(
-            "generation-prompt catalog gate: checked=\(checked.joined(separator: ",")) "
+            "generation-prompt catalog gate: checked=\(checked.sorted().joined(separator: ",")) "
                 + "skipped=\(skipped.joined(separator: ","))")
         #expect(!checked.isEmpty, "no catalog chat model is downloaded; the gate checked nothing")
+    }
+
+    /// One model's measurements, by default and with thinking off (and on,
+    /// for the family that thinks only when asked). Returns the model's ID.
+    @concurrent
+    static func check(_ model: Entry, in directory: URL) async throws -> String {
+        let tokenizer = try await AppTokenizerLoader().load(from: directory)
+        let identity = ModelIdentity(directory: directory)
+        let byDefault = try Self.measured(tokenizer, .canonical)
+        let off = try Self.measured(
+            tokenizer, Self.context(enableThinking: false, identity: identity))
+        #expect(byDefault.unknownReason == nil, "\(model.id) default: \(byDefault.traceValue)")
+        #expect(off.unknownReason == nil, "\(model.id) thinking off: \(off.traceValue)")
+        switch model.family {
+        case .thinksWhenAsked:
+            #expect(byDefault.thinkBlock == .closed, "\(model.id): \(byDefault.traceValue)")
+            #expect(off.thinkBlock == .closed, "\(model.id) thinking off: \(off.traceValue)")
+            let on = try Self.measured(
+                tokenizer, Self.context(enableThinking: true, identity: identity))
+            #expect(on.thinkBlock == .opens, "\(model.id) thinking on: \(on.traceValue)")
+        case .thinksByDefault:
+            #expect(byDefault.thinkBlock == .opens, "\(model.id): \(byDefault.traceValue)")
+            #expect(off.thinkBlock == .closed, "\(model.id) thinking off: \(off.traceValue)")
+        case .measuresOnly:
+            break
+        }
+        return model.id
     }
 }

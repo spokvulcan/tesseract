@@ -18,6 +18,7 @@ import Tokenizers
 /// Uses the real PARO tokenizer/template from the local models directory
 /// (default `~/Library/Application Support/models/z-lab_Qwen3.5-4B-PARO`,
 /// overridable via `TESSERACT_TOKENIZE_CACHE_MODEL`); skipped when absent.
+@Suite(.cpuBound)
 struct RenderChatTemplateParityTests {
 
     private nonisolated static var modelDirectory: URL {
@@ -196,7 +197,7 @@ struct RenderChatTemplateParityTests {
 
     @Test(.enabled(if: modelAvailable))
     func splitEqualsFusedThroughAdaptor() async throws {
-        let tokenizer = try await #huggingFaceTokenizerLoader().load(from: Self.modelDirectory)
+        let tokenizer = try await RealTokenizers.huggingFace(from: Self.modelDirectory)
         let rendering = try #require(tokenizer as? any ChatTemplateRendering)
 
         for testCase in Self.battery() {

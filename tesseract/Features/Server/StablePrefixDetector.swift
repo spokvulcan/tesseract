@@ -23,13 +23,38 @@ struct StablePrefixDetector {
     /// prefix hash doesn't match fullTokens falls through to a fresh
     /// two-probe detect — a memo entry from a different template can cost a
     /// cache hit, never produce a wrong boundary.
-    nonisolated(unsafe) private static var memo: [String: (commonLength: Int, prefixHash: String)] =
-        [:]
-    nonisolated private static let memoLock = NSLock()
+    ///
+    /// `@unchecked Sendable`: the entries are NSLock-guarded.
+    nonisolated final class Memo: @unchecked Sendable {
+        /// The process's memo, which every caller shares unless it passes its own.
+        static let shared = Memo()
+
+        private var entries: [String: (commonLength: Int, prefixHash: String)] = [:]
+        private let lock = NSLock()
+
+        init() {}
+
+        fileprivate func entry(for key: String) -> (commonLength: Int, prefixHash: String)? {
+            lock.withLock { entries[key] }
+        }
+
+        fileprivate func store(commonLength: Int, prefixHash: String, for key: String) {
+            lock.withLock {
+                // Bounded: probe keys rotate only when the operator changes the
+                // system prompt / tool set / template context.
+                if entries.count > 256 { entries.removeAll() }
+                entries[key] = (commonLength, prefixHash)
+            }
+        }
+
+        func removeAll() {
+            lock.withLock { entries.removeAll() }
+        }
+    }
 
     /// Test hook: drop all memoized probe results.
     nonisolated static func resetMemo() {
-        memoLock.withLock { memo.removeAll() }
+        Memo.shared.removeAll()
     }
 
     /// Returns the token offset where the stable prefix (system + tools) ends.
@@ -39,12 +64,16 @@ struct StablePrefixDetector {
     /// - Common prefix doesn't match the start of fullTokens
     /// - Common prefix is suspiciously short for a large prompt (suggests
     ///   non-deterministic template rendering, e.g. swift-jinja tojson variance)
+    ///
+    /// `memo` is the shared memo unless a caller (a test counting its probes)
+    /// passes its own.
     nonisolated static func detect(
         systemPrompt: String?,
         toolSpecs: [ToolSpec]?,
         additionalContext: [String: any Sendable]? = nil,
         fullTokens: [Int],
-        tokenizer: any Tokenizer
+        tokenizer: any Tokenizer,
+        memo: Memo = .shared
     ) throws -> Int? {
         guard let systemPrompt, !systemPrompt.isEmpty else {
             return nil
@@ -52,7 +81,7 @@ struct StablePrefixDetector {
 
         let memoKey = Self.memoKey(
             systemPrompt: systemPrompt, toolSpecs: toolSpecs, additionalContext: additionalContext)
-        if let cached = (memoLock.withLock { memo[memoKey] }),
+        if let cached = memo.entry(for: memoKey),
             fullTokens.count >= cached.commonLength,
             tokenHash(fullTokens[0..<cached.commonLength]) == cached.prefixHash,
             passesRatioGuard(commonLength: cached.commonLength, fullTokens: fullTokens)
@@ -96,14 +125,9 @@ struct StablePrefixDetector {
             return nil
         }
 
-        memoLock.withLock {
-            // Bounded: probe keys rotate only when the operator changes the
-            // system prompt / tool set / template context.
-            if memo.count > 256 { memo.removeAll() }
-            memo[memoKey] = (
-                commonLength, tokenHash(probeA[0..<commonLength])
-            )
-        }
+        memo.store(
+            commonLength: commonLength, prefixHash: tokenHash(probeA[0..<commonLength]),
+            for: memoKey)
         return commonLength
     }
 

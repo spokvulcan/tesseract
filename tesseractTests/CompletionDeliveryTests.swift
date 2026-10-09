@@ -322,9 +322,7 @@ struct CompletionDeliveryTests {
             )
             returned.set()
         }
-        // Generous: the loop ends as soon as the finish arrives, and a
-        // loaded full-target run can take many seconds to schedule it.
-        let deadline = ContinuousClock.now + .seconds(30)
+        let deadline = ContinuousClock.now + waitBackstop
         while await !sink.calls.contains(where: { if case .finish = $0 { true } else { false } }),
             ContinuousClock.now < deadline
         {

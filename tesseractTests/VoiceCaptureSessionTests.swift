@@ -18,6 +18,7 @@ import Testing
 @testable import Tesseract_Agent
 
 @MainActor
+@Suite(.timeLimit(.minutes(1)))
 struct VoiceCaptureSessionTests {
 
     // MARK: - A commit closure that records and can suspend

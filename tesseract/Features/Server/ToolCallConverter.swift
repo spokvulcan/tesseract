@@ -26,37 +26,4 @@ nonisolated enum ToolCallConverter {
         }
     }
 
-    /// Remaps tool call IDs in a message array using the provided mapping.
-    ///
-    /// Handles both `tool_call_id` on tool-result messages and `id` fields within
-    /// `tool_calls` arrays on assistant messages. IDs not present in the map are
-    /// left unchanged.
-    static func mapToolCallIDs(
-        _ messages: [OpenAI.ChatMessage],
-        idMap: [String: String]
-    ) -> [OpenAI.ChatMessage] {
-        guard !idMap.isEmpty else { return messages }
-
-        return messages.map { message in
-            let toolCallIdReplacement = message.tool_call_id.flatMap { idMap[$0] }
-            let hasToolCallsRemap =
-                message.tool_calls?.contains { $0.id.flatMap({ idMap[$0] }) != nil } ?? false
-
-            guard toolCallIdReplacement != nil || hasToolCallsRemap else { return message }
-
-            var mapped = message
-            if let replacement = toolCallIdReplacement {
-                mapped.tool_call_id = replacement
-            }
-            if hasToolCallsRemap {
-                mapped.tool_calls = message.tool_calls!.map { call in
-                    guard let id = call.id, let replacement = idMap[id] else { return call }
-                    var remapped = call
-                    remapped.id = replacement
-                    return remapped
-                }
-            }
-            return mapped
-        }
-    }
 }

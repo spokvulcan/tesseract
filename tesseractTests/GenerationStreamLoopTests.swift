@@ -63,7 +63,7 @@ private actor StreamProbe {
 }
 
 private func waitUntil(
-    timeout: Duration = .seconds(1),
+    timeout: Duration = waitBackstop,
     _ condition: @escaping @Sendable () async -> Bool
 ) async -> Bool {
     let clock = ContinuousClock()

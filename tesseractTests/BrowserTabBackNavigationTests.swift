@@ -11,6 +11,7 @@ import WebKit
 /// well-behaved page must still emit `.finished` and land back on the prior
 /// URL, so the timeout fix never regresses the common case into a 30s wait.
 @MainActor
+@Suite(.timeLimit(.minutes(1)))
 struct BrowserTabBackNavigationTests {
 
     private func serveTwoPages() async -> (HTTPServer, UInt16) {
@@ -37,7 +38,9 @@ struct BrowserTabBackNavigationTests {
         let (server, port) = await serveTwoPages()
         defer { server.stop() }
 
-        let tab = BrowserTab(configuration: WebPage.Configuration())
+        // No hydration settle: these pages have no script to wait for, and
+        // the bound below is for the navigation alone.
+        let tab = BrowserTab(configuration: WebPage.Configuration(), hydrationSettle: .zero)
         try await tab.navigate(to: URL(string: "http://127.0.0.1:\(port)/a")!)
         try await tab.navigate(to: URL(string: "http://127.0.0.1:\(port)/b")!)
 
@@ -47,8 +50,8 @@ struct BrowserTabBackNavigationTests {
 
         #expect(status.url.hasSuffix("/a"))
         // Well under the 30s navigation budget — proves the fix left the happy
-        // path fast (observed ~a few ms + hydration settle) rather than making
-        // every back wait for the timeout.
+        // path fast (observed ~a few ms) rather than making every back wait for
+        // the timeout.
         #expect(elapsed < .seconds(5))
     }
 }

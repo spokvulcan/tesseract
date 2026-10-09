@@ -19,6 +19,7 @@ import Tokenizers
 
 // MARK: - Real-tokenizer scenarios
 
+@Suite(.cpuBound)
 struct RenderTokenCacheRealTests {
 
     private nonisolated static var modelDirectory: URL {
@@ -36,7 +37,7 @@ struct RenderTokenCacheRealTests {
     private static let fingerprint = "test-fingerprint"
 
     private static func loadTokenizer() async throws -> any MLXLMCommon.Tokenizer {
-        try await #huggingFaceTokenizerLoader().load(from: modelDirectory)
+        try await RealTokenizers.huggingFace(from: modelDirectory)
     }
 
     private static func tools() -> [MLXLMCommon.ToolSpec] {
@@ -253,6 +254,7 @@ struct RenderTokenCacheRealTests {
 /// against `applyChatTemplate(..., add_generation_prompt: false)` — or the
 /// resolve falls back. Covers the end-of-text right-context classes at the
 /// cut (whitespace runs, letter, CRLF, emoji, digits, `<|im_end|>\n`).
+@Suite(.cpuBound)
 struct RenderTokenCacheTruncatedRealTests {
 
     private nonisolated static var modelDirectory: URL {
@@ -271,7 +273,7 @@ struct RenderTokenCacheTruncatedRealTests {
     private static let noGenPrompt: [String: any Sendable] = ["add_generation_prompt": false]
 
     private static func loadTokenizer() async throws -> any MLXLMCommon.Tokenizer {
-        try await #huggingFaceTokenizerLoader().load(from: modelDirectory)
+        try await RealTokenizers.huggingFace(from: modelDirectory)
     }
 
     private static func resolveTruncated(
@@ -762,6 +764,7 @@ struct RenderTokenCacheReplacingFakeTests {
 /// falls back. Covers the reply-starter classes at the extension junction
 /// (letter / whitespace / emoji / CRLF / digits), the admission probe
 /// continuation, and the entry's non-mutation.
+@Suite(.cpuBound)
 struct RenderTokenCacheReplacingRealTests {
 
     private nonisolated static var modelDirectory: URL {
@@ -780,7 +783,7 @@ struct RenderTokenCacheReplacingRealTests {
     private static let noGenPrompt: [String: any Sendable] = ["add_generation_prompt": false]
 
     private static func loadTokenizer() async throws -> any MLXLMCommon.Tokenizer {
-        try await #huggingFaceTokenizerLoader().load(from: modelDirectory)
+        try await RealTokenizers.huggingFace(from: modelDirectory)
     }
 
     private static func resolveReplacingTail(

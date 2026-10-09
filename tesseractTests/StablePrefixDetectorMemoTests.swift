@@ -8,9 +8,10 @@ import Testing
 /// must degrade to a fresh two-probe detect (never a wrong boundary), and the
 /// 256-entry eviction must keep the map bounded without breaking detection.
 ///
-/// The memo is process-global static state; this suite is `@MainActor` like
-/// the other detector suites, so all three serialize on the main actor and
-/// `resetMemo()` in each suite's `init` cannot race another suite's detect.
+/// Each test detects through its own memo. The shared one is warmed and
+/// cleared by everything else in the process (the other detector suites, the
+/// server suites' prefill planning), and a suite's `init` runs apart from its
+/// test body, so a reset there can be undone before the test counts a probe.
 @MainActor
 struct StablePrefixDetectorMemoTests {
 
@@ -60,11 +61,7 @@ struct StablePrefixDetectorMemoTests {
     // MARK: - Helpers
 
     private let tokenizer = CountingTokenizer()
-
-    init() {
-        // The detector's memo is process-global — start every test clean.
-        StablePrefixDetector.resetMemo()
-    }
+    private let memo = StablePrefixDetector.Memo()
 
     /// Render a full conversation (counts as one template call).
     private func fullTokens(system: String, user: String) throws -> [Int] {
@@ -82,14 +79,14 @@ struct StablePrefixDetectorMemoTests {
 
         let first = try StablePrefixDetector.detect(
             systemPrompt: "You are helpful.", toolSpecs: nil,
-            fullTokens: full, tokenizer: tokenizer)
+            fullTokens: full, tokenizer: tokenizer, memo: memo)
         #expect(first != nil)
         // 1 (full render above) + 2 (probes) — the memo was cold.
         #expect(tokenizer.templateCalls == 3)
 
         let second = try StablePrefixDetector.detect(
             systemPrompt: "You are helpful.", toolSpecs: nil,
-            fullTokens: full, tokenizer: tokenizer)
+            fullTokens: full, tokenizer: tokenizer, memo: memo)
         #expect(second == first)
         // Memo hit — no additional template renders.
         #expect(tokenizer.templateCalls == 3)
@@ -100,13 +97,15 @@ struct StablePrefixDetectorMemoTests {
         // still matches, so the second request must be served from the memo.
         let fullA = try fullTokens(system: "sys", user: "first question")
         let first = try StablePrefixDetector.detect(
-            systemPrompt: "sys", toolSpecs: nil, fullTokens: fullA, tokenizer: tokenizer)
+            systemPrompt: "sys", toolSpecs: nil, fullTokens: fullA, tokenizer: tokenizer,
+            memo: memo)
         #expect(first != nil)
         let callsAfterFirst = tokenizer.templateCalls
 
         let fullB = try fullTokens(system: "sys", user: "something else entirely")
         let second = try StablePrefixDetector.detect(
-            systemPrompt: "sys", toolSpecs: nil, fullTokens: fullB, tokenizer: tokenizer)
+            systemPrompt: "sys", toolSpecs: nil, fullTokens: fullB, tokenizer: tokenizer,
+            memo: memo)
         #expect(second == first)
         // Only fullB's render was added — no probes.
         #expect(tokenizer.templateCalls == callsAfterFirst + 1)
@@ -116,7 +115,8 @@ struct StablePrefixDetectorMemoTests {
         let system = "shared system prompt"
         let full = try fullTokens(system: system, user: "hello")
         let detected = try StablePrefixDetector.detect(
-            systemPrompt: system, toolSpecs: nil, fullTokens: full, tokenizer: tokenizer)
+            systemPrompt: system, toolSpecs: nil, fullTokens: full, tokenizer: tokenizer,
+            memo: memo)
         let boundary = try #require(detected)
         #expect(boundary > 0)
         let callsAfterMemo = tokenizer.templateCalls
@@ -128,7 +128,8 @@ struct StablePrefixDetectorMemoTests {
         var tampered = full
         tampered[2] ^= 0xFF  // inside the stable prefix (im_start markup)
         let result = try StablePrefixDetector.detect(
-            systemPrompt: system, toolSpecs: nil, fullTokens: tampered, tokenizer: tokenizer)
+            systemPrompt: system, toolSpecs: nil, fullTokens: tampered, tokenizer: tokenizer,
+            memo: memo)
         #expect(result == nil)
         // The fall-through ran both probes.
         #expect(tokenizer.templateCalls == callsAfterMemo + 2)
@@ -141,7 +142,8 @@ struct StablePrefixDetectorMemoTests {
             let system = "system prompt variant \(i)"
             let full = try fullTokens(system: system, user: "q")
             let boundary = try StablePrefixDetector.detect(
-                systemPrompt: system, toolSpecs: nil, fullTokens: full, tokenizer: tokenizer)
+                systemPrompt: system, toolSpecs: nil, fullTokens: full, tokenizer: tokenizer,
+                memo: memo)
             #expect(boundary != nil)
         }
         let calls = tokenizer.templateCalls
@@ -150,7 +152,7 @@ struct StablePrefixDetectorMemoTests {
         let full = try fullTokens(system: "system prompt variant 0", user: "q2")
         let detected = try StablePrefixDetector.detect(
             systemPrompt: "system prompt variant 0", toolSpecs: nil,
-            fullTokens: full, tokenizer: tokenizer)
+            fullTokens: full, tokenizer: tokenizer, memo: memo)
         let boundary = try #require(detected)
         #expect(boundary > 0)
         // 1 (full render) + 2 (probes after eviction).
