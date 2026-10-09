@@ -163,6 +163,8 @@ nonisolated struct StepCue: Sendable, Equatable {
     /// (nil: a step already under way).
     var next: String?
     var nextAt: Date? = nil
+    /// What comes next is a call: its link, to join from the panel.
+    var nextLink: URL? = nil
     var phase: Phase = .start
     /// Shown well after its moment — the owner was away, busy or behind
     /// another panel — so it says so ("Still time for", "How did it go?").

@@ -41,6 +41,7 @@ struct JarvisPanelGalleryTests {
         case stepCueLate
         case stepCheckInLate
         case stepDone
+        case stepDoneBeforeCall
         case stepCueSmall
         case stepCheckInSmall
         case stepCheckInMeeting
@@ -96,6 +97,12 @@ struct JarvisPanelGalleryTests {
                     reminderID: "letter", title: "Write to the case worker about the bus ticket",
                     start: Self.at(11, 12), minutes: 20, areaName: "Inbox", isMustDo: false,
                     next: nil, phase: .end, late: true)
+            case .stepDoneBeforeCall:
+                model.done = StepCue(
+                    reminderID: "adr", title: "Write the cache ADR", start: Self.at(10, 45),
+                    minutes: 75, areaName: "Work", isMustDo: false,
+                    next: "Design review at 12:10", nextAt: Self.at(12, 10),
+                    nextLink: URL(string: "https://meet.google.com/abc-defg-hij"), phase: .end)
             case .stepDone:
                 model.done = StepCue(
                     reminderID: "adr", title: "Write the cache ADR", start: Self.at(13, 45),
@@ -228,6 +235,21 @@ struct JarvisPanelGalleryTests {
         #expect(cue.doneLine(now: now) == "That's the must-do — the rest is a bonus.")
         cue.isMustDo = false
         #expect(cue.doneLine(now: now) == nil)
+    }
+
+    @Test func aStepDoneBeforeACallOffersToJoinIt() throws {
+        let link = try #require(URL(string: "https://meet.google.com/abc-defg-hij"))
+        var cue = StepCue(
+            reminderID: "adr", title: "Write the cache ADR", start: Shown.at(10, 45),
+            minutes: 75, areaName: "Work", isMustDo: false, next: "Design review at 12:10",
+            nextAt: Shown.at(12, 10), nextLink: link, phase: .end)
+        #expect(cue.joinLink(now: Shown.at(12)) == link)
+        // A few minutes under way, still; a call half an hour off, not yet.
+        #expect(cue.joinLink(now: Shown.at(12, 15)) == link)
+        #expect(cue.joinLink(now: Shown.at(11, 30)) == nil)
+        #expect(cue.joinLink(now: Shown.at(12, 30)) == nil)
+        cue.nextLink = nil
+        #expect(cue.joinLink(now: Shown.at(12)) == nil)
     }
 
     @Test func theMustDoIsNamedAtItsStart() {

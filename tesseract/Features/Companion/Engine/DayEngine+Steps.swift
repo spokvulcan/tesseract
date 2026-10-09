@@ -167,7 +167,7 @@ nonisolated extension DayEngine {
         return StepCue(
             reminderID: task.id, title: task.title, start: slot.start, minutes: slot.minutes,
             areaName: facts.areaName(of: task), isMustDo: state.mustDoID == task.id,
-            next: next?.0, nextAt: next?.1, phase: phase,
+            next: next?.title, nextAt: next?.at, nextLink: next?.link, phase: phase,
             late: now.timeIntervalSince(moment) >= stepCueLate,
             putOff: state.putOff[task.id] ?? 0,
             small: state.smallStarts.contains(StepCue.key(slot)),
@@ -353,16 +353,20 @@ nonisolated extension DayEngine {
     /// The day's next step once this slot ends, and when it starts: an open
     /// task already under way (one a focus session held back; no time),
     /// else the next event or task.
-    private static func nextStep(after slot: Placement, facts: DayFacts) -> (String, Date?)? {
+    private static func nextStep(after slot: Placement, facts: DayFacts)
+        -> (title: String, at: Date?, link: URL?)?
+    {
         let slotEnd = end(of: slot)
         for row in TimelineBuilder.build(facts: facts).rows {
             let at = AgendaTime.clock(row.start, calendar: facts.calendar)
             switch row.kind {
             case .event(let event) where row.start >= slotEnd:
-                return ("\(event.title) at \(at)", row.start)
+                return ("\(event.title) at \(at)", row.start, event.meetingLink)
             case .task(let task) where !task.isDone && task.id != slot.reminderID:
-                if row.start >= slotEnd { return ("\(task.reminder.title) at \(at)", row.start) }
-                if (row.end ?? row.start) > slotEnd { return (task.reminder.title, nil) }
+                if row.start >= slotEnd {
+                    return ("\(task.reminder.title) at \(at)", row.start, nil)
+                }
+                if (row.end ?? row.start) > slotEnd { return (task.reminder.title, nil, nil) }
             default:
                 continue
             }

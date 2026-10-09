@@ -580,4 +580,8 @@ the owner must remember to read does not. What changed:
   "Join with Google Meet" — carries it and a Join button that opens it; any
   other click still opens Today. A nudge's id now includes the event's end
   and link, so a meeting made longer or given a new link is nudged again with
-  what is true now.
+  what is true now. The same link is offered where the call meets the day:
+  the Now Card's Join during a call and in the quarter hour before one, and
+  the panel's "Done" when the step just finished is followed by a call that
+  soon (`StepCue.nextLink`) — the step's end check-in comes five minutes
+  before a meeting, so Done and Join are the same minute.

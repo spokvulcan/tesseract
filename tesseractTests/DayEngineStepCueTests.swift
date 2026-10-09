@@ -603,6 +603,24 @@ struct DayEngineStepCueTests {
         .state
     }
 
+    @Test func aCueKnowsWhenWhatComesNextIsACall() throws {
+        // A call right after the letter (11:10–11:30).
+        var call = Self.meeting(Self.local(11, 30), Self.local(12))
+        call.notes = "Join with Google Meet: https://meet.google.com/abc-defg-hij"
+        let cued = DayEngine.decide(
+            .tick, snapshot: Self.snapshot(at: Self.local(11, 10), events: [call]),
+            state: Self.state())
+        let cue = try #require(Self.cues(cued.effects).first)
+        #expect(cue.next == "Sync at 11:30")
+        #expect(cue.nextLink == URL(string: "https://meet.google.com/abc-defg-hij"))
+        // A room meeting has no link.
+        call.notes = nil
+        let room = DayEngine.decide(
+            .tick, snapshot: Self.snapshot(at: Self.local(11, 10), events: [call]),
+            state: Self.state())
+        #expect(try #require(Self.cues(room.effects).first).nextLink == nil)
+    }
+
     @Test func aStepStartedBeforeAMeetingEndsFiveMinutesBeforeIt() throws {
         let cued = Self.atReview(.tick, at: Self.local(11, 35), Self.state())
         let cue = try #require(Self.cues(cued.effects).first)

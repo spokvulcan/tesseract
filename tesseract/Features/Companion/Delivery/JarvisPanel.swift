@@ -266,6 +266,13 @@ final class JarvisPanelController {
                     if choice == .done { self.acknowledge(cue) } else { self.close() }
                 },
                 undoDone: { [weak self] in self?.undoDone() },
+                join: { [weak self] url in
+                    // Off to the call: the panel goes with the step's Done.
+                    self?.doneTask?.cancel()
+                    self?.model.done = nil
+                    self?.close()
+                    NSWorkspace.shared.open(url)
+                },
                 chooseBreak: { [weak self] choice in
                     guard let self, self.model.rest != nil else { return }
                     self.onAction(.breakCue(choice))
@@ -364,6 +371,8 @@ struct JarvisPanelView: View {
     let choose: (StepChoice) -> Void
     /// Take back the Done the panel is saying.
     var undoDone: () -> Void = {}
+    /// Open a call's link.
+    var join: (URL) -> Void = { _ in }
     var chooseBreak: (BreakChoice) -> Void = { _ in }
     let send: () -> Void
     let capture: () -> Void
@@ -397,7 +406,7 @@ struct JarvisPanelView: View {
                     } else if let rest = model.rest {
                         BreakCueContent(cue: rest, choose: chooseBreak)
                     } else if let done = model.done {
-                        StepDoneContent(cue: done, now: now(), undo: undoDone)
+                        StepDoneContent(cue: done, now: now(), undo: undoDone, join: join)
                     } else if let shown = model.card {
                         CardContent(
                             card: liveCard(shown.id) ?? shown, agenda: agenda, now: now(),
@@ -599,6 +608,7 @@ private struct StepDoneContent: View {
     let cue: StepCue
     let now: Date
     let undo: () -> Void
+    var join: (URL) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -620,6 +630,13 @@ private struct StepDoneContent: View {
                 Text(line)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            if let link = cue.joinLink(now: now) {
+                Button("Join") { join(link) }
+                    .buttonStyle(PanelButtonStyle(prominent: true))
+                    .focusable(false)
+                    .help("Open the call")
+                    .padding(.top, 8)
             }
         }
     }
@@ -664,6 +681,15 @@ extension StepCue {
         guard isMustDo else { return next }
         return ["That's the must-do — the rest is a bonus.", next].compactMap(\.self)
             .joined(separator: "\n")
+    }
+
+    /// What comes next is a call starting within a quarter hour (or a few
+    /// minutes under way): its link, so the step done, joining is one click.
+    func joinLink(now: Date) -> URL? {
+        guard let nextLink, let nextAt,
+            nextAt.timeIntervalSince(now) <= 15 * 60, now.timeIntervalSince(nextAt) <= 10 * 60
+        else { return nil }
+        return nextLink
     }
 }
 
