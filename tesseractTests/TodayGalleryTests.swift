@@ -3,9 +3,11 @@
 //  tesseractTests
 //
 //  Today, rendered with the app's wiring over fixture days (an in-memory
-//  Agenda and a saved day state, ADR-0073): the morning after the plan, a
-//  busy midday with a slid task and things waiting, an evening with the day
-//  done, and the same night past midnight, still that day until 04:00. Each renders at a wide, a regular and a phone width, so every
+//  Agenda and a saved day state, ADR-0073): the morning after the plan, the
+//  same day at 14:20 deep in the must-do's slot (its time left drains on the
+//  Now Card), a busy midday with a slid task and things waiting, an evening
+//  with the day done, and the same night past midnight, still that day until
+//  04:00. Each renders at a wide, a regular and a phone width, so every
 //  layout's body runs. With TODAY_GALLERY_DIR set (TEST_RUNNER_TODAY_GALLERY_DIR
 //  through xcodebuild), each render is also written there as a PNG, in dark
 //  and light, for judging the page by eye.
@@ -79,6 +81,7 @@ struct TodayGalleryTests {
 /// A day Today can be drawn over, on Sunday 4 October 2026.
 enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
     case morning
+    case focus
     case midday
     case evening
     case night
@@ -93,6 +96,7 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
     var now: Date {
         switch self {
         case .morning: Self.at(8, 20)
+        case .focus: Self.at(14, 20)
         case .midday: Self.at(14, 10)
         case .evening: Self.at(22, 1)
         case .night: Self.at(0, 40, day: 5)
@@ -142,10 +146,15 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
     var reminders: [AgendaReminder] {
         let today = Self.at(0)
         switch self {
-        case .morning:
+        case .morning, .focus:
+            let focus = self == .focus
             return [
-                Self.reminder("mail", "Answer mail", list: "work", due: today),
-                Self.reminder("pr", "Review PR #612", list: "work", due: today),
+                Self.reminder(
+                    "mail", "Answer mail", list: "work", due: today,
+                    doneAt: focus ? Self.at(8, 45) : nil),
+                Self.reminder(
+                    "pr", "Review PR #612", list: "work", due: today,
+                    doneAt: focus ? Self.at(9, 20) : nil),
                 Self.reminder("adr", "Write the cache ADR", list: "work", due: today),
                 Self.reminder("rent", "Pay rent", list: "life", due: today),
                 Self.reminder(
@@ -204,7 +213,7 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
                 calendarTitle: "Personal", colorHex: "#30D158"),
         ]
         switch self {
-        case .morning:
+        case .morning, .focus:
             return [
                 Self.event("s", "Standup", Self.at(9, 30), Self.at(10), meeting: true),
                 Self.event(
@@ -232,7 +241,7 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
     var state: DayState {
         var state = DayState(day: DayKey(for: now))
         switch self {
-        case .morning:
+        case .morning, .focus:
             state.morningPlanAt = Self.at(8, 18)
             state.mustDoID = "adr"
             state.plan = [

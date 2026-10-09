@@ -289,6 +289,11 @@ the owner must remember to read does not. What changed:
   Breakpoint speaks only when something needs the owner (or while Jarvis is
   judging what came in). The Breakpoint is titled "While you were away", so
   the greeting is said once, by Jarvis's line.
+- **Time left can be seen.** During a meeting or a task's slot the Now Card
+  said "Until 15:00": a clock reading, which a time-blind owner has to turn
+  into "how long" each time. It now leads with the time left ("40 min left,
+  until 15:00 · then Design review at 15:00") over a short accent bar that
+  drains as the minutes go (`NowCard.span`).
 - **The trace measures it**: `cue.presented` (start or end, how late, the
   slot's length, the must-do) and `cue.reaction` (the choice, the time to
   react).

@@ -1782,8 +1782,9 @@ _Avoid_: dashboard, Mission Control (retired), home screen (unqualified).
 
 **Now Card**:
 The top of Today: the step the day is on (the meeting under way, the task
-whose slot is now, a task that slid, free time and what fits in it, the next
-step, what's left, or a done day and how tomorrow starts) with one-click
+whose slot is now — with how much of it is left, in words and a short bar
+that drains like a visual timer — a task that slid, free time and what fits
+in it, the next step, what's left, or a done day and how tomorrow starts) with one-click
 offers that move it on (Done, Start now, "Do it at 16:30", Tomorrow, Plan my
 day, Wrap up the day). Code builds it from the Timeline, so it never waits on
 the model; Jarvis's latest card line rides along while fresh (a plan for four

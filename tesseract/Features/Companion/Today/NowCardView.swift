@@ -35,6 +35,9 @@ struct NowCardView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            if let span = card.span {
+                TimeLeft(span: span, now: facts.now)
+            }
             if !card.actions.isEmpty {
                 actionRow
             }
@@ -97,6 +100,36 @@ struct NowCardView: View {
                 .focusable(false)
             }
         }
+    }
+}
+
+// MARK: - Time left
+
+/// How much of the step under way is left: a short bar in the accent that
+/// drains as the minutes go, like a visual timer.
+private struct TimeLeft: View {
+    let span: DateInterval
+    let now: Date
+
+    /// Short, so it reads as a timer and not as the day's progress above.
+    private static let width: CGFloat = 220
+
+    var body: some View {
+        let total = max(span.duration, 60)
+        let left = min(max(span.end.timeIntervalSince(now), 0), total)
+        Capsule()
+            .fill(.quaternary)
+            .frame(width: Self.width, height: 4)
+            .overlay(alignment: .leading) {
+                Capsule()
+                    .fill(Color.accentColor)
+                    .frame(width: Self.width * CGFloat(left / total), height: 4)
+            }
+            .accessibilityElement()
+            .accessibilityLabel("Time left")
+            .accessibilityValue(
+                "\(MomentPrompts.minutesText(Int((left / 60).rounded(.up)))) of \(MomentPrompts.minutesText(Int(total / 60)))"
+            )
     }
 }
 

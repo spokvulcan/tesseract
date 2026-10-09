@@ -17,10 +17,13 @@ nonisolated struct NowCard: Sendable, Equatable {
     /// The step (an event or task title) or the day's state ("Free until
     /// 13:00", "All done for today.").
     var headline: String
-    /// When it ends, what slid, what comes next.
+    /// How much is left and when it ends, what slid, what comes next.
     var detail: String?
     /// One-click proposals, the main one first.
     var actions: [NowAction]
+    /// The step under way, start to end: Today shows how much of it is
+    /// left, so the time can be seen and not only read.
+    var span: DateInterval? = nil
 }
 
 nonisolated struct NowAction: Sendable, Equatable, Identifiable {
@@ -96,6 +99,11 @@ nonisolated enum NowCardBuilder {
         func then(after date: Date) -> String? {
             ahead.first { $0.start >= date }.map { "then \(title(of: $0)) at \(clock($0.start))" }
         }
+        // Time left first: what a glance at the clock can't tell.
+        func left(until end: Date) -> String {
+            let minutes = max(1, Int((end.timeIntervalSince(now) / 60).rounded(.up)))
+            return "\(MomentPrompts.minutesText(minutes)) left, until \(clock(end))"
+        }
 
         // In a meeting or a block.
         for row in timeline.rows {
@@ -104,7 +112,8 @@ nonisolated enum NowCardBuilder {
             }
             return NowCard(
                 headline: event.title,
-                detail: joined("Until \(clock(event.end))", then(after: event.end)), actions: [])
+                detail: joined(left(until: event.end), then(after: event.end)), actions: [],
+                span: DateInterval(start: event.start, end: event.end))
         }
 
         let timed = timeline.rows.compactMap { row -> TimelineTask? in
@@ -118,8 +127,9 @@ nonisolated enum NowCardBuilder {
         }) {
             return NowCard(
                 headline: task.reminder.title,
-                detail: joined("Until \(clock(end(of: task)))", then(after: end(of: task))),
-                actions: [NowAction(kind: .complete(reminderID: task.id), title: "Done")])
+                detail: joined(left(until: end(of: task)), then(after: end(of: task))),
+                actions: [NowAction(kind: .complete(reminderID: task.id), title: "Done")],
+                span: DateInterval(start: task.start ?? now, end: end(of: task)))
         }
 
         // A task that slid: offer the next free slot (tomorrow, in the evening).

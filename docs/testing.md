@@ -230,8 +230,9 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # no store is touched), capture and the one-key hotkey,
 # the Timeline (tomorrow after today, and the small hours past midnight), the
 # Now Card (its decision table, the Inbox's slot offers, how
-# long a card's line stays fresh), Today rendered with the app's wiring over
-# fixture days at a wide, a regular and a phone width
+# long a card's line stays fresh, the time left of the step under way), Today
+# rendered with the app's wiring over fixture days (one deep in a slot, its
+# time left draining) at a wide, a regular and a phone width
 # (TEST_RUNNER_TODAY_GALLERY_DIR=<dir> also writes each render there as a PNG,
 # dark and light), the Step Cue (a planned slot put on the panel at its start,
 # once, and never while away, quiet, in a call, a game or a meeting, or over a

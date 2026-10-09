@@ -37,18 +37,31 @@ struct NowCardTests {
         TimelineBuilderTests.facts(now: now, mustDo: mustDo)
     }
 
-    @Test func inAMeetingItSaysUntilWhenAndWhatsNext() {
+    @Test func inAMeetingItSaysHowMuchIsLeftAndWhatsNext() {
         let card = Self.card(Self.day(now: Self.local(30, 9, 40)))
         #expect(card.headline == "Standup")
-        #expect(card.detail == "Until 10:00 · then Call the dentist at 11:00")
+        #expect(card.detail == "20 min left, until 10:00 · then Call the dentist at 11:00")
         #expect(card.actions.isEmpty)
+        #expect(card.span?.end == Self.local(30, 10))
     }
 
     @Test func aTaskWhoseSlotIsNowIsOneClickFromDone() {
         let card = Self.card(Self.day(now: Self.local(30, 11, 5)))
         #expect(card.headline == "Call the dentist")
-        #expect(card.detail == "Until 11:15 · then 1:1 at 13:00")
+        #expect(card.detail == "10 min left, until 11:15 · then 1:1 at 13:00")
         #expect(card.actions.map(\.kind) == [.complete(reminderID: "dentist")])
+        #expect(card.span == DateInterval(start: Self.local(30, 11), end: Self.local(30, 11, 15)))
+    }
+
+    @Test func theTimeLeftRoundsUpToTheMinute() {
+        // 09:59:30: half a minute of the standup is left, said as a minute.
+        let now = Self.local(30, 9, 59).addingTimeInterval(30)
+        let card = Self.card(Self.day(now: now))
+        #expect(card.detail?.hasPrefix("1 min left, until 10:00") == true)
+    }
+
+    @Test func freeTimeHasNoSpan() {
+        #expect(Self.card(Self.day(now: Self.local(30, 12))).span == nil)
     }
 
     @Test func aTaskThatSlidIsOfferedTheNextFreeSlot() {
