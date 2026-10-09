@@ -231,6 +231,12 @@ struct JarvisPanelGalleryTests {
         // At 08:20, mail at 08:30 is due: the plan offers to start it.
         #expect(
             PlanStep.startable(steps, now: TodayFixture.morning.now)?.reminderID == "mail")
+        // A task only due at a time, not placed by the plan, is not offered.
+        var unplanned = plan
+        unplanned.placements = []
+        let bare = PlanStep.ahead(
+            plan: unplanned, agenda: container.agenda, now: TodayFixture.morning.now)
+        #expect(bare.allSatisfy { $0.reminderID == nil })
         #expect(
             PlanStep.startable(steps, now: TodayFixture.morning.now.addingTimeInterval(-15 * 60))
                 == nil)

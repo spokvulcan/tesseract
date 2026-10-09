@@ -52,6 +52,7 @@ nonisolated enum DayEngine {
             state.ledger.prune(now: snapshot.now)
             if snapshot.ownerPresent {
                 state.lastPresentAt = snapshot.now
+                state.lastActiveAt = snapshot.now
                 effects += eveningIfDue(snapshot: snapshot, state: &state)
                 effects += meetingEnded(snapshot: snapshot, state: &state)
                 effects += triageIfDue(snapshot: snapshot, state: &state)
@@ -161,13 +162,17 @@ nonisolated enum DayEngine {
     static func ownerReturned(
         awayFrom: Date, snapshot: DaySnapshot, state: inout DayState
     ) -> [DayEffect] {
-        // The night, measured at the day's first sit-down (an absence that
-        // began before the day's 04:00 start): how long the Mac was left.
+        // The night, measured once, at the day's first sit-down after an
+        // absence that began in the night (before 06:00 of the day's date):
+        // how long the Mac was left since it was last in use.
         var night: [DayEffect] = []
-        let away = snapshot.now.timeIntervalSince(awayFrom)
-        if away >= DaySettings.overnightGap,
-            awayFrom < (state.day.start(calendar: snapshot.calendar) ?? snapshot.now)
+        let left = state.lastActiveAt ?? awayFrom
+        let away = snapshot.now.timeIntervalSince(left)
+        if !state.nightMeasured, away >= DaySettings.overnightGap,
+            let midnight = state.day.date(calendar: snapshot.calendar),
+            left < midnight.addingTimeInterval(6 * 3600)
         {
+            state.nightMeasured = true
             let upLate = snapshot.facts(state: state).upLateUntil != nil
             night = [
                 .trace(
@@ -194,7 +199,8 @@ nonisolated enum DayEngine {
                 awayFrom: awayFrom, snapshot: snapshot, state: state)
             if !prepared.isEmpty { return prepared }
         } else if afterTheNight, snapshot.minuteOfDay < snapshot.settings.eveningMinutes,
-            noPlanSeen(awayFrom: awayFrom, state: state)
+            noPlanSeen(awayFrom: awayFrom, state: state), state.running == nil,
+            !snapshot.chatBusy
         {
             // A day that starts late — a weekend, a long night (4 October:
             // first at the Mac at 14:43, a plan only on asking) — still gets

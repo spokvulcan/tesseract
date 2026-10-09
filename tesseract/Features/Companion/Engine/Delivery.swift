@@ -69,7 +69,14 @@ nonisolated enum DeliveryLadder {
             snapshot.now.timeIntervalSince(satDownAt) < 12 * 3600,
             quietHoursEndInTheMorning(settings)
         else { return false }
-        return snapshot.minuteOfDay < settings.quietEndMinutes
+        // The sit-down itself in that morning part, the same morning: one at
+        // 14:43 lifts nothing that night.
+        let calendar = snapshot.calendar
+        let parts = calendar.dateComponents([.hour, .minute], from: satDownAt)
+        let satMinute = (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
+        return calendar.isDate(satDownAt, inSameDayAs: snapshot.now)
+            && satMinute < settings.quietEndMinutes
+            && snapshot.minuteOfDay < settings.quietEndMinutes
     }
 
     /// Quiet hours over the night that end in the morning (23:00–08:00,

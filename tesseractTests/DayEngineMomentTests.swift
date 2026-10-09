@@ -142,6 +142,7 @@ struct DayEngineMomentTests {
         // At the Mac until 01:20; the plan is made ahead at 05:30.
         var late = Self.state()
         late.lastPresentAt = Self.local(30, 1, 20)
+        late.lastActiveAt = Self.local(30, 1, 20)
         let prepared = DayEngine.decide(
             .tick, snapshot: Self.snapshot(at: Self.local(30, 5, 30), present: false),
             state: late)
@@ -153,16 +154,35 @@ struct DayEngineMomentTests {
         // Off to bed at 23:30: an ordinary plan.
         var early = Self.state()
         early.lastPresentAt = Self.local(29, 23, 30)
+        early.lastActiveAt = Self.local(29, 23, 30)
         let ordinary = DayEngine.decide(
             .tick, snapshot: Self.snapshot(at: Self.local(30, 5, 30), present: false),
             state: early)
         #expect(Self.moments(ordinary.effects).first?.text.contains("Last night") == false)
+        // Locked at 23:45, the Mac asleep at 00:05 (sleep reads as a return,
+        // stamping the last presence): no tick saw the owner past midnight.
+        var locked = early
+        locked.lastActiveAt = Self.local(29, 23, 45)
+        locked.lastPresentAt = Self.local(30, 0, 5)
+        let asleep = DayEngine.decide(
+            .tick, snapshot: Self.snapshot(at: Self.local(30, 5, 30), present: false),
+            state: locked)
+        #expect(Self.moments(asleep.effects).first?.text.contains("Last night") == false)
+        // Up until 04:30 is up late too, though it is already the new day.
+        var dawn = Self.state()
+        dawn.lastActiveAt = Self.local(30, 4, 30)
+        #expect(
+            DaySnapshot(
+                now: Self.local(30, 9), settings: DaySettings(), agenda: .empty,
+                ownerPresent: true
+            ).facts(state: dawn).upLateUntil == Self.local(30, 4, 30))
     }
 
     @Test func theDaysFirstSitDownMeasuresTheNight() throws {
         // At the Mac until 01:20, back at 07:40: 6 h 20 min away, up late.
         var state = Self.state()
         state.lastPresentAt = Self.local(30, 1, 20)
+        state.lastActiveAt = Self.local(30, 1, 20)
         let sitDown = DayEngine.decide(
             .presenceReturned(awayFrom: Self.local(30, 1, 20)),
             snapshot: Self.snapshot(at: Self.local(30, 7, 40)), state: state)
@@ -177,6 +197,46 @@ struct DayEngineMomentTests {
             !afternoon.effects.contains {
                 if case .trace(.nightEnded, _) = $0 { true } else { false }
             })
+    }
+
+    @Test func aLateReplanWaitsForAModelThatIsFree() {
+        // Prepared at 07:00, the owner sits down at 14:43 while Triage runs.
+        var state = Self.state()
+        state.morningPlanAt = Self.local(30, 7)
+        state.running = .triage
+        state.plan = [Placement(reminderID: "R2", start: Self.local(30, 8), minutes: 30)]
+        state.cards = [
+            DayCard(
+                id: "morningPlan-1", kind: .morningPlan, createdAt: Self.local(30, 7),
+                isFallback: false,
+                body: .morningPlan(
+                    MorningPlanCard(
+                        line: "A day.", mustDoID: nil, placements: state.plan, suggestions: [])))
+        ]
+        let back = DayEngine.decide(
+            .presenceReturned(awayFrom: Self.local(29, 23)),
+            snapshot: Self.snapshot(at: Self.local(30, 14, 43)), state: state)
+        #expect(Self.moments(back.effects).isEmpty)
+        #expect(back.state.plan == state.plan)
+    }
+
+    @Test func aReplanKeepsTheStepTheOwnerIsIn() {
+        // The gym, started at 09:00 for an hour; Jarvis's plan lands at 09:10.
+        var state = Self.state()
+        let gym = Placement(reminderID: "R2", start: Self.local(30, 9), minutes: 60)
+        state.plan = [gym]
+        state.startedSteps = [StepCue.key(gym)]
+        let card = MorningPlanCard(
+            line: "Review first.", mustDoID: "R1",
+            placements: [Placement(reminderID: "R1", start: Self.local(30, 10, 30), minutes: 30)],
+            suggestions: [])
+        _ = DayEngine.accept(
+            .morningPlan(card), kind: .morningPlan, fallback: false,
+            snapshot: Self.snapshot(at: Self.local(30, 9, 10)), state: &state)
+        #expect(state.plan.map(\.reminderID) == ["R2", "R1"])
+        #expect(
+            DayEngine.focus(snapshot: Self.snapshot(at: Self.local(30, 9, 20)), state: state)?
+                .reminderID == "R2")
     }
 
     @Test func morningPlanRunsOncePerDay() {

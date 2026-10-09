@@ -296,9 +296,11 @@ the owner must remember to read does not. What changed:
   events, the must-do starred) and its tips, with Looks Good; the Evening
   Wrap-up lists what got done and each leftover with Tomorrow, Later and Let
   go (Jarvis's pick in the accent) or Do What Jarvis Suggests. When the
-  plan's first step is a task due within ten minutes, its main button is
-  Start Now: the step starts and the card is taken in — one click from the
-  plan to doing, not Looks Good and then a cue. Looks Good and
+  plan's first step is a task it placed, due within ten minutes, its main
+  button is Start Now (not on the card code puts up while Jarvis thinks):
+  the step starts and the card is taken in — one click from the plan to
+  doing, not Looks Good and then a cue. A plan that lands while the owner is
+  in a step they started keeps that step's slot. Looks Good and
   Good Night take the card in (`card.reaction` "kept"): it leaves the panel
   and stays in Today, unlike the close button; a kept card never takes the
   panel again (Jarvis's version of a kept plan updates in Today) and its
@@ -318,8 +320,10 @@ the owner must remember to read does not. What changed:
   that starts late gets it too: on Sunday 4 October the owner was first at
   the Mac at 14:43, after the morning window, and the plan ran only when
   they asked for it. The first sit-down after the night now runs the plan
-  until the evening, unless the owner already saw today's plan; one made
-  ahead that morning is made again, its slots gone by.
+  until the evening, unless the owner already saw today's plan (or a moment
+  or a chat has the model then); one made ahead that morning is made again,
+  its slots gone by. Such a late sit-down never ends the night's quiet hours
+  early: only one in the morning part of them does, that morning.
 - **"Nothing needs you" is no news.** 39 of the 43 Breakpoint cards had
   nothing for the owner, yet each became Jarvis's word on the Now Card for an
   hour, pushing the Morning Plan's line and tips off it after the first
@@ -367,8 +371,10 @@ the owner must remember to read does not. What changed:
   the Mac past midnight (before 04:00, the night before the day's start), the
   Morning Plan's request says until when, and asks for the must-do and what
   can't wait, with room to rest, said kindly. Code knows it from the last
-  presence (`DayFacts.upLateUntil`), so a plan made ahead before the owner
-  sits down gets it too.
+  clock tick that saw the owner at the Mac, between midnight and 05:00
+  (`DayState.lastActiveAt`, `DayFacts.upLateUntil`) — not from the presence
+  signals, since the Mac going to sleep reads as a return — so a plan made
+  ahead before the owner sits down gets it too.
 - **A bot in a chat app is an app's news.** Slack counts as people, so
   every Jira comment relayed through it went to Triage: 7 of the 18 Slack
   banners in the ledger were the Jira bot, and on 7 October three Triage

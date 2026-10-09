@@ -158,6 +158,14 @@ struct DeliveryLadderTests {
             now: at(21, 0), settings: settings, agenda: .empty, ownerPresent: true)
         #expect(DeliveryLadder.quietHoursAreNight(settings))
         #expect(!DeliveryLadder.dayStarted(at(9, 30), snapshot: evening))
+        // A sit-down after the morning lifts nothing that night.
+        settings.quietStartMinutes = 23 * 60
+        settings.quietEndMinutes = 8 * 60
+        let night = DaySnapshot(
+            now: Calendar.current.date(
+                from: DateComponents(year: 2026, month: 10, day: 1, hour: 0, minute: 20))!,
+            settings: settings, agenda: .empty, ownerPresent: true)
+        #expect(!DeliveryLadder.dayStarted(at(14, 43), snapshot: night))
     }
 
     @Test func aGameInFrontGetsNoPanelAndNoVoice() {

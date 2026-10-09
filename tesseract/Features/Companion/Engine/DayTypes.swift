@@ -297,10 +297,10 @@ nonisolated struct DaySnapshot: Sendable, Equatable {
             weekFocus: state.weekFocus)
         facts.mustDoDays = state.mustDoDays
         facts.departures = state.departures
-        // At the Mac past midnight, the night before this day's start.
-        if let last = state.lastPresentAt, DayKey(for: last, calendar: calendar) < state.day,
-            calendar.component(.hour, from: last) < DayKey.rolloverHour,
-            now.timeIntervalSince(last) < 12 * 3600
+        // At the Mac past midnight (until 05:00) on this day's date.
+        if let last = state.lastActiveAt, let midnight = state.day.date(calendar: calendar),
+            last >= midnight, last < midnight.addingTimeInterval(5 * 3600),
+            last <= now, now.timeIntervalSince(last) < 12 * 3600
         {
             facts.upLateUntil = last
         }
@@ -411,6 +411,12 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     /// When the owner sat down to start this day (the first sit-down after
     /// the night): for them, the morning's end of quiet hours is over.
     var satDownAt: Date?
+    /// The last clock tick with the owner at the Mac (carried). Unlike
+    /// `lastPresentAt`, no presence signal stamps it: the Mac going to sleep
+    /// reads as a return, and idle is noticed minutes after the last input.
+    var lastActiveAt: Date?
+    /// Today's first sit-down measured the night before it (`night.ended`).
+    var nightMeasured = false
     /// The week's one focus, from the last week's look-back, and when it was
     /// set (carried a week).
     var weekFocus: String?
@@ -439,7 +445,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         case cuedSteps, startedSteps, interrupted, morningPlanResumed, windDownAt
         case draft, draftForNextDay, departures, satDownAt, weekFocus
         case weekFocusSetAt, mustDoDoneAt, mustDoDays, cueOnPanel, taskProposals
-        case putOff, smallStarts
+        case putOff, smallStarts, lastActiveAt, nightMeasured
     }
 
     /// Every field but the day is optional on disk, so a state saved by an
@@ -485,6 +491,8 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
             (try? c.decodeIfPresent([TaskProposal].self, forKey: .taskProposals)) ?? []
         putOff = (try? c.decodeIfPresent([String: Int].self, forKey: .putOff)) ?? [:]
         smallStarts = (try? c.decodeIfPresent(Set<String>.self, forKey: .smallStarts)) ?? []
+        lastActiveAt = try? c.decodeIfPresent(Date.self, forKey: .lastActiveAt)
+        nightMeasured = (try? c.decodeIfPresent(Bool.self, forKey: .nightMeasured)) ?? false
     }
 
     /// The day as a relaunch finds it: the moment in flight never finished,
@@ -509,6 +517,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     func rolledOver(to day: DayKey) -> DayState {
         var next = DayState(day: day, syncedNudgeIDs: syncedNudgeIDs)
         next.lastPresentAt = lastPresentAt
+        next.lastActiveAt = lastActiveAt
         next.carryOver = carryOverForNextDay
         // "Last night's draft" only for the morning after it, and tonight's
         // proposed tasks through tomorrow.

@@ -293,7 +293,18 @@ nonisolated extension DayEngine {
         case .morningPlan(let card):
             state.morningPlanAt = snapshot.now
             if let mustDo = card.mustDoID { setMustDo(mustDo, state: &state) }
-            if !card.placements.isEmpty { state.plan = card.placements }
+            if !card.placements.isEmpty {
+                // A step the owner started and is still in keeps its slot.
+                let running = state.plan.filter { slot in
+                    state.startedSteps.contains(StepCue.key(slot)) && slot.start <= snapshot.now
+                        && snapshot.now
+                            < slot.start.addingTimeInterval(TimeInterval(slot.minutes * 60))
+                }
+                state.plan =
+                    (card.placements.filter { placement in
+                        !running.contains { $0.reminderID == placement.reminderID }
+                    } + running).sorted { $0.start < $1.start }
+            }
             // Jarvis's own plan sets the day's departures, none included (a
             // class that went online); the code card leaves them be.
             if !fallback, !refining { state.departures = card.departures }

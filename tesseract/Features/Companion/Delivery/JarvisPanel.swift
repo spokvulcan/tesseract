@@ -100,12 +100,15 @@ final class JarvisPanelController {
     private func acknowledge(_ cue: StepCue) {
         model.cue = nil
         model.done = cue
+        // What the field held before: only what changes meanwhile counts.
+        let draft = model.draft
+        let asked = model.asked
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: Self.doneLinger)
             guard let self, self.model.done == cue else { return }
             self.model.done = nil
             let turnedToJarvis =
-                self.model.listening || self.model.asked != nil || !self.model.draft.isEmpty
+                self.model.listening || self.model.asked != asked || self.model.draft != draft
             if !turnedToJarvis { self.close() }
         }
     }
@@ -597,7 +600,8 @@ private struct MorningPlanContent: View {
 
     var body: some View {
         let steps = PlanStep.ahead(plan: plan, agenda: agenda, now: now)
-        let first = PlanStep.startable(steps, now: now)
+        // Jarvis's own plan, not the card code put up while he thinks.
+        let first = card.isRefining ? nil : PlanStep.startable(steps, now: now)
         VStack(alignment: .leading, spacing: 12) {
             Text(card.kind.title).fontWeight(.semibold)
             Text(card.line).fixedSize(horizontal: false, vertical: true)
@@ -655,7 +659,8 @@ struct PlanStep: Identifiable, Equatable {
     var title: String
     var minutes: Int
     var kind: Kind
-    /// A task's reminder (nil for an event).
+    /// The reminder of a task the plan placed (nil for an event, or a task
+    /// only due at a time).
     var reminderID: String? = nil
 
     /// The most the panel lists; Today has the rest.
@@ -685,10 +690,11 @@ struct PlanStep: Identifiable, Equatable {
                     id: row.id, start: event.start, title: event.title,
                     minutes: Int(event.duration / 60), kind: .event(colorHex: event.colorHex))
             case .task(let task) where !task.isDone:
+                // Only a step the plan placed can be started from it.
                 return PlanStep(
                     id: row.id, start: row.start, title: task.reminder.title,
                     minutes: task.minutes, kind: .task(isMustDo: task.isMustDo),
-                    reminderID: task.id)
+                    reminderID: task.isPlanned ? task.id : nil)
             default:
                 return nil
             }
