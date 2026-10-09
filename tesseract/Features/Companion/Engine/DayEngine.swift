@@ -48,6 +48,7 @@ nonisolated enum DayEngine {
 
         switch signal {
         case .tick:
+            effects += giveUpOnQuietMoment(snapshot: snapshot, state: &state)
             effects += syncNudgesIfChanged(snapshot: snapshot, state: &state)
             state.ledger.prune(now: snapshot.now)
             if snapshot.ownerPresent {

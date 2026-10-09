@@ -52,6 +52,8 @@ final class CompanionRuntime {
     @ObservationIgnored private var watcher: NotificationCenterWatcher?
 
     @ObservationIgnored private var clockTask: Task<Void, Never>?
+    /// The moment generating now, so one given up on can be stopped.
+    @ObservationIgnored private var momentTask: Task<Void, Never>?
     @ObservationIgnored private var toggleTask: Task<Void, Never>?
     /// Signals are decided strictly one after another.
     @ObservationIgnored private var chain: Task<Void, Never>?
@@ -259,12 +261,19 @@ final class CompanionRuntime {
             // Off the signal chain: a generation takes seconds to minutes, and
             // the loop must keep hearing the owner meanwhile.
             presence.beginThinking()
-            Task { [weak self] in
+            momentTask = Task { [weak self] in
                 guard let self else { return }
                 let outcome = await self.thread.runMoment(request)
+                // Given up on meanwhile: the engine has moved on.
+                guard !Task.isCancelled else { return }
                 self.presence.endThinking()
                 self.send(.momentOutcome(request, outcome))
             }
+
+        case .cancelMoment:
+            momentTask?.cancel()
+            momentTask = nil
+            presence.endThinking()
 
         case .presentCard(let card, let rung):
             await present(card, on: rung)

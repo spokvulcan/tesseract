@@ -190,6 +190,8 @@ nonisolated enum DayEffect: Sendable, Equatable {
     case syncNudges([Nudge])
     /// Run one moment: append its request to the Day Thread and generate.
     case runMoment(MomentRequest)
+    /// Stop the moment's generation: it went quiet and was given up on.
+    case cancelMoment
     /// Show a card on a delivery rung (voice is `speak`).
     case presentCard(DayCard, DeliveryRung)
     /// Put a planned step that starts now on the Jarvis Panel.
@@ -413,6 +415,10 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     /// Minutes taken off a step so it ends before the next meeting, by task:
     /// going on after the meeting gives them back.
     var cutShort: [String: Int] = [:]
+    /// The moment running, as asked, and since when: one that stays quiet
+    /// is given up on, and a reply to one given up on doesn't end another.
+    var runningRequest: MomentRequest?
+    var runningSince: Date?
     /// The cue on the panel now, by its key, until the owner answers it.
     var cueOnPanel: String?
     /// Tasks the Night Reflection proposed, until the owner decides (kept
@@ -459,6 +465,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         case draft, draftForNextDay, departures, satDownAt, weekFocus
         case weekFocusSetAt, mustDoDoneAt, mustDoDays, cueOnPanel, taskProposals
         case putOff, smallStarts, lastActiveAt, nightMeasured, morningPlanWaiting, cutShort
+        case runningRequest, runningSince
     }
 
     /// Every field but the day is optional on disk, so a state saved by an
@@ -505,6 +512,8 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         putOff = (try? c.decodeIfPresent([String: Int].self, forKey: .putOff)) ?? [:]
         smallStarts = (try? c.decodeIfPresent(Set<String>.self, forKey: .smallStarts)) ?? []
         cutShort = (try? c.decodeIfPresent([String: Int].self, forKey: .cutShort)) ?? [:]
+        runningRequest = try? c.decodeIfPresent(MomentRequest.self, forKey: .runningRequest)
+        runningSince = try? c.decodeIfPresent(Date.self, forKey: .runningSince)
         lastActiveAt = try? c.decodeIfPresent(Date.self, forKey: .lastActiveAt)
         nightMeasured = (try? c.decodeIfPresent(Bool.self, forKey: .nightMeasured)) ?? false
         morningPlanWaiting =
@@ -520,6 +529,8 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         // One still waiting from an earlier launch is kept.
         state.interrupted = running ?? interrupted
         state.running = nil
+        state.runningRequest = nil
+        state.runningSince = nil
         for index in state.cards.indices { state.cards[index].isRefining = false }
         // The cue on the panel went with the app: it comes back by its rules.
         if let key = state.cueOnPanel {

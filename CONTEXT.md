@@ -1896,8 +1896,10 @@ One model call at a point in the day when there is something to judge — the
 Morning Plan, a Breakpoint, a Triage, the Evening Wrap-up, the Night
 Reflection — asking for a JSON card. A reply is validated against the facts it
 was shown; an invalid or failed one gets one retry, then a deterministic card.
-Every moment runs at the owner's own reasoning effort (one cached prefix) and
-under its own output cap. No moment runs without new input.
+One quiet for fifteen minutes the Mac was awake is stopped and counts as
+failed, so a stalled run never holds the day's later moments back. Every moment
+runs at the owner's own reasoning effort (one cached prefix) and under its own
+output cap. No moment runs without new input.
 _Avoid_: turn (a chat word), beat, wake.
 
 **Morning Plan**:

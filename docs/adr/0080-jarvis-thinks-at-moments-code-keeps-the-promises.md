@@ -57,7 +57,11 @@ a Profile fact or a card — and code and the OS keep it without the model.
 3. **Moments are single model calls with a JSON card.** Morning Plan,
    Breakpoint, Triage, Evening Wrap-up, Night Reflection. Each reply is
    validated against the facts it was shown; an invalid or failed reply gets
-   one retry, then a deterministic card built from the snapshot. No moment
+   one retry, then a deterministic card built from the snapshot. A moment
+   quiet for fifteen minutes of the Mac awake is stopped and fails the same
+   way (amended: one morning's plan sat unanswered for six hours and held
+   every Triage back until the app restarted; a reply to a moment given up
+   on changes nothing). No moment
    runs without new input, and none waits on the model to deliver something
    urgent: a Breakpoint's card goes up at once, built by code, and the model
    only refines it when there are notifications to judge.

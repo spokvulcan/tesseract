@@ -413,6 +413,96 @@ struct DayEngineMomentTests {
         #expect(try #require(decision.state.cards.last).isFallback)
     }
 
+    // MARK: A moment that goes quiet
+
+    /// The plan Jarvis began at the day's first sit-down, 07:40.
+    static func planStarted() -> DayEngine.Decision {
+        DayEngine.decide(
+            .presenceReturned(awayFrom: local(29, 23)), snapshot: snapshot(at: local(30, 7, 40)),
+            state: state())
+    }
+
+    /// A tick a minute, the Mac awake, from `from` through `to`.
+    static func ticks(_ state: DayState, from: Date, through to: Date) -> (DayState, [DayEffect]) {
+        var state = state
+        var effects: [DayEffect] = []
+        var now = from
+        while now <= to {
+            let decision = DayEngine.decide(.tick, snapshot: snapshot(at: now), state: state)
+            state = decision.state
+            effects += decision.effects
+            now = now.addingTimeInterval(60)
+        }
+        return (state, effects)
+    }
+
+    static func failure(_ effects: [DayEffect]) -> [String: CompanionTraceValue]? {
+        for effect in effects {
+            if case .trace(.momentFailed, let fields) = effect { return fields }
+        }
+        return nil
+    }
+
+    @Test func aMomentQuietForAQuarterHourIsStoppedAndAskedOnceMore() throws {
+        let started = Self.planStarted()
+        let first = try #require(Self.moments(started.effects).first)
+        #expect(started.state.runningRequest == first)
+        let (waiting, quiet) = Self.ticks(
+            started.state, from: Self.local(30, 7, 41), through: Self.local(30, 7, 54))
+        #expect(!quiet.contains(.cancelMoment))
+        #expect(waiting.running == .morningPlan)
+
+        let given = DayEngine.decide(
+            .tick, snapshot: Self.snapshot(at: Self.local(30, 7, 55)), state: waiting)
+        #expect(given.effects.first == .cancelMoment)
+        #expect(Self.failure(given.effects)?["reason"] == .string("no answer in 15 min"))
+        let retry = try #require(Self.moments(given.effects).first)
+        #expect(retry.attempt == 1)
+        #expect(retry.trigger == .retry)
+        #expect(given.state.runningRequest == retry)
+
+        // The first run answering after all changes nothing: the retry runs.
+        let late = DayEngine.decide(
+            .momentOutcome(first, .reply(#"{"line": "Late."}"#, measure)),
+            snapshot: Self.snapshot(at: Self.local(30, 7, 56)), state: given.state)
+        #expect(late.effects.isEmpty)
+        #expect(late.state.runningRequest == retry)
+        #expect(late.state.running == .morningPlan)
+    }
+
+    @Test func aRetryThatGoesQuietTooLeavesTheCardCodeBuilt() throws {
+        let started = Self.planStarted()
+        let (gaveUp, _) = Self.ticks(
+            started.state, from: Self.local(30, 7, 41), through: Self.local(30, 7, 55))
+        let (final, effects) = Self.ticks(
+            gaveUp, from: Self.local(30, 7, 56), through: Self.local(30, 8, 10))
+        #expect(effects.contains(.cancelMoment))
+        #expect(Self.failure(effects)?["fallback"] == .bool(true))
+        #expect(final.running == nil)
+        #expect(final.runningRequest == nil)
+        let card = try #require(final.cards.last { $0.kind == .morningPlan })
+        #expect(card.isFallback)
+        #expect(!card.isRefining)
+        // Free again: what comes next can run.
+        #expect(Self.moments(effects).isEmpty)
+    }
+
+    @Test func timeTheMacSleptDoesNotCount() throws {
+        let started = Self.planStarted()
+        var state = started.state
+        state.lastTickAt = Self.local(30, 7, 45)
+        // The lid closed at 07:45 and opened at 09:00: the run slept with it.
+        let woke = DayEngine.decide(
+            .tick, snapshot: Self.snapshot(at: Self.local(30, 9)), state: state)
+        #expect(!woke.effects.contains(.cancelMoment))
+        #expect(woke.state.running == .morningPlan)
+        #expect(woke.state.runningSince == Self.local(30, 8, 55))
+        // Awake ten more minutes: fifteen in all, given up.
+        let (_, effects) = Self.ticks(
+            woke.state, from: Self.local(30, 9, 1), through: Self.local(30, 9, 10))
+        #expect(effects.contains(.cancelMoment))
+    }
+
     // MARK: Evening Wrap-up and its actions
 
     @Test func theWrapUpOffersLeftoversAndTheirActionsChangeReminders() throws {

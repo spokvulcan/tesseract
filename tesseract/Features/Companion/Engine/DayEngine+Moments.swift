@@ -46,6 +46,8 @@ nonisolated extension DayEngine {
         let request = MomentRequest(
             kind: kind, trigger: trigger, text: body, attempt: attempt, context: context,
             day: state.day)
+        state.runningRequest = request
+        state.runningSince = snapshot.now
         return [
             .trace(
                 .momentStarted,
@@ -166,6 +168,34 @@ nonisolated extension DayEngine {
 
     // MARK: - Outcomes
 
+    /// How long a moment may stay quiet, the Mac awake: the slowest run
+    /// (a cold Night Reflection, waiting on the owner's own chat) takes a
+    /// few minutes.
+    static let momentPatience: TimeInterval = 15 * 60
+
+    /// A moment quiet past `momentPatience` is given up on: its generation
+    /// is cancelled, and it fails as any failed call does — one retry, then
+    /// the card code built. A stalled run held every later moment back (no
+    /// Triage, no Breakpoint, no Evening Wrap-up) until the app restarted.
+    /// Time the Mac slept doesn't count: the run slept with it.
+    static func giveUpOnQuietMoment(snapshot: DaySnapshot, state: inout DayState)
+        -> [DayEffect]
+    {
+        guard let request = state.runningRequest, let since = state.runningSince else {
+            return []
+        }
+        if let last = state.lastTickAt, snapshot.now.timeIntervalSince(last) > 3 * 60 {
+            state.runningSince = since.addingTimeInterval(snapshot.now.timeIntervalSince(last))
+            return []
+        }
+        guard snapshot.now.timeIntervalSince(since) >= momentPatience else { return [] }
+        let minutes = Int(momentPatience / 60)
+        return [.cancelMoment]
+            + momentFinished(
+                request, .failed("no answer in \(minutes) min", nil), snapshot: snapshot,
+                state: &state)
+    }
+
     static func momentFinished(
         _ request: MomentRequest, _ outcome: MomentOutcome, snapshot: DaySnapshot,
         state: inout DayState
@@ -173,7 +203,11 @@ nonisolated extension DayEngine {
         if let day = request.day, day != state.day {
             return lateMomentFinished(request, outcome, snapshot: snapshot, state: &state)
         }
+        // A reply to a moment given up on: the one running now isn't it.
+        if let running = state.runningRequest, running != request { return [] }
         state.running = nil
+        state.runningRequest = nil
+        state.runningSince = nil
         var fields = traceFields(request, outcome: outcome, power: snapshot.power)
         var failure = "unknown"
         if case .reply(let text, let measure) = outcome {
