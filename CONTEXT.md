@@ -1793,7 +1793,8 @@ done and what is still open, never a slid task at the top) with one-click
 offers that move it on (Done, Start now, "Do it at 16:30", Tomorrow, Plan my
 day, Wrap up the day; several tasks that slid are fitted into the day's next
 free slots, in order, with one "Fit all 3 in"). Code builds it from the Timeline, so it never waits on
-the model; Jarvis's latest card line rides along while fresh (a plan for four
+the model; the must-do wears the Day Line's star on it, and one that slid
+says so ("Your must-do slid past 10:15."); Jarvis's latest card line rides along while fresh (a plan for four
 hours, a welcome back for one, the evening's cards until the day ends) — a
 Breakpoint with nothing for the owner says nothing, so the plan's word stands —
 and everything Waiting on You and the evening's leftovers sit on it, each said

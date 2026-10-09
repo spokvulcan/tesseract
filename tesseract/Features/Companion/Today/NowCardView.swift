@@ -26,9 +26,17 @@ struct NowCardView: View {
         VStack(alignment: .leading, spacing: 12) {
             header(jarvis)
             VStack(alignment: .leading, spacing: 3) {
-                Text(card.headline)
-                    .fontWeight(.semibold)
-                    .fixedSize(horizontal: false, vertical: true)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(card.headline)
+                        .fontWeight(.semibold)
+                        .fixedSize(horizontal: false, vertical: true)
+                    // The must-do wears its star here as on the Day Line.
+                    if card.isMustDo {
+                        Image(systemName: "star.fill")
+                            .foregroundStyle(Color.accentColor)
+                            .help("The day's must-do")
+                    }
+                }
                 if let detail = card.detail {
                     Text(detail)
                         .foregroundStyle(.secondary)

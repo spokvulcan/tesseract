@@ -73,6 +73,20 @@ struct NowCardTests {
         #expect(card.span == nil)
     }
 
+    @Test func theMustDoWearsItsStarAndSaysWhenItSlid() {
+        // The dentist (11:00–11:15) is the must-do.
+        let now = Self.card(Self.day(now: Self.local(30, 11, 5), mustDo: "dentist"))
+        #expect(now.isMustDo)
+        let slid = Self.card(Self.day(now: Self.local(30, 11, 30), mustDo: "dentist"))
+        #expect(slid.headline == "Call the dentist")
+        #expect(slid.detail == "Your must-do slid past 11:00.")
+        #expect(slid.isMustDo)
+        // Another task that slid says only that.
+        let other = Self.card(Self.day(now: Self.local(30, 11, 30)))
+        #expect(other.detail == "Slid past 11:00.")
+        #expect(!other.isMustDo)
+    }
+
     @Test func theTimeLeftRoundsUpToTheMinute() {
         // 09:59:30: half a minute of the standup is left, said as a minute.
         let now = Self.local(30, 9, 59).addingTimeInterval(30)

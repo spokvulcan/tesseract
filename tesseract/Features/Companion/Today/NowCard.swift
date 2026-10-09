@@ -26,6 +26,8 @@ nonisolated struct NowCard: Sendable, Equatable {
     /// The step under way, start to end: Today shows how much of it is
     /// left, so the time can be seen and not only read.
     var span: DateInterval? = nil
+    /// The step is the day's must-do: it wears Today's star.
+    var isMustDo = false
 }
 
 nonisolated struct NowAction: Sendable, Equatable, Identifiable {
@@ -167,13 +169,14 @@ nonisolated enum NowCardBuilder {
                             title: "Start now",
                             help: "Start it now; Jarvis checks in when its time is up"),
                         NowAction(kind: .complete(reminderID: task.id), title: "Done"),
-                    ])
+                    ], isMustDo: task.isMustDo)
             }
             return NowCard(
                 headline: task.reminder.title,
                 detail: joined(left(until: end(of: task)), then(after: end(of: task))),
                 actions: [NowAction(kind: .complete(reminderID: task.id), title: "Done")],
-                span: DateInterval(start: task.start ?? now, end: end(of: task)))
+                span: DateInterval(start: task.start ?? now, end: end(of: task)),
+                isMustDo: task.isMustDo)
         }
 
         let openAnytime = timeline.anytime.filter { !$0.isDone }
@@ -194,7 +197,9 @@ nonisolated enum NowCardBuilder {
                     actions: [])
             }
             var actions: [NowAction] = []
+            var isMustDo = false
             if case .task(let task) = next.kind {
+                isMustDo = task.isMustDo
                 actions = [
                     NowAction(
                         kind: .place(
@@ -207,7 +212,7 @@ nonisolated enum NowCardBuilder {
             return NowCard(
                 headline: title(of: next),
                 detail: "At \(clock(next.start)), in \(MomentPrompts.minutesText(minutes)).",
-                actions: actions)
+                actions: actions, isMustDo: isMustDo)
         }
 
         // The evening closes the day: what is still ahead tonight, or else
@@ -239,7 +244,8 @@ nonisolated enum NowCardBuilder {
         // decision, not one per task, and no tidying the plan at midnight.
         let slid = timed.filter(\.isSlid)
         if let task = slid.first, let start = task.start {
-            var detail = "Slid past \(clock(start))."
+            // The day's one goal slipping is said so, not as one more task.
+            var detail = (task.isMustDo ? "Your must-do slid" : "Slid") + " past \(clock(start))."
             if slid.count == 2 { detail += " One more slid too." }
             if slid.count > 2 { detail += " \(slid.count - 1) more slid too." }
             let done = NowAction(kind: .complete(reminderID: task.id), title: "Done")
@@ -264,7 +270,9 @@ nonisolated enum NowCardBuilder {
                     title: "Do it at \(clock(slot))")
                 actions = [place, done, tomorrow]
             }
-            return NowCard(headline: task.reminder.title, detail: detail, actions: actions)
+            return NowCard(
+                headline: task.reminder.title, detail: detail, actions: actions,
+                isMustDo: task.isMustDo)
         }
 
         // Free time now: what fits in it. With nothing to fit and nothing
@@ -300,7 +308,7 @@ nonisolated enum NowCardBuilder {
                                 minutes: task.minutes),
                             title: "Start now"),
                         NowAction(kind: .complete(reminderID: task.id), title: "Done"),
-                    ])
+                    ], isMustDo: task.isMustDo)
             }
             let next = ahead.first.map { "Then \(title(of: $0))." }
             let inboxCount = context.inboxCount
