@@ -319,6 +319,14 @@ the owner must remember to read does not. What changed:
   All Hands at 07:30 — 8 h 30 min from now."). Code, no model; within the
   first hour of quiet hours, midnight or not; never in a game or a call; a
   setting beside quiet hours turns it off (`night.wind-down` in the trace).
+- **A bot in a chat app is an app's news.** Slack counts as people, so
+  every Jira comment relayed through it went to Triage: 7 of the 18 Slack
+  banners in the ledger were the Jira bot, and on 7 October three Triage
+  runs judged nothing else. A messaging app's banner whose sender line, or
+  the speaker before a channel message's colon, is a known integration
+  (Jira, GitHub, CI, calendars, Notion, …) is now an app's news: it waits
+  for the next Breakpoint and costs no model call. Paging tools stay people,
+  and the title is never read (in Slack it is the workspace).
 - **The trace measures it**: `cue.presented` (start or end, how late, the
   slot's length, the must-do) and `cue.reaction` (the choice, the time to
   react).

@@ -1917,7 +1917,8 @@ Breakpoint.
 **Notification Source**:
 Who a banner is from, decided by code on arrival: a person (a chat, a mail, a
 call — messaging apps, or a messaging site in a browser), an app's own news (an
-image is ready, a download finished), or noise (the system's own banners such
+image is ready, a download finished, a bot such as Jira or CI posting through a
+chat app — paging tools stay people), or noise (the system's own banners such
 as Game Mode, and games). Only people reach Triage; an app's news waits for the
 next Breakpoint; noise is never shown. Owner rules apply first.
 _Avoid_: priority, category (the App Store's).
