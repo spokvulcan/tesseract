@@ -346,6 +346,18 @@ nonisolated extension DayEngine {
                     : DeliveryLadder.rungs(for: importance, snapshot: snapshot)
             return rungs.filter { $0 == .panel || $0 == .today }.map { .presentCard(card, $0) }
         }
+        // Triage cards gather: what still waits on an open one stays, the
+        // new items after it — a second raise mustn't hide the first.
+        var body = body
+        if case .triage(var incoming) = body {
+            let fresh = Set(incoming.raise.map(\.id))
+            let waiting = state.cards.filter { $0.kind == .triage && !$0.dismissed }
+                .flatMap { card -> [WaitingItem] in
+                    if case .triage(let old) = card.body { old.raise } else { [] }
+                }
+            incoming.raise = waiting.filter { !fresh.contains($0.id) } + incoming.raise
+            body = .triage(incoming)
+        }
         // A newer card of the same kind replaces the older one.
         var effects: [DayEffect] = []
         for index in state.cards.indices

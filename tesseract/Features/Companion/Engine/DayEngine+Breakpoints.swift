@@ -99,6 +99,17 @@ nonisolated extension DayEngine {
     static func breakpointReplied(
         _ request: MomentRequest, reply: String, snapshot: DaySnapshot, state: inout DayState
     ) -> [DayEffect]? {
+        // A newer Breakpoint replaced this one's card while the model ran:
+        // it judges the same banners, so this reply marks nothing.
+        if let cardID = request.context.cardID,
+            let card = state.cards.first(where: { $0.id == cardID }), card.dismissed,
+            state.cards.contains(where: {
+                $0.kind == .breakpoint && !$0.dismissed && $0.createdAt >= card.createdAt
+                    && $0.id != cardID
+            })
+        {
+            return []
+        }
         let offered = request.context.notificationIDs.compactMap { state.ledger.entry($0) }
         guard
             let choice = BreakpointMoment.choose(reply, from: offered, field: .needsYou),

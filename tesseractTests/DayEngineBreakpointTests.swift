@@ -379,6 +379,53 @@ struct DayEngineBreakpointTests {
         #expect(Self.moments(decision.effects).isEmpty)
     }
 
+    @Test func aSecondRaiseKeepsTheFirstOnTheCard() throws {
+        let rules = [TriageRule(sender: "Anna", action: .raise, phrase: "always Anna")]
+        let first = DayEngine.decide(
+            .notificationArrived(
+                Self.notification(
+                    "a1", app: "Slack", title: "Anna", body: "ping", at: Self.local(11))),
+            snapshot: Self.snapshot(at: Self.local(11), present: false, rules: rules),
+            state: Self.state())
+        let second = DayEngine.decide(
+            .notificationArrived(
+                Self.notification(
+                    "a2", app: "Slack", title: "Anna", body: "are you there?",
+                    at: Self.local(11, 5))),
+            snapshot: Self.snapshot(at: Self.local(11, 5), present: false, rules: rules),
+            state: first.state)
+        let open = second.state.cards.filter { $0.kind == .triage && !$0.dismissed }
+        #expect(open.count == 1)
+        guard case .triage(let triage) = try #require(open.first).body else {
+            Issue.record("expected a Triage card")
+            return
+        }
+        #expect(triage.raise.map(\.id) == ["a1", "a2"])
+    }
+
+    @Test func aReplyForABreakpointANewerOneReplacedMarksNothing() throws {
+        let first = DayEngine.decide(
+            .presenceReturned(awayFrom: Self.local(12)),
+            snapshot: Self.snapshot(at: Self.local(13)), state: Self.awayWithNotifications())
+        let request = try #require(Self.moments(first.effects).first)
+        // A second Breakpoint replaces the first card while its model runs.
+        var replaced = first.state
+        replaced.running = nil
+        let second = DayEngine.decide(
+            .presenceReturned(awayFrom: Self.local(13, 5)),
+            snapshot: Self.snapshot(at: Self.local(13, 20)), state: replaced)
+        #expect(second.state.cards.filter { $0.kind == .breakpoint && !$0.dismissed }.count == 1)
+        let reply = #"{"line": "Anna needs a look.", "needs_you": ["n1"]}"#
+        let measure = MomentMeasure(
+            promptTokens: 900, outputTokens: 60, prefillSeconds: 0.2, generateSeconds: 2,
+            latencySeconds: 3, hitCap: false, modelID: "m")
+        let late = DayEngine.decide(
+            .momentOutcome(request, .reply(reply, measure)),
+            snapshot: Self.snapshot(at: Self.local(13, 21)), state: second.state)
+        // Anna's banner is still the newer card's to judge.
+        #expect(late.state.ledger.entry("n-anna")?.triagedAt == nil)
+    }
+
     @Test func aHotMacDefersTriageUntilItCools() {
         var state = Self.state()
         state =
