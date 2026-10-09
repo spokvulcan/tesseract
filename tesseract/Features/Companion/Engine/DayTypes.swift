@@ -144,6 +144,8 @@ nonisolated enum DayEffect: Sendable, Equatable {
     case retractCard(cardID: String)
     /// Say one line aloud.
     case speak(String)
+    /// Post one banner of Jarvis's own (the wind-down).
+    case postBanner(title: String, body: String)
     /// Bring an app to the front (a card item's "Open").
     case openApp(name: String)
     /// Change the owner's Reminders.
@@ -261,6 +263,8 @@ nonisolated struct DaySettings: Sendable, Equatable {
     var speaks: Bool = true
     var quietStartMinutes: Int = 23 * 60
     var quietEndMinutes: Int = 8 * 60
+    /// Say when tomorrow starts, once, as quiet hours begin.
+    var windDown: Bool = true
     /// The owner's notification rules.
     var rules: [TriageRule] = []
 
@@ -326,6 +330,8 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     var interrupted: MomentKind?
     /// The Morning Plan was run again once after a quit cut it short.
     var morningPlanResumed = false
+    /// When tonight's wind-down banner went out.
+    var windDownAt: Date?
 
     init(day: DayKey, syncedNudgeIDs: Set<String>? = nil) {
         self.day = day
@@ -336,7 +342,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         case day, syncedNudgeIDs, lastPresentAt, morningPlanAt, eveningWrapUpAt, nightReflectionAt
         case running, cards, mustDoID, plan, carryOver, carryOverForNextDay, ledger, agents
         case agentSpokenAt, lastTickAt, lastTriageAt, whereYouWere, deferred, firedNudgeIDs
-        case cuedSteps, startedSteps, interrupted, morningPlanResumed
+        case cuedSteps, startedSteps, interrupted, morningPlanResumed, windDownAt
     }
 
     /// Every field but the day is optional on disk, so a state saved by an
@@ -368,6 +374,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         interrupted = try? c.decodeIfPresent(MomentKind.self, forKey: .interrupted)
         morningPlanResumed =
             (try? c.decodeIfPresent(Bool.self, forKey: .morningPlanResumed)) ?? false
+        windDownAt = try? c.decodeIfPresent(Date.self, forKey: .windDownAt)
     }
 
     /// The day as a relaunch finds it: the moment in flight never finished,

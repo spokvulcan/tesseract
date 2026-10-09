@@ -77,11 +77,13 @@ struct CompanionSettingsPane: View {
                 DatePicker(
                     "Until", selection: minutesBinding($settings.companionQuietEndMinutes),
                     displayedComponents: .hourAndMinute)
+                Toggle("Say When Tomorrow Starts as They Begin", isOn: $settings.companionWindDown)
+                    .disabled(!settings.companionHeartbeatEnabled)
             } header: {
                 Text("Quiet Hours")
             } footer: {
                 Text(
-                    "Jarvis's own banners, panels and voice stop in quiet hours. Your reminders and event nudges still fire."
+                    "Jarvis's own banners, panels and voice stop in quiet hours. If you're still at the Mac as they begin, one banner says when tomorrow starts. Your reminders and event nudges still fire."
                 )
             }
 

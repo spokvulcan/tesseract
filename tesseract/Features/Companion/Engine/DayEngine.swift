@@ -52,6 +52,7 @@ nonisolated enum DayEngine {
                 if !effects.contains(where: \.takesPanel) {
                     effects += stepCueIfDue(snapshot: snapshot, state: &state)
                 }
+                effects += windDownIfDue(snapshot: snapshot, state: &state)
             } else {
                 effects += prepareMorningPlanIfDue(snapshot: snapshot, state: &state)
             }
@@ -169,6 +170,57 @@ nonisolated enum DayEngine {
             .nightReflection, trigger: .night, snapshot: snapshot, state: &state,
             text: MomentPrompts.nightReflection(
                 facts: snapshot.facts(state: state), profile: snapshot.profile))
+    }
+
+    /// As quiet hours begin with the owner still at the Mac, one banner, once
+    /// a night: when tomorrow starts, and how far off that is. A friend's word
+    /// to rest, not a rule; then quiet hours hold everything of Jarvis's.
+    static func windDownIfDue(snapshot: DaySnapshot, state: inout DayState) -> [DayEffect] {
+        let settings = snapshot.settings
+        guard settings.windDown, state.windDownAt == nil,
+            settings.quietStartMinutes != settings.quietEndMinutes,
+            !snapshot.frontmostIsGame,
+            !DeliveryLadder.interruptionFreeApps.contains(snapshot.frontmostBundleID ?? "")
+        else { return [] }
+        // Within the first hour of quiet hours, midnight or not.
+        let sinceStart = (snapshot.minuteOfDay - settings.quietStartMinutes + 24 * 60) % (24 * 60)
+        guard sinceStart < 60 else { return [] }
+        state.windDownAt = snapshot.now
+        let tomorrow = TimelineBuilder.tomorrow(facts: snapshot.facts(state: state))
+        var fields: [String: CompanionTraceValue] = [:]
+        if let first = tomorrow.rows.first {
+            fields["minutesUntil"] = .int(Int(first.start.timeIntervalSince(snapshot.now) / 60))
+        }
+        return [
+            .postBanner(
+                title: "Time to wind down",
+                body: windDownLine(tomorrow, now: snapshot.now, calendar: snapshot.calendar)),
+            .trace(.windDown, fields),
+        ]
+    }
+
+    /// When tomorrow starts: its first event or timed task and how far off it
+    /// is, or what it holds without a time.
+    static func windDownLine(_ tomorrow: TomorrowTimeline, now: Date, calendar: Calendar)
+        -> String
+    {
+        if let first = tomorrow.rows.first {
+            let title: String =
+                switch first.kind {
+                case .event(let event): event.title
+                case .task(let task): task.reminder.title
+                case .free, .now: ""
+                }
+            let minutes = max(0, Int(first.start.timeIntervalSince(now) / 60))
+            let clock = AgendaTime.clock(first.start, calendar: calendar)
+            return
+                "Tomorrow starts with \(title) at \(clock) — \(MomentPrompts.minutesText(minutes)) from now."
+        }
+        if !tomorrow.allDayEvents.isEmpty {
+            let names = tomorrow.allDayEvents.map(\.title).joined(separator: ", ")
+            return "Tomorrow: \(names), nothing at a set time. Rest well."
+        }
+        return "Nothing is set for tomorrow yet. Rest well."
     }
 
     static func isEvening(_ snapshot: DaySnapshot) -> Bool {

@@ -1965,6 +1965,13 @@ silence Jarvis's own deliveries — except the Morning Plan at the day's first
 sit-down, which is the owner starting their day; the owner's reminders and
 Nudges still fire. Nothing unanswered is re-summoned; it stays in Today.
 
+**Wind-down**:
+The night's one banner as quiet hours begin with the owner still at the Mac:
+"Time to wind down — Tomorrow starts with All Hands at 07:30 — 8 h 30 min from
+now." Built by code, within the first hour of quiet hours, never in a game or
+a call; the owner can switch it off beside quiet hours in Settings.
+_Avoid_: bedtime (Health's own), reminder.
+
 **Governor**:
 No daily budget, usefulness first — but Triage and the Night Reflection wait
 while the Mac is hot or low on battery; the Night Reflection runs on power, or

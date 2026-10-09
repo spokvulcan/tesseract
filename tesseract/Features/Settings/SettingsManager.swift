@@ -470,6 +470,10 @@ final class SettingsManager {
         }
     }
 
+    var companionWindDown: Bool {
+        didSet { SettingsCatalogue.companionWindDown.write(companionWindDown, to: store) }
+    }
+
     var companionTriageRulesJSON: String {
         didSet {
             SettingsCatalogue.companionTriageRulesJSON.write(companionTriageRulesJSON, to: store)
@@ -847,6 +851,7 @@ final class SettingsManager {
         self.companionQuietStartMinutes = SettingsCatalogue.companionQuietStartMinutes.load(
             from: store)
         self.companionQuietEndMinutes = SettingsCatalogue.companionQuietEndMinutes.load(from: store)
+        self.companionWindDown = SettingsCatalogue.companionWindDown.load(from: store)
         self.companionTriageRulesJSON = SettingsCatalogue.companionTriageRulesJSON.load(from: store)
         self.companionThreadCeilingTokens = SettingsCatalogue.companionThreadCeilingTokens.load(
             from: store)
@@ -1013,6 +1018,7 @@ final class SettingsManager {
         companionSpeaks = SettingsCatalogue.companionSpeaks.default
         companionQuietStartMinutes = SettingsCatalogue.companionQuietStartMinutes.default
         companionQuietEndMinutes = SettingsCatalogue.companionQuietEndMinutes.default
+        companionWindDown = SettingsCatalogue.companionWindDown.default
         companionTriageRulesJSON = SettingsCatalogue.companionTriageRulesJSON.default
         companionThreadCeilingTokens = SettingsCatalogue.companionThreadCeilingTokens.default
         captureHotkeyKeyCode = SettingsCatalogue.captureHotkeyKeyCode.default

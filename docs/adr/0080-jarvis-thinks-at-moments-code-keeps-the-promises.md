@@ -311,6 +311,14 @@ the owner must remember to read does not. What changed:
   engine runs a Morning Plan again with the trigger `resumed` — once, not
   after the owner closed the card, not in the evening. Every other moment
   already runs again on its own trigger.
+- **The wind-down.** The owner was at the Mac past midnight most nights,
+  with mornings that start at 07:15 or 07:30, and nothing in the Companion
+  spoke to sleep (Health's own bedtime banners are held as an app's news).
+  As quiet hours begin with the owner still at the Mac, one banner a night
+  says when tomorrow starts and how far off that is ("Tomorrow starts with
+  All Hands at 07:30 — 8 h 30 min from now."). Code, no model; within the
+  first hour of quiet hours, midnight or not; never in a game or a call; a
+  setting beside quiet hours turns it off (`night.wind-down` in the trace).
 - **The trace measures it**: `cue.presented` (start or end, how late, the
   slot's length, the must-do) and `cue.reaction` (the choice, the time to
   react).

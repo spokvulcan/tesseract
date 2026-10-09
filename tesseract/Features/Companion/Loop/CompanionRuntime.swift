@@ -232,6 +232,7 @@ final class CompanionRuntime {
             speaks: settings.companionSpeaks,
             quietStartMinutes: settings.companionQuietStartMinutes,
             quietEndMinutes: settings.companionQuietEndMinutes,
+            windDown: settings.companionWindDown,
             rules: rules)
     }
 
@@ -271,6 +272,9 @@ final class CompanionRuntime {
 
         case .speak(let line):
             delivery.speak(line)
+
+        case .postBanner(let title, let body):
+            if isActive { await notifier.post(title: title, body: body) }
 
         case .openApp(let name):
             delivery.openApp(name)

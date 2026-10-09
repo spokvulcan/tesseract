@@ -142,6 +142,9 @@ extension SettingsCatalogue {
         "companionQuietStartMinutes", default: 23 * 60)
     /// Quiet hours end (minutes after midnight).
     static let companionQuietEndMinutes = Setting.int("companionQuietEndMinutes", default: 8 * 60)
+    /// Whether Jarvis says when tomorrow starts, once, as quiet hours begin
+    /// with the owner still at the Mac.
+    static let companionWindDown = Setting.bool("companionWindDown", default: true)
     /// The owner's notification rules (`[TriageRule]`, JSON), newest first.
     static let companionTriageRulesJSON = Setting.string("companionTriageRulesJSON", default: "[]")
     /// The Day Thread's compaction ceiling, in tokens.

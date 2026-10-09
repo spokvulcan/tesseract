@@ -85,6 +85,12 @@ nonisolated enum CompanionTraceEvent: String, Sendable, Equatable, CaseIterable 
     /// A Day Thread passed its ceiling and was compacted.
     case threadCompacted = "thread.compacted"
 
+    // MARK: - night.*
+
+    /// Quiet hours began with the owner at the Mac: the night's one banner
+    /// said when tomorrow starts. Carries the minutes until then.
+    case windDown = "night.wind-down"
+
     // MARK: - governor.*
 
     /// Non-urgent model work was deferred (thermal state, battery).
