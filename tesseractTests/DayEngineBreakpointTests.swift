@@ -189,6 +189,21 @@ struct DayEngineBreakpointTests {
         #expect(Set(breakpoint.canWait.map(\.app)) == ["GitHub", "ChatGPT"])
     }
 
+    @Test func aBannerGoneDuringTheCallLeavesAGapNotAShift() {
+        let anna = SeenLedger.Entry(
+            notification: ObservedNotification(
+                id: "n-anna", app: "Slack", title: "Anna", subtitle: "", body: "PR?",
+                arrivedAt: Self.local(12, 10)),
+            arrivedPresent: false)
+        // n1 left the ledger while the model judged; it picked n2, Anna.
+        let choice = BreakpointMoment.choose(
+            #"{"line": "Anna asks.", "needs_you": ["n2"]}"#, from: [nil, anna], field: .needsYou)
+        #expect(choice?.entries.map(\.id) == ["n-anna"])
+        let none = BreakpointMoment.choose(
+            #"{"line": "x", "needs_you": ["n1"]}"#, from: [nil, anna], field: .needsYou)
+        #expect(none?.entries.isEmpty == true)
+    }
+
     @Test func aMeetingThatEndsIsABreakpoint() {
         var state = Self.awayWithNotifications()
         state.lastTickAt = Self.local(15, 44)

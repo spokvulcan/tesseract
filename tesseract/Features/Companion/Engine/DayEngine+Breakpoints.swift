@@ -110,9 +110,12 @@ nonisolated extension DayEngine {
         {
             return []
         }
-        let offered = request.context.notificationIDs.compactMap { state.ledger.entry($0) }
+        // By the request's numbering: one gone from the ledger meanwhile
+        // leaves a gap, not a shift onto the next banner.
+        let numbered = request.context.notificationIDs.map { state.ledger.entry($0) }
+        let offered = numbered.compactMap { $0 }
         guard
-            let choice = BreakpointMoment.choose(reply, from: offered, field: .needsYou),
+            let choice = BreakpointMoment.choose(reply, from: numbered, field: .needsYou),
             choice.line != nil
         else { return nil }
         state.ledger.markPresented(request.context.notificationIDs, at: snapshot.now)
@@ -166,8 +169,11 @@ nonisolated extension DayEngine {
     static func triageReplied(
         _ request: MomentRequest, reply: String, snapshot: DaySnapshot, state: inout DayState
     ) -> [DayEffect]? {
-        let offered = request.context.notificationIDs.compactMap { state.ledger.entry($0) }
-        guard let choice = BreakpointMoment.choose(reply, from: offered, field: .raise) else {
+        // By the request's numbering: one gone from the ledger meanwhile
+        // leaves a gap, not a shift onto the next banner.
+        let numbered = request.context.notificationIDs.map { state.ledger.entry($0) }
+        let offered = numbered.compactMap { $0 }
+        guard let choice = BreakpointMoment.choose(reply, from: numbered, field: .raise) else {
             return nil
         }
         let raised = choice.entries.filter { $0.seenAt == nil }
