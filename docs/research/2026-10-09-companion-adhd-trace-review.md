@@ -104,7 +104,14 @@ The trace measures the new behaviour: `cue.presented` / `cue.reaction`,
    revisits ADR-0080 decision 4 and needs the owner's call. Not the cause of
    the cold prefills: the Day Opening is committed to the thread once, so it
    does not change across a relaunch, and the SSD prefix cache is on by
-   default; why a relaunched thread misses it is not yet known.
+   default. Its manifest (metadata only) shows where it stops: of the 18
+   snapshots on disk (4–8 October), the 4.4k-token system root and two
+   branch points were read back after a relaunch, but none of the nine leaf
+   snapshots written at the end of a moment's reply (3–20k tokens) ever was
+   — each one's last access is its creation. So a relaunched thread restores
+   the root and re-reads everything after it. Why the next request's path
+   misses the leaf (a reply rendered differently from how it was generated,
+   for one) is for the prefix cache's own investigation, not the Companion's.
 2. **Keep someday lists out of the plan's candidates.** Partly done: the
    requests now list 15 undated reminders, the Inbox and lists with dated work
    first, the rest summed by list. Mapping Areas (or marking lists Jarvis
