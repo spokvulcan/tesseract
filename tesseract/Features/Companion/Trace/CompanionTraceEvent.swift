@@ -43,6 +43,9 @@ nonisolated enum CompanionTraceEvent: String, Sendable, Equatable, CaseIterable 
     /// later, dismiss, or away — up from the Mac with it on the panel).
     /// Carries the time to react.
     case cueReaction = "cue.reaction"
+    /// A meeting landed on a planned step not yet begun: code moved the step
+    /// to the first free time after it. Carries how far, and its length.
+    case cueMoved = "cue.moved"
 
     // MARK: - nudge.*: OS-scheduled notifications for events and reminders
 

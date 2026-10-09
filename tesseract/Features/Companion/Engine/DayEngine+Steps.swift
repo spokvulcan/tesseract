@@ -20,7 +20,9 @@
 //  it would run into, so its check-in is the heads-up to wrap up and get
 //  there, not a question held until the meeting is over. Where a quarter
 //  hour more — or later — would run into a meeting, the cue offers to go on
-//  once it is over instead, with the time that was cut.
+//  once it is over instead, with the time that was cut. A meeting that lands
+//  on the plan later moves a step not begun to the first free time after
+//  it, and ends a started one five minutes before it.
 //
 //  No model. Each start and each end is cued once, as soon as the owner can
 //  see it: never while they are away, in quiet hours, a call, a game or a
@@ -245,6 +247,96 @@ nonisolated extension DayEngine {
             end = next.end
         }
         return end
+    }
+
+    /// The agenda changed. A meeting (or somewhere to be) now on a planned
+    /// step not yet begun moves the step to the first free time after it,
+    /// as long — clear of other meetings, the way to one and the plan's
+    /// other steps — before the evening (an evening step, before midnight);
+    /// with none, it stays, to slide where Today and the wrap-up see it. In
+    /// a meeting at its time, the owner would never get its cue. A step
+    /// the owner started now ends five minutes before one, as a start does.
+    static func clearStepsOfMeetings(snapshot: DaySnapshot, state: inout DayState)
+        -> [DayEffect]
+    {
+        let facts = snapshot.facts(state: state)
+        let meetings = facts.eventsToday.filter(endsAStep)
+        guard !meetings.isEmpty else { return [] }
+        if let focus = focus(snapshot: snapshot, state: state) {
+            keepClear(focus.reminderID, snapshot: snapshot, state: &state)
+        }
+        let calendar = snapshot.calendar
+        let minutes = snapshot.settings.eveningMinutes
+        guard
+            let evening = calendar.date(
+                bySettingHour: minutes / 60, minute: minutes % 60, second: 0, of: snapshot.now),
+            let midnight = calendar.date(
+                byAdding: .day, value: 1, to: calendar.startOfDay(for: snapshot.now))
+        else { return [] }
+        let away = facts.departures.compactMap { departure -> DateInterval? in
+            guard departure.at < departure.eventStart,
+                meetings.contains(where: {
+                    $0.id == departure.eventID && $0.start == departure.eventStart
+                })
+            else { return nil }
+            return DateInterval(start: departure.at, end: departure.eventStart)
+        }
+        var effects: [DayEffect] = []
+        for slot in state.plan.sorted(by: { $0.start < $1.start }) {
+            let key = StepCue.key(slot)
+            let span = DateInterval(start: slot.start, end: end(of: slot))
+            guard slot.start > snapshot.now, !state.startedSteps.contains(key),
+                state.cuedSteps[key] == nil, facts.task(slot.reminderID) != nil,
+                let hit = meetings.filter({ $0.start < span.end && $0.end > span.start })
+                    .max(by: { $0.end < $1.end })
+            else { continue }
+            let others = state.plan.filter { $0.reminderID != slot.reminderID }
+                .map { DateInterval(start: $0.start, end: end(of: $0)) }
+            let busy = meetings.map { DateInterval(start: $0.start, end: $0.end) } + away + others
+            guard
+                let start = firstFree(
+                    from: hit.end, minutes: slot.minutes, busy: busy,
+                    until: slot.start < evening ? evening : midnight, calendar: calendar),
+                let index = state.plan.firstIndex(where: { $0.reminderID == slot.reminderID })
+            else { continue }
+            state.plan[index].start = start
+            effects.append(
+                .trace(
+                    .cueMoved,
+                    [
+                        "minutes": .int(Int(start.timeIntervalSince(slot.start) / 60)),
+                        "length": .int(slot.minutes),
+                    ]))
+        }
+        state.plan.sort { $0.start < $1.start }
+        return effects
+    }
+
+    /// The first start from `from` — on the next five minutes — where
+    /// `minutes` fit clear of `busy`, ending by `until`.
+    static func firstFree(
+        from: Date, minutes: Int, busy: [DateInterval], until: Date, calendar: Calendar
+    ) -> Date? {
+        var start = onTheFive(from, calendar: calendar)
+        let length = TimeInterval(minutes * 60)
+        // Each pass moves past a block, so the plan's handful ends it soon.
+        for _ in 0..<64 {
+            let span = DateInterval(start: start, duration: length)
+            guard span.end <= until else { return nil }
+            guard
+                let block = busy.filter({ $0.start < span.end && $0.end > span.start })
+                    .max(by: { $0.end < $1.end })
+            else { return start }
+            start = onTheFive(block.end, calendar: calendar)
+        }
+        return nil
+    }
+
+    private static func onTheFive(_ date: Date, calendar: Calendar) -> Date {
+        let minute = calendar.dateInterval(of: .minute, for: date)?.start ?? date
+        let over = calendar.component(.minute, from: minute) % 5
+        if minute == date, over == 0 { return date }
+        return minute.addingTimeInterval(TimeInterval((5 - over) * 60))
     }
 
     /// A meeting with other people is under way.

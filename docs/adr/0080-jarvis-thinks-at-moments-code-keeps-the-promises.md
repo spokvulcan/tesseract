@@ -318,6 +318,17 @@ the owner must remember to read does not. What changed:
   time that was cut (a quarter hour at least), one not begun whole, cued
   again then and not counted as put off. If the meeting moved meanwhile,
   the answer is the quarter hour it replaced (`cue.reaction` "resume").
+  The plan was only kept clear of meetings known when a step started: the
+  owner adds and moves events through Jarvis most days (twelve in a week),
+  and a meeting that lands on a planned step not yet begun hid its cue (the
+  owner is in the meeting at its time) until the slot had gone by. When
+  the agenda changes — or the Companion comes on — such a step moves to the
+  first free time after the meeting, as long, clear of other meetings, the
+  way to one and the plan's other steps, before the evening (an evening
+  step, before midnight); with none, it stays and slides where Today and
+  the wrap-up see it (`cue.moved`, how far and how long). One the owner
+  started ends five minutes before a meeting added into it, as a start
+  does. No model.
 - **The panel's buttons are drawn by hand** (capsules, the main one in the
   accent): the panel is never key, and a system prominent button turns gray
   in a window that isn't.

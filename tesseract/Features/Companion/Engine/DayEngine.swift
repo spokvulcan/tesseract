@@ -75,9 +75,12 @@ nonisolated enum DayEngine {
 
         case .agendaChanged:
             effects += syncNudgesIfChanged(snapshot: snapshot, state: &state)
+            effects += clearStepsOfMeetings(snapshot: snapshot, state: &state)
 
         case .companionEnabled:
             effects += syncNudgesIfChanged(snapshot: snapshot, state: &state)
+            // The calendar may have changed while the app was closed.
+            effects += clearStepsOfMeetings(snapshot: snapshot, state: &state)
             effects += resumeInterrupted(snapshot: snapshot, state: &state)
             if snapshot.ownerPresent {
                 // Starting up counts as sitting down: measure the gap from

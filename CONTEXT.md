@@ -1884,7 +1884,10 @@ ends five minutes before the next meeting with other people or event with a
 place (or the time to leave for one) it would run into — a block of the
 owner's own doesn't — so its check-in is the heads-up to wrap up; where In 15 min or
 15 more min would run into a meeting, the cue offers "At 16:00" or "Go on at
-16:00" instead — after it, with the time that was cut. Closing it changes
+16:00" instead — after it, with the time that was cut. A meeting added later
+on a step not begun moves the step to the first free time after it (as long,
+before the evening; with none, it stays), and one added into a started step
+ends it five minutes before. Closing it changes
 nothing; a toggle in Settings (Your Day) turns Step Cues off.
 _Avoid_: reminder (Reminders' own alarm), nudge (an event's OS notification).
 
