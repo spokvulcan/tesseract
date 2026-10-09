@@ -35,8 +35,12 @@ nonisolated enum DeliveryLadder {
         "com.cisco.webexmeetingsapp", "com.apple.iWork.Keynote",
     ]
 
-    static func rungs(for importance: Importance, snapshot: DaySnapshot) -> [DeliveryRung] {
-        if isQuietHours(snapshot) { return [.today] }
+    /// - Parameter sittingDown: the owner just sat down to start the day (the
+    ///   first sit-down after the night): for them quiet hours are over.
+    static func rungs(for importance: Importance, snapshot: DaySnapshot, sittingDown: Bool = false)
+        -> [DeliveryRung]
+    {
+        if isQuietHours(snapshot), !sittingDown { return [.today] }
         guard snapshot.ownerPresent else {
             // Away or locked: a banner waits on the lock screen; normal cards
             // wait in Today.

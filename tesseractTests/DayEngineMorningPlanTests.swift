@@ -102,6 +102,47 @@ struct DayEngineMorningPlanTests {
         #expect(panelCards(sitDown.effects).first?.kind == .morningPlan)
     }
 
+    @Test func aPreparedPlanMeetsAnEarlySitDownOnThePanel() throws {
+        var state = Day.state()
+        state.lastPresentAt = Day.local(29, 23)
+        let early = DayEngine.decide(
+            .tick, snapshot: Day.snapshot(at: Day.local(30, 5), present: false), state: state)
+        var ready = early.state
+        ready.running = nil
+        // 07:40, before quiet hours end at 08:00: the owner is starting the day.
+        let sitDown = DayEngine.decide(
+            .presenceReturned(awayFrom: Day.local(29, 23)),
+            snapshot: Day.snapshot(at: Day.local(30, 7, 40)), state: ready)
+        #expect(panelCards(sitDown.effects).first?.kind == .morningPlan)
+    }
+
+    @Test func aPlanMadeAtAnEarlySitDownGoesUpOnThePanel() {
+        var state = Day.state()
+        state.lastPresentAt = Day.local(29, 23)
+        let sitDown = DayEngine.decide(
+            .presenceReturned(awayFrom: Day.local(29, 23)),
+            snapshot: Day.snapshot(at: Day.local(30, 7, 40)), state: state)
+        #expect(panelCards(sitDown.effects).first?.kind == .morningPlan)
+        #expect(Day.moments(sitDown.effects).first?.trigger == .firstPresence)
+    }
+
+    @Test func quietHoursStillHoldACardThatIsNotTheDaysStart() {
+        var state = Day.state()
+        state.lastPresentAt = Day.local(30, 7)
+        state.morningPlanAt = Day.local(30, 6)
+        state.agents = [
+            AgentSignal(
+                id: "s1", kind: .waiting, agent: "Claude Code", project: "tesseract",
+                directory: "/tmp/tesseract", message: "Needs approval", at: Day.local(30, 7, 10))
+        ]
+        // Back at 07:40 from a break: a Breakpoint, and it waits in Today.
+        let back = DayEngine.decide(
+            .presenceReturned(awayFrom: Day.local(30, 7)),
+            snapshot: Day.snapshot(at: Day.local(30, 7, 40)), state: state)
+        #expect(back.state.cards.last?.kind == .breakpoint)
+        #expect(panelCards(back.effects).isEmpty)
+    }
+
     @Test func noPlanIsPreparedOnBattery() {
         var state = Day.state()
         state.lastPresentAt = Day.local(29, 23)

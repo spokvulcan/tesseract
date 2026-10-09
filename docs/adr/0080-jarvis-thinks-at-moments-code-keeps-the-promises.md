@@ -275,6 +275,13 @@ the owner must remember to read does not. What changed:
   go (Jarvis's pick in the accent) or Do What Jarvis Suggests. The panel
   shows the card as the day has it now, so an item handled there leaves it
   (it used to stay), and it is as tall as what it says (it was always 560 pt).
+- **The plan meets the first sit-down on the panel, quiet hours or not.**
+  Since plans were made ahead (5 October on), the owner sat down at 06:12,
+  07:55, 07:58 and 07:59 — every time inside the default quiet hours, which
+  end at 08:00 — so the plan never reached the panel and waited unseen in
+  Today. The day's first sit-down is the owner starting their day, not
+  Jarvis reaching out at night: the Morning Plan, made ahead or made then,
+  takes the panel at it (a game or a call still keeps it in Today).
 - **The trace measures it**: `cue.presented` (start or end, how late, the
   slot's length, the must-do) and `cue.reaction` (the choice, the time to
   react).

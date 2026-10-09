@@ -1875,8 +1875,9 @@ tasks into the free time before the first meeting, the Must-do placed where it
 fits. A card built by code goes up at once — the day's shape and where it
 starts — and Jarvis's version replaces it in place when he has thought it
 through; when the Mac is awake and on power before the owner sits down, the plan
-is made ahead and comes forward at the sit-down. Skipping it costs nothing and
-nothing nags.
+is made ahead and comes forward at the sit-down. The first sit-down is the
+owner starting the day, so the plan meets them on the panel even before quiet
+hours end. Skipping it costs nothing and nothing nags.
 
 **Breakpoint**:
 Coming back after the away threshold (ten minutes by default), or a meeting
@@ -1953,8 +1954,9 @@ People, coding agents and missed notifications that need the owner, under
 How a card reaches the owner, decided by code: the glyph for anything waiting,
 the Jarvis Panel for Breakpoints and urgent items when present, a banner when
 away or locked, a spoken line for urgent items when voice is on. Quiet hours
-silence Jarvis's own deliveries; the owner's reminders and Nudges still fire.
-Nothing unanswered is re-summoned; it stays in Today.
+silence Jarvis's own deliveries — except the Morning Plan at the day's first
+sit-down, which is the owner starting their day; the owner's reminders and
+Nudges still fire. Nothing unanswered is re-summoned; it stays in Today.
 
 **Governor**:
 No daily budget, usefulness first — but Triage and the Night Reflection wait

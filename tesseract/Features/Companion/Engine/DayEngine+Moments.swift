@@ -62,9 +62,14 @@ nonisolated extension DayEngine {
     ) -> [DayEffect] {
         guard state.running == nil, !snapshot.chatBusy else { return [] }
         let facts = snapshot.facts(state: state)
+        // The day's first sit-down is the owner starting their day: the plan
+        // meets them on the panel, even before quiet hours end.
+        let rungs =
+            trigger == .firstPresence
+            ? DeliveryLadder.rungs(for: .normal, snapshot: snapshot, sittingDown: true) : nil
         var effects = accept(
             .morningPlan(FallbackCards.morningPlan(facts: facts)), kind: .morningPlan,
-            fallback: false, snapshot: snapshot, state: &state, refining: true)
+            fallback: false, snapshot: snapshot, state: &state, refining: true, rungs: rungs)
         let cardID = state.cards.last?.id
         effects += run(
             .morningPlan, trigger: trigger, snapshot: snapshot, state: &state,
@@ -97,9 +102,8 @@ nonisolated extension DayEngine {
                 $0.kind == .morningPlan && !$0.dismissed && $0.createdAt >= awayFrom
             })
         else { return [] }
-        let rungs = DeliveryLadder.rungs(for: .normal, snapshot: snapshot).filter {
-            $0 == .panel || $0 == .today
-        }
+        let rungs = DeliveryLadder.rungs(for: .normal, snapshot: snapshot, sittingDown: true)
+            .filter { $0 == .panel || $0 == .today }
         return rungs.map { .presentCard(card, $0) } + [
             .trace(
                 .cardPresented,
@@ -237,11 +241,12 @@ nonisolated extension DayEngine {
 
     /// Put a new card on the day and deliver it. With `cardID`, the model's
     /// version replaces the card code put up first; `refining` marks a code
-    /// card the model is still working on.
+    /// card the model is still working on; `rungs` overrides where a new card
+    /// goes.
     static func accept(
         _ body: DayCard.Body, kind: MomentKind, fallback: Bool, snapshot: DaySnapshot,
         state: inout DayState, importance: Importance = .normal, cardID: String? = nil,
-        refining: Bool = false
+        refining: Bool = false, rungs: [DeliveryRung]? = nil
     ) -> [DayEffect] {
         switch body {
         case .morningPlan(let card):
@@ -287,7 +292,7 @@ nonisolated extension DayEngine {
             kind: kind, createdAt: snapshot.now, isFallback: fallback, body: body,
             isRefining: refining)
         state.cards.append(card)
-        let rungs = deliveryRungs(body, importance: importance, snapshot: snapshot)
+        let rungs = rungs ?? deliveryRungs(body, importance: importance, snapshot: snapshot)
         for rung in rungs {
             if rung == .voice {
                 effects.append(.speak(card.line))
