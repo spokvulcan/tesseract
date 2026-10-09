@@ -64,6 +64,9 @@ nonisolated extension DayEngine {
         trigger: MomentTrigger, snapshot: DaySnapshot, state: inout DayState
     ) -> [DayEffect] {
         guard state.running == nil, !snapshot.chatBusy else { return [] }
+        // Whatever starts it (Today opened, Plan my day), a plan that waited
+        // for the model is no longer waiting.
+        state.morningPlanWaiting = false
         let facts = snapshot.facts(state: state)
         // The day's first sit-down is the owner starting their day: the plan
         // meets them on the panel, even before quiet hours end.

@@ -217,6 +217,17 @@ struct DayEngineMomentTests {
         #expect(request.kind == .morningPlan)
         #expect(request.trigger == .firstPresence)
         #expect(!later.state.morningPlanWaiting)
+        // Opening Today first starts it there, and nothing plans the day twice.
+        var opened = free
+        opened =
+            DayEngine.decide(
+                .todayOpened, snapshot: Self.snapshot(at: Self.local(30, 7, 41)), state: opened
+            ).state
+        #expect(!opened.morningPlanWaiting)
+        opened.running = nil
+        let next = DayEngine.decide(
+            .tick, snapshot: Self.snapshot(at: Self.local(30, 7, 42)), state: opened)
+        #expect(Self.moments(next.effects).isEmpty)
     }
 
     @Test func aLateReplanWaitsForAModelThatIsFree() {
