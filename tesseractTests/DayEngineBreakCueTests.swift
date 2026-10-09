@@ -150,6 +150,16 @@ struct DayEngineBreakCueTests {
         #expect(decision.state.breakCuedAt == nil)
     }
 
+    @Test func aCueWaitsWhileJarvisIsThinking() {
+        // The Evening Wrap-up is being written: its card may take the panel
+        // any moment; the break waits for it rather than go up and be replaced.
+        var state = Self.state()
+        state.running = .eveningWrapUp
+        #expect(Self.breaks(Self.tick(state, at: Self.local(11)).effects).isEmpty)
+        state.running = nil
+        #expect(Self.breaks(Self.tick(state, at: Self.local(11, 1)).effects).count == 1)
+    }
+
     @Test func theFirstTickAtTheMacStartsTheCount() {
         var state = Self.state()
         state.sittingSince = nil

@@ -1877,8 +1877,8 @@ half hour before the next event or time to leave, the menu bar counts down
 to that instead: "in 12m", "leave in 12m"). Built by code, no model; each start and
 end once, as soon as the owner can see it; never while away, in quiet hours
 (but not the morning's end of them once the owner sat down to start the
-day), a call, a game or a meeting, nor over a panel that is up. What came due
-meanwhile is cued late — a start while its slot still runs, an end that day —
+day), a call, a game or a meeting, nor over a panel that is up or while
+Jarvis is writing a card. What came due meanwhile is cued late — a start while its slot still runs, an end that day —
 and says so ("Still time for", "How did it go?"). A slot whose reminder rings
 at the same minute is left to Reminders. It chimes softly as it appears, with
 the app's sounds on. Done is answered for a moment ("Done", the must-do

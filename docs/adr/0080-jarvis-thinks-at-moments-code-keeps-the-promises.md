@@ -268,7 +268,10 @@ the owner must remember to read does not. What changed:
   in quiet hours (but the morning's end of them is over once the owner sat
   down to start the day), a call, a game or a meeting with other people, nor
   over a panel the owner hasn't closed (it waits a tick, and a card that
-  takes the panel on the same tick goes first). What came due meanwhile is
+  takes the panel on the same tick goes first), nor while Jarvis is writing
+  a card (a day's minute-by-minute simulation put a Break Cue up a minute
+  into the Evening Wrap-up, to be replaced by its card and come back after
+  it; cues now wait for the moment to finish). What came due meanwhile is
   cued late, once they can see it — a start while its slot still runs, an
   end that day — and says so ("Still time for", "How did it go?"): a cue
   first lived only ten minutes past its moment, so a slot that started while

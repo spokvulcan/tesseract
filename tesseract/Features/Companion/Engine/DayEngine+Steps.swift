@@ -60,6 +60,9 @@ nonisolated extension DayEngine {
         // quiet hours doesn't hold the plan back.
         let started = DeliveryLadder.dayStarted(state.satDownAt, snapshot: snapshot)
         guard !snapshot.panelUp,
+            // Jarvis is thinking: his card may take the panel any moment, and
+            // a cue up first would be replaced, then come back after it.
+            state.running == nil,
             DeliveryLadder.rungs(for: .normal, snapshot: snapshot, sittingDown: started)
                 .contains(.panel),
             !inMeeting(snapshot)

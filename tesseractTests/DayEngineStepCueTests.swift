@@ -1053,18 +1053,30 @@ struct DayEngineStepCueTests {
         let nine = Self.tick(state, at: Self.local(21))
         #expect(!nine.effects.contains { if case .runMoment = $0 { true } else { false } })
         #expect(nine.state.eveningWrapUpAt == nil)
-        // At its end the Wrap-up starts thinking (its card goes first), and
-        // the check-in follows a tick later.
+        // At its end the Wrap-up starts thinking; its card goes first.
         let end = Self.tick(nine.state, at: Self.local(21, 10))
-        #expect(
-            end.effects.contains {
-                if case .runMoment(let request) = $0 {
-                    request.kind == .eveningWrapUp
+        let request = try #require(
+            end.effects.lazy.compactMap { effect -> MomentRequest? in
+                if case .runMoment(let request) = effect, request.kind == .eveningWrapUp {
+                    request
                 } else {
-                    false
+                    nil
                 }
-            })
-        let next = Self.tick(end.state, at: Self.local(21, 11))
+            }.first)
+        // While Jarvis writes it, no cue goes up for its card to replace.
+        let thinking = Self.tick(end.state, at: Self.local(21, 11))
+        #expect(Self.cues(thinking.effects).isEmpty)
+        let written = DayEngine.decide(
+            .momentOutcome(
+                request,
+                .reply(
+                    #"{"line": "A good day.", "leftovers": []}"#,
+                    MomentMeasure(
+                        promptTokens: 900, outputTokens: 60, prefillSeconds: 0.2,
+                        generateSeconds: 2, latencySeconds: 3, hitCap: false, modelID: "m"))),
+            snapshot: Self.snapshot(at: Self.local(21, 12)), state: thinking.state)
+        // Its card closed, the check-in follows.
+        let next = Self.tick(written.state, at: Self.local(21, 13))
         #expect(Self.cues(next.effects).first?.phase == .end)
     }
 
