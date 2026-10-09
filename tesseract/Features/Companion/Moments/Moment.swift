@@ -66,6 +66,8 @@ nonisolated enum MomentTrigger: String, Sendable, Equatable, Codable {
     case night
     case retry
     case ownerAsked
+    /// The app quit while it ran: it runs again, once.
+    case resumed
 }
 
 /// A moment the engine wants run.

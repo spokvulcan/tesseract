@@ -322,6 +322,10 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     /// Slots the owner started (Start on a cue, Start now on Today), by
     /// `StepCue.key`: their end checks in.
     var startedSteps: Set<String> = []
+    /// A moment the app quit in the middle of, until the engine picks it up.
+    var interrupted: MomentKind?
+    /// The Morning Plan was run again once after a quit cut it short.
+    var morningPlanResumed = false
 
     init(day: DayKey, syncedNudgeIDs: Set<String>? = nil) {
         self.day = day
@@ -332,7 +336,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         case day, syncedNudgeIDs, lastPresentAt, morningPlanAt, eveningWrapUpAt, nightReflectionAt
         case running, cards, mustDoID, plan, carryOver, carryOverForNextDay, ledger, agents
         case agentSpokenAt, lastTickAt, lastTriageAt, whereYouWere, deferred, firedNudgeIDs
-        case cuedSteps, startedSteps
+        case cuedSteps, startedSteps, interrupted, morningPlanResumed
     }
 
     /// Every field but the day is optional on disk, so a state saved by an
@@ -361,6 +365,20 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         firedNudgeIDs = (try? c.decodeIfPresent(Set<String>.self, forKey: .firedNudgeIDs)) ?? []
         cuedSteps = (try? c.decodeIfPresent([String: Date].self, forKey: .cuedSteps)) ?? [:]
         startedSteps = (try? c.decodeIfPresent(Set<String>.self, forKey: .startedSteps)) ?? []
+        interrupted = try? c.decodeIfPresent(MomentKind.self, forKey: .interrupted)
+        morningPlanResumed =
+            (try? c.decodeIfPresent(Bool.self, forKey: .morningPlanResumed)) ?? false
+    }
+
+    /// The day as a relaunch finds it: the moment in flight never finished,
+    /// so it is recorded as interrupted for the engine to pick up, and a card
+    /// it was refining keeps the version code built.
+    func relaunched() -> DayState {
+        var state = self
+        state.interrupted = running
+        state.running = nil
+        for index in state.cards.indices { state.cards[index].isRefining = false }
+        return state
     }
 
     /// The next day's state: what must survive the rollover survives.

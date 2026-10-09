@@ -1881,7 +1881,9 @@ starts — and Jarvis's version replaces it in place when he has thought it
 through; when the Mac is awake and on power before the owner sits down, the plan
 is made ahead and comes forward at the sit-down. The first sit-down is the
 owner starting the day, so the plan meets them on the panel even before quiet
-hours end. Skipping it costs nothing and nothing nags.
+hours end. A plan the app quit in the middle of runs again once when the
+Companion next comes on (not once the owner closed it, nor in the evening).
+Skipping it costs nothing and nothing nags.
 
 **Breakpoint**:
 Coming back after the away threshold (ten minutes by default), or a meeting

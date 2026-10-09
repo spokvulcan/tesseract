@@ -302,6 +302,15 @@ the owner must remember to read does not. What changed:
   what is still open ("1 of 3 done today." · "Still open: …"), with the
   Evening Wrap-up as the way to settle it; once wrapped up, it looks at
   tomorrow.
+- **A plan cut short by a quit runs again, once.** On 8 October the plan
+  was made ahead at 05:25 and the app was killed three minutes later; a
+  relaunch cleared the moment in flight, and since the plan's time was set
+  when its code card went up, nothing ever finished it: the day had no
+  plan, and so nothing to cue. A relaunch now records the moment it cut
+  short (`DayState.relaunched()`), and when the Companion comes on the
+  engine runs a Morning Plan again with the trigger `resumed` — once, not
+  after the owner closed the card, not in the evening. Every other moment
+  already runs again on its own trigger.
 - **The trace measures it**: `cue.presented` (start or end, how late, the
   slot's length, the must-do) and `cue.reaction` (the choice, the time to
   react).

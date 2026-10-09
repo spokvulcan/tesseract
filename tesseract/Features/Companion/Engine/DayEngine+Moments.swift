@@ -77,6 +77,28 @@ nonisolated extension DayEngine {
         return effects
     }
 
+    /// A Morning Plan the app quit in the middle of runs again, once: its
+    /// time was set when the code card went up, so nothing else would ever
+    /// finish it, and the day would go by with no plan. Not once the owner
+    /// closed the card, nor in the evening. The other moments run again on
+    /// their own triggers.
+    static func resumeInterrupted(snapshot: DaySnapshot, state: inout DayState) -> [DayEffect] {
+        guard let kind = state.interrupted else { return [] }
+        state.interrupted = nil
+        guard kind == .morningPlan, !state.morningPlanResumed,
+            snapshot.minuteOfDay < snapshot.settings.eveningMinutes,
+            let index = state.cards.lastIndex(where: { $0.kind == .morningPlan }),
+            !state.cards[index].dismissed
+        else { return [] }
+        state.morningPlanResumed = true
+        state.cards[index].isRefining = true
+        let effects = run(
+            .morningPlan, trigger: .resumed, snapshot: snapshot, state: &state,
+            context: MomentContext(cardID: state.cards[index].id))
+        if state.running == nil { state.cards[index].isRefining = false }
+        return effects
+    }
+
     /// Plan the day before the owner sits down, when the Mac is awake and on
     /// power in the morning window and they have been away all night. The
     /// card waits in Today and comes forward at the first sit-down.

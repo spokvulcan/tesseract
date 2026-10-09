@@ -64,6 +64,7 @@ nonisolated enum DayEngine {
 
         case .companionEnabled:
             effects += syncNudgesIfChanged(snapshot: snapshot, state: &state)
+            effects += resumeInterrupted(snapshot: snapshot, state: &state)
             if snapshot.ownerPresent {
                 // Starting up counts as sitting down: measure the gap from
                 // the last time the owner was seen.

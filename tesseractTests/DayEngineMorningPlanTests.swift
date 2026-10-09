@@ -143,6 +143,68 @@ struct DayEngineMorningPlanTests {
         #expect(panelCards(back.effects).isEmpty)
     }
 
+    // MARK: A plan cut short by a quit
+
+    /// The plan was prepared at 05:00 and the app quit while Jarvis thought.
+    static func cutShort() throws -> DayState {
+        var state = Day.state()
+        state.lastPresentAt = Day.local(29, 23)
+        let early = DayEngine.decide(
+            .tick, snapshot: Day.snapshot(at: Day.local(30, 5), present: false), state: state)
+        #expect(early.state.running == .morningPlan)
+        return early.state.relaunched()
+    }
+
+    @Test func aRelaunchRecordsTheMomentItCutShort() throws {
+        let relaunched = try Self.cutShort()
+        #expect(relaunched.running == nil)
+        #expect(relaunched.interrupted == .morningPlan)
+        #expect(relaunched.cards.allSatisfy { !$0.isRefining })
+    }
+
+    @Test func aPlanTheAppQuitInTheMiddleOfRunsAgainOnce() throws {
+        let relaunched = try Self.cutShort()
+        let back = DayEngine.decide(
+            .companionEnabled, snapshot: Day.snapshot(at: Day.local(30, 5, 10), present: false),
+            state: relaunched)
+        let request = try #require(Day.moments(back.effects).first)
+        #expect(request.kind == .morningPlan)
+        #expect(request.trigger == .resumed)
+        #expect(request.context.cardID == relaunched.cards.last?.id)
+        #expect(back.state.cards.last?.isRefining == true)
+        #expect(back.state.interrupted == nil)
+
+        // Cut short again: the code card stands; no loop of retries.
+        let again = DayEngine.decide(
+            .companionEnabled, snapshot: Day.snapshot(at: Day.local(30, 5, 20), present: false),
+            state: back.state.relaunched())
+        #expect(Day.moments(again.effects).isEmpty)
+    }
+
+    @Test func aClosedOrLatePlanIsNotRunAgain() throws {
+        var closed = try Self.cutShort()
+        closed.cards[closed.cards.count - 1].dismissed = true
+        let afterClose = DayEngine.decide(
+            .companionEnabled, snapshot: Day.snapshot(at: Day.local(30, 7), present: false),
+            state: closed)
+        #expect(Day.moments(afterClose.effects).isEmpty)
+        let evening = DayEngine.decide(
+            .companionEnabled, snapshot: Day.snapshot(at: Day.local(30, 21, 30), present: false),
+            state: try Self.cutShort())
+        #expect(!Day.moments(evening.effects).contains { $0.kind == .morningPlan })
+    }
+
+    @Test func otherMomentsCutShortWaitForTheirOwnTriggers() {
+        var state = Day.state()
+        state.morningPlanAt = Day.local(30, 8)
+        state.running = .nightReflection
+        let back = DayEngine.decide(
+            .companionEnabled, snapshot: Day.snapshot(at: Day.local(30, 9), present: false),
+            state: state.relaunched())
+        #expect(Day.moments(back.effects).isEmpty)
+        #expect(back.state.interrupted == nil)
+    }
+
     @Test func noPlanIsPreparedOnBattery() {
         var state = Day.state()
         state.lastPresentAt = Day.local(29, 23)

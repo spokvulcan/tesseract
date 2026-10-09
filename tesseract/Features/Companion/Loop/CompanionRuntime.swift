@@ -76,12 +76,9 @@ final class CompanionRuntime {
         self.delivery = delivery
         self.profile = profile
         self.now = now
-        var loaded = stateStore.load() ?? DayState(day: DayKey(for: now()))
-        // A moment in flight when the app quit never finished, and a card it
-        // was refining keeps the version code built.
-        loaded.running = nil
-        for index in loaded.cards.indices { loaded.cards[index].isRefining = false }
-        self.state = loaded
+        // A moment in flight when the app quit never finished: the engine
+        // picks it up when the Companion comes on.
+        self.state = (stateStore.load() ?? DayState(day: DayKey(for: now()))).relaunched()
         agenda.addListener { [weak self] in self?.send(.agendaChanged) }
         thread.openingProvider = { [weak self] in self?.dayOpening() ?? "" }
     }
