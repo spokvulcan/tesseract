@@ -19,6 +19,15 @@ import Testing
 
 struct EventKitAgendaStoreTests {
 
+    @Test func aCancelledOrDeclinedEventIsNotPartOfTheDay() {
+        #expect(EventKitAgendaStore.isKept(status: .confirmed, ownStatus: nil))
+        #expect(EventKitAgendaStore.isKept(status: .confirmed, ownStatus: .accepted))
+        #expect(EventKitAgendaStore.isKept(status: .tentative, ownStatus: .tentative))
+        #expect(EventKitAgendaStore.isKept(status: .none, ownStatus: .pending))
+        #expect(!EventKitAgendaStore.isKept(status: .canceled, ownStatus: .accepted))
+        #expect(!EventKitAgendaStore.isKept(status: .confirmed, ownStatus: .declined))
+    }
+
     @Test func theRemindersCompletionDeliversFromEventKitsQueue() async {
         let delivered = await withCheckedContinuation { continuation in
             let completion = EventKitAgendaStore.remindersCompletion { reminders in
