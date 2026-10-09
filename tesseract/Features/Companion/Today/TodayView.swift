@@ -161,7 +161,7 @@ private struct TodayDayPage: View {
         let state = runtime.state
         let facts = DayFacts(
             snapshot: agenda.snapshot, areas: agenda.areas, inboxListID: agenda.inbox?.id,
-            now: now, mustDoID: state.mustDoID, plan: state.plan)
+            now: now, mustDoID: state.mustDoID, plan: state.plan, weekFocus: state.weekFocus)
         let timeline = TimelineBuilder.build(facts: facts)
         let isEvening = NowCardBuilder.isEvening(
             now, eveningMinutes: settings.companionEveningMinutes, calendar: facts.calendar)
@@ -178,7 +178,7 @@ private struct TodayDayPage: View {
         let motion: Animation? = reduceMotion ? nil : .smooth(duration: 0.25)
         ScrollView {
             VStack(alignment: .leading, spacing: TodayLayout.rhythm) {
-                TodayHeader(timeline: timeline, now: now)
+                TodayHeader(timeline: timeline, now: now, weekFocus: state.weekFocus)
                 TodayAccessNotice()
                 if width == .wide {
                     HStack(alignment: .top, spacing: TodayLayout.columnGap) {
@@ -220,6 +220,8 @@ private struct TodayDayPage: View {
 private struct TodayHeader: View {
     let timeline: TodayTimeline
     let now: Date
+    /// The week's one focus, kept in sight all week.
+    let weekFocus: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -230,6 +232,11 @@ private struct TodayHeader: View {
                         .dateTime.weekday(.wide).day().month(.wide))
                 )
                 .fontWeight(.semibold)
+                if let weekFocus {
+                    Text("· This week: \(weekFocus)")
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
                 Spacer()
                 if timeline.totalCount > 0 {
                     Text("\(timeline.doneCount) of \(timeline.totalCount) done")

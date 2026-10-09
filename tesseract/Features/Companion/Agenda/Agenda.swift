@@ -24,6 +24,9 @@ nonisolated struct AgendaSnapshot: Sendable, Equatable {
     var doneToday: [AgendaReminder]
     var lists: [AgendaList]
     var calendars: [AgendaCalendar]
+    /// Reminders completed in the last seven days, today included: the
+    /// week's look-back counts them.
+    var doneThisWeek: [AgendaReminder] = []
 
     static let empty = AgendaSnapshot(
         takenAt: .distantPast, access: .undetermined, events: [], open: [], doneToday: [],
@@ -125,11 +128,15 @@ final class Agenda {
         let endOfToday = calendar.date(byAdding: .day, value: 1, to: startOfToday) ?? now
         let events = store.events(from: startOfToday, to: endOfTomorrow)
         let open = await store.openReminders()
-        let done = await store.completedReminders(
-            from: startOfToday, to: day.end(calendar: calendar) ?? endOfToday)
+        // One read for the week; today's are the ones since its start.
+        let weekStart = calendar.date(byAdding: .day, value: -6, to: startOfToday) ?? startOfToday
+        let doneThisWeek = await store.completedReminders(
+            from: weekStart, to: day.end(calendar: calendar) ?? endOfToday)
+        let done = doneThisWeek.filter { ($0.completedAt ?? .distantPast) >= startOfToday }
         snapshot = AgendaSnapshot(
             takenAt: now, access: store.access, events: events, open: open, doneToday: done,
-            lists: store.reminderLists(), calendars: store.eventCalendars())
+            lists: store.reminderLists(), calendars: store.eventCalendars(),
+            doneThisWeek: doneThisWeek)
     }
 
     // MARK: Areas

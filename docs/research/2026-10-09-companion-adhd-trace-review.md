@@ -95,9 +95,10 @@ The trace measures the new behaviour: `cue.presented` / `cue.reaction`,
    requests now list 15 undated reminders, the Inbox and lists with dated work
    first, the rest summed by list. Mapping Areas (or marking lists Jarvis
    never plans from) would go further.
-3. **A weekly look-back.** Goals span weeks; the Companion sees one day at a
-   time. A Sunday moment over the week's completed reminders per Area, with one
-   focus for the next week, would carry goals across days.
+3. **A weekly look-back.** Built as part of the Evening Wrap-up on the week's
+   last day: the week's done reminders by Area and next week's one focus,
+   kept for the week. Next: let the focus pick a must-do when the plan has
+   none, and count the week's must-dos.
 4. **A leaner agenda listing.** The `agenda` tool prints every event's full id,
    calendar name and meeting URL (with its password); short handles and the
    URL's host would shrink every thread that asks about the day.

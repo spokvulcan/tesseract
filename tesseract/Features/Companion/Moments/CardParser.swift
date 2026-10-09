@@ -125,6 +125,8 @@ nonisolated enum CardParser {
         }
         let line: String?
         let leftovers: [Entry]?
+        let week: String?
+        let focus: String?
     }
 
     static func eveningWrapUp(
@@ -140,6 +142,15 @@ nonisolated enum CardParser {
             uniquingKeysWith: { first, _ in first })
         var card = FallbackCards.eveningWrapUp(facts: facts, leftovers: leftovers)
         card.line = line
+        if facts.isWeekReview {
+            card.week = cleanLine(decoded.week) ?? card.week
+            // A focus is a few words: anything longer is cut at a word.
+            card.focus = cleanLine(decoded.focus).map { focus in
+                guard focus.count > 80 else { return focus }
+                let cut = focus.prefix(80)
+                return String(cut[..<(cut.lastIndex(of: " ") ?? cut.endIndex)]) + "…"
+            }
+        }
         card.leftovers = card.leftovers.map { leftover in
             var leftover = leftover
             if let raw = suggested[leftover.reminderID],
@@ -253,6 +264,7 @@ nonisolated enum FallbackCards {
             leftovers: leftovers.map {
                 Leftover(reminderID: $0.id, title: $0.title, suggestion: .tomorrow)
             },
-            tomorrowFirst: first)
+            tomorrowFirst: first,
+            week: facts.isWeekReview ? MomentPrompts.weekLine(facts) : nil)
     }
 }

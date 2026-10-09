@@ -30,12 +30,17 @@ nonisolated struct DayFacts: Sendable, Equatable {
     /// Today's must-do and plan, as they stand.
     var mustDoID: String?
     var plan: [Placement]
+    /// Completed in the last seven days, today included.
+    var doneThisWeek: [AgendaReminder]
+    /// The week's one focus, set by the last week's look-back.
+    var weekFocus: String?
 
     init(
         now: Date, calendar: Calendar = .current, events: [AgendaEvent] = [],
         dueOrOverdue: [AgendaReminder] = [], dueTomorrow: [AgendaReminder] = [],
         undated: [AgendaReminder] = [], doneToday: [AgendaReminder] = [], areas: [Area] = [],
-        inboxListID: String? = nil, mustDoID: String? = nil, plan: [Placement] = []
+        inboxListID: String? = nil, mustDoID: String? = nil, plan: [Placement] = [],
+        doneThisWeek: [AgendaReminder] = [], weekFocus: String? = nil
     ) {
         self.now = now
         self.calendar = calendar
@@ -48,12 +53,15 @@ nonisolated struct DayFacts: Sendable, Equatable {
         self.inboxListID = inboxListID
         self.mustDoID = mustDoID
         self.plan = plan
+        self.doneThisWeek = doneThisWeek
+        self.weekFocus = weekFocus
     }
 
     /// Build from the Agenda's snapshot.
     init(
         snapshot: AgendaSnapshot, areas: [Area], inboxListID: String?, now: Date,
-        calendar: Calendar = .current, mustDoID: String? = nil, plan: [Placement] = []
+        calendar: Calendar = .current, mustDoID: String? = nil, plan: [Placement] = [],
+        weekFocus: String? = nil
     ) {
         let startOfToday = Self.startOfDay(for: now, calendar: calendar)
         let endOfToday = calendar.date(byAdding: .day, value: 1, to: startOfToday) ?? now
@@ -67,7 +75,24 @@ nonisolated struct DayFacts: Sendable, Equatable {
             },
             undated: snapshot.open.filter { $0.due == nil },
             doneToday: snapshot.doneToday, areas: areas, inboxListID: inboxListID,
-            mustDoID: mustDoID, plan: plan)
+            mustDoID: mustDoID, plan: plan, doneThisWeek: snapshot.doneThisWeek,
+            weekFocus: weekFocus)
+    }
+
+    /// The owner's day is the week's last (the day before the calendar's
+    /// first weekday): the Evening Wrap-up looks back on the week.
+    var isWeekReview: Bool {
+        let weekday = calendar.component(.weekday, from: startOfToday)
+        return weekday == (calendar.firstWeekday + 5) % 7 + 1
+    }
+
+    /// The week's done reminders by Area, the most first.
+    var doneThisWeekByArea: [(area: String, count: Int)] {
+        var counts: [String: Int] = [:]
+        for reminder in doneThisWeek { counts[areaName(of: reminder), default: 0] += 1 }
+        return counts.map { ($0.key, $0.value) }.sorted {
+            ($0.count, $1.area) > ($1.count, $0.area)
+        }
     }
 
     /// Midnight on the owner's day: before 04:00, the previous date's.

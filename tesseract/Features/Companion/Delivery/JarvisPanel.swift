@@ -669,6 +669,17 @@ private struct WrapUpContent: View {
                     }
                 }
             }
+            if wrapUp.week != nil || wrapUp.focus != nil {
+                VStack(alignment: .leading, spacing: MorningPlanContent.rowSpacing) {
+                    Text("This week").fontWeight(.semibold)
+                    if let week = wrapUp.week {
+                        Text(week).fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let focus = wrapUp.focus {
+                        Text("Next week: \(focus)").foregroundStyle(Color.accentColor)
+                    }
+                }
+            }
             if let first = wrapUp.tomorrowFirst {
                 Text("Tomorrow starts with \(first).").foregroundStyle(.secondary)
             }

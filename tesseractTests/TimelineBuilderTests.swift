@@ -273,6 +273,38 @@ struct CardParserTests {
         #expect(card.departures.first?.eventStart == TimelineBuilderTests.local(30, 13))
     }
 
+    @Test func theWeeksLookBackKeepsAShortFocusOnlyOnItsDay() {
+        let reply =
+            #"{"line": "A good week.", "leftovers": [], "week": "Steady work and the streak held.", "focus": "Send three applications and keep the evenings for the Companion work, every single day of it"}"#
+        guard
+            case .card(.eveningWrapUp(let sunday)) = CardParser.eveningWrapUp(
+                reply, facts: MomentPromptsTests.weekFacts(day: 4), leftovers: [])
+        else {
+            Issue.record("expected a wrap-up card")
+            return
+        }
+        #expect(sunday.week == "Steady work and the streak held.")
+        #expect(
+            sunday.focus
+                == "Send three applications and keep the evenings for the Companion work, every…")
+        guard
+            case .card(.eveningWrapUp(let saturday)) = CardParser.eveningWrapUp(
+                reply, facts: MomentPromptsTests.weekFacts(day: 3), leftovers: [])
+        else {
+            Issue.record("expected a wrap-up card")
+            return
+        }
+        #expect(saturday.week == nil)
+        #expect(saturday.focus == nil)
+    }
+
+    @Test func aWrapUpSavedBeforeTheLookBackStillLoads() throws {
+        let json = #"{"line": "Done.", "done": [], "leftovers": []}"#
+        let card = try JSONDecoder().decode(EveningWrapUpCard.self, from: Data(json.utf8))
+        #expect(card.week == nil)
+        #expect(card.focus == nil)
+    }
+
     @Test func aCardSavedBeforeDeparturesStillLoads() throws {
         let json = #"{"line": "Hi", "placements": [], "suggestions": []}"#
         let card = try JSONDecoder().decode(MorningPlanCard.self, from: Data(json.utf8))

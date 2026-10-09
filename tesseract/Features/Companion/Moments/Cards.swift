@@ -140,6 +140,37 @@ nonisolated struct EveningWrapUpCard: Sendable, Equatable, Codable {
     var leftovers: [Leftover]
     /// Tomorrow's first commitment ("09:30 Standup"), when there is one.
     var tomorrowFirst: String?
+    /// On the week's last day: a line on the week…
+    var week: String?
+    /// …and next week's one focus.
+    var focus: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case line, done, leftovers, tomorrowFirst, week, focus
+    }
+
+    init(
+        line: String, done: [String], leftovers: [Leftover], tomorrowFirst: String?,
+        week: String? = nil, focus: String? = nil
+    ) {
+        self.line = line
+        self.done = done
+        self.leftovers = leftovers
+        self.tomorrowFirst = tomorrowFirst
+        self.week = week
+        self.focus = focus
+    }
+
+    /// A card saved before the week's look-back still loads.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        line = try c.decode(String.self, forKey: .line)
+        done = try c.decode([String].self, forKey: .done)
+        leftovers = try c.decode([Leftover].self, forKey: .leftovers)
+        tomorrowFirst = try c.decodeIfPresent(String.self, forKey: .tomorrowFirst)
+        week = try c.decodeIfPresent(String.self, forKey: .week)
+        focus = try c.decodeIfPresent(String.self, forKey: .focus)
+    }
 }
 
 nonisolated struct Leftover: Sendable, Equatable, Hashable, Codable, Identifiable {

@@ -219,8 +219,17 @@ private struct JarvisWord: View {
             ForEach(reflection.tomorrow, id: \.self) { line in
                 Text("· \(line)").foregroundStyle(.secondary)
             }
-        case .eveningWrapUp, .triage:
-            // Their items wait below, under Needs you and Left from today.
+        case .eveningWrapUp(let wrapUp):
+            // Its leftovers wait below, under Left from today; the week's
+            // look-back says the week and next week's focus here.
+            if let week = wrapUp.week {
+                Text(week).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            if let focus = wrapUp.focus {
+                Text("Next week: \(focus)").foregroundStyle(.secondary)
+            }
+        case .triage:
+            // Its items wait below, under Needs you.
             EmptyView()
         }
     }

@@ -33,6 +33,10 @@ nonisolated enum MomentPrompts {
             lines.append("")
             lines.append("Areas: " + facts.areas.map(\.name).joined(separator: ", "))
         }
+        if let focus = facts.weekFocus {
+            lines.append("")
+            lines.append("This week's focus: \(focus)")
+        }
         if let carryOver, !carryOver.isEmpty {
             lines.append("")
             lines.append("Carried over from last night: \(carryOver)")
@@ -54,6 +58,10 @@ nonisolated enum MomentPrompts {
         lines.append(
             "Help the owner start the day. They have several goals across their Areas, not one focus. Put small tasks into the free time before the first meeting, and pick at most one must-do — the one thing that matters most today; it can sit anywhere in the day, even late."
         )
+        if let focus = facts.weekFocus {
+            lines.append(
+                "This week's focus: \(focus). When a task serves it, let it be the must-do.")
+        }
         lines.append("")
         lines += agendaLines(facts)
         if let free = facts.freeBeforeFirstEvent {
@@ -108,11 +116,28 @@ nonisolated enum MomentPrompts {
         if let first = facts.tomorrowEvents.first {
             lines.append("Tomorrow starts with: \(clock(first.start, facts)) \(first.title)")
         }
+        let review = facts.isWeekReview
+        if review {
+            lines.append("")
+            lines.append(
+                "It's the week's last day: look back on the week too. "
+                    + weekLine(facts)
+                    + (facts.weekFocus.map { " This week's focus was: \($0)." } ?? ""))
+        }
         lines.append("")
         lines.append("Reply with only this JSON, nothing before or after it:")
-        lines.append(
-            #"{"line": "<one warm sentence that notices what got done>", "leftovers": [{"id": "<id>", "suggest": "tomorrow" | "later" | "drop"}]}"#
-        )
+        if review {
+            lines.append(
+                #"{"line": "<one warm sentence that notices what got done>", "leftovers": [{"id": "<id>", "suggest": "tomorrow" | "later" | "drop"}], "week": "<one warm sentence on the week>", "focus": "<next week's one focus, a few words>"}"#
+            )
+            lines.append(
+                "\"focus\" is the one thing that matters most next week, from what the owner works toward — a few words, not a list."
+            )
+        } else {
+            lines.append(
+                #"{"line": "<one warm sentence that notices what got done>", "leftovers": [{"id": "<id>", "suggest": "tomorrow" | "later" | "drop"}]}"#
+            )
+        }
         lines.append(
             "Never call anything missed or failed. Suggest \"tomorrow\" for what still matters soon, \"later\" for what can wait undated, \"drop\" only for what no longer matters."
         )
@@ -191,6 +216,14 @@ nonisolated enum MomentPrompts {
             lines.append("Done today: " + facts.doneToday.map(\.title).joined(separator: "; "))
         }
         return lines
+    }
+
+    /// "This week: 23 done — Work 9, Daily 6, Duolingo 5."
+    static func weekLine(_ facts: DayFacts) -> String {
+        let total = facts.doneThisWeek.count
+        guard total > 0 else { return "This week: nothing checked off in Reminders." }
+        let areas = facts.doneThisWeekByArea.prefix(5).map { "\($0.area) \($0.count)" }
+        return "This week: \(total) done — \(areas.joined(separator: ", "))."
     }
 
     /// The most undated tasks a request lists.

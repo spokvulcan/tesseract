@@ -70,6 +70,56 @@ struct MomentPromptsTests {
         #expect(lines.contains("- …and 7 more, in Movies"))
     }
 
+    /// A Monday-first week, so Sunday is the week's last day whatever the
+    /// machine's locale.
+    static var mondayFirst: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.firstWeekday = 2
+        return calendar
+    }
+
+    static func weekFacts(day: Int, focus: String? = nil) -> DayFacts {
+        let calendar = mondayFirst
+        let at = { (d: Int, h: Int) in
+            calendar.date(from: DateComponents(year: 2026, month: 10, day: d, hour: h))!
+        }
+        func done(_ id: String, list: String) -> AgendaReminder {
+            AgendaReminder(
+                id: id, title: id, listID: list, listTitle: list.capitalized, isCompleted: true,
+                completedAt: at(day - 1, 10))
+        }
+        return DayFacts(
+            now: at(day, 21), calendar: calendar,
+            doneThisWeek: [
+                done("a", list: "work"), done("b", list: "work"), done("c", list: "daily"),
+            ],
+            weekFocus: focus)
+    }
+
+    @Test func onTheWeeksLastDayTheWrapUpLooksBackAndAsksForAFocus() {
+        // Sunday 4 October.
+        let sunday = MomentPrompts.eveningWrapUp(
+            facts: Self.weekFacts(day: 4, focus: "the job search"), leftovers: [])
+        #expect(sunday.contains("It's the week's last day: look back on the week too."))
+        #expect(sunday.contains("This week: 3 done — Work 2, Daily 1."))
+        #expect(sunday.contains("This week's focus was: the job search."))
+        #expect(sunday.contains(#""focus": "<next week's one focus, a few words>""#))
+        // Saturday: an ordinary evening.
+        let saturday = MomentPrompts.eveningWrapUp(facts: Self.weekFacts(day: 3), leftovers: [])
+        #expect(!saturday.contains("week's last day"))
+        #expect(!saturday.contains(#""focus""#))
+    }
+
+    @Test func theWeeksFocusOpensTheDayAndGuidesThePlan() {
+        let facts = Self.weekFacts(day: 5, focus: "the job search")
+        #expect(
+            MomentPrompts.dayOpening(facts: facts, profile: [], carryOver: nil)
+                .contains("This week's focus: the job search"))
+        #expect(
+            MomentPrompts.morningPlan(facts: facts).contains(
+                "This week's focus: the job search. When a task serves it, let it be the must-do."))
+    }
+
     @Test func theMorningPlanAsksForTheCardWithIDs() {
         let text = MomentPrompts.morningPlan(facts: Self.facts)
         #expect(text.hasPrefix("[Morning Plan]"))

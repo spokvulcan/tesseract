@@ -253,7 +253,8 @@ nonisolated struct DaySnapshot: Sendable, Equatable {
     func facts(state: DayState) -> DayFacts {
         DayFacts(
             snapshot: agenda, areas: areas, inboxListID: inboxListID, now: now,
-            calendar: calendar, mustDoID: state.mustDoID, plan: state.plan)
+            calendar: calendar, mustDoID: state.mustDoID, plan: state.plan,
+            weekFocus: state.weekFocus)
     }
 
     /// Minutes after local midnight.
@@ -351,6 +352,10 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     /// When the owner sat down to start this day (the first sit-down after
     /// the night): for them, the morning's end of quiet hours is over.
     var satDownAt: Date?
+    /// The week's one focus, from the last week's look-back, and when it was
+    /// set (carried a week).
+    var weekFocus: String?
+    var weekFocusSetAt: Date?
     /// A moment the app quit in the middle of, until the engine picks it up.
     var interrupted: MomentKind?
     /// The Morning Plan was run again once after a quit cut it short.
@@ -368,7 +373,8 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         case running, cards, mustDoID, plan, carryOver, carryOverForNextDay, ledger, agents
         case agentSpokenAt, lastTickAt, lastTriageAt, whereYouWere, deferred, firedNudgeIDs
         case cuedSteps, startedSteps, interrupted, morningPlanResumed, windDownAt
-        case draft, draftForNextDay, departures, heldSteps, satDownAt
+        case draft, draftForNextDay, departures, heldSteps, satDownAt, weekFocus
+        case weekFocusSetAt
     }
 
     /// Every field but the day is optional on disk, so a state saved by an
@@ -406,6 +412,8 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         departures = (try? c.decodeIfPresent([Departure].self, forKey: .departures)) ?? []
         heldSteps = (try? c.decodeIfPresent(Set<String>.self, forKey: .heldSteps)) ?? []
         satDownAt = try? c.decodeIfPresent(Date.self, forKey: .satDownAt)
+        weekFocus = try? c.decodeIfPresent(String.self, forKey: .weekFocus)
+        weekFocusSetAt = try? c.decodeIfPresent(Date.self, forKey: .weekFocusSetAt)
     }
 
     /// The day as a relaunch finds it: the moment in flight never finished,
@@ -428,6 +436,13 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         next.draft = draftForNextDay
         // Quiet hours that begin just before 04:00 are still the same night.
         next.windDownAt = windDownAt
+        // The week's focus holds until the next look-back (a week, a day's grace).
+        if let setAt = weekFocusSetAt, let start = day.date(),
+            start.timeIntervalSince(setAt) < 8 * 24 * 3600
+        {
+            next.weekFocus = weekFocus
+            next.weekFocusSetAt = setAt
+        }
         next.ledger = ledger
         next.agents = agents
         next.agentSpokenAt = agentSpokenAt

@@ -312,6 +312,46 @@ struct DayEngineMomentTests {
     }
 }
 
+struct WeekFocusTests {
+
+    @Test func theLookBacksFocusRidesTheWeekAndThenGoes() throws {
+        var state = DayState(day: DayKey(rawValue: "2026-10-04"))
+        state.syncedNudgeIDs = []
+        let reply =
+            #"{"line": "A good week.", "leftovers": [], "week": "Steady.", "focus": "the job search"}"#
+        let measure = MomentMeasure(
+            promptTokens: 1000, outputTokens: 100, prefillSeconds: 1, generateSeconds: 2,
+            latencySeconds: 3, hitCap: false, modelID: "m")
+        let calendar = MomentPromptsTests.mondayFirst
+        let at = { (d: Int, h: Int) in
+            calendar.date(from: DateComponents(year: 2026, month: 10, day: d, hour: h))!
+        }
+        var agenda = AgendaSnapshot.empty
+        agenda.access = .full
+        func snapshot(_ now: Date) -> DaySnapshot {
+            DaySnapshot(
+                now: now, calendar: calendar, settings: DaySettings(), agenda: agenda,
+                ownerPresent: false)
+        }
+        state.running = .eveningWrapUp
+        let accepted = DayEngine.decide(
+            .momentOutcome(
+                MomentRequest(kind: .eveningWrapUp, trigger: .eveningTime, text: "x"),
+                .reply(reply, measure)),
+            snapshot: snapshot(at(4, 21)), state: state)
+        #expect(accepted.state.weekFocus == "the job search")
+        // Monday and the rest of the week: it holds.
+        let monday = DayEngine.decide(.tick, snapshot: snapshot(at(5, 9)), state: accepted.state)
+        #expect(monday.state.weekFocus == "the job search")
+        #expect(monday.state.day == DayKey(rawValue: "2026-10-05"))
+        // Ten days on, with no new look-back: it is gone.
+        var later = monday.state
+        later.day = DayKey(rawValue: "2026-10-13")
+        let gone = DayEngine.decide(.tick, snapshot: snapshot(at(14, 9)), state: later)
+        #expect(gone.state.weekFocus == nil)
+    }
+}
+
 struct DayStateStoreTests {
 
     @Test @MainActor func aSavedDayComesBackAndOldFilesStillLoad() throws {

@@ -359,6 +359,13 @@ the owner must remember to read does not. What changed:
   "1h 5m"), refreshed on its own clock, with the step in the tooltip; it
   goes back to the glyph alone when the step ends or is done
   (`DayEngine.focus`, pushed through `CompanionPresence`).
+- **A week's focus.** Goals span weeks; the Companion saw one day at a
+  time. On the week's last day the Evening Wrap-up also looks back on the
+  week (the Agenda's snapshot now holds the week's completed reminders, read
+  in the same EventKit query as today's) and may answer `week` and `focus`:
+  next week's one thing, in a few words. Code keeps the focus a week
+  (`DayState.weekFocus`); it opens each day's thread, the Morning Plan is
+  asked to let the must-do serve it, and Today shows it beside the date.
 - **An online meeting reads as its service.** A Zoom event's location is
   its link with the password; it showed under the event on the Day Line, in
   its nudge, in the agenda tool and in the plan's list of events to leave

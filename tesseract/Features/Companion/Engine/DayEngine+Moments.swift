@@ -278,8 +278,14 @@ nonisolated extension DayEngine {
             if let mustDo = card.mustDoID { state.mustDoID = mustDo }
             if !card.placements.isEmpty { state.plan = card.placements }
             if !card.departures.isEmpty { state.departures = card.departures }
-        case .eveningWrapUp:
+        case .eveningWrapUp(let card):
             state.eveningWrapUpAt = snapshot.now
+            // The week's look-back names next week's focus: it rides each
+            // day's opening and the plan until the next one.
+            if let focus = card.focus {
+                state.weekFocus = focus
+                state.weekFocusSetAt = snapshot.now
+            }
         case .reflection(let card):
             state.nightReflectionAt = snapshot.now
             state.carryOverForNextDay = card.carryOver

@@ -313,6 +313,8 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
         case .evening, .night:
             state.morningPlanAt = Self.at(9)
             state.eveningWrapUpAt = Self.at(21)
+            state.weekFocus = "Ship the Companion"
+            state.weekFocusSetAt = Self.at(21)
             state.nightReflectionAt = Self.at(21, 50)
             state.cards = [
                 DayCard(
