@@ -35,7 +35,12 @@ final class ExtensionHost {
         extensions.first { $0.path == path }
     }
 
-    /// Collect tools from all extensions in registration order.
+    /// Collect tools from all extensions in registration order, each
+    /// extension's in name order. An extension hands its tools over as a
+    /// dictionary, whose order Swift seeds per process: walked as is, the
+    /// system prompt's tool list — and every cached prefix after it — changed
+    /// with each relaunch (the browser tools reordered, and no snapshot past
+    /// them was ever restored).
     /// Deduplication keys off `tool.name` (the canonical identity).
     /// First registration wins on name conflicts (duplicates log a warning).
     func aggregatedTools() -> [AgentToolDefinition] {
@@ -43,7 +48,7 @@ final class ExtensionHost {
         var result: [AgentToolDefinition] = []
 
         for ext in extensions {
-            for (key, tool) in ext.tools {
+            for (key, tool) in ext.tools.sorted(by: { $0.key < $1.key }) {
                 if key != tool.name {
                     Log.agent.warning(
                         "[ExtensionHost] Key/name mismatch in '\(ext.path)': key='\(key)' name='\(tool.name)' — using tool.name"

@@ -101,21 +101,24 @@ The trace measures the new behaviour: `cue.presented` / `cue.reaction`,
 
 ## Recommendations not built
 
-1. **Run Triage and the Evening Wrap-up on a lean context.** Both judge what
-   their request already holds, yet read the whole Day Thread; after a relaunch
-   that is a full prefill of 8–27k tokens. A short conversation (system prompt,
-   Profile, the request) would share the cached root and cost seconds. This
-   revisits ADR-0080 decision 4 and needs the owner's call. Not the cause of
-   the cold prefills: the Day Opening is committed to the thread once, so it
-   does not change across a relaunch, and the SSD prefix cache is on by
-   default. Its manifest (metadata only) shows where it stops: of the 18
-   snapshots on disk (4–8 October), the 4.4k-token system root and two
-   branch points were read back after a relaunch, but none of the nine leaf
-   snapshots written at the end of a moment's reply (3–20k tokens) ever was
-   — each one's last access is its creation. So a relaunched thread restores
-   the root and re-reads everything after it. Why the next request's path
-   misses the leaf (a reply rendered differently from how it was generated,
-   for one) is for the prefix cache's own investigation, not the Companion's.
+1. **Cold prefills after a relaunch: found and fixed.** The Day Opening is
+   committed once and the SSD prefix cache is on, yet a relaunched thread
+   restored at most a shallow branch point: of the 18 snapshots on disk
+   (4–8 October), no leaf written at the end of a moment's reply was ever read
+   back. The cause was the system prompt itself: the twelve `browser.*` MCP
+   tools reached it in Swift Dictionary order, which Swift seeds per process,
+   so after each relaunch the request's tokens left everything on disk at
+   token 2088, ahead of the 4.4k-token system root and every leaf. Past the
+   system block the threads matched exactly: the stranded leaves would have
+   supplied 12,629 of 12,841, 11,310 of 11,518 and 11,664 of 12,390 tokens.
+   `ExtensionHost.aggregatedTools()` now walks each extension's tools in name
+   order (`ExtensionToolOrderTests`). A lean context for Triage and the
+   Evening Wrap-up (ADR-0080 decision 4) is no longer needed for this; it
+   would still need the owner's call. Two follow-ups for the prefix cache:
+   the emitted-path index is in memory only, so a reply stored under the
+   model's own token split would still miss after a relaunch; and the agent
+   route resolves `preservesThinking` without the model's declared flags, so
+   each moment's leaf is rebuilt by re-reading the whole reply.
 2. **Keep someday lists out of the plan's candidates.** Partly done: the
    requests now list 15 undated reminders, the Inbox and lists with dated work
    first, the rest summed by list. Mapping Areas (or marking lists Jarvis
