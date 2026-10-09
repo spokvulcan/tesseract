@@ -1885,8 +1885,9 @@ through; when the Mac is awake and on power before the owner sits down, the plan
 is made ahead and comes forward at the sit-down. The first sit-down is the
 owner starting the day, so the plan meets them on the panel even before quiet
 hours end. For an event in person it sets a time to leave (Jarvis knows the
-bus takes half an hour; the calendar doesn't): a Nudge fires then, and the Now
-Card says "Leave at 12:30" as the event comes up. A plan the app quit in the middle of runs again once when the
+bus takes half an hour; the calendar doesn't): a Nudge fires then, the Now
+Card says "Leave at 12:30" as the event comes up, and the Day Line shows it
+under the event. A plan the app quit in the middle of runs again once when the
 Companion next comes on (not once the owner closed it, nor in the evening).
 Skipping it costs nothing and nothing nags.
 

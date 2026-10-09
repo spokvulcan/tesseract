@@ -341,8 +341,9 @@ the owner must remember to read does not. What changed:
   and may answer `leave: [{event, at}]` for one in person; code keeps a
   departure only for a listed event, before it starts, at most three hours
   ahead and still to come. Each becomes a Nudge the OS keeps ("Time to leave
-  for Class", `nudge.leave.*`), and the Now Card says "Leave at 12:30" as the
-  event comes up — free time ends at the departure, not the event.
+  for Class", `nudge.leave.*`), the Now Card says "Leave at 12:30" as the
+  event comes up — free time ends at the departure, not the event — and the
+  Day Line shows it under the event.
 - **The trace measures it**: `cue.presented` (start or end, how late, the
   slot's length, the must-do) and `cue.reaction` (the choice, the time to
   react).

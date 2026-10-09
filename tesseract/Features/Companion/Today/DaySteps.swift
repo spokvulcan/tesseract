@@ -314,11 +314,20 @@ private struct AreaTag: View {
 // MARK: - Steps
 
 private struct EventStep: View {
+    @Environment(CompanionRuntime.self) private var runtime
     let event: AgendaEvent
     let isPast: Bool
     let isAllDay: Bool
     let style: TodayLayout.StepStyle
     let line: DayLine?
+
+    /// When the plan says to leave for it, while it is still ahead.
+    private var leave: Departure? {
+        guard !isPast else { return nil }
+        return runtime.state.departures.first {
+            $0.eventID == event.id && $0.eventStart == event.start
+        }
+    }
 
     var body: some View {
         StepRow(line: line) {
@@ -337,6 +346,10 @@ private struct EventStep: View {
                     Text(event.title)
                         .fontWeight(.medium)
                         .foregroundStyle(isPast ? .secondary : .primary)
+                    if style == .table, let leave {
+                        Text("Leave at \(AgendaTime.clock(leave.at))")
+                            .foregroundStyle(Color.accentColor)
+                    }
                     if style == .table, let location = event.location, !location.isEmpty {
                         Text(location).foregroundStyle(.secondary).lineLimit(1)
                     }
@@ -354,6 +367,7 @@ private struct EventStep: View {
     private var details: String {
         var parts = [event.calendarTitle]
         if !isAllDay { parts.append("until \(AgendaTime.clock(event.end))") }
+        if let leave { parts.append("leave at \(AgendaTime.clock(leave.at))") }
         if let location = event.location, !location.isEmpty { parts.append(location) }
         return parts.joined(separator: " · ")
     }

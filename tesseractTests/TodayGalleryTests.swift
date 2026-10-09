@@ -267,6 +267,11 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
             state.morningPlanAt = Self.at(8, 15)
             state.mustDoID = "adr"
             state.plan = [Placement(reminderID: "anna", start: Self.at(13), minutes: 30)]
+            state.departures = [
+                Departure(
+                    eventID: "c", title: "Climbing", at: Self.at(18), eventStart: Self.at(18, 30),
+                    location: "Boulderhalle")
+            ]
             state.agents = [
                 AgentSignal(
                     id: "session-1", kind: .waiting, agent: "Claude Code", project: "tesseract",
