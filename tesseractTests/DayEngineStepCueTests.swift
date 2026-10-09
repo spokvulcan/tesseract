@@ -35,7 +35,8 @@ struct DayEngineStepCueTests {
     static func snapshot(
         at now: Date, present: Bool = true, frontmost: String? = "com.apple.Safari",
         game: Bool = false, panelUp: Bool = false, open: [AgendaReminder]? = nil,
-        done: [AgendaReminder] = [], events: [AgendaEvent] = [], quiet: (Int, Int)? = nil
+        done: [AgendaReminder] = [], events: [AgendaEvent] = [], quiet: (Int, Int)? = nil,
+        stepCues: Bool = true
     ) -> DaySnapshot {
         var agenda = AgendaSnapshot.empty
         agenda.access = .full
@@ -43,6 +44,7 @@ struct DayEngineStepCueTests {
         agenda.doneToday = done
         agenda.events = events
         var settings = DaySettings()
+        settings.stepCues = stepCues
         if let quiet {
             settings.quietStartMinutes = quiet.0
             settings.quietEndMinutes = quiet.1
@@ -151,6 +153,9 @@ struct DayEngineStepCueTests {
         QuietRow(
             name: "the slot started too long ago (the Mac slept)",
             snapshot: snapshot(at: local(11, 21))),
+        QuietRow(
+            name: "the owner switched Step Cues off",
+            snapshot: snapshot(at: local(11, 10), stepCues: false)),
     ]
 
     @Test(arguments: quietRows)

@@ -32,7 +32,7 @@ nonisolated extension DayEngine {
     // MARK: - The cue
 
     static func stepCueIfDue(snapshot: DaySnapshot, state: inout DayState) -> [DayEffect] {
-        guard !snapshot.panelUp,
+        guard snapshot.settings.stepCues, !snapshot.panelUp,
             DeliveryLadder.rungs(for: .normal, snapshot: snapshot).contains(.panel),
             !inMeeting(snapshot)
         else { return [] }

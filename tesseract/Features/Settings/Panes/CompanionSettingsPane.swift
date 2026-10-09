@@ -66,8 +66,14 @@ struct CompanionSettingsPane: View {
                 Stepper(
                     "Nudge \(settings.companionNudgeLeadMinutes) min before events",
                     value: $settings.companionNudgeLeadMinutes, in: 0...60, step: 5)
+                Toggle("Bring Planned Steps When They Start", isOn: $settings.companionStepCues)
+                    .disabled(!settings.companionHeartbeatEnabled)
             } header: {
                 Text("Your Day")
+            } footer: {
+                Text(
+                    "When a step Jarvis planned (or you placed) starts, it comes to you on the Jarvis panel — Start, In 15 min, Tomorrow or Done — and one you started checks in when its time is up."
+                )
             }
 
             Section {

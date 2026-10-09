@@ -265,6 +265,9 @@ nonisolated struct DaySettings: Sendable, Equatable {
     var quietEndMinutes: Int = 8 * 60
     /// Say when tomorrow starts, once, as quiet hours begin.
     var windDown: Bool = true
+    /// Put a planned step on the panel at its start, and check in at the end
+    /// of one the owner started.
+    var stepCues: Bool = true
     /// The owner's notification rules.
     var rules: [TriageRule] = []
 

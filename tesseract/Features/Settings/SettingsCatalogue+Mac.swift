@@ -145,6 +145,9 @@ extension SettingsCatalogue {
     /// Whether Jarvis says when tomorrow starts, once, as quiet hours begin
     /// with the owner still at the Mac.
     static let companionWindDown = Setting.bool("companionWindDown", default: true)
+    /// Whether a planned step comes to the owner on the Jarvis Panel when its
+    /// slot starts, and checks in at its end once started (Step Cues).
+    static let companionStepCues = Setting.bool("companionStepCues", default: true)
     /// The owner's notification rules (`[TriageRule]`, JSON), newest first.
     static let companionTriageRulesJSON = Setting.string("companionTriageRulesJSON", default: "[]")
     /// The Day Thread's compaction ceiling, in tokens.

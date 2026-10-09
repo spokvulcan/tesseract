@@ -232,7 +232,7 @@ final class CompanionRuntime {
             speaks: settings.companionSpeaks,
             quietStartMinutes: settings.companionQuietStartMinutes,
             quietEndMinutes: settings.companionQuietEndMinutes,
-            windDown: settings.companionWindDown,
+            windDown: settings.companionWindDown, stepCues: settings.companionStepCues,
             rules: rules)
     }
 

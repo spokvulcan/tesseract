@@ -1854,7 +1854,8 @@ Done, 15 more min (it runs longer and checks in again), Tomorrow; while it
 runs, no other start interrupts it. Built by code, no model; each start and
 end once, within ten minutes; never while away, in quiet hours, a call, a
 game or a meeting, nor over a panel that is up; a slot whose reminder rings
-at the same minute is left to Reminders. Closing it changes nothing.
+at the same minute is left to Reminders. Closing it changes nothing; a toggle
+in Settings (Your Day) turns Step Cues off.
 _Avoid_: reminder (Reminders' own alarm), nudge (an event's OS notification).
 
 **Day Engine**:
