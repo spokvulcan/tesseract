@@ -72,7 +72,7 @@ struct CompanionSettingsPane: View {
                 Text("Your Day")
             } footer: {
                 Text(
-                    "When a step Jarvis planned (or you placed) starts, it comes to you on the Jarvis panel — Start, In 15 min, Tomorrow or Done — and one you started checks in when its time is up."
+                    "When a step Jarvis planned (or you placed) starts, it comes to you on the Jarvis panel — Start, In 15 min, Tomorrow or Done — and one you started checks in when its time is up. If you're away, it waits for you. The menu bar counts down the step you're on, and the last half hour before your next event."
                 )
             }
 
