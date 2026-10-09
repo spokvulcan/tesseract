@@ -221,11 +221,13 @@ struct NowCardTests {
         let card = Self.card(facts)
         #expect(card.headline == "All done for today.")
         #expect(card.detail == "Next: Work, tomorrow at 09:00.")
-        // Past midnight it is still the same day, and tomorrow still starts with work.
+        // Past midnight it is still the same day, and tomorrow still starts
+        // with work — now within half a day, it says how far off.
         var night = facts
         night.now = Self.local(31, 0, 40)
         #expect(Self.card(night).headline == "All done for today.")
-        #expect(Self.card(night).detail == "Next: Work, tomorrow at 09:00.")
+        #expect(
+            Self.card(night).detail == "Next: Work, tomorrow at 09:00 — 8 h 20 min from now.")
         // With nothing on tomorrow, it says so.
         var free = facts
         free.events = [TimelineBuilderTests.standup]

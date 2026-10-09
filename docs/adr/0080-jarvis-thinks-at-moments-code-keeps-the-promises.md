@@ -353,6 +353,9 @@ the owner must remember to read does not. What changed:
   hours that start at night, within their first hour and while they hold,
   once a night (across the 04:00 rollover too); never in a game or a call; a
   setting beside quiet hours turns it off (`night.wind-down` in the trace).
+  A done day's Now Card says it too, whenever Today is looked at within half
+  a day of tomorrow's start ("Next: Put the bins out, tomorrow at 07:30 —
+  6 h 50 min from now.").
 - **After a night past midnight, the plan keeps the day light.** The
   wind-down speaks as quiet hours begin; the morning after a late night still
   got a full plan, with commitments from 07:15. When the owner was last at

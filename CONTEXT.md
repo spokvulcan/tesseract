@@ -1784,7 +1784,8 @@ _Avoid_: dashboard, Mission Control (retired), home screen (unqualified).
 The top of Today: the step the day is on (the meeting under way, the task
 whose slot is now — with how much of it is left, in words and a short bar
 that drains like a visual timer — a task that slid, free time and what fits
-in it, the next step, what's left, or a done day and how tomorrow starts; in
+in it, the next step, what's left, or a done day and how tomorrow starts —
+within half a day, how far off that is; in
 the evening it closes the day — what is still ahead tonight, else what got
 done and what is still open, never a slid task at the top) with one-click
 offers that move it on (Done, Start now, "Do it at 16:30", Tomorrow, Plan my

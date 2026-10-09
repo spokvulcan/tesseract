@@ -197,7 +197,7 @@ nonisolated enum NowCardBuilder {
                 // Wrapped up, what's open has its place: look ahead instead.
                 let detail =
                     context.wrappedUp
-                    ? lookAhead(timeline.tomorrow, clock: clock)
+                    ? lookAhead(timeline.tomorrow, now: now, clock: clock)
                     : done > 0 ? "Still open: \(names)\(more)." : "\(names)\(more)."
                 let count = "\(done) of \(timeline.totalCount) done today"
                 return NowCard(
@@ -300,16 +300,21 @@ nonisolated enum NowCardBuilder {
                 detail: "Add a task with + below, or ask Jarvis to plan with you.", actions: [])
         }
         return NowCard(
-            headline: "All done for today.", detail: lookAhead(timeline.tomorrow, clock: clock),
-            actions: [])
+            headline: "All done for today.",
+            detail: lookAhead(timeline.tomorrow, now: now, clock: clock), actions: [])
     }
 
     /// How tomorrow begins: its first step, steps below on the Day Line.
-    private static func lookAhead(_ tomorrow: TomorrowTimeline, clock: (Date) -> String)
-        -> String
-    {
+    /// How tomorrow starts. Within half a day, how far off that is too — the
+    /// wind-down's word, there whenever Today is looked at late.
+    private static func lookAhead(
+        _ tomorrow: TomorrowTimeline, now: Date, clock: (Date) -> String
+    ) -> String {
         if let first = tomorrow.rows.first {
-            return "Next: \(title(of: first)), tomorrow at \(clock(first.start))."
+            let next = "Next: \(title(of: first)), tomorrow at \(clock(first.start))"
+            let minutes = Int(first.start.timeIntervalSince(now) / 60)
+            guard minutes > 0, minutes < 12 * 60 else { return next + "." }
+            return next + " — \(MomentPrompts.minutesText(minutes)) from now."
         }
         if !tomorrow.allDayEvents.isEmpty {
             return "Tomorrow: " + tomorrow.allDayEvents.map(\.title).joined(separator: ", ") + "."
