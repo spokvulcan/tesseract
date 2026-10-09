@@ -4,8 +4,10 @@
 //
 //  The Jarvis Panel's content, rendered with the app's view over fixture
 //  cards — a Step Cue (one for the must-do, with a long title, one at the
-//  end of a started step, both shown late, the owner back from away, and
-//  the word a step marked done gets), the Morning Plan with its steps over the
+//  end of a started step, both shown late, the owner back from away, the
+//  word a step marked done gets, and the five-minute start offered once a
+//  step was put off twice, with its check-in), the Morning Plan with its
+//  steps over the
 //  Today gallery's morning, the Evening Wrap-up with its leftovers, and a
 //  Breakpoint card — each at the height the panel fits to it. With
 //  PANEL_GALLERY_DIR set (TEST_RUNNER_PANEL_GALLERY_DIR through xcodebuild),
@@ -36,6 +38,8 @@ struct JarvisPanelGalleryTests {
         case stepCueLate
         case stepCheckInLate
         case stepDone
+        case stepCueSmall
+        case stepCheckInSmall
         case morningPlan
         case eveningWrapUp
         case breakpoint
@@ -89,6 +93,16 @@ struct JarvisPanelGalleryTests {
                     reminderID: "adr", title: "Write the cache ADR", start: Self.at(13, 45),
                     minutes: 75, areaName: "Work", isMustDo: true,
                     next: "Design review at 15:00", phase: .end)
+            case .stepCueSmall:
+                model.cue = StepCue(
+                    reminderID: "letter", title: "Write to the case worker about the bus ticket",
+                    start: Self.at(11, 40), minutes: 20, areaName: "Inbox", isMustDo: false,
+                    next: nil, putOff: 2)
+            case .stepCheckInSmall:
+                model.cue = StepCue(
+                    reminderID: "letter", title: "Write to the case worker about the bus ticket",
+                    start: Self.at(11, 41), minutes: 5, areaName: "Inbox", isMustDo: false,
+                    next: nil, phase: .end, small: true)
             case .morningPlan:
                 model.card = TodayFixture.morning.state.cards.first
             case .eveningWrapUp:

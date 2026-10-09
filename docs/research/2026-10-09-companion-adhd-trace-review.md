@@ -69,6 +69,7 @@ the ideas the changes lean on; it makes no claims beyond them.
 |---|---|
 | 3 | **Step Cue**: a planned slot comes to the owner on the Jarvis Panel at its start (Start, In 15 min, Tomorrow, Done); a started one checks in at its end; no start interrupts it, a held start is cued once the owner is free |
 | 3 | A cue that came due while the owner was away, in a meeting or behind another panel is shown late when they can see it ("Still time for", "How did it go?"), instead of lapsing after ten minutes |
+| 3 | A step put off twice is offered as five minutes ("Just five minutes?"), and five minutes in the check-in asks to keep going |
 | 2 | The Morning Plan and the Evening Wrap-up are whole on the panel (steps, tips, leftovers with their choices); the panel shows the live card and fits its content; Looks Good keeps the card instead of dismissing it |
 | 4 | The Morning Plan meets the first sit-down on the panel, quiet hours or not; Step Cues follow after an early sit-down |
 | 1 | A quiet Breakpoint no longer takes Jarvis's word; it is titled "While you were away", so the greeting is said once |

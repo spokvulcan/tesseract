@@ -11,6 +11,10 @@
 //  15 more min, Tomorrow. Help lands at the moment of doing, not in a list
 //  the owner has to remember to read, and a started step never just slides.
 //
+//  Starting is the hard part: a step put off twice ("In 15 min") is offered
+//  as five minutes ("Start 5 min"), and five minutes in, the check-in asks
+//  to keep going.
+//
 //  No model. Each start and each end is cued once, as soon as the owner can
 //  see it: never while they are away, in quiet hours, a call, a game or a
 //  meeting, never over a panel they haven't closed, and nothing while a step
@@ -31,6 +35,8 @@ nonisolated extension DayEngine {
     /// "In 15 min" moves a slot this far; "15 more min" makes it this much
     /// longer.
     static let stepLaterMinutes = 15
+    /// "Start 5 min": a step put off twice is offered this small a start.
+    static let smallStartMinutes = 5
 
     // MARK: - The cue
 
@@ -134,7 +140,9 @@ nonisolated extension DayEngine {
             reminderID: task.id, title: task.title, start: slot.start, minutes: slot.minutes,
             areaName: facts.areaName(of: task), isMustDo: state.mustDoID == task.id,
             next: nextStep(after: slot, facts: facts), phase: phase,
-            late: now.timeIntervalSince(moment) >= stepCueLate)
+            late: now.timeIntervalSince(moment) >= stepCueLate,
+            putOff: state.putOff[task.id] ?? 0,
+            small: state.smallStarts.contains(StepCue.key(slot)))
     }
 
     private static func end(of slot: Placement) -> Date {
@@ -244,9 +252,19 @@ nonisolated extension DayEngine {
             if let slot = moveSlot(reminderID, to: minute, state: &state) {
                 markStartedIfNow(slot, snapshot: snapshot, state: &state)
             }
+        case .startSmall:
+            // Five minutes from now; its end asks to keep going.
+            if let index = state.plan.firstIndex(where: { $0.reminderID == reminderID }) {
+                state.plan[index].minutes = smallStartMinutes
+            }
+            if let slot = moveSlot(reminderID, to: minute, state: &state) {
+                markStartedIfNow(slot, snapshot: snapshot, state: &state)
+                state.smallStarts.insert(StepCue.key(slot))
+            }
         case .later:
             let later = minute.addingTimeInterval(TimeInterval(stepLaterMinutes * 60))
             _ = moveSlot(reminderID, to: later, state: &state)
+            state.putOff[reminderID, default: 0] += 1
         case .extend:
             // A quarter of an hour on from now, or from its end if that is
             // still ahead: a late answer doesn't make it already over.
@@ -255,6 +273,8 @@ nonisolated extension DayEngine {
                 let from = max(end(of: slot), minute)
                 let until = from.addingTimeInterval(TimeInterval(stepLaterMinutes * 60))
                 state.plan[index].minutes = Int(until.timeIntervalSince(slot.start) / 60)
+                // Going on past five minutes: no longer a small start.
+                state.smallStarts.remove(StepCue.key(slot))
             }
         case .tomorrow:
             state.plan.removeAll { $0.reminderID == reminderID }

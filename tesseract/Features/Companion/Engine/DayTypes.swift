@@ -112,6 +112,9 @@ nonisolated struct MenuBarClock: Sendable, Equatable {
 nonisolated enum StepChoice: String, Sendable, Equatable {
     /// Doing it now: the slot starts this minute.
     case start
+    /// Just five minutes, then decide: offered once a step was put off
+    /// twice. The slot starts this minute, five minutes long.
+    case startSmall
     /// Not yet: the slot moves a quarter of an hour on, and is cued again then.
     case later
     /// Not finished: the slot runs a quarter of an hour longer, and checks in
@@ -147,6 +150,14 @@ nonisolated struct StepCue: Sendable, Equatable {
     /// Shown well after its moment — the owner was away, busy or behind
     /// another panel — so it says so ("Still time for", "How did it go?").
     var late = false
+    /// How often today the owner put this task off ("In 15 min"): from the
+    /// second time, its start is offered as five minutes.
+    var putOff = 0
+    /// A five-minute start ("Start 5 min"): its end asks to keep going.
+    var small = false
+
+    /// The start is offered small: starting is the hard part.
+    var offersSmallStart: Bool { phase == .start && putOff >= 2 }
 
     var end: Date { start.addingTimeInterval(TimeInterval(minutes * 60)) }
 
@@ -377,6 +388,10 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     /// Slots the owner started (Start on a cue, Start now on Today), by
     /// `StepCue.key`: their end checks in.
     var startedSteps: Set<String> = []
+    /// How often today each task was put off on its cue ("In 15 min").
+    var putOff: [String: Int] = [:]
+    /// Five-minute starts, by `StepCue.key`: their end asks to keep going.
+    var smallStarts: Set<String> = []
     /// The cue on the panel now, by its key, until the owner answers it.
     var cueOnPanel: String?
     /// Tasks the Night Reflection proposed, until the owner decides (kept
@@ -413,6 +428,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         case cuedSteps, startedSteps, interrupted, morningPlanResumed, windDownAt
         case draft, draftForNextDay, departures, satDownAt, weekFocus
         case weekFocusSetAt, mustDoDoneAt, mustDoDays, cueOnPanel, taskProposals
+        case putOff, smallStarts
     }
 
     /// Every field but the day is optional on disk, so a state saved by an
@@ -456,6 +472,8 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         cueOnPanel = try? c.decodeIfPresent(String.self, forKey: .cueOnPanel)
         taskProposals =
             (try? c.decodeIfPresent([TaskProposal].self, forKey: .taskProposals)) ?? []
+        putOff = (try? c.decodeIfPresent([String: Int].self, forKey: .putOff)) ?? [:]
+        smallStarts = (try? c.decodeIfPresent(Set<String>.self, forKey: .smallStarts)) ?? []
     }
 
     /// The day as a relaunch finds it: the moment in flight never finished,

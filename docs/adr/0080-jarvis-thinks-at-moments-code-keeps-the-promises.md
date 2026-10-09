@@ -268,7 +268,12 @@ the owner must remember to read does not. What changed:
   it changes nothing. Done is answered for a moment before the panel closes
   — "Done", the must-do credited ("the rest is a bonus"), and what comes
   next — the win said aloud and the next step named at the moment one ends;
-  a card or cue that arrives meanwhile takes the panel at once.
+  a card or cue that arrives meanwhile takes the panel at once. Starting is
+  the hard part: a step put off twice in a day ("In 15 min") is offered as
+  "Just five minutes?" with Start 5 min, and five minutes in its check-in
+  asks to keep going ("five minutes counts"); Keep going adds a quarter of
+  an hour, after which it checks in as any step (`cue.reaction`
+  "startSmall").
 - **A started step checks in when its time is up.** A step the owner started
   (Start on a cue, or Start now on Today, which needs no cue of its own) is
   put back on the panel at its end while its task is open: Done, 15 more min

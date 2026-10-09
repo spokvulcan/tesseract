@@ -346,12 +346,25 @@ private struct StepCueContent: View {
             HStack(spacing: 8) {
                 switch cue.phase {
                 case .start:
-                    choice("Start", .start, prominent: true)
+                    if cue.offersSmallStart {
+                        choice(
+                            "Start \(DayEngine.smallStartMinutes) min", .startSmall, prominent: true
+                        )
+                        .help("Just five minutes, then decide; Jarvis asks then")
+                    } else {
+                        choice("Start", .start, prominent: true)
+                    }
                     choice("In \(DayEngine.stepLaterMinutes) min", .later)
                         .help("Move it a quarter of an hour on; Jarvis asks again then")
                     choice("Tomorrow", .tomorrow)
                     Spacer(minLength: 0)
                     choice("Done", .done)
+                case .end where cue.small:
+                    choice("Keep going", .extend, prominent: true)
+                        .help("A quarter of an hour more; Jarvis asks again then")
+                    choice("Done", .done)
+                    choice("Tomorrow", .tomorrow)
+                    Spacer(minLength: 0)
                 case .end:
                     choice("Done", .done, prominent: true)
                     choice("\(DayEngine.stepLaterMinutes) more min", .extend)
@@ -371,17 +384,23 @@ private struct StepCueContent: View {
             .focusable(false)
     }
 
-    /// A late cue (the owner was away or busy) says so, without blame.
+    /// A late cue (the owner was away or busy) says so, without blame; a
+    /// step put off twice is offered small, and a small start asks to go on.
     private var heading: String {
+        if cue.offersSmallStart { return "Just five minutes?" }
         switch (cue.phase, cue.late) {
-        case (.start, false): "Time for"
-        case (.start, true): "Still time for"
-        case (.end, false): "Time's up"
-        case (.end, true): "How did it go?"
+        case (.start, false): return "Time for"
+        case (.start, true): return "Still time for"
+        case (.end, false): return cue.small ? "Five minutes in" : "Time's up"
+        case (.end, true): return "How did it go?"
         }
     }
 
     private var detail: String {
+        if cue.offersSmallStart { return "Starting is the hard part: five minutes, then decide." }
+        if cue.phase == .end, cue.small, !cue.late {
+            return "Keep going, or leave it there — five minutes counts."
+        }
         var parts = ["\(MomentPrompts.minutesText(cue.minutes))"]
         if cue.isMustDo { parts.append("your must-do") }
         parts.append(cue.areaName)

@@ -1866,7 +1866,9 @@ meanwhile is cued late â€” a start while its slot still runs, an end that day â€
 and says so ("Still time for", "How did it go?"). A slot whose reminder rings
 at the same minute is left to Reminders. It chimes softly as it appears, with
 the app's sounds on. Done is answered for a moment ("Done", the must-do
-credited, what comes next) before the panel closes. Closing it changes nothing; a toggle in Settings (Your
+credited, what comes next) before the panel closes. A step put off twice in a
+day is offered as five minutes ("Just five minutes?", Start 5 min), and five
+minutes in it asks to keep going. Closing it changes nothing; a toggle in Settings (Your
 Day) turns Step Cues off.
 _Avoid_: reminder (Reminders' own alarm), nudge (an event's OS notification).
 

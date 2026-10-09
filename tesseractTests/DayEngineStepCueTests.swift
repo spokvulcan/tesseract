@@ -690,6 +690,69 @@ struct DayEngineStepCueTests {
         #expect(next.reminderID == "deck")
     }
 
+    // MARK: Put off
+
+    /// The letter alone in the plan, its slot at 11:10.
+    static func letterOnly() -> DayState {
+        var state = state()
+        state.plan = [Placement(reminderID: "letter", start: local(11, 10), minutes: 20)]
+        return state
+    }
+
+    @Test func aStepPutOffTwiceIsOfferedJustFiveMinutes() throws {
+        var state = Self.letterOnly()
+        var at = Self.local(11, 10)
+        for round in 0..<2 {
+            let up = Self.tick(state, at: at)
+            let cue = try #require(Self.cues(up.effects).first)
+            #expect(cue.putOff == round)
+            #expect(!cue.offersSmallStart)
+            state =
+                DayEngine.decide(
+                    .cardAction(.step(reminderID: "letter", .later)),
+                    snapshot: Self.snapshot(at: at), state: up.state
+                ).state
+            at = at.addingTimeInterval(15 * 60)
+        }
+        let third = try #require(Self.cues(Self.tick(state, at: at).effects).first)
+        #expect(third.putOff == 2)
+        #expect(third.offersSmallStart)
+        // A new day starts the count again.
+        let tomorrow = DayEngine.decide(
+            .tick, snapshot: Self.snapshot(at: Self.local(9, day: 31), present: false),
+            state: state)
+        #expect(tomorrow.state.putOff.isEmpty)
+    }
+
+    @Test func fiveMinutesStartsTheStepAndThenAsksToKeepGoing() throws {
+        var state = Self.letterOnly()
+        state.putOff = ["letter": 2]
+        let up = Self.tick(state, at: Self.local(11, 10))
+        #expect(try #require(Self.cues(up.effects).first).offersSmallStart)
+        let small = DayEngine.decide(
+            .cardAction(.step(reminderID: "letter", .startSmall)),
+            snapshot: Self.snapshot(at: Self.local(11, 11)), state: up.state)
+        let slot = try #require(small.state.plan.first)
+        #expect(slot.start == Self.local(11, 11))
+        #expect(slot.minutes == 5)
+        #expect(Self.traced(.cueReaction, in: small.effects)?["action"] == .string("startSmall"))
+        #expect(
+            DayEngine.focus(snapshot: Self.snapshot(at: Self.local(11, 13)), state: small.state)?
+                .end == Self.local(11, 16))
+        let check = Self.tick(small.state, at: Self.local(11, 16))
+        let cue = try #require(Self.cues(check.effects).first)
+        #expect(cue.phase == .end)
+        #expect(cue.small)
+        // Keep going: a quarter of an hour more, then an ordinary check-in.
+        let going = DayEngine.decide(
+            .cardAction(.step(reminderID: "letter", .extend)),
+            snapshot: Self.snapshot(at: Self.local(11, 16)), state: check.state)
+        let next = try #require(
+            Self.cues(Self.tick(going.state, at: Self.local(11, 31)).effects).first)
+        #expect(next.phase == .end)
+        #expect(!next.small)
+    }
+
     // MARK: Saved state
 
     @Test func aStateSavedBeforeCuesStillLoads() throws {
