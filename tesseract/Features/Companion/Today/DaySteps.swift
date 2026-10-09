@@ -366,8 +366,9 @@ private struct EventStep: View {
 
     private var details: String {
         var parts = [event.calendarTitle]
-        if !isAllDay { parts.append("until \(AgendaTime.clock(event.end))") }
+        // Leaving matters more than the end, on a line that may be cut short.
         if let leave { parts.append("leave at \(AgendaTime.clock(leave.at))") }
+        if !isAllDay { parts.append("until \(AgendaTime.clock(event.end))") }
         if let place = event.place { parts.append(place) }
         return parts.joined(separator: " · ")
     }
