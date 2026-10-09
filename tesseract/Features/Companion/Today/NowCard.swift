@@ -32,6 +32,8 @@ nonisolated struct NowAction: Sendable, Equatable, Identifiable {
         case complete(reminderID: String)
         /// A slot in today's plan: "Start now", "Do it at 16:30".
         case place(reminderID: String, start: Date, minutes: Int)
+        /// Slots for tasks that slid, one after another: "Fit all 3 in".
+        case placeAll([Placement])
         /// Due tomorrow; tomorrow's plan finds it a time.
         case tomorrow(reminderID: String)
         case planDay
@@ -206,7 +208,9 @@ nonisolated enum NowCardBuilder {
             }
         }
 
-        // A task that slid: offer the next free slot, or tomorrow.
+        // A task that slid: offer the next free slot, or tomorrow. Several
+        // that slid are fitted into the day in one click, in order — one
+        // decision, not one per task, and no tidying the plan at midnight.
         let slid = timed.filter(\.isSlid)
         if let task = slid.first, let start = task.start {
             var detail = "Slid past \(clock(start))."
@@ -215,7 +219,15 @@ nonisolated enum NowCardBuilder {
             let done = NowAction(kind: .complete(reminderID: task.id), title: "Done")
             let tomorrow = NowAction(kind: .tomorrow(reminderID: task.id), title: "Tomorrow")
             var actions = [tomorrow, done]
-            if let slot = TimelineBuilder.firstFreeSlot(minutes: task.minutes, facts: facts) {
+            let fitted = slid.count > 1 ? TimelineBuilder.fit(slid, facts: facts) : []
+            if fitted.count > 1 {
+                let all =
+                    fitted.count < slid.count
+                    ? "\(fitted.count)" : fitted.count == 2 ? "both" : "all \(fitted.count)"
+                let fit = NowAction(kind: .placeAll(fitted), title: "Fit \(all) in")
+                actions = [fit, done, tomorrow]
+            } else if let slot = TimelineBuilder.firstFreeSlot(minutes: task.minutes, facts: facts)
+            {
                 let place = NowAction(
                     kind: .place(reminderID: task.id, start: slot, minutes: task.minutes),
                     title: "Do it at \(clock(slot))")
@@ -370,22 +382,29 @@ nonisolated enum InboxSlot: Sendable, Equatable {
 
 nonisolated extension NowCard {
     /// The slot this card offers in today's plan.
-    var offeredPlacement: Placement? {
-        for action in actions {
-            if case .place(let id, let start, let minutes) = action.kind {
-                return Placement(reminderID: id, start: start, minutes: minutes)
+    var offeredPlacement: Placement? { offeredPlacements.first }
+
+    /// Every slot this card offers: one ("Do it at 16:30"), or one per task
+    /// that slid ("Fit all 3 in").
+    var offeredPlacements: [Placement] {
+        actions.flatMap { action -> [Placement] in
+            switch action.kind {
+            case .place(let id, let start, let minutes):
+                [Placement(reminderID: id, start: start, minutes: minutes)]
+            case .placeAll(let placements): placements
+            case .complete, .tomorrow, .planDay, .wrapUp: []
             }
         }
-        return nil
     }
 
-    /// The day with this card's offer taken (in place of the task's old
-    /// slot, as a yes would), so the Inbox's offers keep clear of it.
+    /// The day with this card's offer taken (in place of the tasks' old
+    /// slots, as a yes would), so the Inbox's offers keep clear of it.
     func reserving(_ facts: DayFacts) -> DayFacts {
-        guard let offered = offeredPlacement else { return facts }
         var facts = facts
-        facts.plan.removeAll { $0.reminderID == offered.reminderID }
-        facts.plan.append(offered)
+        for offered in offeredPlacements {
+            facts.plan.removeAll { $0.reminderID == offered.reminderID }
+            facts.plan.append(offered)
+        }
         return facts
     }
 }

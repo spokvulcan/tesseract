@@ -5,7 +5,7 @@
 //  Today, rendered with the app's wiring over fixture days (an in-memory
 //  Agenda and a saved day state, ADR-0073): the morning after the plan, the
 //  same day at 14:20 deep in the must-do's slot (its time left drains on the
-//  Now Card), a busy midday with a slid task and things waiting, an evening
+//  Now Card), a busy midday with two slid steps and things waiting, an evening
 //  with the day done, and the same night past midnight, still that day until
 //  04:00. Each renders at a wide, a regular and a phone width, so every
 //  layout's body runs. With TODAY_GALLERY_DIR set (TEST_RUNNER_TODAY_GALLERY_DIR
@@ -266,7 +266,10 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
         case .midday:
             state.morningPlanAt = Self.at(8, 15)
             state.mustDoID = "adr"
-            state.plan = [Placement(reminderID: "anna", start: Self.at(13), minutes: 30)]
+            state.plan = [
+                Placement(reminderID: "anna", start: Self.at(13), minutes: 30),
+                Placement(reminderID: "rent", start: Self.at(13, 30), minutes: 15),
+            ]
             state.departures = [
                 Departure(
                     eventID: "c", title: "Climbing", at: Self.at(18), eventStart: Self.at(18, 30),

@@ -1788,7 +1788,8 @@ in it, the next step, what's left, or a done day and how tomorrow starts; in
 the evening it closes the day — what is still ahead tonight, else what got
 done and what is still open, never a slid task at the top) with one-click
 offers that move it on (Done, Start now, "Do it at 16:30", Tomorrow, Plan my
-day, Wrap up the day). Code builds it from the Timeline, so it never waits on
+day, Wrap up the day; several tasks that slid are fitted into the day's next
+free slots, in order, with one "Fit all 3 in"). Code builds it from the Timeline, so it never waits on
 the model; Jarvis's latest card line rides along while fresh (a plan for four
 hours, a welcome back for one, the evening's cards until the day ends) — a
 Breakpoint with nothing for the owner says nothing, so the plan's word stands —

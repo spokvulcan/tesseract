@@ -408,6 +408,14 @@ the owner must remember to read does not. What changed:
   The look-back also counts the week's must-dos ("The must-do got done on 4
   of the 6 days it was set"): the engine notes when the day's must-do is seen
   done and keeps each day's outcome a week (`DayState.mustDoDays`).
+- **Tasks that slid fit back in with one click.** The Now Card offered a
+  slid task the next free slot, one task at a time ("Slid past 13:00. 2 more
+  slid too."), and five of the six times the owner took a task off the plan
+  were between 23:52 and 00:24, tidying slid tasks before bed. With two or
+  more slid, the card now offers "Fit both in" / "Fit all 3 in": code places
+  each, in order, at the next free slot after the ones before it (as "Do it
+  at" would, the Day Line's free time), and the Inbox's offers keep clear of
+  them; Step Cues follow the new slots. No model.
 - **The week ends on a clean slate.** The Evening Wrap-up asked only about
   today's tasks, so a task left overdue stayed "carried" on Today from day
   to day with nothing ever asking about it (the same few overdue reminders

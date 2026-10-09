@@ -587,6 +587,11 @@ struct TodayActions {
         case .complete(let id): setDone(id, true)
         case .place(let id, let start, let minutes):
             runtime.act(.place(reminderID: id, start: start, minutes: minutes))
+        case .placeAll(let placements):
+            for slot in placements {
+                runtime.act(
+                    .place(reminderID: slot.reminderID, start: slot.start, minutes: slot.minutes))
+            }
         case .tomorrow(let id): moveToTomorrow(id)
         case .planDay: runtime.act(.planNow)
         case .wrapUp: runtime.act(.wrapUpNow)

@@ -269,19 +269,46 @@ struct NowCardTests {
     }
 
     @Test func theInboxKeepsClearOfTheCardsOwnOffer() {
-        // Rent was planned for 10:30 and slid; the card offers it 12:00.
+        // Rent was planned for 10:30 and slid, and so did the dentist at
+        // 11:00: the card fits both in from 12:00.
         let facts = TimelineBuilderTests.facts(
             now: Self.local(30, 12),
             plan: [Placement(reminderID: "rent", start: Self.local(30, 10, 30), minutes: 15)])
         let card = Self.card(facts)
         #expect(card.headline == "Pay rent")
         #expect(card.detail == "Slid past 10:30. One more slid too.")
+        #expect(card.actions.map(\.title) == ["Fit both in", "Done", "Tomorrow"])
         #expect(
-            card.offeredPlacement
-                == Placement(reminderID: "rent", start: Self.local(30, 12), minutes: 15))
-        // The offer replaces rent's old slot, so the gym goes after it.
+            card.offeredPlacements == [
+                Placement(reminderID: "rent", start: Self.local(30, 12), minutes: 15),
+                Placement(reminderID: "dentist", start: Self.local(30, 12, 15), minutes: 15),
+            ])
+        // The offer replaces their old slots, so the gym goes after them.
         let slots = InboxSlot.suggest(for: ["gym"], facts: card.reserving(facts), evening: false)
-        #expect(slots["gym"] == .today(Self.local(30, 12, 15)))
+        #expect(slots["gym"] == .today(Self.local(30, 12, 30)))
+    }
+
+    @Test func severalTasksThatSlidAreFittedIntoTheDayInOneClick() {
+        // At 12:30, rent (10:30), the gym (an hour from 10:45) and the
+        // dentist (11:00) have all slid; half an hour is free before the 1:1.
+        let facts = TimelineBuilderTests.facts(
+            now: Self.local(30, 12, 30),
+            plan: [
+                Placement(reminderID: "rent", start: Self.local(30, 10, 30), minutes: 15),
+                Placement(reminderID: "gym", start: Self.local(30, 10, 45), minutes: 60),
+            ])
+        let card = Self.card(facts)
+        #expect(card.detail == "Slid past 10:30. 2 more slid too.")
+        #expect(card.actions.first?.title == "Fit all 3 in")
+        // Each at the next free slot after the ones before it: rent now, the
+        // gym after the 1:1, the dentist after the gym (the quarter hour left
+        // before the 1:1 is too short to count as free).
+        #expect(
+            card.offeredPlacements == [
+                Placement(reminderID: "rent", start: Self.local(30, 12, 30), minutes: 15),
+                Placement(reminderID: "gym", start: Self.local(30, 13, 45), minutes: 60),
+                Placement(reminderID: "dentist", start: Self.local(30, 14, 45), minutes: 15),
+            ])
     }
 
     @Test func aPlansLineGoesStaleButTheEveningsHolds() {

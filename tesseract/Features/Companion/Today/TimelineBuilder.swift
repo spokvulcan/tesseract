@@ -288,6 +288,22 @@ nonisolated enum TimelineBuilder {
         return nil
     }
 
+    /// Each task, in order, at the next free slot after the ones before it —
+    /// what "Fit them in" places for tasks that slid. Stops at the first that
+    /// no longer fits today.
+    static func fit(_ tasks: [TimelineTask], facts: DayFacts) -> [Placement] {
+        var facts = facts
+        var placed: [Placement] = []
+        for task in tasks {
+            guard let start = firstFreeSlot(minutes: task.minutes, facts: facts) else { break }
+            let placement = Placement(reminderID: task.id, start: start, minutes: task.minutes)
+            facts.plan.removeAll { $0.reminderID == task.id }
+            facts.plan.append(placement)
+            placed.append(placement)
+        }
+        return placed
+    }
+
     private static func order(_ a: TimelineRow, _ b: TimelineRow) -> Bool {
         if a.start != b.start { return a.start < b.start }
         // At the same minute: the Now line first, then events, then tasks.

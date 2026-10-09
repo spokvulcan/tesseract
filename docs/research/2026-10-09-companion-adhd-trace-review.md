@@ -76,6 +76,7 @@ the ideas the changes lean on; it makes no claims beyond them.
 | 1 | A quiet Breakpoint no longer takes Jarvis's word; it is titled "While you were away", so the greeting is said once |
 | — | The Now Card leads with the time left of the step under way, over a draining bar; the menu bar shows it from any app, and counts down the last half hour to the next event or time to leave |
 | 3 | In the evening the Now Card closes the day (what is ahead tonight, or what got done and what is still open) instead of heading it with a slid task |
+| 3 | Several tasks that slid are fitted back into the day's free slots in one click ("Fit all 3 in") |
 | 5 | A Morning Plan cut short by a quit runs again, once |
 | 9 | The wind-down: one banner as quiet hours begin, saying when tomorrow starts |
 | 6 | A bot posting through a chat app is an app's news, not a person |
