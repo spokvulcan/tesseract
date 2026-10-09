@@ -1954,6 +1954,10 @@ Card says "Leave at 12:30" as the event comes up, and the Day Line shows it
 under the event. A plan the app quit in the middle of runs again once when the
 Companion next comes on (not once the owner closed it, nor in the evening).
 After a night at the Mac past midnight it is asked to keep the day light.
+It is told how long the owner's steps really take: a step started whole and
+seen done in time is timed against the minutes it had (two weeks, the last
+thirty), and from five of them, 15% or more off, the plan hears the pace
+("about 1.5× the time planned") and sizes slots by it.
 Skipping it costs nothing and nothing nags.
 
 **Breakpoint**:

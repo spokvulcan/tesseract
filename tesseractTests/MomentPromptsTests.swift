@@ -183,6 +183,21 @@ struct MomentPromptsTests {
                 "This week's focus: the job search. When a task serves it, let it be the must-do."))
     }
 
+    @Test func thePlanIsToldHowLongStepsReallyTake() {
+        let at = TimelineBuilderTests.local(29, 12)
+        var facts = Self.facts
+        facts.stepRuns = Array(repeating: StepRun(planned: 30, actual: 45, at: at), count: 6)
+        #expect(
+            MomentPrompts.morningPlan(facts: facts).contains(
+                "Lately the owner's steps took about 1.5× the time planned (6 steps): give each slot that much room, and fewer of them."
+            ))
+        // Too few to tell, or close enough to plan: nothing said.
+        facts.stepRuns = Array(facts.stepRuns.prefix(4))
+        #expect(!MomentPrompts.morningPlan(facts: facts).contains("Lately the owner's steps"))
+        facts.stepRuns = Array(repeating: StepRun(planned: 30, actual: 32, at: at), count: 6)
+        #expect(!MomentPrompts.morningPlan(facts: facts).contains("Lately the owner's steps"))
+    }
+
     @Test func theNightReflectionAsksForTasksTheDayShowed() {
         let text = MomentPrompts.nightReflection(facts: Self.facts, profile: [])
         #expect(text.contains(#""tasks": [{"title":"#))

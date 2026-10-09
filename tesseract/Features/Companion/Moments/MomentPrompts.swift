@@ -67,6 +67,15 @@ nonisolated enum MomentPrompts {
                 "Last night they were at the Mac until \(clock(late, facts)), past midnight. Keep today light: the must-do and what can't wait, with room to rest — and say it kindly, never as a reproach."
             )
         }
+        // How long steps really take: a slot sized by hope runs over.
+        if let pace = facts.stepPace, abs(pace.ratio - 1) >= 0.15 {
+            let ratio = String(format: "%.1f", pace.ratio)
+            lines.append(
+                "Lately the owner's steps took about \(ratio)× the time planned (\(pace.count) steps): "
+                    + (pace.ratio > 1
+                        ? "give each slot that much room, and fewer of them."
+                        : "slots can be that much shorter."))
+        }
         lines.append("")
         lines += agendaLines(facts)
         if let free = facts.freeBeforeFirstEvent {

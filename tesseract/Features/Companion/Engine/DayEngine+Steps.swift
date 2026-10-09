@@ -428,11 +428,37 @@ nonisolated extension DayEngine {
     // MARK: - Started
 
     /// A slot given to a task from now ("Start now" on Today) is started:
-    /// it needs no cue of its own, and its end checks in.
-    static func markStartedIfNow(_ slot: Placement, snapshot: DaySnapshot, state: inout DayState) {
+    /// it needs no cue of its own, and its end checks in. One started whole
+    /// (`measured`: not five minutes, not a late quarter hour more) is timed.
+    static func markStartedIfNow(
+        _ slot: Placement, snapshot: DaySnapshot, state: inout DayState, measured: Bool = true
+    ) {
         guard slot.start <= snapshot.now.addingTimeInterval(60) else { return }
         state.startedSteps.insert(StepCue.key(slot))
         state.cuedSteps[StepCue.key(slot)] = snapshot.now
+        if measured { state.startedMinutes[StepCue.key(slot)] = slot.minutes }
+    }
+
+    /// A step started whole, now seen done: how long it took against the
+    /// minutes it had, kept for the plan's sizing — unless done well after
+    /// its time was up (the owner away when it checked in), when how long
+    /// it took is unknown.
+    static func noteStepRuns(snapshot: DaySnapshot, state: inout DayState) {
+        guard !state.startedMinutes.isEmpty else { return }
+        for slot in state.plan {
+            let key = StepCue.key(slot)
+            guard let planned = state.startedMinutes[key],
+                let completed = snapshot.agenda.doneToday.first(where: {
+                    $0.id == slot.reminderID
+                })?.completedAt,
+                completed >= slot.start
+            else { continue }
+            state.startedMinutes[key] = nil
+            guard completed <= end(of: slot).addingTimeInterval(stepCueLate) else { continue }
+            let actual = max(1, Int(completed.timeIntervalSince(slot.start) / 60))
+            state.stepRuns.append(StepRun(planned: planned, actual: actual, at: completed))
+            state.stepRuns = Array(state.stepRuns.suffix(30))
+        }
     }
 
     // MARK: - The owner's choice
@@ -481,7 +507,7 @@ nonisolated extension DayEngine {
                 state.plan[index].minutes = smallStartMinutes
             }
             if let slot = moveSlot(reminderID, to: minute, state: &state) {
-                markStartedIfNow(slot, snapshot: snapshot, state: &state)
+                markStartedIfNow(slot, snapshot: snapshot, state: &state, measured: false)
                 state.smallStarts.insert(StepCue.key(slot))
             }
         case .later:
@@ -518,7 +544,8 @@ nonisolated extension DayEngine {
                 if minute.timeIntervalSince(end(of: slot)) >= stepCueLate {
                     state.plan[index].start = minute
                     state.plan[index].minutes = stepLaterMinutes
-                    markStartedIfNow(state.plan[index], snapshot: snapshot, state: &state)
+                    markStartedIfNow(
+                        state.plan[index], snapshot: snapshot, state: &state, measured: false)
                     state.plan.sort { $0.start < $1.start }
                 } else {
                     let until = max(end(of: slot), minute).addingTimeInterval(quarter)

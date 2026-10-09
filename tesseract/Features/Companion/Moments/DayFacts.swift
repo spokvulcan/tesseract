@@ -41,6 +41,16 @@ nonisolated struct DayFacts: Sendable, Equatable {
     var upLateUntil: Date?
     /// When to leave for the day's events in person: the way there is busy.
     var departures: [Departure] = []
+    /// How long the owner's started steps took against their plan, lately.
+    var stepRuns: [StepRun] = []
+
+    /// Actual over planned minutes across at least five recent steps: how
+    /// far the owner's days run past (or short of) their plans.
+    var stepPace: (ratio: Double, count: Int)? {
+        let planned = stepRuns.reduce(0) { $0 + $1.planned }
+        guard stepRuns.count >= 5, planned > 0 else { return nil }
+        return (Double(stepRuns.reduce(0) { $0 + $1.actual }) / Double(planned), stepRuns.count)
+    }
 
     init(
         now: Date, calendar: Calendar = .current, events: [AgendaEvent] = [],

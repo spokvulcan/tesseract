@@ -1098,6 +1098,56 @@ struct DayEngineStepCueTests {
         #expect(Self.cues(next.effects).first?.phase == .end)
     }
 
+    // MARK: Pace
+
+    static func done(_ reminder: AgendaReminder, at completed: Date) -> AgendaReminder {
+        var done = reminder
+        done.isCompleted = true
+        done.completedAt = completed
+        return done
+    }
+
+    @Test func aStepStartedAndDoneInTimeIsTimed() {
+        // The letter, started at 11:12 for twenty minutes, done at 11:38.
+        let seen = DayEngine.decide(
+            .agendaChanged,
+            snapshot: Self.snapshot(
+                at: Self.local(11, 39), open: [Self.deck, Self.dentist],
+                done: [Self.done(Self.letter, at: Self.local(11, 38))]),
+            state: Self.started())
+        #expect(seen.state.stepRuns == [StepRun(planned: 20, actual: 26, at: Self.local(11, 38))])
+        #expect(seen.state.startedMinutes.isEmpty)
+    }
+
+    @Test func aStepDoneLongAfterItsTimeIsNotTimed() {
+        // Done at 12:30, an hour after its 11:32 end: how long it took is unknown.
+        let seen = DayEngine.decide(
+            .agendaChanged,
+            snapshot: Self.snapshot(
+                at: Self.local(12, 31), open: [Self.deck, Self.dentist],
+                done: [Self.done(Self.letter, at: Self.local(12, 30))]),
+            state: Self.started())
+        #expect(seen.state.stepRuns.isEmpty)
+        #expect(seen.state.startedMinutes.isEmpty)
+    }
+
+    @Test func fiveMinutesStartedIsNotTimed() {
+        let small = DayEngine.decide(
+            .cardAction(.step(reminderID: "letter", .startSmall)),
+            snapshot: Self.snapshot(at: Self.local(11, 11)), state: Self.cued())
+        #expect(small.state.startedMinutes.isEmpty)
+    }
+
+    @Test func runsAreKeptTwoWeeks() {
+        var state = Self.state()
+        state.stepRuns = [
+            StepRun(planned: 30, actual: 40, at: Self.local(10, 12, day: 15)),
+            StepRun(planned: 30, actual: 40, at: Self.local(10, 12, day: 29)),
+        ]
+        let next = state.rolledOver(to: DayKey(rawValue: "2026-10-01"))
+        #expect(next.stepRuns.count == 1)
+    }
+
     // MARK: Saved state
 
     @Test func aStateSavedBeforeCuesStillLoads() throws {
@@ -1105,5 +1155,6 @@ struct DayEngineStepCueTests {
         let state = try JSONDecoder().decode(DayState.self, from: Data(json.utf8))
         #expect(state.cuedSteps.isEmpty)
         #expect(state.startedSteps.isEmpty)
+        #expect(state.stepRuns.isEmpty)
     }
 }

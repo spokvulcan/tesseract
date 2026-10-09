@@ -146,8 +146,10 @@ nonisolated enum DayEngine {
             effects += nudgesDelivered(delivered, state: &state)
         }
 
-        // After the signal: a must-do set by it may be done already.
+        // After the signal: a must-do set by it may be done already, and a
+        // step started may be seen done.
         noteMustDoDone(snapshot: snapshot, state: &state)
+        noteStepRuns(snapshot: snapshot, state: &state)
         holdCueUnderCard(effects, snapshot: snapshot, state: &state)
         let waitingAfter = waitingCount(state, now: snapshot.now)
         if waitingAfter != waitingBefore { effects.append(.setWaiting(waitingAfter)) }

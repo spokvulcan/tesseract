@@ -585,3 +585,14 @@ the owner must remember to read does not. What changed:
   the panel's "Done" when the step just finished is followed by a call that
   soon (`StepCue.nextLink`) — the step's end check-in comes five minutes
   before a meeting, so Done and Join are the same minute.
+- **The plan learns how long steps take.** Time runs differently for the
+  owner than on paper — the planning fallacy, sharper with ADHD — and the
+  Morning Plan sized slots by the model's guess every day, never by how
+  the owner's steps went. A step started whole (Start, Start now; not five
+  minutes, not a late quarter hour more) is timed: seen done, how long it
+  took joins `DayState.stepRuns` with the minutes it had (two weeks, the
+  last thirty), unless done more than ten minutes after its time was up,
+  when the real length is unknown. From five runs, when the pace is 15% or
+  more off, the plan's request says so ("Lately the owner's steps took
+  about 1.5× the time planned (6 steps): give each slot that much room, and
+  fewer of them."). Code measures; the model only reads one line.

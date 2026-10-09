@@ -194,6 +194,14 @@ nonisolated struct StepCue: Sendable, Equatable {
     }
 }
 
+/// A step the owner started whole and saw done in time: the minutes it
+/// had, and the minutes it took.
+nonisolated struct StepRun: Sendable, Equatable, Codable {
+    var planned: Int
+    var actual: Int
+    var at: Date
+}
+
 /// What the owner chose on a Break Cue.
 nonisolated enum BreakChoice: String, Sendable, Equatable {
     /// Up from the Mac now: the time at it starts again from here.
@@ -348,6 +356,7 @@ nonisolated struct DaySnapshot: Sendable, Equatable {
             weekFocus: state.weekFocus)
         facts.mustDoDays = state.mustDoDays
         facts.departures = state.departures
+        facts.stepRuns = state.stepRuns
         // At the Mac past midnight (until 05:00) on this day's date.
         if let last = state.lastActiveAt, let midnight = state.day.date(calendar: calendar),
             last >= midnight, last < midnight.addingTimeInterval(5 * 3600),
@@ -504,6 +513,13 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     var breakCuedAt: Date?
     /// Break Cues shown today: each says something different.
     var breakCues = 0
+    /// Steps started whole (Start, Start now), by `StepCue.key`, with their
+    /// minutes then: once seen done, how long they took joins `stepRuns`.
+    var startedMinutes: [String: Int] = [:]
+    /// Planned against actual minutes of the steps the owner started and saw
+    /// done in time (carried two weeks, the last 30): the Morning Plan sizes
+    /// slots by them.
+    var stepRuns: [StepRun] = []
 
     init(day: DayKey, syncedNudgeIDs: Set<String>? = nil) {
         self.day = day
@@ -519,6 +535,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         case weekFocusSetAt, mustDoDoneAt, mustDoDays, cueOnPanel, taskProposals
         case putOff, smallStarts, lastActiveAt, nightMeasured, morningPlanWaiting, cutShort
         case runningRequest, runningSince, sittingSince, breakNotBefore, breakCuedAt, breakCues
+        case startedMinutes, stepRuns
     }
 
     /// Every field but the day is optional on disk, so a state saved by an
@@ -575,6 +592,9 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         breakNotBefore = try? c.decodeIfPresent(Date.self, forKey: .breakNotBefore)
         breakCuedAt = try? c.decodeIfPresent(Date.self, forKey: .breakCuedAt)
         breakCues = (try? c.decodeIfPresent(Int.self, forKey: .breakCues)) ?? 0
+        startedMinutes =
+            (try? c.decodeIfPresent([String: Int].self, forKey: .startedMinutes)) ?? [:]
+        stepRuns = (try? c.decodeIfPresent([StepRun].self, forKey: .stepRuns)) ?? []
     }
 
     /// The day as a relaunch finds it: the moment in flight never finished,
@@ -613,6 +633,13 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         }
         // Quiet hours that begin just before 04:00 are still the same night.
         next.windDownAt = windDownAt
+        // Two weeks of how long steps took, for the plan's sizing.
+        if let date = day.date(),
+            let since = Calendar.current.date(
+                byAdding: .day, value: -14, to: date)
+        {
+            next.stepRuns = stepRuns.filter { $0.at >= since }
+        }
         // At the Mac across 04:00: the same sitting.
         next.sittingSince = sittingSince
         next.breakNotBefore = breakNotBefore
