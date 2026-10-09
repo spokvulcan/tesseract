@@ -733,10 +733,13 @@ private struct WrapUpContent: View {
             }
             if !wrapUp.leftovers.isEmpty {
                 VStack(alignment: .leading, spacing: MorningPlanContent.rowSpacing * 2) {
-                    Text("Left from today").fontWeight(.semibold)
+                    Text(wrapUp.leftoversHeading).fontWeight(.semibold)
                     ForEach(wrapUp.leftovers) { leftover in
                         VStack(alignment: .leading, spacing: MorningPlanContent.rowSpacing) {
                             Text(leftover.title).lineLimit(2)
+                            if let waiting = leftover.waiting {
+                                Text(waiting).foregroundStyle(.secondary)
+                            }
                             HStack(spacing: 6) {
                                 choice("Tomorrow", .tomorrow, for: leftover)
                                 choice("Later", .later, for: leftover)

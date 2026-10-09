@@ -403,6 +403,15 @@ the owner must remember to read does not. What changed:
   The look-back also counts the week's must-dos ("The must-do got done on 4
   of the 6 days it was set"): the engine notes when the day's must-do is seen
   done and keeps each day's outcome a week (`DayState.mustDoDays`).
+- **The week ends on a clean slate.** The Evening Wrap-up asked only about
+  today's tasks, so a task left overdue stayed "carried" on Today from day
+  to day with nothing ever asking about it (the same few overdue reminders
+  showed in the agenda listings across days). On the week's last day the
+  Wrap-up also asks about up to five overdue tasks, oldest first, each with
+  the day it has waited since ("Waiting since Thu 1 Oct", under "Still
+  open"); Jarvis is told that "later" (no date) and "drop" are kind
+  answers for what has waited a week, and without the model the card
+  suggests Later for them — another tomorrow only rebuilds the pile.
 - **An online meeting reads as its service.** A Zoom event's location is
   its link with the password; it showed under the event on the Day Line, in
   its nudge, in the agenda tool and in the plan's list of events to leave

@@ -8,7 +8,8 @@
 //  word a step marked done gets, and the five-minute start offered once a
 //  step was put off twice, with its check-in), the Morning Plan with its
 //  steps over the
-//  Today gallery's morning, the Evening Wrap-up with its leftovers, and a
+//  Today gallery's morning, the Evening Wrap-up with its leftovers (and on
+//  the week's last day, with one that has waited since last week), and a
 //  Breakpoint card — each at the height the panel fits to it. With
 //  PANEL_GALLERY_DIR set (TEST_RUNNER_PANEL_GALLERY_DIR through xcodebuild),
 //  each render is also written there as a PNG, in dark and light, for judging
@@ -42,6 +43,7 @@ struct JarvisPanelGalleryTests {
         case stepCheckInSmall
         case morningPlan
         case eveningWrapUp
+        case eveningWrapUpWeek
         case breakpoint
 
         var testDescription: String { rawValue }
@@ -126,6 +128,27 @@ struct JarvisPanelGalleryTests {
                                     suggestion: .later),
                             ],
                             tomorrowFirst: "07:30 All Hands")))
+            case .eveningWrapUpWeek:
+                let lastWeek = Calendar.current.date(
+                    from: DateComponents(year: 2026, month: 10, day: 1))!
+                model.card = DayCard(
+                    id: "eveningWrapUp-2", kind: .eveningWrapUp, createdAt: Self.at(21),
+                    isFallback: false,
+                    body: .eveningWrapUp(
+                        EveningWrapUpCard(
+                            line: "A full week: the Companion shipped and the streak held.",
+                            done: ["Ship the Companion", "Duolingo lesson"],
+                            leftovers: [
+                                Leftover(
+                                    reminderID: "invoice", title: "Send the invoice",
+                                    suggestion: .tomorrow),
+                                Leftover(
+                                    reminderID: "passport", title: "Renew passport",
+                                    suggestion: .later, since: lastWeek),
+                            ],
+                            tomorrowFirst: "07:30 Put the bins out",
+                            week: "Twelve things done, most of them for work.",
+                            focus: "The job search")))
             case .breakpoint:
                 model.card = DayCard(
                     id: "breakpoint-1", kind: .breakpoint, createdAt: Self.at(15, 44),

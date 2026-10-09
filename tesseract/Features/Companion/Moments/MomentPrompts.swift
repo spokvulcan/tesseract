@@ -107,11 +107,23 @@ nonisolated enum MomentPrompts {
         } else {
             lines.append("Done today: " + facts.doneToday.map(\.title).joined(separator: "; "))
         }
-        if leftovers.isEmpty {
+        let waiting = leftovers.filter { ($0.due ?? .distantFuture) < facts.startOfToday }
+        let today = leftovers.filter { !waiting.contains($0) }
+        if today.isEmpty {
             lines.append("Nothing left over from today.")
         } else {
             lines.append("Still open from today (id — title):")
-            lines += leftovers.map { "- \($0.id) — \($0.title)" }
+            lines += today.map { "- \($0.id) — \($0.title)" }
+        }
+        if !waiting.isEmpty {
+            lines.append("Waiting since an earlier day (id — title — due):")
+            lines += waiting.map { reminder in
+                let due = reminder.due.map { dayName($0, calendar: facts.calendar) } ?? ""
+                return "- \(reminder.id) — \(reminder.title) — \(due)"
+            }
+            lines.append(
+                "What has waited a week or more may no longer matter: \"later\" keeps it without a date, \"drop\" lets it go."
+            )
         }
         if let first = facts.tomorrowEvents.first {
             lines.append("Tomorrow starts with: \(clock(first.start, facts)) \(first.title)")

@@ -139,14 +139,27 @@ nonisolated extension DayEngine {
     }
 
     /// Open tasks that belonged to today: due today, or planned today.
+    /// What the Evening Wrap-up asks about: today's open tasks, planned or
+    /// due today. On the week's last day also what has waited longest — up
+    /// to five overdue tasks, oldest first — so the week ends on a clean
+    /// slate, not a pile carried from day to day.
     static func leftovers(_ facts: DayFacts) -> [AgendaReminder] {
         let planned = Set(facts.plan.map(\.reminderID))
-        return facts.openTasks.filter { reminder in
+        let today = facts.openTasks.filter { reminder in
             if planned.contains(reminder.id) { return true }
             guard let due = reminder.due else { return false }
             return due >= facts.startOfToday && due < facts.endOfToday
         }
+        guard facts.isWeekReview else { return today }
+        let asked = Set(today.map(\.id))
+        let waiting = facts.dueOrOverdue
+            .filter { ($0.due ?? .distantFuture) < facts.startOfToday && !asked.contains($0.id) }
+            .sorted { ($0.due ?? .distantPast) < ($1.due ?? .distantPast) }
+        return today + waiting.prefix(waitingAsked)
     }
+
+    /// The most overdue tasks the week's look-back asks about.
+    static let waitingAsked = 5
 
     // MARK: - Outcomes
 

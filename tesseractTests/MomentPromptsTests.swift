@@ -115,6 +115,50 @@ struct MomentPromptsTests {
         #expect(!saturday.contains(#""focus""#))
     }
 
+    @Test func theWeeksLastWrapUpAlsoAsksAboutWhatHasWaitedLongest() throws {
+        let calendar = Self.mondayFirst
+        let at = { (d: Int, h: Int) in
+            calendar.date(from: DateComponents(year: 2026, month: 10, day: d, hour: h))!
+        }
+        func task(_ id: String, due day: Int) -> AgendaReminder {
+            AgendaReminder(
+                id: id, title: id.capitalized, listID: "life", listTitle: "Life",
+                due: at(day, 0))
+        }
+        // Sunday 4 October: one task due today, seven overdue (3 Oct back to
+        // 27 Sep).
+        var sunday = Self.weekFacts(day: 4)
+        sunday.dueOrOverdue = [task("bins", due: 4)] + (1...7).map { task("old\($0)", due: 4 - $0) }
+        let leftovers = DayEngine.leftovers(sunday)
+        #expect(leftovers.map(\.id) == ["bins", "old7", "old6", "old5", "old4", "old3"])
+        // On any other day, only today's.
+        var saturday = Self.weekFacts(day: 3)
+        saturday.dueOrOverdue = [task("bins", due: 3), task("old", due: 1)]
+        #expect(DayEngine.leftovers(saturday).map(\.id) == ["bins"])
+
+        let text = MomentPrompts.eveningWrapUp(facts: sunday, leftovers: leftovers)
+        #expect(text.contains("Still open from today (id — title):\n- bins — Bins"))
+        #expect(text.contains("Waiting since an earlier day (id — title — due):"))
+        #expect(text.contains("- old7 — Old7 — Sunday 27 September"))
+        #expect(text.contains(#""drop" lets it go."#))
+
+        // Without the model: what waited is kept undated, today's rolls on.
+        let card = FallbackCards.eveningWrapUp(facts: sunday, leftovers: leftovers)
+        #expect(card.leftovers.first?.suggestion == .tomorrow)
+        #expect(card.leftovers.first?.since == nil)
+        let oldest = try #require(card.leftovers.dropFirst().first)
+        #expect(oldest.suggestion == .later)
+        #expect(oldest.since == at(-3, 0))
+        #expect(oldest.waiting?.hasPrefix("Waiting since") == true)
+        #expect(card.leftoversHeading == "Still open")
+        #expect(
+            FallbackCards.eveningWrapUp(facts: saturday, leftovers: DayEngine.leftovers(saturday))
+                .leftoversHeading == "Left from today")
+        // A leftover saved before it could have waited still loads.
+        let saved = #"{"reminderID": "x", "title": "X", "suggestion": "tomorrow"}"#
+        #expect(try JSONDecoder().decode(Leftover.self, from: Data(saved.utf8)).since == nil)
+    }
+
     @Test func theWeeksFocusOpensTheDayAndGuidesThePlan() {
         let facts = Self.weekFacts(day: 5, focus: "the job search")
         #expect(

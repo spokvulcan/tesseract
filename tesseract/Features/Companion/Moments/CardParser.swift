@@ -310,8 +310,13 @@ nonisolated enum FallbackCards {
         }
         return EveningWrapUpCard(
             line: line, done: done,
-            leftovers: leftovers.map {
-                Leftover(reminderID: $0.id, title: $0.title, suggestion: .tomorrow)
+            leftovers: leftovers.map { reminder in
+                // One that has waited since an earlier day is kept without a
+                // date by default: another tomorrow only rebuilds the pile.
+                let since = reminder.due.flatMap { $0 < facts.startOfToday ? $0 : nil }
+                return Leftover(
+                    reminderID: reminder.id, title: reminder.title,
+                    suggestion: since == nil ? .tomorrow : .later, since: since)
             },
             tomorrowFirst: first,
             week: facts.isWeekReview ? MomentPrompts.weekLine(facts) : nil)

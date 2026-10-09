@@ -1951,7 +1951,9 @@ let go. Nothing is ever labelled missed or failed. On the week's last day (the
 day before the calendar's first weekday) it also looks back on the week — what
 got done, by Area — and names the **Week's Focus**: next week's one thing, in a
 few words, which opens each day's thread, steers the Morning Plan's must-do and
-shows beside Today's date until the next look-back.
+shows beside Today's date until the next look-back. That evening it also asks
+about up to five overdue tasks, oldest first ("Waiting since…"), so the week
+ends on a clean slate.
 
 **Night Reflection**:
 Once a night, after the Evening Wrap-up — on power, or on a battery at least

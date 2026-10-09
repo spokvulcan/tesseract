@@ -82,6 +82,7 @@ the ideas the changes lean on; it makes no claims beyond them.
 | 10 | The plan sets a time to leave for an event in person; the OS nudges then, the Now Card and the Day Line say it |
 | — | Once the must-do is done, the Now Card says the rest is a bonus; Done on a Step Cue is answered for a moment — the win, and what comes next |
 | — | A week's focus: the week's last evening looks back (done by Area, must-dos kept) and names next week's one thing, shown beside Today's date |
+| — | The week ends on a clean slate: that evening also asks about up to five overdue tasks, oldest first, suggesting Later for what has waited |
 | — | An online meeting reads as its service ("Zoom"), never its link and password |
 | — | The plan's candidates come the likeliest first; collection lists are summed |
 | — | An empty Inbox teaches the capture hotkey; a Step Cue chimes softly |

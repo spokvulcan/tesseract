@@ -176,6 +176,12 @@ nonisolated struct EveningWrapUpCard: Sendable, Equatable, Codable {
         week = try c.decodeIfPresent(String.self, forKey: .week)
         focus = try c.decodeIfPresent(String.self, forKey: .focus)
     }
+
+    /// "Left from today", or "Still open" once the week's look-back also
+    /// asks about what has waited since an earlier day.
+    var leftoversHeading: String {
+        leftovers.contains { $0.since != nil } ? "Still open" : "Left from today"
+    }
 }
 
 nonisolated struct Leftover: Sendable, Equatable, Hashable, Codable, Identifiable {
@@ -192,6 +198,16 @@ nonisolated struct Leftover: Sendable, Equatable, Hashable, Codable, Identifiabl
     var reminderID: String
     var title: String
     var suggestion: Suggestion
+    /// Due on an earlier day (the week's look-back asks about these too):
+    /// the day it has waited since.
+    var since: Date? = nil
+
+    /// "Waiting since Fri 26 Sep", for one due on an earlier day.
+    var waiting: String? {
+        since.map {
+            "Waiting since \($0.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)))"
+        }
+    }
 }
 
 // MARK: - Breakpoint

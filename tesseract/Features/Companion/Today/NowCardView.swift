@@ -355,7 +355,7 @@ private struct Leftovers: View {
     var body: some View {
         ForEach(wrapUps, id: \.cardID) { cardID, wrapUp in
             VStack(alignment: .leading, spacing: 8) {
-                Text("Left from today").fontWeight(.semibold)
+                Text(wrapUp.leftoversHeading).fontWeight(.semibold)
                 ForEach(wrapUp.leftovers) { leftover in
                     LeftoverRow(cardID: cardID, leftover: leftover)
                 }
@@ -376,15 +376,21 @@ private struct LeftoverRow: View {
     var body: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 8) {
-                Text(leftover.title).lineLimit(1)
+                title.lineLimit(1)
                 Spacer(minLength: 8)
                 choices
             }
             VStack(alignment: .leading, spacing: 6) {
-                Text(leftover.title).lineLimit(2)
+                title.lineLimit(2)
                 HStack(spacing: 8) { choices }
             }
         }
+    }
+
+    /// The task, and how long it has waited when that is since an earlier day.
+    private var title: Text {
+        guard let waiting = leftover.waiting else { return Text(leftover.title) }
+        return Text(leftover.title) + Text("  \(waiting)").foregroundStyle(.secondary)
     }
 
     @ViewBuilder private var choices: some View {
