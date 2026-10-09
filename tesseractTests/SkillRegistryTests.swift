@@ -34,6 +34,29 @@ struct SkillRegistryTests {
         return root
     }
 
+    // MARK: - Order
+
+    /// The skills section is part of the system prompt the prefix cache keys
+    /// on: it lists skills in name order, not the directory's.
+    @Test func skillsAreDiscoveredInNameOrder() throws {
+        let root = try makeTempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["writing", "agenda", "proofread", "memory"] {
+            try writeSkill(
+                name,
+                """
+                ---
+                name: \(name)
+                description: The \(name) skill.
+                ---
+                Body.
+                """, in: root)
+        }
+        #expect(
+            SkillRegistry.discover(locations: [root]).map(\.name)
+                == ["agenda", "memory", "proofread", "writing"])
+    }
+
     // MARK: - composer-pill key
 
     @Test func composerPillKeyParsesTrue() throws {
