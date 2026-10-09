@@ -111,10 +111,13 @@ private struct InboxSection: View {
 private struct JarvisNoticed: View {
     @Environment(ProfileStore.self) private var profile
     @Environment(CompanionRuntime.self) private var runtime
+    @Environment(Agenda.self) private var agenda
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        let tasks = runtime.state.taskProposals
+        // One the owner wrote down meanwhile is no longer a question.
+        let open = Set(agenda.snapshot.open.map { $0.title.lowercased() })
+        let tasks = runtime.state.taskProposals.filter { !open.contains($0.title.lowercased()) }
         if !profile.openProposals.isEmpty || !tasks.isEmpty {
             VStack(alignment: .leading, spacing: TodayLayout.rowSpacing) {
                 HStack {

@@ -211,9 +211,13 @@ nonisolated enum CardParser {
         }
     }
 
-    /// - Parameter facts: the night's facts: a proposed task is due on its
-    ///   tomorrow, and one already among the open tasks is dropped.
-    static func nightReflection(_ reply: String, facts: DayFacts? = nil) -> CardParse {
+    /// - Parameters:
+    ///   - facts: the night's facts: a proposed task is due on its tomorrow.
+    ///   - open: every open reminder, whatever its date: a proposed task
+    ///     already among them is dropped.
+    static func nightReflection(
+        _ reply: String, facts: DayFacts? = nil, open: [AgendaReminder] = []
+    ) -> CardParse {
         guard let data = jsonObject(in: reply) else { return .invalid("no JSON object") }
         guard let decoded = try? JSONDecoder().decode(ReflectionReply.self, from: data),
             let note = decoded.carryOver?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -223,13 +227,13 @@ nonisolated enum CardParser {
             guard let text = cleanLine(proposal.text) else { return nil }
             return ProposalDraft(text: text, reason: cleanLine(proposal.reason) ?? "")
         }
-        let open = Set((facts?.openTasks ?? []).map { $0.title.lowercased() })
+        let existing = Set((open + (facts?.openTasks ?? [])).map { $0.title.lowercased() })
         var seen = Set<String>()
         let tasks = (decoded.tasks?.values ?? []).compactMap { task -> TaskProposal? in
             guard var title = cleanLine(task.title) else { return nil }
             if title.count > 120 { title = String(title.prefix(117)) + "…" }
             let key = title.lowercased()
-            guard !open.contains(key), seen.insert(key).inserted else { return nil }
+            guard !existing.contains(key), seen.insert(key).inserted else { return nil }
             let later = task.when?.lowercased() == "later"
             return TaskProposal(
                 id: "task-" + NudgePlanner.stableHash(key), title: title,

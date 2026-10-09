@@ -270,6 +270,28 @@ struct DayEngineMorningPlanTests {
         #expect(panelCards(refined.effects).isEmpty)
     }
 
+    @Test func aKeptPlanStaysInTodayWhenJarvisCantThinkItThrough() throws {
+        let sitDown = DayEngine.decide(
+            .presenceReturned(awayFrom: Day.local(29, 23)),
+            snapshot: Day.snapshot(at: Day.local(30, 9, 3)), state: Day.state())
+        let request = try #require(Day.moments(sitDown.effects).first)
+        let card = try #require(sitDown.state.cards.last)
+        let kept = DayEngine.decide(
+            .cardAction(.keep(cardID: card.id)),
+            snapshot: Day.snapshot(at: Day.local(30, 9, 4)), state: sitDown.state)
+        let first = DayEngine.decide(
+            .momentOutcome(request, .failed("model not loaded", nil)),
+            snapshot: Day.snapshot(at: Day.local(30, 9, 5)), state: kept.state)
+        let retry = try #require(Day.moments(first.effects).first)
+        let second = DayEngine.decide(
+            .momentOutcome(retry, .failed("model not loaded", nil)),
+            snapshot: Day.snapshot(at: Day.local(30, 9, 6)), state: first.state)
+        let stood = try #require(second.state.cards.last)
+        #expect(stood.isFallback)
+        #expect(panelCards(second.effects).isEmpty)
+        #expect(second.effects.contains(.presentCard(stood, .today)))
+    }
+
     @Test func aReplanWithNoDepartureWithdrawsTheOldOne() throws {
         let sitDown = DayEngine.decide(
             .presenceReturned(awayFrom: Day.local(29, 23)),

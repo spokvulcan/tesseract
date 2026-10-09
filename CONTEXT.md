@@ -2011,9 +2011,10 @@ _Avoid_: memory (unqualified), beliefs, episodes (all retired).
 **Task Proposal**:
 Something the day showed the owner must do that isn't in Reminders yet ("send
 the request she asked for"), from the Night Reflection — at most three, most
-nights none, never one already among the open tasks. It waits under "Jarvis
-noticed" that night and the next day: Add makes it a reminder (due the
-reflection's tomorrow, or in the Inbox), No lets it go.
+nights none, never one already in Reminders. It waits under "Jarvis noticed"
+that night and the next day: Add makes it a reminder (due the reflection's
+tomorrow, or in the Inbox), No lets it go; one the owner wrote down meanwhile
+leaves the question.
 _Avoid_: suggestion (the Morning Plan's tips).
 
 **Fact Proposal**:

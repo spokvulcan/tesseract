@@ -157,10 +157,15 @@ nonisolated enum TimelineBuilder {
                 if case .task(let item) = row.kind, item.isDone { return nil }
                 return DateInterval(start: row.start, end: end)
             }
-            // The way to an event in person is not free time.
+            // The way to an event in person is not free time, while the
+            // event is still on the calendar at that time.
             + facts.departures.compactMap { departure in
-                departure.at < departure.eventStart
-                    ? DateInterval(start: departure.at, end: departure.eventStart) : nil
+                guard departure.at < departure.eventStart,
+                    events.contains(where: {
+                        $0.id == departure.eventID && $0.start == departure.eventStart
+                    })
+                else { return nil }
+                return DateInterval(start: departure.at, end: departure.eventStart)
             }
         rows += freeGaps(from: now, to: dayEnd, busy: busy).map { gap in
             TimelineRow(

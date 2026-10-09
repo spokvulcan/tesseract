@@ -216,9 +216,10 @@ nonisolated extension DayEngine {
         case .triage:
             return triageReplied(request, reply: reply, snapshot: snapshot, state: &state)
         case .nightReflection:
-            guard case .card(let body) = CardParser.nightReflection(reply, facts: facts) else {
-                return nil
-            }
+            guard
+                case .card(let body) = CardParser.nightReflection(
+                    reply, facts: facts, open: snapshot.agenda.open)
+            else { return nil }
             return accept(
                 body, kind: .nightReflection, fallback: false, snapshot: snapshot, state: &state)
         }
@@ -238,6 +239,8 @@ nonisolated extension DayEngine {
                 state.cards[index].isRefining = false
                 let card = state.cards[index]
                 guard !card.dismissed else { return [] }
+                // Taken in already: it stays in Today, never on the panel again.
+                guard !card.kept else { return [.presentCard(card, .today)] }
                 return DeliveryLadder.rungs(for: .normal, snapshot: snapshot)
                     .filter { $0 == .panel || $0 == .today }
                     .map { .presentCard(card, $0) }
@@ -277,7 +280,7 @@ nonisolated extension DayEngine {
         switch body {
         case .morningPlan(let card):
             state.morningPlanAt = snapshot.now
-            if let mustDo = card.mustDoID { state.mustDoID = mustDo }
+            if let mustDo = card.mustDoID { setMustDo(mustDo, state: &state) }
             if !card.placements.isEmpty { state.plan = card.placements }
             // Jarvis's own plan sets the day's departures, none included (a
             // class that went online); the code card leaves them be.
@@ -418,7 +421,7 @@ nonisolated extension DayEngine {
             ]
 
         case .setMustDo(let reminderID):
-            state.mustDoID = reminderID
+            setMustDo(reminderID, state: &state)
             return [.trace(.cardReaction, ["action": "mustDo", "set": .bool(reminderID != nil)])]
 
         case .removeFromPlan(let reminderID):
@@ -540,9 +543,17 @@ nonisolated extension DayEngine {
                 return []
             }
             state.taskProposals.removeAll { $0.id == id }
+            // Already in Reminders (the owner wrote it down meanwhile): no twin.
+            let exists = snapshot.agenda.open.contains {
+                $0.title.lowercased() == proposal.title.lowercased()
+            }
             let decided = DayEffect.trace(
-                .taskDecided, ["added": .bool(add), "dated": .bool(proposal.due != nil)])
-            return add
+                .taskDecided,
+                [
+                    "added": .bool(add && !exists), "dated": .bool(proposal.due != nil),
+                    "existed": .bool(exists),
+                ])
+            return add && !exists
                 ? [.mutateAgenda(.add(title: proposal.title, due: proposal.due)), decided]
                 : [decided]
 
@@ -552,6 +563,13 @@ nonisolated extension DayEngine {
             state.cards[index].kept = true
             return [reaction("kept", card: state.cards[index], snapshot: snapshot)]
         }
+    }
+
+    /// The day's must-do. A different one starts undone: the done mark was
+    /// the old one's.
+    static func setMustDo(_ reminderID: String?, state: inout DayState) {
+        if state.mustDoID != reminderID { state.mustDoDoneAt = nil }
+        state.mustDoID = reminderID
     }
 
     /// Take an item off a Breakpoint or Triage card.

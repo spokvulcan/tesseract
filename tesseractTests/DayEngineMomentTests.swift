@@ -344,6 +344,13 @@ struct WeekFocusTests {
         let monday = DayEngine.decide(.tick, snapshot: snapshot(at(5, 9)), state: accepted.state)
         #expect(monday.state.weekFocus == "the job search")
         #expect(monday.state.day == DayKey(rawValue: "2026-10-05"))
+        // Set after midnight, it still belongs to Sunday's look-back: through
+        // the next Monday, not a day more.
+        var late = accepted.state
+        late.weekFocusSetAt = at(5, 1)
+        late.day = DayKey(rawValue: "2026-10-12")
+        #expect(late.rolledOver(to: DayKey(rawValue: "2026-10-12")).weekFocus == "the job search")
+        #expect(late.rolledOver(to: DayKey(rawValue: "2026-10-13")).weekFocus == nil)
         // Ten days on, with no new look-back: it is gone.
         var later = monday.state
         later.day = DayKey(rawValue: "2026-10-13")
@@ -412,6 +419,50 @@ struct MustDoDaysTests {
         var later = next
         later.day = DayKey(rawValue: "2026-10-08")
         #expect(later.rolledOver(to: DayKey(rawValue: "2026-10-09")).mustDoDays.isEmpty)
+    }
+
+    static func spec(doneAt: Date) -> AgendaReminder {
+        AgendaReminder(
+            id: "R1", title: "Spec", listID: "w", listTitle: "Work", isCompleted: true,
+            completedAt: doneAt)
+    }
+
+    @Test func aDifferentMustDoStartsUndone() {
+        var state = DayState(day: DayKey(rawValue: "2026-09-30"))
+        state.syncedNudgeIDs = []
+        state.mustDoID = "R1"
+        state.mustDoDoneAt = DayEngineMomentTests.local(30, 11)
+        var agenda = AgendaSnapshot.empty
+        agenda.access = .full
+        agenda.doneToday = [Self.spec(doneAt: DayEngineMomentTests.local(30, 11))]
+        let changed = DayEngine.decide(
+            .cardAction(.setMustDo(reminderID: "R2")),
+            snapshot: DaySnapshot(
+                now: DayEngineMomentTests.local(30, 13), settings: DaySettings(), agenda: agenda,
+                ownerPresent: true),
+            state: state)
+        #expect(changed.state.mustDoID == "R2")
+        #expect(changed.state.mustDoDoneAt == nil)
+        let next = changed.state.rolledOver(to: DayKey(rawValue: "2026-10-01"))
+        #expect(next.mustDoDays == ["2026-09-30": false])
+    }
+
+    @Test func aMustDoDoneOnThePhoneWhileTheMacSleptCountsForItsDay() {
+        var state = DayState(day: DayKey(rawValue: "2026-09-30"))
+        state.syncedNudgeIDs = []
+        state.mustDoID = "R1"
+        // Done at 23:00; the Mac wakes the next morning.
+        var agenda = AgendaSnapshot.empty
+        agenda.access = .full
+        agenda.doneThisWeek = [Self.spec(doneAt: DayEngineMomentTests.local(30, 23))]
+        let morning = DayEngine.decide(
+            .tick,
+            snapshot: DaySnapshot(
+                now: DayEngineMomentTests.local(31, 8), settings: DaySettings(), agenda: agenda,
+                ownerPresent: false),
+            state: state)
+        #expect(morning.state.day == DayKey(rawValue: "2026-10-01"))
+        #expect(morning.state.mustDoDays == ["2026-09-30": true])
     }
 }
 

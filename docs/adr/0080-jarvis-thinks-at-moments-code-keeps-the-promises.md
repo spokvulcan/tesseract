@@ -374,11 +374,13 @@ the owner must remember to read does not. What changed:
   Breakpoint noted a colleague "still waiting on that request from you" and
   the Night Reflection's draft said to send it early, but nothing made it a
   reminder. The Night Reflection may now answer `tasks` (at most three, most
-  nights none): code drops any already among the open tasks, fixes the due
-  day (the reflection's tomorrow, or the Inbox), and keeps them under "Jarvis
-  noticed" that night and the next day (`DayState.taskProposals`). Add makes
-  the reminder through the Agenda (with its undo); No lets it go
-  (`task.proposed`, `task.decided`).
+  nights none): code drops any already in Reminders, whatever its date,
+  fixes the due day (the reflection's tomorrow, or the Inbox), and keeps them
+  under "Jarvis noticed" that night and the next day
+  (`DayState.taskProposals`). Add makes the reminder through the Agenda (with
+  its undo), unless the owner wrote it down meanwhile — then the question
+  leaves Today and Add makes no twin; No lets it go (`task.proposed`,
+  `task.decided`).
 - **A week's focus.** Goals span weeks; the Companion saw one day at a
   time. On the week's last day the Evening Wrap-up also looks back on the
   week (the Agenda's snapshot now holds the week's completed reminders, read
@@ -393,8 +395,9 @@ the owner must remember to read does not. What changed:
   its link with the password; it showed under the event on the Day Line, in
   its nudge, in the agenda tool and in the plan's list of events to leave
   for. `AgendaEvent.place` reads it as "Zoom" (text around the link stays:
-  "Room 4 · Microsoft Teams"), which also tells the plan there is nothing to
-  travel to; the agent's listing keeps the link without its query.
+  "Room 4 · Microsoft Teams"; every link goes, and a passcode written beside
+  one), which also tells the plan there is nothing to travel to; the agent's
+  listing keeps the link without its query.
 - **The plan sees the likeliest tasks first.** The Day Opening and the
   Morning Plan listed up to 25 undated reminders in the store's order, most
   of them from collection lists (films, books, places) no day plans. They now

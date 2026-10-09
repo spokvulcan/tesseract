@@ -132,6 +132,27 @@ struct DeliveryLadderTests {
             frontmostBundleID: frontmost, frontmostIsGame: game)
     }
 
+    @Test func sittingDownEndsTheMorningOfQuietHoursThatStartAfterMidnight() {
+        let at = { (hour: Int, minute: Int) in
+            Calendar.current.date(
+                from: DateComponents(year: 2026, month: 9, day: 30, hour: hour, minute: minute))!
+        }
+        var settings = DaySettings()
+        settings.quietStartMinutes = 60
+        settings.quietEndMinutes = 9 * 60
+        let morning = DaySnapshot(
+            now: at(7, 30), settings: settings, agenda: .empty, ownerPresent: true)
+        #expect(DeliveryLadder.quietHoursAreNight(settings))
+        #expect(DeliveryLadder.dayStarted(at(7, 10), snapshot: morning))
+        // A daytime window holds, sat down or not.
+        settings.quietStartMinutes = 13 * 60
+        settings.quietEndMinutes = 15 * 60
+        let afternoon = DaySnapshot(
+            now: at(13, 30), settings: settings, agenda: .empty, ownerPresent: true)
+        #expect(!DeliveryLadder.quietHoursAreNight(settings))
+        #expect(!DeliveryLadder.dayStarted(at(7, 10), snapshot: afternoon))
+    }
+
     @Test func aGameInFrontGetsNoPanelAndNoVoice() {
         let playing = Self.snapshot(hour: 20, frontmost: "com.valvesoftware.dota2", game: true)
         #expect(DeliveryLadder.rungs(for: .normal, snapshot: playing) == [.today])

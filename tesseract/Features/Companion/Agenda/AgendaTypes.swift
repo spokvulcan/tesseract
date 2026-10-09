@@ -98,20 +98,36 @@ nonisolated enum AgendaPlace {
         guard let location = location?.trimmingCharacters(in: .whitespacesAndNewlines),
             !location.isEmpty
         else { return nil }
-        guard let range = location.range(of: #"https?://[^\s,;]+"#, options: .regularExpression)
-        else { return location }
-        let url = URL(string: String(location[range]))
-        let host = (url?.host ?? "").lowercased()
-        var service =
-            services.first { host == $0.host || host.hasSuffix("." + $0.host) }?.name
-            ?? (host.hasPrefix("www.") ? String(host.dropFirst(4)) : host)
-        if withLink, let url {
-            service += " — \(url.host ?? "")\(url.path)"
+        // Every link goes, the first names the service; a passcode written
+        // beside it goes too.
+        var rest = location
+        var service: (name: String, link: String)?
+        while let range = rest.range(
+            of: #"(?i)https?://[^\s,;]+"#, options: .regularExpression)
+        {
+            if service == nil, let url = URL(string: String(rest[range])),
+                let host = url.host?.lowercased(), !host.isEmpty
+            {
+                let name =
+                    services.first { host == $0.host || host.hasSuffix("." + $0.host) }?.name
+                    ?? (host.hasPrefix("www.") ? String(host.dropFirst(4)) : host)
+                service = (name, "\(host)\(url.path)")
+            }
+            rest.replaceSubrange(range, with: " ")
         }
-        let rest = location.replacingCharacters(in: range, with: "")
+        // "Passcode: 1234", "pwd=abc", "PIN 4455" — not "Pin Oak Park".
+        rest = rest.replacingOccurrences(
+            of: #"(?i)\b(pass ?code|password|pwd|pin)\b(\s*[:=#]\s*|\s+(?=\d))\S+"#,
+            with: " ", options: .regularExpression)
+        rest = rest.replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression)
             .trimmingCharacters(
                 in: CharacterSet(charactersIn: " -–—/|,;:").union(.whitespacesAndNewlines))
-        return rest.isEmpty ? service : "\(rest) · \(service)"
+        guard let service else { return rest.isEmpty ? nil : rest }
+        let named = withLink ? "\(service.name) — \(service.link)" : service.name
+        if rest.isEmpty { return named }
+        // "Zoom Meeting" already says Zoom.
+        if !withLink, rest.lowercased().contains(service.name.lowercased()) { return rest }
+        return "\(rest) · \(named)"
     }
 }
 

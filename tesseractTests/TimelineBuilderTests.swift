@@ -100,6 +100,32 @@ struct TimelineBuilderTests {
         #expect(timeline.doneCount == 1)
     }
 
+    @Test func theWayToAnEventIsBusyOnlyWhileTheEventStands() {
+        func freeBeforeTheOneOnOne(_ departure: Departure) -> [Int] {
+            var facts = Self.facts(now: Self.local(30, 10, 30))
+            facts.departures = [departure]
+            return TimelineBuilder.build(facts: facts).rows.compactMap { row in
+                guard case .free(let minutes) = row.kind, row.start >= Self.local(30, 11),
+                    row.start < Self.local(30, 13)
+                else { return nil }
+                return minutes
+            }
+        }
+        // Leave at 12:30 for the 1:1 at 13:00: the way there is not free.
+        let leave = Departure(
+            eventID: "E2", title: "1:1", at: Self.local(30, 12, 30),
+            eventStart: Self.local(30, 13))
+        #expect(freeBeforeTheOneOnOne(leave) == [75])
+        // Planned for a start the 1:1 no longer has, or for an event since
+        // cancelled: the time is free again.
+        var moved = leave
+        moved.eventStart = Self.local(30, 13, 30)
+        #expect(freeBeforeTheOneOnOne(moved) == [105])
+        var cancelled = leave
+        cancelled.eventID = "E9"
+        #expect(freeBeforeTheOneOnOne(cancelled) == [105])
+    }
+
     @Test func freeGapsSkipShortOnes() {
         let gaps = TimelineBuilder.freeGaps(
             from: Self.local(30, 9), to: Self.local(30, 12),

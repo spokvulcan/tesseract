@@ -269,6 +269,12 @@ struct AgendaPlaceTests {
             ("https://www.example.org/call", "example.org"),
             ("Efstaleiti 1", "Efstaleiti 1"),
             ("  ", nil),
+            // Every link goes, any case, and a passcode written beside one.
+            ("HTTPS://ZOOM.US/j/123?pwd=x, https://zoom.us/j/123", "Zoom"),
+            ("Zoom Meeting https://zoom.us/j/1 Passcode: 1234", "Zoom Meeting"),
+            ("Room 4 PIN 4455 https://meet.google.com/abc", "Room 4 · Google Meet"),
+            ("Pin Oak Park", "Pin Oak Park"),
+            ("https:///no-host", nil),
         ] as [(String, String?)])
     func aLocationReadsAsAPlace(_ location: String, _ label: String?) {
         #expect(AgendaPlace.label(location) == label)

@@ -477,9 +477,13 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         var days = mustDoDays
         if mustDoID != nil { days[self.day.rawValue] = mustDoDoneAt != nil }
         next.mustDoDays = days.filter { $0.key > Self.weekBefore(day) }
-        // The week's focus holds until the next look-back (a week, a day's grace).
-        if let setAt = weekFocusSetAt, let start = day.date(),
-            start.timeIntervalSince(setAt) < 8 * 24 * 3600
+        // The week's focus holds until the next look-back (a week, a day's
+        // grace), counted from the day it was set: a look-back after
+        // midnight belongs to the evening before.
+        if let setAt = weekFocusSetAt, let from = DayKey(for: setAt).date(),
+            let to = day.date(),
+            let days = Calendar.current.dateComponents([.day], from: from, to: to).day,
+            days <= 8
         {
             next.weekFocus = weekFocus
             next.weekFocusSetAt = setAt

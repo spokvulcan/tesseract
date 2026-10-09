@@ -37,12 +37,11 @@ nonisolated enum DayEngine {
         let today = DayKey(for: snapshot.now, calendar: snapshot.calendar)
         // Counted before the rollover, so cards a new day clears clear the glyph.
         let waitingBefore = waitingCount(state, now: snapshot.now)
-        if state.day != today { state = state.rolledOver(to: today) }
-        // The must-do seen done, for the week's look-back.
-        if let mustDo = state.mustDoID, state.mustDoDoneAt == nil,
-            snapshot.agenda.doneToday.contains(where: { $0.id == mustDo })
-        {
-            state.mustDoDoneAt = snapshot.now
+        if state.day != today {
+            // Done on the phone while the Mac slept through 04:00: it counts
+            // for the day it was the must-do of.
+            noteMustDoDone(snapshot: snapshot, state: &state)
+            state = state.rolledOver(to: today)
         }
 
         switch signal {
@@ -88,6 +87,12 @@ nonisolated enum DayEngine {
                 effects.append(.syncNudges([]))
                 state.syncedNudgeIDs = []
             }
+            // The panel closes with the Companion: its cue comes back by its
+            // rules once the Companion is on again.
+            if let key = state.cueOnPanel {
+                state.cuedSteps[key] = nil
+                state.cueOnPanel = nil
+            }
 
         case .presenceReturned(let awayFrom):
             effects += ownerReturned(awayFrom: awayFrom, snapshot: snapshot, state: &state)
@@ -128,10 +133,21 @@ nonisolated enum DayEngine {
             effects += nudgesDelivered(delivered, state: &state)
         }
 
+        // After the signal: a must-do set by it may be done already.
+        noteMustDoDone(snapshot: snapshot, state: &state)
         holdCueUnderCard(effects, snapshot: snapshot, state: &state)
         let waitingAfter = waitingCount(state, now: snapshot.now)
         if waitingAfter != waitingBefore { effects.append(.setWaiting(waitingAfter)) }
         return Decision(state: state, effects: effects)
+    }
+
+    /// The must-do seen done, for the week's look-back.
+    private static func noteMustDoDone(snapshot: DaySnapshot, state: inout DayState) {
+        guard let mustDo = state.mustDoID, state.mustDoDoneAt == nil,
+            (snapshot.agenda.doneToday + snapshot.agenda.doneThisWeek)
+                .contains(where: { $0.id == mustDo })
+        else { return }
+        state.mustDoDoneAt = snapshot.now
     }
 
     // MARK: - Triggers
@@ -188,9 +204,8 @@ nonisolated enum DayEngine {
         let settings = snapshot.settings
         // Quiet hours that start at night (a daytime window is no bedtime),
         // still on, once a night (across the 04:00 rollover too).
-        let nightStart =
-            settings.quietStartMinutes >= 18 * 60 || settings.quietStartMinutes < 4 * 60
-        guard settings.windDown, nightStart, DeliveryLadder.isQuietHours(snapshot),
+        guard settings.windDown, DeliveryLadder.quietHoursAreNight(settings),
+            DeliveryLadder.isQuietHours(snapshot),
             state.windDownAt.map({ snapshot.now.timeIntervalSince($0) >= 12 * 3600 }) ?? true,
             !snapshot.frontmostIsGame,
             !DeliveryLadder.interruptionFreeApps.contains(snapshot.frontmostBundleID ?? "")

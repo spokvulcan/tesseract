@@ -181,11 +181,13 @@ struct NightReflectionTests {
             from: DateComponents(year: 2026, month: 9, day: day, hour: hour, minute: minute))!
     }
 
-    static func snapshot(at now: Date, power: PowerState = .nominal, present: Bool = false)
-        -> DaySnapshot
-    {
+    static func snapshot(
+        at now: Date, power: PowerState = .nominal, present: Bool = false,
+        open: [AgendaReminder] = []
+    ) -> DaySnapshot {
         var agenda = AgendaSnapshot.empty
         agenda.access = .full
+        agenda.open = open
         return DaySnapshot(
             now: now, settings: DaySettings(), agenda: agenda, ownerPresent: present, power: power,
             profile: ["Works on Tesseract in the evenings."])
@@ -275,6 +277,36 @@ struct NightReflectionTests {
         // Left undecided, they don't outlive the next day.
         let dayAfter = morning.state.rolledOver(to: DayKey(rawValue: "2026-10-02"))
         #expect(dayAfter.taskProposals.isEmpty)
+    }
+
+    @Test func aTaskAlreadyInRemindersIsNeitherProposedNorAddedTwice() throws {
+        // Already due on Friday: the night proposes it again, and another.
+        let friday = AgendaReminder(
+            id: "R9", title: "Send the request", listID: "w", listTitle: "Work",
+            due: Self.local(33, 9))
+        var state = Self.afterWrapUp()
+        state.running = .nightReflection
+        let reply =
+            #"{"carry_over": "Good.", "tasks": [{"title": "send the request", "when": "tomorrow"}, {"title": "Book the bike service", "when": "later"}]}"#
+        let measure = MomentMeasure(
+            promptTokens: 3000, outputTokens: 400, prefillSeconds: 0.5, generateSeconds: 12,
+            latencySeconds: 13, hitCap: false, modelID: "m")
+        let night = DayEngine.decide(
+            .momentOutcome(
+                MomentRequest(kind: .nightReflection, trigger: .night, text: "x"),
+                .reply(reply, measure)),
+            snapshot: Self.snapshot(at: Self.local(30, 22), open: [friday]), state: state)
+        #expect(night.state.taskProposals.map(\.title) == ["Book the bike service"])
+        // The owner writes the bike service down in the morning: Add adds no twin.
+        let written = AgendaReminder(
+            id: "R10", title: "Book the bike service", listID: "inbox", listTitle: "Reminders")
+        let proposal = try #require(night.state.taskProposals.first)
+        let added = DayEngine.decide(
+            .cardAction(.taskProposal(id: proposal.id, add: true)),
+            snapshot: Self.snapshot(at: Self.local(31, 8), open: [friday, written]),
+            state: night.state)
+        #expect(!added.effects.contains { if case .mutateAgenda = $0 { true } else { false } })
+        #expect(added.state.taskProposals.isEmpty)
     }
 
     @Test func itsNoteOpensTomorrowAndItsProposalsGoToTheProfile() throws {
