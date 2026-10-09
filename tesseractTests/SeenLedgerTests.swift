@@ -93,6 +93,30 @@ struct SeenLedgerTests {
         #expect(Set(ledger.untriaged(now: now).map(\.id)) == ["ci-fail", "anna"])
     }
 
+    @Test func aSenderRuleFindsTheSenderWhereverTheBannerShowsIt() {
+        let anna = TriageRule(sender: "Anna", action: .raise, phrase: "always Anna")
+        // Messages: the title is the sender.
+        #expect(anna.matches(Self.notification("m", app: "Messages", title: "Anna")))
+        // Slack: the title is the workspace; a direct message's sender line,
+        // or the name before a channel message's colon, is who wrote.
+        #expect(
+            anna.matches(
+                ObservedNotification(
+                    id: "dm", app: "Slack", title: "Acme", subtitle: "Anna", body: "Got a minute?",
+                    arrivedAt: Self.base)))
+        #expect(
+            anna.matches(
+                ObservedNotification(
+                    id: "ch", app: "Slack", title: "Acme", subtitle: "#qa",
+                    body: "Anna: can you look?", arrivedAt: Self.base)))
+        // Someone else in the same workspace is not Anna.
+        #expect(
+            !anna.matches(
+                ObservedNotification(
+                    id: "roman", app: "Slack", title: "Acme", subtitle: "Roman",
+                    body: "Lunch?", arrivedAt: Self.base)))
+    }
+
     @Test func aRuleMustNarrowSomething() {
         let everything = TriageRule(action: .ignore, phrase: "")
         #expect(!everything.isSpecific)

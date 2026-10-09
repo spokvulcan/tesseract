@@ -158,12 +158,28 @@ nonisolated struct TriageRule: Sendable, Equatable, Hashable, Codable, Identifia
     func matches(_ notification: ObservedNotification) -> Bool {
         guard isSpecific else { return false }
         if let app, notification.app.lowercased() != app.lowercased() { return false }
-        if let sender, !notification.title.lowercased().contains(sender.lowercased()) {
-            return false
+        if let sender {
+            let wanted = sender.lowercased()
+            guard Self.senderLines(of: notification).contains(where: { $0.contains(wanted) })
+            else { return false }
         }
         let text = "\(notification.title) \(notification.subtitle) \(notification.body)"
             .lowercased()
         return keywords.allSatisfy { text.contains($0.lowercased()) }
+    }
+}
+
+nonisolated extension TriageRule {
+    /// Where a banner says who it is from: the title (Messages, Mail,
+    /// WhatsApp), a chat app's sender line (Slack's subtitle in a direct
+    /// message, where the title is the workspace), or the name before a
+    /// channel message's colon ("Anna: can you look?").
+    static func senderLines(of notification: ObservedNotification) -> [String] {
+        var lines = [notification.title, notification.subtitle]
+        if let colon = notification.body.firstIndex(of: ":") {
+            lines.append(String(notification.body[..<colon]))
+        }
+        return lines.map { $0.lowercased() }
     }
 }
 

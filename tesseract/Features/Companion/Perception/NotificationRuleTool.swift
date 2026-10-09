@@ -54,7 +54,10 @@ func createNotificationRuleTool(store: TriageRuleStore) -> AgentToolDefinition {
                 "app": PropertySchema(
                     type: "string", description: "The app's name, e.g. Slack or GitHub."),
                 "sender": PropertySchema(
-                    type: "string", description: "Who it's from (matched in the title)."),
+                    type: "string",
+                    description:
+                        "Who it's from: a name, matched where the banner shows its sender (the title, or a chat app's sender line)."
+                ),
                 "keywords": PropertySchema(
                     type: "string", description: "Comma-separated words that must all appear."),
                 "then": PropertySchema(
