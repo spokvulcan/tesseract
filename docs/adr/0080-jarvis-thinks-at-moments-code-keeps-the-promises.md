@@ -473,7 +473,11 @@ the owner must remember to read does not. What changed:
   must-do among them") — the pressure comes off once the main thing is in.
 - **The trace measures it**: `cue.presented` (start or end, how late, the
   slot's length, the must-do) and `cue.reaction` (the choice, the time to
-  react).
+  react; "startSmall" among them); `card.reaction` "fitted" (slid tasks fit
+  back in, how many); and `night.ended` at the day's first sit-down (how
+  long the Mac was left, and whether the owner was at it past midnight), so
+  a week's trace shows whether the wind-down and a light day change the
+  nights. `scripts/companion-trace-report.py` prints them by day.
 - `JarvisPanelGalleryTests` renders the panel's content over fixture cards,
   each at the height the panel fits to it; `TEST_RUNNER_PANEL_GALLERY_DIR`
   writes the renders as PNGs.

@@ -159,6 +159,26 @@ struct DayEngineMomentTests {
         #expect(Self.moments(ordinary.effects).first?.text.contains("Last night") == false)
     }
 
+    @Test func theDaysFirstSitDownMeasuresTheNight() throws {
+        // At the Mac until 01:20, back at 07:40: 6 h 20 min away, up late.
+        var state = Self.state()
+        state.lastPresentAt = Self.local(30, 1, 20)
+        let sitDown = DayEngine.decide(
+            .presenceReturned(awayFrom: Self.local(30, 1, 20)),
+            snapshot: Self.snapshot(at: Self.local(30, 7, 40)), state: state)
+        #expect(
+            sitDown.effects.contains(
+                .trace(.nightEnded, ["minutesAway": .int(380), "upLate": .bool(true)])))
+        // A long afternoon away is not a night.
+        let afternoon = DayEngine.decide(
+            .presenceReturned(awayFrom: Self.local(30, 12)),
+            snapshot: Self.snapshot(at: Self.local(30, 17)), state: sitDown.state)
+        #expect(
+            !afternoon.effects.contains {
+                if case .trace(.nightEnded, _) = $0 { true } else { false }
+            })
+    }
+
     @Test func morningPlanRunsOncePerDay() {
         var state = Self.state()
         state.morningPlanAt = Self.local(30, 7)

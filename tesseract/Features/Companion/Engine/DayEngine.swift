@@ -161,6 +161,25 @@ nonisolated enum DayEngine {
     static func ownerReturned(
         awayFrom: Date, snapshot: DaySnapshot, state: inout DayState
     ) -> [DayEffect] {
+        // The night, measured at the day's first sit-down (an absence that
+        // began before the day's 04:00 start): how long the Mac was left.
+        var night: [DayEffect] = []
+        let away = snapshot.now.timeIntervalSince(awayFrom)
+        if away >= DaySettings.overnightGap,
+            awayFrom < (state.day.start(calendar: snapshot.calendar) ?? snapshot.now)
+        {
+            let upLate = snapshot.facts(state: state).upLateUntil != nil
+            night = [
+                .trace(
+                    .nightEnded, ["minutesAway": .int(Int(away / 60)), "upLate": .bool(upLate)])
+            ]
+        }
+        return night + sittingDown(awayFrom: awayFrom, snapshot: snapshot, state: &state)
+    }
+
+    private static func sittingDown(
+        awayFrom: Date, snapshot: DaySnapshot, state: inout DayState
+    ) -> [DayEffect] {
         let away = snapshot.now.timeIntervalSince(awayFrom)
         let hour = snapshot.minuteOfDay / 60
         let afterTheNight =

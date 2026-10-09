@@ -97,6 +97,10 @@ nonisolated enum CompanionTraceEvent: String, Sendable, Equatable, CaseIterable 
     /// Quiet hours began with the owner at the Mac: the night's one banner
     /// said when tomorrow starts. Carries the minutes until then.
     case windDown = "night.wind-down"
+    /// The day's first sit-down after the night: how long the Mac was left
+    /// (minutes) and whether the owner was at it past midnight — the
+    /// measure of whether the wind-down and a light day change the nights.
+    case nightEnded = "night.ended"
 
     // MARK: - governor.*
 

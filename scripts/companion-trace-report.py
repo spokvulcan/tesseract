@@ -10,7 +10,8 @@ prefix cache), cards by delivery rung, card reactions by action ("kept" apart
 from "dismissed"), Step Cues by phase and the owner's choices, the wind-down,
 nudges (event and leave), notifications by source, Triage, and the tasks the
 Night Reflection proposed and what the owner decided. A Step Cue shown ten
-minutes or more after its moment counts as late. Counts only — no titles,
+minutes or more after its moment counts as late. The night before is how long
+the Mac was left before the day's first sit-down. Counts only — no titles,
 messages or names.
 """
 
@@ -47,6 +48,7 @@ def summarise(path):
     triage = [0, 0]
     wind_down = 0
     tasks = collections.Counter()
+    night = None
     for record in records(path):
         event = record["event"]
         fields = record.get("fields", {})
@@ -82,6 +84,10 @@ def summarise(path):
             triage[1] += fields.get("raised", 0)
         elif event == "night.wind-down":
             wind_down += 1
+        elif event == "night.ended":
+            minutes = fields.get("minutesAway", 0)
+            night = "%d h %02d min away%s" % (
+                minutes // 60, minutes % 60, ", up past midnight" if fields.get("upLate") else "")
         elif event == "task.proposed":
             tasks["proposed"] += fields.get("count", 0)
         elif event == "task.decided":
@@ -102,6 +108,7 @@ def summarise(path):
         "nudges": dict(nudges),
         "notifications": dict(sources),
         "triage runs / raised": "%d / %d" % tuple(triage),
+        "night before": night,
         "wind-down": wind_down,
         "task proposals": dict(tasks),
     }
