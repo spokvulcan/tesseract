@@ -44,7 +44,8 @@ nonisolated extension DayEngine {
         }
         state.running = kind
         let request = MomentRequest(
-            kind: kind, trigger: trigger, text: body, attempt: attempt, context: context)
+            kind: kind, trigger: trigger, text: body, attempt: attempt, context: context,
+            day: state.day)
         return [
             .trace(
                 .momentStarted,
@@ -166,6 +167,9 @@ nonisolated extension DayEngine {
         _ request: MomentRequest, _ outcome: MomentOutcome, snapshot: DaySnapshot,
         state: inout DayState
     ) -> [DayEffect] {
+        if let day = request.day, day != state.day {
+            return lateMomentFinished(request, outcome, snapshot: snapshot, state: &state)
+        }
         state.running = nil
         var fields = traceFields(request, outcome: outcome, power: snapshot.power)
         var failure = "unknown"
@@ -610,6 +614,33 @@ nonisolated extension DayEngine {
         state.plan.append(slot)
         state.plan.sort { $0.start < $1.start }
         markStartedIfNow(slot, snapshot: snapshot, state: &state)
+    }
+
+    /// A reply that landed after the 04:00 rollover (the lid closed on the
+    /// Night Reflection, the Mac woke past four) belongs to the day it ran
+    /// for. A night's reflection opens this morning instead — its note, its
+    /// draft and its proposed tasks, where the morning has none — without
+    /// taking tonight's; anything else is dropped (a wrap-up's leftovers were
+    /// that day's). The new day's own moment, if one runs, keeps running.
+    private static func lateMomentFinished(
+        _ request: MomentRequest, _ outcome: MomentOutcome, snapshot: DaySnapshot,
+        state: inout DayState
+    ) -> [DayEffect] {
+        var fields = traceFields(request, outcome: outcome, power: snapshot.power)
+        fields["late"] = true
+        guard request.kind == .nightReflection, case .reply(let text, _) = outcome,
+            case .card(.reflection(let card)) = CardParser.nightReflection(
+                text, facts: snapshot.facts(state: state), open: snapshot.agenda.open)
+        else {
+            fields["reason"] = "after the rollover"
+            return [.trace(.momentFailed, fields)]
+        }
+        state.carryOver = state.carryOver ?? card.carryOver
+        if state.draft.isEmpty { state.draft = card.tomorrow }
+        if state.taskProposals.isEmpty { state.taskProposals = card.tasks }
+        var effects: [DayEffect] = [.trace(.momentFinished, fields)]
+        if !card.proposals.isEmpty { effects.append(.proposeFacts(card.proposals)) }
+        return effects
     }
 
     /// The day's must-do. A different one starts undone: the done mark was

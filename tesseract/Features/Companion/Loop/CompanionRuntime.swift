@@ -206,11 +206,13 @@ final class CompanionRuntime {
     private func process(_ signal: DaySignal) async {
         let snapshot = snapshot()
         let decision = DayEngine.decide(signal, snapshot: snapshot, state: state)
-        if decision.state.day != state.day { thread.show(day: decision.state.day) }
         if decision.state != state {
             state = decision.state
             stateStore.save(state)
         }
+        // The thread turns to the new day only between moments: one in
+        // flight at 04:00 finishes in its own day's thread, not the next.
+        if thread.momentRunning == nil { thread.show(day: state.day) }
         presence.setClock(isActive ? DayEngine.clock(snapshot: snapshot, state: state) : nil)
         for effect in decision.effects { await perform(effect) }
     }
@@ -274,7 +276,8 @@ final class CompanionRuntime {
             delivery.retractPanel(cardID)
 
         case .speak(let line):
-            delivery.speak(line)
+            // A moment that finishes after the Companion went off stays quiet.
+            if isActive { delivery.speak(line) }
 
         case .postBanner(let title, let body):
             if isActive { await notifier.post(title: title, body: body) }

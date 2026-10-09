@@ -82,6 +82,9 @@ nonisolated struct MomentRequest: Sendable, Equatable, Codable {
     /// Card-specific facts the engine needs back with the result (the away
     /// span of a Breakpoint, the notification ids a Triage covered).
     var context: MomentContext = .init()
+    /// The day it ran for: a reply that lands after the 04:00 rollover still
+    /// belongs to it.
+    var day: DayKey? = nil
 }
 
 nonisolated struct MomentContext: Sendable, Equatable, Codable {

@@ -309,6 +309,41 @@ struct NightReflectionTests {
         #expect(added.state.taskProposals.isEmpty)
     }
 
+    @Test func aReflectionThatLandsAfterFourOpensThisMorningInstead() throws {
+        // The reflection ran for the 30th; its reply lands at 04:10 on the 1st.
+        var state = Self.afterWrapUp()
+        state.running = .nightReflection
+        let reply =
+            #"{"carry_over": "Finish the spec first.", "tomorrow": ["Finish the spec"], "tasks": [{"title": "Send the request", "when": "tomorrow"}]}"#
+        let measure = MomentMeasure(
+            promptTokens: 3000, outputTokens: 400, prefillSeconds: 0.5, generateSeconds: 12,
+            latencySeconds: 13, hitCap: false, modelID: "m")
+        let request = MomentRequest(
+            kind: .nightReflection, trigger: .night, text: "x",
+            day: DayKey(rawValue: "2026-09-30"))
+        let late = DayEngine.decide(
+            .momentOutcome(request, .reply(reply, measure)),
+            snapshot: Self.snapshot(at: Self.local(31, 4, 10)), state: state)
+        #expect(late.state.day == DayKey(rawValue: "2026-10-01"))
+        #expect(late.state.carryOver == "Finish the spec first.")
+        #expect(late.state.draft == ["Finish the spec"])
+        #expect(late.state.taskProposals.map(\.title) == ["Send the request"])
+        // Tonight's reflection is still to come.
+        #expect(late.state.nightReflectionAt == nil)
+        // A wrap-up that lands late is dropped: its leftovers were that day's.
+        var evening = Self.afterWrapUp()
+        evening.eveningWrapUpAt = nil
+        evening.running = .eveningWrapUp
+        let wrapUp = MomentRequest(
+            kind: .eveningWrapUp, trigger: .eveningTime, text: "x",
+            day: DayKey(rawValue: "2026-09-30"))
+        let dropped = DayEngine.decide(
+            .momentOutcome(wrapUp, .reply(#"{"line": "Good day.", "leftovers": []}"#, measure)),
+            snapshot: Self.snapshot(at: Self.local(31, 4, 10)), state: evening)
+        #expect(dropped.state.eveningWrapUpAt == nil)
+        #expect(!dropped.state.cards.contains { $0.kind == .eveningWrapUp })
+    }
+
     @Test func itsNoteOpensTomorrowAndItsProposalsGoToTheProfile() throws {
         var state = Self.afterWrapUp()
         state.running = .nightReflection
