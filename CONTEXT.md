@@ -1951,7 +1951,9 @@ next Breakpoint; noise is never shown. Owner rules apply first.
 _Avoid_: priority, category (the App Store's).
 
 **Evening Wrap-up**:
-The moment at the evening time (or the next presence before 03:00): what got
+The moment at the evening time (or the next presence before 03:00; after the
+step the owner started, if one is running — it doesn't interrupt a focus
+session): what got
 done, and each leftover rolled to tomorrow or another day, kept for later, or
 let go. Nothing is ever labelled missed or failed. On the week's last day (the
 day before the calendar's first weekday) it also looks back on the week — what

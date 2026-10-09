@@ -200,9 +200,13 @@ nonisolated enum DayEngine {
         return !card.dismissed && !card.kept && card.createdAt >= awayFrom
     }
 
-    /// The Evening Wrap-up is due from the evening time until 03:00, once.
+    /// The Evening Wrap-up is due from the evening time until 03:00, once —
+    /// after the step the owner started, if one is running: like a Step
+    /// Cue, it doesn't interrupt a focus session.
     static func eveningIfDue(snapshot: DaySnapshot, state: inout DayState) -> [DayEffect] {
-        guard state.eveningWrapUpAt == nil, isEvening(snapshot) else { return [] }
+        guard state.eveningWrapUpAt == nil, isEvening(snapshot),
+            focus(snapshot: snapshot, state: state) == nil
+        else { return [] }
         return run(.eveningWrapUp, trigger: .eveningTime, snapshot: snapshot, state: &state)
     }
 

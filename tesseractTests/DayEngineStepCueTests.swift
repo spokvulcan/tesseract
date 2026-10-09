@@ -784,6 +784,31 @@ struct DayEngineStepCueTests {
         #expect(!gone.state.plan.contains { $0.reminderID == "letter" })
     }
 
+    @Test func theEveningWrapUpWaitsForAStepTheOwnerStarted() throws {
+        // The letter, started at 20:50 for twenty minutes, runs over 21:00.
+        var state = Self.letterOnly()
+        state.plan = [Placement(reminderID: "letter", start: Self.local(20, 50), minutes: 20)]
+        state.startedSteps = [StepCue.key(state.plan[0])]
+        state.cuedSteps = [StepCue.key(state.plan[0]): Self.local(20, 50)]
+        state.lastTickAt = Self.local(20, 59)
+        let nine = Self.tick(state, at: Self.local(21))
+        #expect(!nine.effects.contains { if case .runMoment = $0 { true } else { false } })
+        #expect(nine.state.eveningWrapUpAt == nil)
+        // At its end the Wrap-up starts thinking (its card goes first), and
+        // the check-in follows a tick later.
+        let end = Self.tick(nine.state, at: Self.local(21, 10))
+        #expect(
+            end.effects.contains {
+                if case .runMoment(let request) = $0 {
+                    request.kind == .eveningWrapUp
+                } else {
+                    false
+                }
+            })
+        let next = Self.tick(end.state, at: Self.local(21, 11))
+        #expect(Self.cues(next.effects).first?.phase == .end)
+    }
+
     // MARK: Saved state
 
     @Test func aStateSavedBeforeCuesStillLoads() throws {

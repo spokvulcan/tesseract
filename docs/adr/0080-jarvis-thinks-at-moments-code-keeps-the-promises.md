@@ -285,7 +285,8 @@ the owner must remember to read does not. What changed:
   whose slot went meanwhile (a re-plan) still starts, half an hour from now. While it runs, no other cue interrupts it: what comes
   due meanwhile waits (the check-in names a step already under way) and is
   cued once the owner is free; of two check-ins, the step that ended last
-  comes first.
+  comes first. The Evening Wrap-up waits for it too: due at the evening time,
+  it runs once a step the owner started has ended.
 - **The panel's buttons are drawn by hand** (capsules, the main one in the
   accent): the panel is never key, and a system prominent button turns gray
   in a window that isn't.
