@@ -125,6 +125,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBarManager?.onTalkToAgent = { [weak self] in
             self?.navigateToAgent()
         }
+        menuBarManager?.onOpenToday = { [weak self] in
+            self?.navigateToToday()
+        }
         menuBarManager?.onQuit = {
             NSApp.terminate(nil)
         }

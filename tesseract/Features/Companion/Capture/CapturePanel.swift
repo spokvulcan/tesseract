@@ -84,6 +84,12 @@ final class CapturePanelController {
             return
         }
         // A tap: type.
+        openForTyping()
+    }
+
+    /// The bar, ready to type into: a tap of the hotkey, or the menu bar's
+    /// "Write a Thought Down…".
+    func openForTyping() {
         show()
         model.mode = .typing
         model.focusRequest += 1

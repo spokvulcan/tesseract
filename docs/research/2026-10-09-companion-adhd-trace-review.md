@@ -91,6 +91,7 @@ the ideas the changes lean on; it makes no claims beyond them.
 | — | An online meeting reads as its service ("Zoom"), never its link and password |
 | — | The plan's candidates come the likeliest first; collection lists are summed |
 | — | An empty Inbox teaches the capture hotkey; a Step Cue chimes softly |
+| — | The menu bar menu opens on the day: what is on now or next, Open Today, Write a Thought Down… |
 | — | Two code reviews of these changes, with every finding fixed and tested |
 
 The trace measures the new behaviour: `cue.presented` / `cue.reaction`,

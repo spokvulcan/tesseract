@@ -57,6 +57,10 @@ final class MenuBarManager: NSObject {
 
     // Feature callbacks (wired by the container).
     var onTakeAppshot: (() -> Void)?
+    /// The Companion's entries: whether it is on, Today, and the capture bar.
+    var companionOn: (() -> Bool)?
+    var onOpenToday: (() -> Void)?
+    var onCaptureThought: (() -> Void)?
     var onOffloadModel: (() -> Void)?
     var onClearMemoryCache: (() -> Void)?
     var onClearDiskCache: (() -> Void)?
@@ -373,6 +377,7 @@ extension MenuBarManager: NSMenuDelegate {
     /// and nothing can go stale between opens.
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        addJarvisSection(to: menu)
         addModelsSection(to: menu)
         addDictationSection(to: menu)
         addAgentSection(to: menu)
@@ -403,6 +408,37 @@ extension MenuBarManager: NSMenuDelegate {
     }
 
     // MARK: Sections
+
+    /// The day from any app: what the clock counts down, in words, Today,
+    /// and the capture bar — the one-key hotkey, named, for whoever never
+    /// found it.
+    private func addJarvisSection(to menu: NSMenu) {
+        guard companionOn?() == true else { return }
+        menu.addItem(.sectionHeader(title: "Jarvis"))
+        let now = Date()
+        if let clock, clock.until > now {
+            let line = NSMenuItem(
+                title: MenuBarClockText.tooltip(clock, now: now), action: nil, keyEquivalent: "")
+            line.isEnabled = false
+            menu.addItem(line)
+        }
+        menu.addItem(
+            actionItem(
+                title: "Open Today", symbol: "sun.max", action: #selector(openToday), badge: nil))
+        let capture = actionItem(
+            title: "Write a Thought Down…", symbol: "square.and.pencil",
+            action: #selector(captureThought), badge: nil)
+        let key = settings.captureHotkey
+        capture.toolTip =
+            key.isSingleModifier
+            ? "Or tap \(key.displayString) in any app; hold it to say one."
+            : "Or press \(key.displayString) in any app."
+        menu.addItem(capture)
+    }
+
+    @objc private func openToday() { onOpenToday?() }
+
+    @objc private func captureThought() { onCaptureThought?() }
 
     /// What is loaded and what it is doing — always visible, no submenu.
     private func addModelsSection(to menu: NSMenu) {

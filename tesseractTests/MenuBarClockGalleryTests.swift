@@ -42,6 +42,25 @@ struct MenuBarClockGalleryTests {
         }
     }
 
+    @Test func theMenuOpensOnTheDayWithJarvisOn() throws {
+        let manager = MenuBarManager(settings: SettingsManager(store: InMemorySettingsStore()))
+        let soon = Date().addingTimeInterval(12 * 60 + 30)
+        manager.updateClock(MenuBarClock(kind: .event, title: "Design review", until: soon))
+        var on = true
+        manager.companionOn = { on }
+        let menu = NSMenu()
+        manager.menuNeedsUpdate(menu)
+        let titles = menu.items.prefix(4).map(\.title)
+        #expect(titles.first == "Jarvis")
+        #expect(titles.dropFirst().first?.hasPrefix("Design review at ") == true)
+        #expect(titles.dropFirst().first?.hasSuffix("— in 13 min") == true)
+        #expect(Array(titles.suffix(2)) == ["Open Today", "Write a Thought Down…"])
+        // With the Companion off, the menu is as it was.
+        on = false
+        manager.menuNeedsUpdate(menu)
+        #expect(!menu.items.contains { $0.title == "Open Today" })
+    }
+
     /// A strip of menu bar, the status item's content left in it.
     private func render(_ text: String, dark: Bool) throws -> NSBitmapImageRep {
         let strip = NSView(frame: NSRect(x: 0, y: 0, width: 160, height: 24))

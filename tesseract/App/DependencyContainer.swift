@@ -611,6 +611,8 @@ final class DependencyContainer: ObservableObject {
         companionPresence.onClockChange = { [weak manager] clock in
             manager?.updateClock(clock)
         }
+        manager.companionOn = { [settingsManager] in settingsManager.companionHeartbeatEnabled }
+        manager.onCaptureThought = { [weak self] in self?.capturePanel.openForTyping() }
         manager.onTakeAppshot = { [appshotController] in
             Task { await appshotController.takeAppshot() }
         }
