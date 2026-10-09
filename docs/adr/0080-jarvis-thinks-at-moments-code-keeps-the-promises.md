@@ -362,7 +362,14 @@ the owner must remember to read does not. What changed:
   said "Until 15:00": a clock reading, which a time-blind owner has to turn
   into "how long" each time. It now leads with the time left ("40 min left,
   until 15:00 · then Design review at 15:00") over a short accent bar that
-  drains as the minutes go (`NowCard.span`).
+  drains as the minutes go (`NowCard.span`). That is for a step the owner
+  started; Today didn't know which, so a slot whose cue was closed, missed
+  or answered by mistake drained as if under way, with only Done — the
+  day's first must-do sat that way once its Done was taken back outside
+  the app.
+  A slot not started shows its time instead ("13:45–15:00 · then Design
+  review at 15:00") with Start now first, which starts it from this minute
+  like a cue's Start (`NowCardBuilder.Context.startedSteps`).
 - **The evening closes the day.** The owner's most frequent manual fix was
   taking planned tasks off the plan by hand — five of six times between 23:52
   and 00:24 — because at night the Now Card still led with a slid task

@@ -1782,8 +1782,10 @@ _Avoid_: dashboard, Mission Control (retired), home screen (unqualified).
 
 **Now Card**:
 The top of Today: the step the day is on (the meeting under way, the task
-whose slot is now — with how much of it is left, in words and a short bar
-that drains like a visual timer — a task that slid, free time and what fits
+whose slot is now — once the owner started it, how much of it is left, in
+words and a short bar that drains like a visual timer; not started (its cue
+closed, missed or answered by mistake), its time and Start now — a task
+that slid, free time and what fits
 in it, the next step, what's left, or a done day and how tomorrow starts —
 within half a day, how far off that is; in
 the evening it closes the day — what is still ahead tonight, else what got

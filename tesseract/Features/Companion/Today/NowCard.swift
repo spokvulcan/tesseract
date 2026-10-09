@@ -5,7 +5,8 @@
 //  The top of Today: where the owner is in the day and the one step that
 //  moves it on. Built by code from the Timeline, so it is there the moment
 //  Today opens and never waits on the model: the meeting they're in, the
-//  task whose slot is now, a task that slid and the next free slot for it,
+//  task whose slot is now (under way, or one click from starting), a task
+//  that slid and the next free slot for it,
 //  free time and what fits in it, what's next; in the evening, the day
 //  closing (never a slid task at midnight); and once the day is done, how
 //  tomorrow starts. Jarvis proposes; the owner says yes in one click.
@@ -58,6 +59,9 @@ nonisolated enum NowCardBuilder {
         var wrappedUp: Bool
         var eveningMinutes: Int
         var inboxCount: Int = 0
+        /// The slots the owner started, by `StepCue.key`: one whose time
+        /// is now is under way; one not started is offered to start.
+        var startedSteps: Set<String> = []
     }
 
     static let maxActions = 3
@@ -140,11 +144,31 @@ nonisolated enum NowCardBuilder {
                 detail: "Time to leave. It starts at \(clock(next.start)).", actions: [])
         }
 
-        // A task whose slot is now.
+        // A task whose slot is now: under way once the owner started it
+        // (its time left drains); else its time, one click from starting —
+        // a cue closed, missed or answered by mistake leaves Today the
+        // place to start it.
         if let task = timed.first(where: { task in
             guard let start = task.start else { return false }
             return start <= now && end(of: task) > now
         }) {
+            let start = task.start ?? now
+            let slot = Placement(reminderID: task.id, start: start, minutes: task.minutes)
+            guard context.startedSteps.contains(StepCue.key(slot)) else {
+                return NowCard(
+                    headline: task.reminder.title,
+                    detail: joined(
+                        "\(clock(start))–\(clock(end(of: task)))", then(after: end(of: task))),
+                    actions: [
+                        NowAction(
+                            kind: .place(
+                                reminderID: task.id, start: minute(now, facts.calendar),
+                                minutes: task.minutes),
+                            title: "Start now",
+                            help: "Start it now; Jarvis checks in when its time is up"),
+                        NowAction(kind: .complete(reminderID: task.id), title: "Done"),
+                    ])
+            }
             return NowCard(
                 headline: task.reminder.title,
                 detail: joined(left(until: end(of: task)), then(after: end(of: task))),

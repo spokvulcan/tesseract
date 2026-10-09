@@ -22,11 +22,12 @@ struct NowCardTests {
     }
 
     static func context(
-        companionOn: Bool = true, planned: Bool = true, wrappedUp: Bool = false, inbox: Int = 0
+        companionOn: Bool = true, planned: Bool = true, wrappedUp: Bool = false, inbox: Int = 0,
+        started: Set<String> = []
     ) -> NowCardBuilder.Context {
         NowCardBuilder.Context(
             companionOn: companionOn, planned: planned, wrappedUp: wrappedUp,
-            eveningMinutes: 21 * 60, inboxCount: inbox)
+            eveningMinutes: 21 * 60, inboxCount: inbox, startedSteps: started)
     }
 
     static func card(_ facts: DayFacts, _ context: NowCardBuilder.Context = context()) -> NowCard {
@@ -46,12 +47,30 @@ struct NowCardTests {
         #expect(card.span?.end == Self.local(30, 10))
     }
 
-    @Test func aTaskWhoseSlotIsNowIsOneClickFromDone() {
-        let card = Self.card(Self.day(now: Self.local(30, 11, 5)))
+    @Test func aStartedStepSaysHowMuchIsLeftAndIsOneClickFromDone() {
+        let started = StepCue.key(
+            Placement(reminderID: "dentist", start: Self.local(30, 11), minutes: 15))
+        let card = Self.card(
+            Self.day(now: Self.local(30, 11, 5)), Self.context(started: [started]))
         #expect(card.headline == "Call the dentist")
         #expect(card.detail == "10 min left, until 11:15 · then 1:1 at 13:00")
         #expect(card.actions.map(\.kind) == [.complete(reminderID: "dentist")])
         #expect(card.span == DateInterval(start: Self.local(30, 11), end: Self.local(30, 11, 15)))
+    }
+
+    @Test func aStepWhoseTimeIsNowButNotStartedIsOneClickFromStarting() {
+        // Its cue was closed, missed, or answered by mistake: Today starts it.
+        let card = Self.card(Self.day(now: Self.local(30, 11, 5)))
+        #expect(card.headline == "Call the dentist")
+        #expect(card.detail == "11:00–11:15 · then 1:1 at 13:00")
+        #expect(
+            card.actions.map(\.kind) == [
+                .place(reminderID: "dentist", start: Self.local(30, 11, 5), minutes: 15),
+                .complete(reminderID: "dentist"),
+            ])
+        #expect(card.actions.first?.title == "Start now")
+        // Nothing is running: no time draining.
+        #expect(card.span == nil)
     }
 
     @Test func theTimeLeftRoundsUpToTheMinute() {

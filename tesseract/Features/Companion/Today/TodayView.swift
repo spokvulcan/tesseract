@@ -172,7 +172,8 @@ private struct TodayDayPage: View {
                 companionOn: settings.companionHeartbeatEnabled,
                 planned: state.morningPlanAt != nil, wrappedUp: state.eveningWrapUpAt != nil,
                 eveningMinutes: settings.companionEveningMinutes,
-                inboxCount: TodaySideColumn.inbox(agenda: agenda, plan: state.plan).count))
+                inboxCount: TodaySideColumn.inbox(agenda: agenda, plan: state.plan).count,
+                startedSteps: state.startedSteps))
         // The Inbox's offers keep clear of the card's own.
         let offerFacts = card.reserving(facts)
         let motion: Animation? = reduceMotion ? nil : .smooth(duration: 0.25)

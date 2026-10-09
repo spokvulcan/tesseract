@@ -4,8 +4,9 @@
 //
 //  Today, rendered with the app's wiring over fixture days (an in-memory
 //  Agenda and a saved day state, ADR-0073): the morning after the plan, the
-//  same day at 14:20 deep in the must-do's slot (its time left drains on the
-//  Now Card), a busy midday with two slid steps and things waiting, an evening
+//  same day at 14:20 deep in the must-do's slot (started: its time left
+//  drains on the Now Card; not started: one click from starting), a busy
+//  midday with two slid steps and things waiting, an evening
 //  with the day done, and the same night past midnight, still that day until
 //  04:00. Each renders at a wide, a regular and a phone width, so every
 //  layout's body runs. With TODAY_GALLERY_DIR set (TEST_RUNNER_TODAY_GALLERY_DIR
@@ -82,6 +83,7 @@ struct TodayGalleryTests {
 enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
     case morning
     case focus
+    case unstarted
     case midday
     case evening
     case night
@@ -96,7 +98,7 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
     var now: Date {
         switch self {
         case .morning: Self.at(8, 20)
-        case .focus: Self.at(14, 20)
+        case .focus, .unstarted: Self.at(14, 20)
         case .midday: Self.at(14, 10)
         case .evening: Self.at(22, 1)
         case .night: Self.at(0, 40, day: 5)
@@ -146,8 +148,8 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
     var reminders: [AgendaReminder] {
         let today = Self.at(0)
         switch self {
-        case .morning, .focus:
-            let focus = self == .focus
+        case .morning, .focus, .unstarted:
+            let focus = self != .morning
             return [
                 Self.reminder(
                     "mail", "Answer mail", list: "work", due: today,
@@ -213,7 +215,7 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
                 calendarTitle: "Personal", colorHex: "#30D158"),
         ]
         switch self {
-        case .morning, .focus:
+        case .morning, .focus, .unstarted:
             return [
                 Self.event("s", "Standup", Self.at(9, 30), Self.at(10), meeting: true),
                 Self.event(
@@ -241,7 +243,7 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
     var state: DayState {
         var state = DayState(day: DayKey(for: now))
         switch self {
-        case .morning, .focus:
+        case .morning, .focus, .unstarted:
             state.morningPlanAt = Self.at(8, 18)
             state.mustDoID = "adr"
             state.plan = [
@@ -249,6 +251,8 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
                 Placement(reminderID: "pr", start: Self.at(8, 55), minutes: 30),
                 Placement(reminderID: "adr", start: Self.at(13, 45), minutes: 75),
             ]
+            // At 14:20 the must-do is under way; unstarted, its cue was closed.
+            if self == .focus { state.startedSteps = [StepCue.key(state.plan[2])] }
             state.cards = [
                 DayCard(
                     id: "morningPlan-0", kind: .morningPlan, createdAt: Self.at(8, 18),
