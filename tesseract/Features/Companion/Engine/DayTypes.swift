@@ -122,6 +122,10 @@ nonisolated enum StepChoice: String, Sendable, Equatable {
     /// Not finished: the slot runs a quarter of an hour longer, and checks in
     /// again at its new end.
     case extend
+    /// A meeting, or the way to one, comes before a quarter hour more
+    /// would: the slot moves to when it is over and is cued again then —
+    /// the rest of a started step, or the whole of one not begun.
+    case resume
     /// Not today: due tomorrow, off today's plan.
     case tomorrow
     /// Already done.
@@ -159,6 +163,9 @@ nonisolated struct StepCue: Sendable, Equatable {
     var putOff = 0
     /// A five-minute start ("Start 5 min"): its end asks to keep going.
     var small = false
+    /// A meeting, or the way to one, would cut into "In 15 min" or "15 more
+    /// min": when it is over, offered instead ("At 16:00", "Go on at 16:00").
+    var resumeAt: Date? = nil
 
     /// The start is offered small: starting is the hard part.
     var offersSmallStart: Bool { phase == .start && putOff >= 2 }
@@ -403,6 +410,9 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     var putOff: [String: Int] = [:]
     /// Five-minute starts, by `StepCue.key`: their end asks to keep going.
     var smallStarts: Set<String> = []
+    /// Minutes taken off a step so it ends before the next meeting, by task:
+    /// going on after the meeting gives them back.
+    var cutShort: [String: Int] = [:]
     /// The cue on the panel now, by its key, until the owner answers it.
     var cueOnPanel: String?
     /// Tasks the Night Reflection proposed, until the owner decides (kept
@@ -448,7 +458,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         case cuedSteps, startedSteps, interrupted, morningPlanResumed, windDownAt
         case draft, draftForNextDay, departures, satDownAt, weekFocus
         case weekFocusSetAt, mustDoDoneAt, mustDoDays, cueOnPanel, taskProposals
-        case putOff, smallStarts, lastActiveAt, nightMeasured, morningPlanWaiting
+        case putOff, smallStarts, lastActiveAt, nightMeasured, morningPlanWaiting, cutShort
     }
 
     /// Every field but the day is optional on disk, so a state saved by an
@@ -494,6 +504,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
             (try? c.decodeIfPresent([TaskProposal].self, forKey: .taskProposals)) ?? []
         putOff = (try? c.decodeIfPresent([String: Int].self, forKey: .putOff)) ?? [:]
         smallStarts = (try? c.decodeIfPresent(Set<String>.self, forKey: .smallStarts)) ?? []
+        cutShort = (try? c.decodeIfPresent([String: Int].self, forKey: .cutShort)) ?? [:]
         lastActiveAt = try? c.decodeIfPresent(Date.self, forKey: .lastActiveAt)
         nightMeasured = (try? c.decodeIfPresent(Bool.self, forKey: .nightMeasured)) ?? false
         morningPlanWaiting =

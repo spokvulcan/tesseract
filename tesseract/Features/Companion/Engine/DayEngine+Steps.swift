@@ -15,6 +15,13 @@
 //  as five minutes ("Start 5 min"), and five minutes in, the check-in asks
 //  to keep going.
 //
+//  A meeting ends a step, not the other way round: a step started or moved
+//  ends five minutes before the next meeting (or the time to leave for one)
+//  it would run into, so its check-in is the heads-up to wrap up and get
+//  there, not a question held until the meeting is over. Where a quarter
+//  hour more — or later — would run into a meeting, the cue offers to go on
+//  once it is over instead, with the time that was cut.
+//
 //  No model. Each start and each end is cued once, as soon as the owner can
 //  see it: never while they are away, in quiet hours, a call, a game or a
 //  meeting, never over a panel they haven't closed, and nothing while a step
@@ -39,6 +46,9 @@ nonisolated extension DayEngine {
     static let smallStartMinutes = 5
     /// Started from a cue whose slot went meanwhile (a re-plan): this long.
     static let lostSlotMinutes = 30
+    /// A step ends this long before the next meeting, or the time to leave
+    /// for one: time to wrap up and get there.
+    static let transitionMinutes = 5
 
     // MARK: - The cue
 
@@ -145,11 +155,86 @@ nonisolated extension DayEngine {
             next: next?.0, nextAt: next?.1, phase: phase,
             late: now.timeIntervalSince(moment) >= stepCueLate,
             putOff: state.putOff[task.id] ?? 0,
-            small: state.smallStarts.contains(StepCue.key(slot)))
+            small: state.smallStarts.contains(StepCue.key(slot)),
+            resumeAt: resumeTime(for: slot, started: phase == .end, now: now, facts: facts))
     }
 
     private static func end(of slot: Placement) -> Date {
         slot.start.addingTimeInterval(TimeInterval(slot.minutes * 60))
+    }
+
+    // MARK: - Clear of meetings
+
+    /// What ends a step: a meeting with other people, or somewhere to be. A
+    /// block of the owner's own ("Work", 09:00–13:00) is where steps happen.
+    private static func endsAStep(_ event: AgendaEvent) -> Bool {
+        event.hasOtherAttendees || !(event.location ?? "").isEmpty
+    }
+
+    /// How long a step from `start` gets so it keeps clear of what's fixed
+    /// after it: it ends `transitionMinutes` before the next meeting, or the
+    /// time to leave for one, it would run into — right at it when that
+    /// leaves too little; with not even five minutes before it, as wanted.
+    static func clearMinutes(from start: Date, wanted: Int, facts: DayFacts) -> Int {
+        let end = start.addingTimeInterval(TimeInterval(wanted * 60))
+        let events = facts.eventsToday.filter(endsAStep)
+        let fixed =
+            events.map(\.start)
+            + facts.departures.compactMap { departure in
+                events.contains { $0.id == departure.eventID && $0.start == departure.eventStart }
+                    ? departure.at : nil
+            }
+        guard let next = fixed.filter({ $0 > start && $0 <= end }).min() else { return wanted }
+        let room = Int(next.timeIntervalSince(start) / 60)
+        if room - transitionMinutes >= smallStartMinutes { return room - transitionMinutes }
+        return room >= smallStartMinutes ? room : wanted
+    }
+
+    /// The task's slot, cut to keep clear of the next meeting; what was cut
+    /// is kept, for going on after it.
+    static func keepClear(_ reminderID: String, snapshot: DaySnapshot, state: inout DayState) {
+        guard let index = state.plan.firstIndex(where: { $0.reminderID == reminderID }) else {
+            return
+        }
+        let slot = state.plan[index]
+        let minutes = clearMinutes(
+            from: slot.start, wanted: slot.minutes, facts: snapshot.facts(state: state))
+        guard minutes < slot.minutes else { return }
+        state.plan[index].minutes = minutes
+        state.cutShort[reminderID] = slot.minutes - minutes
+    }
+
+    /// When a step can go on if a meeting, or the way to one, would cut into
+    /// what the cue offers: "15 more min" past a started step's end, or "In
+    /// 15 min" with less than a quarter hour of work before the meeting. The
+    /// end of the meeting, and of any straight after it; nil when the next
+    /// quarter hour is free.
+    static func resumeTime(for slot: Placement, started: Bool, now: Date, facts: DayFacts)
+        -> Date?
+    {
+        let quarter = TimeInterval(stepLaterMinutes * 60)
+        let transition = TimeInterval(transitionMinutes * 60)
+        let limit =
+            started
+            ? max(end(of: slot), now).addingTimeInterval(quarter + transition)
+            : now.addingTimeInterval(2 * quarter + transition)
+        let events = facts.eventsToday.filter(endsAStep)
+        var coming = events.filter { $0.start > now && $0.start < limit }.map {
+            (at: $0.start, end: $0.end)
+        }
+        for departure in facts.departures where departure.at > now && departure.at < limit {
+            if let event = events.first(where: {
+                $0.id == departure.eventID && $0.start == departure.eventStart
+            }) {
+                coming.append((at: departure.at, end: event.end))
+            }
+        }
+        guard var end = coming.min(by: { $0.at < $1.at })?.end else { return nil }
+        // Back to back: after the last of the run.
+        while let next = events.first(where: { $0.start <= end && $0.end > end }) {
+            end = next.end
+        }
+        return end
     }
 
     /// A meeting with other people is under way.
@@ -260,10 +345,26 @@ nonisolated extension DayEngine {
             state.plan.append(
                 Placement(reminderID: reminderID, start: minute, minutes: lostSlotMinutes))
         }
-        switch choice {
+        // Going on after a meeting that moved meanwhile: as the quarter hour
+        // would.
+        var applied = choice
+        var resumeAt: Date?
+        if choice == .resume {
+            let slot = state.plan.first { $0.reminderID == reminderID }
+            let started = slot.map { state.startedSteps.contains(StepCue.key($0)) } ?? false
+            resumeAt = slot.flatMap {
+                resumeTime(
+                    for: $0, started: started, now: minute, facts: snapshot.facts(state: state))
+            }
+            if resumeAt == nil { applied = started ? .extend : .later }
+        }
+        switch applied {
         case .start:
-            if let slot = moveSlot(reminderID, to: minute, state: &state) {
-                markStartedIfNow(slot, snapshot: snapshot, state: &state)
+            if moveSlot(reminderID, to: minute, state: &state) != nil {
+                keepClear(reminderID, snapshot: snapshot, state: &state)
+                if let slot = state.plan.first(where: { $0.reminderID == reminderID }) {
+                    markStartedIfNow(slot, snapshot: snapshot, state: &state)
+                }
             }
         case .startSmall:
             // Five minutes from now; its end asks to keep going.
@@ -277,7 +378,24 @@ nonisolated extension DayEngine {
         case .later:
             let later = minute.addingTimeInterval(TimeInterval(stepLaterMinutes * 60))
             _ = moveSlot(reminderID, to: later, state: &state)
+            keepClear(reminderID, snapshot: snapshot, state: &state)
             state.putOff[reminderID, default: 0] += 1
+        case .resume:
+            // When the meeting is over, cued again then: a started step for
+            // the time cut to end before it (a quarter hour at least), one not
+            // begun whole. Not put off: the meeting came first.
+            if let resumeAt,
+                let index = state.plan.firstIndex(where: { $0.reminderID == reminderID })
+            {
+                let slot = state.plan[index]
+                let cut = state.cutShort.removeValue(forKey: reminderID) ?? 0
+                state.plan[index].start = resumeAt
+                state.plan[index].minutes =
+                    state.startedSteps.contains(StepCue.key(slot))
+                    ? max(cut, stepLaterMinutes) : slot.minutes + cut
+                state.plan.sort { $0.start < $1.start }
+                keepClear(reminderID, snapshot: snapshot, state: &state)
+            }
         case .extend:
             // A quarter of an hour on from its end, or from now if that has
             // gone by: a late answer doesn't make it already over. Answered

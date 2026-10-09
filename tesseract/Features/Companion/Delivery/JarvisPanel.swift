@@ -433,21 +433,36 @@ private struct StepCueContent: View {
                     } else {
                         choice("Start", .start, prominent: true)
                     }
-                    choice("In \(DayEngine.stepLaterMinutes) min", .later)
-                        .help("Move it a quarter of an hour on; Jarvis asks again then")
+                    if let resumeAt = cue.resumeAt {
+                        choice("At \(AgendaTime.clock(resumeAt))", .resume)
+                            .help("What comes next is first: move it to when that's over")
+                    } else {
+                        choice("In \(DayEngine.stepLaterMinutes) min", .later)
+                            .help("Move it a quarter of an hour on; Jarvis asks again then")
+                    }
                     choice("Tomorrow", .tomorrow)
                     Spacer(minLength: 0)
                     choice("Done", .done)
                 case .end where cue.small:
-                    choice("Keep going", .extend, prominent: true)
-                        .help("A quarter of an hour more; Jarvis asks again then")
+                    if let resumeAt = cue.resumeAt {
+                        choice("Go on at \(AgendaTime.clock(resumeAt))", .resume, prominent: true)
+                            .help("Pick it up when what comes next is over; Jarvis asks then")
+                    } else {
+                        choice("Keep going", .extend, prominent: true)
+                            .help("A quarter of an hour more; Jarvis asks again then")
+                    }
                     choice("Done", .done)
                     choice("Tomorrow", .tomorrow)
                     Spacer(minLength: 0)
                 case .end:
                     choice("Done", .done, prominent: true)
-                    choice("\(DayEngine.stepLaterMinutes) more min", .extend)
-                        .help("Keep going a quarter of an hour; Jarvis asks again then")
+                    if let resumeAt = cue.resumeAt {
+                        choice("Go on at \(AgendaTime.clock(resumeAt))", .resume)
+                            .help("Pick it up when what comes next is over; Jarvis asks then")
+                    } else {
+                        choice("\(DayEngine.stepLaterMinutes) more min", .extend)
+                            .help("Keep going a quarter of an hour; Jarvis asks again then")
+                    }
                     choice("Tomorrow", .tomorrow)
                     Spacer(minLength: 0)
                 }

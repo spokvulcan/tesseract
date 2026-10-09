@@ -37,8 +37,8 @@ nonisolated enum CompanionTraceEvent: String, Sendable, Equatable, CaseIterable 
     /// A planned step's slot started and code put it on the panel (a Step
     /// Cue). Carries how late it went up and the slot's length.
     case cuePresented = "cue.presented"
-    /// The owner answered a Step Cue (start, later, tomorrow, done or
-    /// dismiss). Carries the time to react.
+    /// The owner answered a Step Cue (start, later, resume after a meeting,
+    /// tomorrow, done or dismiss). Carries the time to react.
     case cueReaction = "cue.reaction"
 
     // MARK: - nudge.*: OS-scheduled notifications for events and reminders

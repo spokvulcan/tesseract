@@ -287,6 +287,23 @@ the owner must remember to read does not. What changed:
   cued once the owner is free; of two check-ins, the step that ended last
   comes first. The Evening Wrap-up waits for it too: due at the evening time,
   it runs once a step the owner started has ended.
+- **A meeting ends a step, not the other way round.** A started or moved
+  step kept its full length, so it ran into the next meeting: its check-in
+  came in the middle of it, held until the meeting was over, and a Morning
+  Plan that packs a task right up to a meeting set that up every time. Now a
+  step started (on a cue, Start now on Today, a lost slot) or moved (In 15
+  min) ends five minutes before the next meeting with other people or event
+  with a place, or the time to leave for one, that it would run into (a
+  block of the owner's own, "Work 09:00–13:00", is where steps happen, and
+  doesn't) — right at it when that leaves too little,
+  and as it was with not even five minutes — so its check-in is the
+  heads-up to wrap up and get there. Where 15 more min (or In 15 min, with
+  less than a quarter hour of work before it) would run into a meeting, the
+  cue offers to go on once that is over instead — "Go on at 16:00", "At
+  16:00", after any meeting straight after it too: a started step for the
+  time that was cut (a quarter hour at least), one not begun whole, cued
+  again then and not counted as put off. If the meeting moved meanwhile,
+  the answer is the quarter hour it replaced (`cue.reaction` "resume").
 - **The panel's buttons are drawn by hand** (capsules, the main one in the
   accent): the panel is never key, and a system prominent button turns gray
   in a window that isn't.

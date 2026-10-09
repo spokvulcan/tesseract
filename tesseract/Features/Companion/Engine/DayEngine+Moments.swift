@@ -632,11 +632,13 @@ nonisolated extension DayEngine {
     }
 
     /// A task's slot in today's plan, in place of any it had; one from now
-    /// is started.
+    /// is started, and ends before the next meeting.
     private static func place(_ slot: Placement, snapshot: DaySnapshot, state: inout DayState) {
         state.plan.removeAll { $0.reminderID == slot.reminderID }
         state.plan.append(slot)
         state.plan.sort { $0.start < $1.start }
+        guard slot.start <= snapshot.now.addingTimeInterval(60) else { return }
+        keepClear(slot.reminderID, snapshot: snapshot, state: &state)
         markStartedIfNow(slot, snapshot: snapshot, state: &state)
     }
 

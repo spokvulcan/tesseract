@@ -426,6 +426,8 @@ struct DayEngineStepCueTests {
         #expect(cue.phase == .end)
         #expect(cue.reminderID == "letter")
         #expect(cue.end == Self.local(11, 32))
+        // Nothing fixed in the next quarter hour: "15 more min", as always.
+        #expect(cue.resumeAt == nil)
         #expect(Self.traced(.cuePresented, in: up.effects)?["phase"] == .string("end"))
         let after = Self.tick(up.state, at: Self.local(11, 33))
         #expect(Self.cues(after.effects).isEmpty)
@@ -542,6 +544,155 @@ struct DayEngineStepCueTests {
             DayEngine.clock(
                 snapshot: Self.snapshot(at: Self.local(17, 40), events: [moved]), state: state)
                 == nil)
+    }
+
+    // MARK: A meeting ends a step
+
+    /// The design review, 12:00–13:00, with other people — into which the
+    /// deck's slot, 11:35–12:25, would run.
+    static let review = AgendaEvent(
+        id: "review", title: "Design review", start: local(12), end: local(13),
+        calendarID: "c", calendarTitle: "Work", hasOtherAttendees: true)
+
+    static func atReview(
+        _ signal: DaySignal, at now: Date, _ state: DayState,
+        events: [AgendaEvent] = [DayEngineStepCueTests.review]
+    ) -> DayEngine.Decision {
+        DayEngine.decide(signal, snapshot: snapshot(at: now, events: events), state: state)
+    }
+
+    /// The deck started from its cue at 11:35, the review ahead.
+    static func deckStarted() -> DayState {
+        let cued = atReview(.tick, at: local(11, 35), state())
+        return atReview(
+            .cardAction(.step(reminderID: "deck", .start)), at: local(11, 35), cued.state
+        )
+        .state
+    }
+
+    @Test func aStepStartedBeforeAMeetingEndsFiveMinutesBeforeIt() throws {
+        let cued = Self.atReview(.tick, at: Self.local(11, 35), Self.state())
+        let cue = try #require(Self.cues(cued.effects).first)
+        #expect(cue.reminderID == "deck")
+        // "In 15 min" would leave ten minutes before the review: after it instead.
+        #expect(cue.resumeAt == Self.local(13))
+        let state = Self.deckStarted()
+        let slot = try #require(state.plan.first { $0.reminderID == "deck" })
+        #expect(slot.start == Self.local(11, 35))
+        #expect(slot.minutes == 20)
+        #expect(state.cutShort["deck"] == 30)
+    }
+
+    @Test func itsCheckInComesBeforeTheMeetingAndGoesOnAfterIt() throws {
+        let up = Self.atReview(.tick, at: Self.local(11, 55), Self.deckStarted())
+        let cue = try #require(Self.cues(up.effects).first)
+        #expect(cue.phase == .end)
+        #expect(!cue.late)
+        #expect(cue.resumeAt == Self.local(13))
+        let resumed = Self.atReview(
+            .cardAction(.step(reminderID: "deck", .resume)), at: Self.local(11, 56), up.state)
+        let slot = try #require(resumed.state.plan.first { $0.reminderID == "deck" })
+        // The half hour cut to end before the review, once it is over; not
+        // started, and not put off.
+        #expect(slot.start == Self.local(13))
+        #expect(slot.minutes == 30)
+        #expect(!resumed.state.startedSteps.contains(StepCue.key(slot)))
+        #expect(resumed.state.cutShort["deck"] == nil)
+        #expect(resumed.state.putOff["deck"] == nil)
+        #expect(Self.traced(.cueReaction, in: resumed.effects)?["action"] == .string("resume"))
+        // Nothing during the review; its start is cued once it is over.
+        #expect(
+            Self.cues(Self.atReview(.tick, at: Self.local(12, 30), resumed.state).effects).isEmpty)
+        let again = try #require(
+            Self.cues(Self.atReview(.tick, at: Self.local(13), resumed.state).effects).first)
+        #expect(again.phase == .start)
+        #expect(again.start == Self.local(13))
+    }
+
+    @Test func aStepNotBegunGoesAfterTheMeetingWhole() throws {
+        let cued = Self.atReview(.tick, at: Self.local(11, 35), Self.state())
+        let moved = Self.atReview(
+            .cardAction(.step(reminderID: "deck", .resume)), at: Self.local(11, 36), cued.state)
+        let slot = try #require(moved.state.plan.first { $0.reminderID == "deck" })
+        #expect(slot.start == Self.local(13))
+        #expect(slot.minutes == 50)
+        #expect(moved.state.putOff["deck"] == nil)
+    }
+
+    @Test func aMeetingThatMovedMeanwhileMakesItAQuarterHourMore() throws {
+        let up = Self.atReview(.tick, at: Self.local(11, 55), Self.deckStarted())
+        // The review was cancelled before the owner answered.
+        let answered = Self.atReview(
+            .cardAction(.step(reminderID: "deck", .resume)), at: Self.local(11, 56), up.state,
+            events: [])
+        let slot = try #require(answered.state.plan.first { $0.reminderID == "deck" })
+        #expect(slot.start == Self.local(11, 35))
+        #expect(slot.minutes == 36)
+    }
+
+    @Test func startNowOnTodayBeforeAMeetingEndsBeforeIt() throws {
+        let placed = Self.atReview(
+            .cardAction(.place(reminderID: "deck", start: Self.local(11, 40), minutes: 50)),
+            at: Self.local(11, 40), Self.cued())
+        let slot = try #require(placed.state.plan.first { $0.reminderID == "deck" })
+        #expect(slot.minutes == 15)
+        // A slot for later is the plan's, kept as offered.
+        let later = Self.atReview(
+            .cardAction(.place(reminderID: "deck", start: Self.local(14), minutes: 50)),
+            at: Self.local(11, 40), Self.cued())
+        #expect(later.state.plan.first { $0.reminderID == "deck" }?.minutes == 50)
+    }
+
+    @Test func aStepKeepsClearOfTheWayToAnEventInPerson() {
+        var facts = DayFacts(
+            now: Self.local(17, 30),
+            events: [
+                AgendaEvent(
+                    id: "climb", title: "Climbing", start: Self.local(18, 30), end: Self.local(20),
+                    calendarID: "c", calendarTitle: "Home", location: "Boulderhalle")
+            ])
+        facts.departures = [
+            Departure(
+                eventID: "climb", title: "Climbing", at: Self.local(18),
+                eventStart: Self.local(18, 30))
+        ]
+        // Five minutes before leaving.
+        #expect(DayEngine.clearMinutes(from: Self.local(17, 30), wanted: 60, facts: facts) == 25)
+        // Too little for that: right up to leaving.
+        #expect(DayEngine.clearMinutes(from: Self.local(17, 52), wanted: 30, facts: facts) == 8)
+        // Not even five minutes: as wanted.
+        #expect(DayEngine.clearMinutes(from: Self.local(17, 57), wanted: 30, facts: facts) == 30)
+        // Over before it: as wanted.
+        #expect(DayEngine.clearMinutes(from: Self.local(17), wanted: 30, facts: facts) == 30)
+        // Leaving is what comes first: after the event, it can go on.
+        #expect(
+            DayEngine.resumeTime(
+                for: Placement(reminderID: "deck", start: Self.local(17, 25), minutes: 30),
+                started: true, now: Self.local(17, 55), facts: facts) == Self.local(20))
+    }
+
+    @Test func aBlockOfTheOwnersOwnDoesNotEndAStep() {
+        // "Work", 12:00–16:00, no one else and nowhere to go: steps happen in it.
+        let block = AgendaEvent(
+            id: "work", title: "Work", start: Self.local(12), end: Self.local(16),
+            calendarID: "c", calendarTitle: "Work")
+        let facts = DayFacts(now: Self.local(11, 40), events: [block])
+        #expect(DayEngine.clearMinutes(from: Self.local(11, 40), wanted: 50, facts: facts) == 50)
+        #expect(
+            DayEngine.resumeTime(
+                for: Placement(reminderID: "deck", start: Self.local(11, 40), minutes: 50),
+                started: false, now: Self.local(11, 40), facts: facts) == nil)
+    }
+
+    @Test func afterMeetingsBackToBackItGoesOnAfterTheLast() {
+        let sync = AgendaEvent(
+            id: "sync", title: "Sync", start: Self.local(13), end: Self.local(13, 30),
+            calendarID: "c", calendarTitle: "Work", hasOtherAttendees: true)
+        let facts = DayFacts(now: Self.local(11, 55), events: [Self.review, sync])
+        #expect(
+            DayEngine.resumeTime(
+                for: Placement(reminderID: "deck", start: Self.local(11, 35), minutes: 20),
+                started: true, now: Self.local(11, 55), facts: facts) == Self.local(13, 30))
     }
 
     @Test func startNowOnTodayIsStartedAndNeedsNoCue() throws {

@@ -5,8 +5,9 @@
 //  The Jarvis Panel's content, rendered with the app's view over fixture
 //  cards — a Step Cue (one for the must-do, with a long title, one at the
 //  end of a started step, both shown late, the owner back from away, the
-//  word a step marked done gets, and the five-minute start offered once a
-//  step was put off twice, with its check-in), the Morning Plan with its
+//  word a step marked done gets, the five-minute start offered once a
+//  step was put off twice, with its check-in, and a check-in just before a
+//  meeting, offering to go on after it), the Morning Plan with its
 //  steps over the
 //  Today gallery's morning, the Evening Wrap-up with its leftovers (and on
 //  the week's last day, with one that has waited since last week), and a
@@ -42,6 +43,7 @@ struct JarvisPanelGalleryTests {
         case stepDone
         case stepCueSmall
         case stepCheckInSmall
+        case stepCheckInMeeting
         case morningPlan
         case eveningWrapUp
         case eveningWrapUpWeek
@@ -107,6 +109,12 @@ struct JarvisPanelGalleryTests {
                     reminderID: "letter", title: "Write to the case worker about the bus ticket",
                     start: Self.at(11, 41), minutes: 5, areaName: "Inbox", isMustDo: false,
                     next: nil, phase: .end, small: true)
+            case .stepCheckInMeeting:
+                model.cue = StepCue(
+                    reminderID: "adr", title: "Write the cache ADR", start: Self.at(13, 45),
+                    minutes: 70, areaName: "Work", isMustDo: true,
+                    next: "Design review at 15:00", nextAt: Self.at(15), phase: .end,
+                    resumeAt: Self.at(16))
             case .morningPlan:
                 model.card = TodayFixture.morning.state.cards.first
             case .eveningWrapUp:
