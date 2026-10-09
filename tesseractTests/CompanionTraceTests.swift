@@ -106,4 +106,26 @@ struct DayKeyTests {
         #expect(key.next(calendar: calendar).rawValue == "2026-10-01")
         #expect(DayKey(rawValue: "2026-09-29") < key)
     }
+
+    /// The nights the clocks change (Berlin: forward on 29 March 2026, back
+    /// on 25 October): the day still turns at 04:00 on the wall clock, and
+    /// the day after is the next date.
+    @Test func theClockChangeNightsKeepTheDayAtFour() throws {
+        func local(_ month: Int, _ day: Int, _ hour: Int, _ minute: Int = 0) -> Date {
+            calendar.date(
+                from: DateComponents(year: 2026, month: month, day: day, hour: hour, minute: minute)
+            )!
+        }
+        let saturday = DayKey(rawValue: "2026-03-28")
+        #expect(saturday.next(calendar: calendar).rawValue == "2026-03-29")
+        #expect(DayKey(for: local(3, 29, 3, 30), calendar: calendar).rawValue == "2026-03-28")
+        #expect(DayKey(for: local(3, 29, 4), calendar: calendar).rawValue == "2026-03-29")
+        let sunday = DayKey(rawValue: "2026-03-29")
+        #expect(try #require(sunday.start(calendar: calendar)) == local(3, 29, 4))
+        #expect(DayKey(rawValue: "2026-10-24").next(calendar: calendar).rawValue == "2026-10-25")
+        #expect(DayKey(for: local(10, 25, 4), calendar: calendar).rawValue == "2026-10-25")
+        #expect(
+            try #require(DayKey(rawValue: "2026-10-25").start(calendar: calendar))
+                == local(10, 25, 4))
+    }
 }

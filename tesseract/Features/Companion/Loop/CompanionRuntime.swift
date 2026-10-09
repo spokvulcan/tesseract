@@ -20,8 +20,14 @@ import Observation
 @MainActor
 struct CompanionDelivery {
     var showPanel: (DayCard) -> Void = { _ in }
+    var showStep: (StepCue) -> Void = { _ in }
+    var showBreak: (BreakCue) -> Void = { _ in }
+    /// Take the Break Cue off the panel, if it is up.
+    var retractBreak: () -> Void = {}
     var retractPanel: (String) -> Void = { _ in }
     var closePanel: () -> Void = {}
+    /// The panel is up with something the owner hasn't closed.
+    var isPanelUp: () -> Bool = { false }
     var speak: (String) -> Void = { _ in }
     var openApp: (String) -> Void = { _ in }
 }
@@ -49,6 +55,8 @@ final class CompanionRuntime {
     @ObservationIgnored private var watcher: NotificationCenterWatcher?
 
     @ObservationIgnored private var clockTask: Task<Void, Never>?
+    /// The moment generating now, so one given up on can be stopped.
+    @ObservationIgnored private var momentTask: Task<Void, Never>?
     @ObservationIgnored private var toggleTask: Task<Void, Never>?
     /// Signals are decided strictly one after another.
     @ObservationIgnored private var chain: Task<Void, Never>?
@@ -73,12 +81,9 @@ final class CompanionRuntime {
         self.delivery = delivery
         self.profile = profile
         self.now = now
-        var loaded = stateStore.load() ?? DayState(day: DayKey(for: now()))
-        // A moment in flight when the app quit never finished, and a card it
-        // was refining keeps the version code built.
-        loaded.running = nil
-        for index in loaded.cards.indices { loaded.cards[index].isRefining = false }
-        self.state = loaded
+        // A moment in flight when the app quit never finished: the engine
+        // picks it up when the Companion comes on.
+        self.state = (stateStore.load() ?? DayState(day: DayKey(for: now()))).relaunched()
         agenda.addListener { [weak self] in self?.send(.agendaChanged) }
         thread.openingProvider = { [weak self] in self?.dayOpening() ?? "" }
     }
@@ -182,6 +187,7 @@ final class CompanionRuntime {
         }
         send(.companionDisabled)
         isActive = false
+        presence.setClock(nil)
         delivery.closePanel()
         Log.companion.info("Companion off")
     }
@@ -203,12 +209,16 @@ final class CompanionRuntime {
     }
 
     private func process(_ signal: DaySignal) async {
-        let decision = DayEngine.decide(signal, snapshot: snapshot(), state: state)
-        if decision.state.day != state.day { thread.show(day: decision.state.day) }
+        let snapshot = snapshot()
+        let decision = DayEngine.decide(signal, snapshot: snapshot, state: state)
         if decision.state != state {
             state = decision.state
             stateStore.save(state)
         }
+        // The thread turns to the new day only between moments: one in
+        // flight at 04:00 finishes in its own day's thread, not the next.
+        if thread.momentRunning == nil { thread.show(day: state.day) }
+        presence.setClock(isActive ? DayEngine.clock(snapshot: snapshot, state: state) : nil)
         for effect in decision.effects { await perform(effect) }
     }
 
@@ -219,7 +229,7 @@ final class CompanionRuntime {
             chatBusy: thread.isChatBusy, frontmostAppName: frontmost.name,
             frontmostBundleID: frontmost.bundleID, frontmostIsGame: frontmost.isGame,
             lastTerminalFrontAt: frontmost.lastTerminalFrontAt(now: now()), power: power.state,
-            profile: profile?.facts.map(\.text) ?? [])
+            profile: profile?.facts.map(\.text) ?? [], panelUp: delivery.isPanelUp())
     }
 
     private var daySettings: DaySettings {
@@ -232,14 +242,15 @@ final class CompanionRuntime {
             speaks: settings.companionSpeaks,
             quietStartMinutes: settings.companionQuietStartMinutes,
             quietEndMinutes: settings.companionQuietEndMinutes,
-            rules: rules)
+            windDown: settings.companionWindDown, stepCues: settings.companionStepCues,
+            breakCues: settings.companionBreakCues, rules: rules)
     }
 
     private func dayOpening() -> String {
         let snapshot = snapshot()
         return MomentPrompts.dayOpening(
             facts: snapshot.facts(state: state), profile: snapshot.profile,
-            carryOver: state.carryOver)
+            carryOver: state.carryOver, draft: state.draft)
     }
 
     // MARK: Effects
@@ -253,21 +264,41 @@ final class CompanionRuntime {
             // Off the signal chain: a generation takes seconds to minutes, and
             // the loop must keep hearing the owner meanwhile.
             presence.beginThinking()
-            Task { [weak self] in
+            momentTask = Task { [weak self] in
                 guard let self else { return }
                 let outcome = await self.thread.runMoment(request)
+                // Given up on meanwhile: the engine has moved on.
+                guard !Task.isCancelled else { return }
                 self.presence.endThinking()
                 self.send(.momentOutcome(request, outcome))
             }
 
+        case .cancelMoment:
+            momentTask?.cancel()
+            momentTask = nil
+            presence.endThinking()
+
         case .presentCard(let card, let rung):
             await present(card, on: rung)
+
+        case .presentStep(let cue):
+            if isActive { delivery.showStep(cue) }
+
+        case .presentBreak(let cue):
+            if isActive { delivery.showBreak(cue) }
+
+        case .retractBreak:
+            delivery.retractBreak()
 
         case .retractCard(let cardID):
             delivery.retractPanel(cardID)
 
         case .speak(let line):
-            delivery.speak(line)
+            // A moment that finishes after the Companion went off stays quiet.
+            if isActive { delivery.speak(line) }
+
+        case .postBanner(let title, let body):
+            if isActive { await notifier.post(title: title, body: body) }
 
         case .openApp(let name):
             delivery.openApp(name)
@@ -341,8 +372,12 @@ final class CompanionRuntime {
                 try await agenda.deleteReminder(id: id, source: "wrapUp")
             case .complete(let id):
                 _ = try await agenda.updateReminder(id: id, completed: true, source: "card")
+            case .reopen(let id):
+                _ = try await agenda.updateReminder(id: id, completed: false, source: "card")
             case .followUp(let title, let at):
                 _ = try agenda.addReminder(title: title, due: at, dueHasTime: true, source: "card")
+            case .add(let title, let due):
+                _ = try agenda.addReminder(title: title, due: due, source: "proposal")
             }
         } catch {
             Log.companion.error("Agenda change failed: \(error.localizedDescription)")

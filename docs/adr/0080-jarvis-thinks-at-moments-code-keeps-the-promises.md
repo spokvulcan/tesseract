@@ -57,7 +57,11 @@ a Profile fact or a card — and code and the OS keep it without the model.
 3. **Moments are single model calls with a JSON card.** Morning Plan,
    Breakpoint, Triage, Evening Wrap-up, Night Reflection. Each reply is
    validated against the facts it was shown; an invalid or failed reply gets
-   one retry, then a deterministic card built from the snapshot. No moment
+   one retry, then a deterministic card built from the snapshot. A moment
+   quiet for fifteen minutes of the Mac awake is stopped and fails the same
+   way (amended: one morning's plan sat unanswered for six hours and held
+   every Triage back until the app restarted; a reply to a moment given up
+   on changes nothing). No moment
    runs without new input, and none waits on the model to deliver something
    urgent: a Breakpoint's card goes up at once, built by code, and the model
    only refines it when there are notifications to judge.
@@ -239,3 +243,360 @@ line and tomorrow was one sentence on the Now Card. What changed:
   date at midnight while the Day Thread and the day's cards stayed on the
   old one, and a wrap-up after midnight read the new date's tasks as its
   leftovers.
+
+## Amendments (2026-10-09, the plan keeps time)
+
+Nine days of the Companion Trace showed the Morning Plan placing two to four
+tasks a day, and the owner using "Start now" and "Do it at 16:30", but a slot
+lives only in the Day Engine's state (Reminders has no duration), so nothing
+marked its start: a plan was kept only if the owner happened to open Today at
+the right minute. That broke this ADR's own rule that every decision becomes
+an artifact code keeps. Help that lands at the moment of doing works; a list
+the owner must remember to read does not. What changed:
+
+- **The Step Cue.** When a planned step's slot starts and the owner is at the
+  Mac, code puts it on the Jarvis Panel (a shorter panel than a card's): the
+  task, until when and what follows, with Start (the slot starts this minute),
+  In 15 min (it moves on and is cued again then), Tomorrow and Did it (done
+  already: first "Done", but alone at the row's end, where a dialog's OK
+  sits, it read as closing the cue — the day's first must-do was answered
+  Done eighteen seconds into a two-and-a-half-hour slot and reopened
+  later; "Already done" didn't fit the row). The must-do's cue wears
+  Today's star and names it at its start ("Time for your must-do"), where
+  it was a word in the gray detail. No model.
+  Each slot is cued once, as soon as the owner can see it; never while away,
+  in quiet hours (but the morning's end of them is over once the owner sat
+  down to start the day), a call, a game or a meeting with other people, nor
+  over a panel the owner hasn't closed (it waits a tick, and a card that
+  takes the panel on the same tick goes first), nor while Jarvis is writing
+  a card (a day's minute-by-minute simulation put a Break Cue up a minute
+  into the Evening Wrap-up, to be replaced by its card and come back after
+  it; cues now wait for the moment to finish). What came due meanwhile is
+  cued late, once they can see it — a start while its slot still runs, an
+  end that day — and says so ("Still time for", "How did it go?"): a cue
+  first lived only ten minutes past its moment, so a slot that started while
+  the owner was away, in a meeting or behind another panel slid unseen. A
+  cue on the panel when the app quits is cued again after the relaunch. A
+  slot whose reminder rings at the same minute is left to Reminders. Closing
+  it changes nothing. Done is answered for a moment before the panel closes
+  — "Done", the must-do credited ("the rest is a bonus"), and what comes
+  next (unless that has started since the cue went up) — the win said aloud
+  and the next step named at the moment one ends; a card that arrives
+  meanwhile takes the panel at once, a cue waits for it to close, and the
+  panel stays if the owner turned to Jarvis (typing, asking, speaking).
+  It says so for five seconds with an Undo: the day's first must-do cue
+  was answered Done eighteen seconds after it went up, at the start of a
+  two-and-a-half-hour slot — done already, or a slip — and a slip
+  completed the task with no way back from the panel. Undo reopens it and puts the cue back to
+  choose again (`cue.reaction` "undo"); a must-do seen open again is no
+  longer counted done for the week's look-back. Starting is
+  the hard part: a step put off twice in a day ("In 15 min") is offered as
+  "Just five minutes?" with Start 5 min, and five minutes in its check-in
+  asks to keep going ("five minutes counts"); Keep going adds a quarter of
+  an hour, after which it checks in as any step (`cue.reaction`
+  "startSmall").
+- **A started step checks in when its time is up.** A step the owner started
+  (Start on a cue, or Start now on Today, which needs no cue of its own) is
+  put back on the panel at its end while its task is open: Done, 15 more min
+  (fifteen minutes from its end, or from now if answered late — ten minutes
+  or more after its end it is a fresh quarter hour from now, not a block
+  stretched back to its first start; it checks in again), Tomorrow. A Start
+  whose slot went meanwhile (a re-plan) still starts, half an hour from now. While it runs, no other cue interrupts it: what comes
+  due meanwhile waits (the check-in names a step already under way) and is
+  cued once the owner is free; of two check-ins, the step that ended last
+  comes first. The Evening Wrap-up waits for it too: due at the evening time,
+  it runs once a step the owner started has ended.
+- **A meeting ends a step, not the other way round.** A started or moved
+  step kept its full length, so it ran into the next meeting: its check-in
+  came in the middle of it, held until the meeting was over, and a Morning
+  Plan that packs a task right up to a meeting set that up every time. Now a
+  step started (on a cue, Start now on Today, a lost slot) or moved (In 15
+  min) ends five minutes before the next meeting with other people or event
+  with a place, or the time to leave for one, that it would run into (a
+  block of the owner's own, "Work 09:00–13:00", is where steps happen, and
+  doesn't) — right at it when that leaves too little,
+  and as it was with not even five minutes — so its check-in is the
+  heads-up to wrap up and get there. Where 15 more min (or In 15 min, with
+  less than a quarter hour of work before it) would run into a meeting, the
+  cue offers to go on once that is over instead — "Go on at 16:00", "At
+  16:00", after any meeting straight after it too: a started step for the
+  time that was cut (a quarter hour at least), one not begun whole, cued
+  again then and not counted as put off. If the meeting moved meanwhile,
+  the answer is the quarter hour it replaced (`cue.reaction` "resume").
+  The plan was only kept clear of meetings known when a step started: the
+  owner adds and moves events through Jarvis most days (twelve in a week),
+  and a meeting that lands on a planned step not yet begun hid its cue (the
+  owner is in the meeting at its time) until the slot had gone by. When
+  the agenda changes — or the Companion comes on — such a step moves to the
+  first free time after the meeting, as long, clear of other meetings, the
+  way to one and the plan's other steps, before the evening (an evening
+  step, before midnight); with none, it stays and slides where Today and
+  the wrap-up see it (`cue.moved`, how far and how long). One the owner
+  started ends five minutes before a meeting added into it, as a start
+  does. No model.
+- **The panel's buttons are drawn by hand** (capsules, the main one in the
+  accent): the panel is never key, and a system prominent button turns gray
+  in a window that isn't.
+- **A card on the panel says it all.** Every Morning Plan and Evening Wrap-up
+  that reached the panel was dismissed: the panel said "Open Today to see it
+  all". The Morning Plan now lists the steps ahead (its tasks among the day's
+  events, the must-do starred) and its tips, with Looks Good; the Evening
+  Wrap-up lists what got done and each leftover with Tomorrow, Later and Let
+  go (Jarvis's pick in the accent) or Do What Jarvis Suggests. When the
+  plan's first step is a task it placed, due within ten minutes, its main
+  button is Start Now (not on the card code puts up while Jarvis thinks):
+  the step starts and the card is taken in — one click from the plan to
+  doing, not Looks Good and then a cue. A plan that lands while the owner is
+  in a step they started keeps that step's slot. Looks Good and
+  Good Night take the card in (`card.reaction` "kept"): it leaves the panel
+  and stays in Today; a kept card never takes the
+  panel again (Jarvis's version of a kept plan updates in Today) and its
+  items no longer light the glyph. The close button first dismissed the
+  card instead, and the owner closes rather than says Looks Good: the four
+  Evening Wrap-ups that reached the panel in a week were closed within
+  twelve seconds to five and a half minutes, which took their leftovers off
+  Today too, while the two that reached only Today had leftovers settled
+  there 45 and 53 minutes later. Closing
+  now takes a card in as Looks Good does (`card.reaction` "closed"): off
+  the panel, never back on it, with what it holds still in Today — this
+  ADR's own rule that nothing unanswered is re-summoned and it stays in
+  Today. Today's own close button still dismisses. A cue a card takes the panel from is
+  un-cued by the engine, which knows the cue on the panel, and comes back by
+  the cue's own rules once the panel is free (a start while its slot still
+  runs, an end that day). The panel
+  shows the card as the day has it now, so an item handled there leaves it
+  (it used to stay), and it is as tall as what it says (it was always 560 pt).
+- **The plan meets the first sit-down on the panel, quiet hours or not.**
+  Since plans were made ahead (5 October on), the owner sat down at 06:12,
+  07:55, 07:58 and 07:59 — every time inside the default quiet hours, which
+  end at 08:00 — so the plan never reached the panel and waited unseen in
+  Today. The day's first sit-down is the owner starting their day, not
+  Jarvis reaching out at night: the Morning Plan, made ahead or made then,
+  takes the panel at it (a game or a call still keeps it in Today). A day
+  that starts late gets it too: on Sunday 4 October the owner was first at
+  the Mac at 14:43, after the morning window, and the plan ran only when
+  they asked for it. The first sit-down after the night now runs the plan
+  until the evening, unless the owner already saw today's plan (or a moment
+  or a chat has the model then); one made ahead that morning is made again,
+  its slots gone by. Such a late sit-down never ends the night's quiet hours
+  early: only one in the morning part of them does, that morning.
+- **"Nothing needs you" is no news.** 39 of the 43 Breakpoint cards had
+  nothing for the owner, yet each became Jarvis's word on the Now Card for an
+  hour, pushing the Morning Plan's line and tips off it after the first
+  break. Jarvis's word is now the latest card with something to say; a
+  Breakpoint speaks only when something needs the owner (or while Jarvis is
+  judging what came in). The Breakpoint is titled "While you were away", so
+  the greeting is said once, by Jarvis's line.
+- **Time left can be seen.** During a meeting or a task's slot the Now Card
+  said "Until 15:00": a clock reading, which a time-blind owner has to turn
+  into "how long" each time. It now leads with the time left ("40 min left,
+  until 15:00 · then Design review at 15:00") over a short accent bar that
+  drains as the minutes go (`NowCard.span`). That is for a step the owner
+  started; Today didn't know which, so a slot whose cue was closed, missed
+  or answered by mistake drained as if under way, with only Done — the
+  day's first must-do sat that way once its Done was taken back outside
+  the app.
+  A slot not started shows its time instead ("13:45–15:00 · then Design
+  review at 15:00") with Start now first, which starts it from this minute
+  like a cue's Start (`NowCardBuilder.Context.startedSteps`).
+- **The evening closes the day.** The owner's most frequent manual fix was
+  taking planned tasks off the plan by hand — five of six times between 23:52
+  and 00:24 — because at night the Now Card still led with a slid task
+  ("Slid past 11:10", Tomorrow, Done). In the evening window the card now
+  shows what is still ahead tonight, or else counts what got done and names
+  what is still open ("1 of 3 done today." · "Still open: …"), with the
+  Evening Wrap-up as the way to settle it; once wrapped up, it looks at
+  tomorrow.
+- **A plan cut short by a quit runs again, once.** On 8 October the plan
+  was made ahead at 05:25 and the app was killed three minutes later; a
+  relaunch cleared the moment in flight, and since the plan's time was set
+  when its code card went up, nothing ever finished it: the day had no
+  plan, and so nothing to cue. A relaunch now records the moment it cut
+  short (`DayState.relaunched()`), and when the Companion comes on the
+  engine runs a Morning Plan again with the trigger `resumed` — once, not
+  after the owner closed the card, not in the evening or the small hours. Every other moment
+  already runs again on its own trigger.
+- **The wind-down.** The owner was at the Mac past midnight most nights,
+  with mornings that start at 07:15 or 07:30, and nothing in the Companion
+  spoke to sleep (Health's own bedtime banners are held as an app's news).
+  As quiet hours begin with the owner still at the Mac, one banner a night
+  says when tomorrow starts and how far off that is ("Tomorrow starts with
+  All Hands at 07:30 — 8 h 30 min from now."). Code, no model; for quiet
+  hours that start at night, within their first hour and while they hold,
+  once a night (across the 04:00 rollover too); never in a game or a call; a
+  setting beside quiet hours turns it off (`night.wind-down` in the trace).
+  A done day's Now Card says it too, whenever Today is looked at within half
+  a day of tomorrow's start ("Next: Put the bins out, tomorrow at 07:30 —
+  6 h 50 min from now.").
+- **The Break Cue.** The Companion kept the plan's time and the night's,
+  but not the hours at the Mac: deep in something, the owner forgets water
+  and standing up (hyperfocus is the other side of ADHD). After two hours at
+  the Mac with no break of five minutes or more, code puts a Break Cue on
+  the panel: how long and since when, one small thing to do, Taking 5 (the
+  two hours start again) and In 30 min; closing it holds it for two hours.
+  Five minutes away is a break whatever the cue said, and a cue still up
+  then comes down. No model; the Step Cue's manners (never while away, in
+  quiet hours, a call, a game or a meeting, nor over a panel that is up); a
+  step's check-in comes first and the next step's start after it, so the
+  break lands between steps. A step the owner started holds it back only
+  when it ends within half an hour: a Morning Plan gave the day's must-do a
+  two-and-a-half-hour slot, and holding the break for all of it would make
+  four hours at the Mac, so a longer step gets it midway, with the step to
+  come back to and until when. A setting turns it off; `cue.presented` and `cue.reaction` carry it with
+  the phase "break" (a reaction "away": up from the Mac with the cue on the
+  panel). The two hours were chosen without a measure of how long the owner
+  sits: the trace had none. `presence.break` now records each real break —
+  five minutes away or more, not the night nor the app starting — with how
+  long the owner sat before it and how long they were away, and the trace
+  report gives the day's count, median and longest sitting, so the
+  threshold can follow the owner's days.
+- **After a night past midnight, the plan keeps the day light.** The
+  wind-down speaks as quiet hours begin; the morning after a late night still
+  got a full plan, with commitments from 07:15. When the owner was last at
+  the Mac past midnight (before 04:00, the night before the day's start), the
+  Morning Plan's request says until when, and asks for the must-do and what
+  can't wait, with room to rest, said kindly. Code knows it from the last
+  clock tick that saw the owner at the Mac, between midnight and 05:00
+  (`DayState.lastActiveAt`, `DayFacts.upLateUntil`) — not from the presence
+  signals, since the Mac going to sleep reads as a return — so a plan made
+  ahead before the owner sits down gets it too.
+- **A bot in a chat app is an app's news.** Slack counts as people, so
+  every Jira comment relayed through it went to Triage: 7 of the 18 Slack
+  banners in the ledger were the Jira bot, and on 7 October three Triage
+  runs judged nothing else. A messaging app's banner whose sender line, or
+  the speaker before a channel message's colon, is a known integration
+  (Jira, GitHub, CI, calendars, Notion, …) is now an app's news: it waits
+  for the next Breakpoint and costs no model call. Paging tools stay people,
+  and the title is never read (in Slack it is the workspace).
+- **The night's draft of tomorrow reaches the morning.** The Night
+  Reflection writes a first draft of tomorrow (on 7 October: send the request
+  a colleague asked for early, documents ready for both ID checks, the free
+  mid-morning for the Companion work), but only its carry-over note opened
+  the next day; the draft lived on a card no one saw by morning. The draft
+  now rides into the next Day Opening as "Last night's first draft of
+  today", where the Morning Plan reads it.
+- **A time to leave.** The owner's Profile says an in-person class means
+  leaving 30 minutes early, and Jarvis wrote "Leave by 12:30" as a plan tip,
+  but the only alarm was the event nudge ten minutes before the start. The
+  Morning Plan now sees the events still ahead with short ids and places,
+  and may answer `leave: [{event, at}]` for one in person; code keeps a
+  departure only for a listed event, before it starts, at most three hours
+  ahead and still to come. Each becomes a Nudge the OS keeps ("Time to leave
+  for Class", `nudge.leave.*`), the Now Card says "Leave at 12:30" as the
+  event comes up and "Time to leave" when it is time, over any task still
+  running; the way there is busy time, so free time and "Do it at" offers end
+  at the departure; and the Day Line shows it under the event. Jarvis's own
+  re-plan sets the day's departures, none included.
+- **The time left of a started step is in the menu bar.** The Now Card's
+  draining bar helps only while Today is open, and during a step the owner
+  is in another app. While a step the owner started runs (its task still
+  open), the status item shows its time left beside the glyph ("25m",
+  "1h 5m"), refreshed on its own clock, with the step in the tooltip; it
+  goes back to the glyph alone when the step ends or is done. The same
+  clock counts down, in the half hour before, to the next event ("in 12m")
+  or the time to leave for one in person ("leave in 12m") — the first that
+  comes, so a meeting shows even over a step that would run into it; the
+  OS nudge ten minutes before was the only word of it outside Today
+  (`DayEngine.clock`, pushed through `CompanionPresence`). Opening the glyph's
+  menu, a Jarvis section (with the Companion on) says the same in words,
+  opens Today, and opens the capture bar ("Write a Thought Down…", the
+  hotkey named in its tooltip) — the one-key capture went unused for ten
+  days of the trace.
+- **A promise in a message becomes a task with one click.** On 7 October a
+  Breakpoint noted a colleague "still waiting on that request from you" and
+  the Night Reflection's draft said to send it early, but nothing made it a
+  reminder. The Night Reflection may now answer `tasks` (at most three, most
+  nights none): code drops any already in Reminders, whatever its date,
+  fixes the due day (the reflection's tomorrow, or the Inbox), and keeps them
+  under "Jarvis noticed" that night and the next day
+  (`DayState.taskProposals`). Add makes the reminder through the Agenda (with
+  its undo), unless the owner wrote it down meanwhile — then the question
+  leaves Today and Add makes no twin; No lets it go (`task.proposed`,
+  `task.decided`).
+- **A week's focus.** Goals span weeks; the Companion saw one day at a
+  time. On the week's last day the Evening Wrap-up also looks back on the
+  week (the Agenda's snapshot now holds the week's completed reminders, read
+  in the same EventKit query as today's) and may answer `week` and `focus`:
+  next week's one thing, in a few words. Code keeps the focus a week
+  (`DayState.weekFocus`); it opens each day's thread, the Morning Plan is
+  asked to let the must-do serve it, and Today shows it beside the date.
+  The look-back also counts the week's must-dos ("The must-do got done on 4
+  of the 6 days it was set"): the engine notes when the day's must-do is seen
+  done and keeps each day's outcome a week (`DayState.mustDoDays`).
+- **Tasks that slid fit back in with one click.** The Now Card offered a
+  slid task the next free slot, one task at a time ("Slid past 13:00. 2 more
+  slid too."), and five of the six times the owner took a task off the plan
+  were between 23:52 and 00:24, tidying slid tasks before bed. With two or
+  more slid, the card now offers "Fit both in" / "Fit all 3 in": code places
+  each, in order, at the next free slot after the ones before it (as "Do it
+  at" would, the Day Line's free time), and the Inbox's offers keep clear of
+  them; Step Cues follow the new slots. No model.
+- **The week ends on a clean slate.** The Evening Wrap-up asked only about
+  today's tasks, so a task left overdue stayed "carried" on Today from day
+  to day with nothing ever asking about it (the same few overdue reminders
+  showed in the agenda listings across days). On the week's last day the
+  Wrap-up also asks about up to five overdue tasks not in today's plan (one
+  planned today is today's, whatever its date), oldest first, each with
+  the day it has waited since ("Waiting since Thu 1 Oct", under "Still
+  open"); Jarvis is told that "later" (no date) and "drop" are kind
+  answers for what has waited a week, and without the model the card
+  suggests Later for them — another tomorrow only rebuilds the pile.
+- **An online meeting reads as its service.** A Zoom event's location is
+  its link with the password; it showed under the event on the Day Line, in
+  its nudge, in the agenda tool and in the plan's list of events to leave
+  for. `AgendaEvent.place` reads it as "Zoom" (text around the link stays:
+  "Room 4 · Microsoft Teams"; every link goes, and a passcode written beside
+  one), which also tells the plan there is nothing to travel to; the agent's
+  listing keeps the link without its query.
+- **The plan sees the likeliest tasks first.** The Day Opening and the
+  Morning Plan listed up to 25 undated reminders in the store's order, most
+  of them from collection lists (films, books, places) no day plans. They now
+  list 15: the Inbox first, then lists that hold dated work, then the rest,
+  with what is left summed by list ("…and 12 more, in Movies, Books").
+- **The capture hotkey is taught where it pays.** In ten days it was never
+  used; tasks came through Today's composer and the agent's tools. An empty
+  Inbox now says "Tap Right ⌥ in any app to write a thought down, or hold it
+  to say one" (the configured key, by name).
+- **Once the must-do is done, the rest is a bonus.** Finishing the day's one
+  thing that mattered most changed nothing on Today: the next free-time card
+  offered the next task at the same weight. Now it says "The must-do is done;
+  this one's a bonus", and the evening counts it ("2 of 4 done today, the
+  must-do among them") — the pressure comes off once the main thing is in.
+- **The trace measures it**: `cue.presented` (start or end, how late, the
+  slot's length, the must-do) and `cue.reaction` (the choice, the time to
+  react; "startSmall" among them); `card.reaction` "fitted" (slid tasks fit
+  back in, how many); and `night.ended` at the day's first sit-down (how
+  long the Mac was left, and whether the owner was at it past midnight), so
+  a week's trace shows whether the wind-down and a light day change the
+  nights. `scripts/companion-trace-report.py` prints them by day.
+- `JarvisPanelGalleryTests` renders the panel's content over fixture cards,
+  each at the height the panel fits to it; `TEST_RUNNER_PANEL_GALLERY_DIR`
+  writes the renders as PNGs.
+- **A call's nudge joins it.** The owner's days hold several calls; a
+  nudge said "In 10 min · Google Meet" and a click opened Today, so joining
+  meant hunting for the link in the calendar, minutes before the call.
+  A nudge for an event with a meeting-service link — in its place, its own
+  link (`EKEvent.url`, now read) or the invite's notes, where Google writes
+  "Join with Google Meet" — carries it and a Join button that opens it; any
+  other click still opens Today. A nudge's id now includes the event's end
+  and link, so a meeting made longer or given a new link is nudged again with
+  what is true now. The same link is offered where the call meets the day:
+  the Now Card's Join during a call and in the quarter hour before one, and
+  the panel's "Done" when the step just finished is followed by a call that
+  soon (`StepCue.nextLink`) — the step's end check-in comes five minutes
+  before a meeting, so Done and Join are the same minute.
+- **The plan learns how long steps take.** Time runs differently for the
+  owner than on paper — the planning fallacy, sharper with ADHD — and the
+  Morning Plan sized slots by the model's guess every day, never by how
+  the owner's steps went. A step started whole (Start, Start now; not five
+  minutes, not a late quarter hour more) is timed: seen done, how long it
+  took joins `DayState.stepRuns` with the minutes it had (two weeks, the
+  last thirty), unless done more than ten minutes after its time was up,
+  when the real length is unknown. From five runs, when the pace is 15% or
+  more off, the plan's request says so ("Lately the owner's steps took
+  about 1.5× the time planned (6 steps): give each slot that much room, and
+  fewer of them."). Code measures; the model only reads one line. The
+  owner sees the same measure as each step ends: the panel's "Done" says
+  how long it took ("Done in 26 min") when answered at its end — time made
+  visible, never weighed against the plan — and `cue.timed` traces each run
+  for the report's pace by day.

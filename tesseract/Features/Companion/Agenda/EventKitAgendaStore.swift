@@ -69,8 +69,22 @@ final class EventKitAgendaStore: AgendaStore {
         guard access.canUseCalendar else { return [] }
         let predicate = store.predicateForEvents(withStart: from, end: to, calendars: nil)
         return store.events(matching: predicate)
+            .filter {
+                Self.isKept(
+                    status: $0.status,
+                    ownStatus: $0.attendees?.first(where: \.isCurrentUser)?.participantStatus)
+            }
             .map(Self.value(of:))
             .sorted { ($0.start, $0.title) < ($1.start, $1.title) }
+    }
+
+    /// A cancelled event, or one the owner declined, is not part of their
+    /// day — as Calendar hides them: no nudge, no busy time, no meeting to
+    /// come back from.
+    nonisolated static func isKept(status: EKEventStatus, ownStatus: EKParticipantStatus?)
+        -> Bool
+    {
+        status != .canceled && ownStatus != .declined
     }
 
     func openReminders() async -> [AgendaReminder] {
@@ -317,7 +331,8 @@ final class EventKitAgendaStore: AgendaStore {
             location: event.location,
             notes: event.notes,
             hasOtherAttendees: others,
-            isEditable: event.calendar?.allowsContentModifications ?? false)
+            isEditable: event.calendar?.allowsContentModifications ?? false,
+            url: event.url)
     }
 
     nonisolated private static func value(of reminder: EKReminder) -> AgendaReminder {
@@ -338,7 +353,8 @@ final class EventKitAgendaStore: AgendaStore {
             dueHasTime: components?.hour != nil,
             isCompleted: reminder.isCompleted,
             completedAt: reminder.completionDate,
-            createdAt: reminder.creationDate)
+            createdAt: reminder.creationDate,
+            repeats: reminder.hasRecurrenceRules)
     }
 
     nonisolated private static func hex(_ color: CGColor?) -> String? {

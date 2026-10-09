@@ -35,6 +35,7 @@ struct TodaySideColumn: View {
 private struct InboxSection: View {
     @Environment(Agenda.self) private var agenda
     @Environment(CompanionRuntime.self) private var runtime
+    @Environment(SettingsManager.self) private var settings
     let facts: DayFacts
     let isEvening: Bool
 
@@ -55,6 +56,11 @@ private struct InboxSection: View {
             }
             if items.isEmpty {
                 Text("Inbox is clear.").foregroundStyle(.secondary)
+                // Where the one-key capture is taught: it went unused for
+                // ten days of the trace.
+                Text(captureHint)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             ForEach(shown) { reminder in
                 let slot = slots[reminder.id] ?? .tomorrow
@@ -76,6 +82,14 @@ private struct InboxSection: View {
         }
     }
 
+    /// How to catch a thought from any app: the capture hotkey, by name.
+    private var captureHint: String {
+        let key = settings.captureHotkey
+        return key.isSingleModifier
+            ? "Tap \(key.displayString) in any app to write a thought down, or hold it to say one."
+            : "Press \(key.displayString) in any app to write a thought down."
+    }
+
     private func title(of slot: InboxSlot) -> String {
         switch slot {
         case .today(let start): "At \(AgendaTime.clock(start))"
@@ -92,13 +106,19 @@ private struct InboxSection: View {
     }
 }
 
-/// Jarvis's "Should I remember this?" proposals, until the owner decides.
+/// What Jarvis noticed, until the owner decides: tasks the day showed they
+/// must do ("Add to your tasks?"), then "Should I remember this?" facts.
 private struct JarvisNoticed: View {
     @Environment(ProfileStore.self) private var profile
+    @Environment(CompanionRuntime.self) private var runtime
+    @Environment(Agenda.self) private var agenda
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        if !profile.openProposals.isEmpty {
+        // One the owner wrote down meanwhile is no longer a question.
+        let open = Set(agenda.snapshot.open.map { $0.title.lowercased() })
+        let tasks = runtime.state.taskProposals.filter { !open.contains($0.title.lowercased()) }
+        if !profile.openProposals.isEmpty || !tasks.isEmpty {
             VStack(alignment: .leading, spacing: TodayLayout.rowSpacing) {
                 HStack {
                     Text("Jarvis noticed").fontWeight(.semibold)
@@ -108,10 +128,39 @@ private struct JarvisNoticed: View {
                         .foregroundStyle(.secondary)
                         .focusable(false)
                 }
+                ForEach(tasks) { task in
+                    TaskProposalRow(proposal: task)
+                }
                 ForEach(profile.openProposals) { proposal in
                     ProposalRow(proposal: proposal)
                 }
             }
         }
+    }
+}
+
+/// A task the day showed, one click from Reminders.
+private struct TaskProposalRow: View {
+    @Environment(CompanionRuntime.self) private var runtime
+    let proposal: TaskProposal
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(proposal.title).fixedSize(horizontal: false, vertical: true)
+            Text(when).foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                Button("Add") { runtime.act(.taskProposal(id: proposal.id, add: true)) }
+                Button("No") { runtime.act(.taskProposal(id: proposal.id, add: false)) }
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.accentColor)
+            .focusable(false)
+        }
+    }
+
+    private var when: String {
+        guard let due = proposal.due else { return "Add to your tasks? Into the Inbox." }
+        let day = due.formatted(.dateTime.weekday(.wide))
+        return "Add to your tasks? Due \(day)."
     }
 }

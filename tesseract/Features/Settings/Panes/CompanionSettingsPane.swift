@@ -66,8 +66,16 @@ struct CompanionSettingsPane: View {
                 Stepper(
                     "Nudge \(settings.companionNudgeLeadMinutes) min before events",
                     value: $settings.companionNudgeLeadMinutes, in: 0...60, step: 5)
+                Toggle("Bring Planned Steps When They Start", isOn: $settings.companionStepCues)
+                    .disabled(!settings.companionHeartbeatEnabled)
+                Toggle("Suggest a Break After Two Hours", isOn: $settings.companionBreakCues)
+                    .disabled(!settings.companionHeartbeatEnabled)
             } header: {
                 Text("Your Day")
+            } footer: {
+                Text(
+                    "When a step Jarvis planned (or you placed) starts, it comes to you on the Jarvis panel — Start, In 15 min, Tomorrow or Done — and one you started checks in when its time is up. If you're away, it waits for you. The menu bar counts down the step you're on, and the last half hour before your next event. After two hours at the Mac with no break, Jarvis suggests one between steps; five minutes away counts."
+                )
             }
 
             Section {
@@ -77,11 +85,13 @@ struct CompanionSettingsPane: View {
                 DatePicker(
                     "Until", selection: minutesBinding($settings.companionQuietEndMinutes),
                     displayedComponents: .hourAndMinute)
+                Toggle("Say When Tomorrow Starts as They Begin", isOn: $settings.companionWindDown)
+                    .disabled(!settings.companionHeartbeatEnabled)
             } header: {
                 Text("Quiet Hours")
             } footer: {
                 Text(
-                    "Jarvis's own banners, panels and voice stop in quiet hours. Your reminders and event nudges still fire."
+                    "Jarvis's own banners, panels and voice stop in quiet hours. If you're still at the Mac as they begin, one banner says when tomorrow starts. Your reminders and event nudges still fire."
                 )
             }
 

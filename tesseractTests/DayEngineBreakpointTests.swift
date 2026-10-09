@@ -156,6 +156,54 @@ struct DayEngineBreakpointTests {
         #expect(refined.state.ledger.unresolved(now: Self.local(13, 1)).isEmpty)
     }
 
+    @Test func theModelsCardKeepsWhatTheCodeCardShowedBesides() throws {
+        // Besides Anna and CI (for the model to judge), an app's news waited.
+        var state = Self.awayWithNotifications()
+        state =
+            DayEngine.decide(
+                .notificationArrived(
+                    Self.notification(
+                        "image", app: "ChatGPT", title: "Your image is ready", body: "",
+                        at: Self.local(12, 30)
+                    ).classified(.app)),
+                snapshot: Self.snapshot(at: Self.local(12, 30), present: false), state: state
+            ).state
+        let first = DayEngine.decide(
+            .presenceReturned(awayFrom: Self.local(12)),
+            snapshot: Self.snapshot(at: Self.local(13)), state: state)
+        let request = try #require(Self.moments(first.effects).first)
+        #expect(request.context.shownIDs == ["image"])
+        let reply = #"{"line": "Anna needs a look at her PR.", "needs_you": ["n1"]}"#
+        let measure = MomentMeasure(
+            promptTokens: 900, outputTokens: 60, prefillSeconds: 0.2, generateSeconds: 2,
+            latencySeconds: 3, hitCap: false, modelID: "m")
+        let refined = DayEngine.decide(
+            .momentOutcome(request, .reply(reply, measure)),
+            snapshot: Self.snapshot(at: Self.local(13)), state: first.state)
+        let card = try #require(refined.state.cards.last)
+        guard case .breakpoint(let breakpoint) = card.body else {
+            Issue.record("expected a Breakpoint card")
+            return
+        }
+        #expect(breakpoint.needsYou.map(\.id) == ["n-anna"])
+        #expect(Set(breakpoint.canWait.map(\.app)) == ["GitHub", "ChatGPT"])
+    }
+
+    @Test func aBannerGoneDuringTheCallLeavesAGapNotAShift() {
+        let anna = SeenLedger.Entry(
+            notification: ObservedNotification(
+                id: "n-anna", app: "Slack", title: "Anna", subtitle: "", body: "PR?",
+                arrivedAt: Self.local(12, 10)),
+            arrivedPresent: false)
+        // n1 left the ledger while the model judged; it picked n2, Anna.
+        let choice = BreakpointMoment.choose(
+            #"{"line": "Anna asks.", "needs_you": ["n2"]}"#, from: [nil, anna], field: .needsYou)
+        #expect(choice?.entries.map(\.id) == ["n-anna"])
+        let none = BreakpointMoment.choose(
+            #"{"line": "x", "needs_you": ["n1"]}"#, from: [nil, anna], field: .needsYou)
+        #expect(none?.entries.isEmpty == true)
+    }
+
     @Test func aMeetingThatEndsIsABreakpoint() {
         var state = Self.awayWithNotifications()
         state.lastTickAt = Self.local(15, 44)
@@ -344,6 +392,73 @@ struct DayEngineBreakpointTests {
             snapshot: Self.snapshot(at: Self.local(11), rules: rules), state: Self.state())
         #expect(Self.panelCards(decision.effects).first?.kind == .triage)
         #expect(Self.moments(decision.effects).isEmpty)
+    }
+
+    @Test func aSecondRaiseKeepsTheFirstOnTheCard() throws {
+        let rules = [TriageRule(sender: "Anna", action: .raise, phrase: "always Anna")]
+        let first = DayEngine.decide(
+            .notificationArrived(
+                Self.notification(
+                    "a1", app: "Slack", title: "Anna", body: "ping", at: Self.local(11))),
+            snapshot: Self.snapshot(at: Self.local(11), present: false, rules: rules),
+            state: Self.state())
+        let second = DayEngine.decide(
+            .notificationArrived(
+                Self.notification(
+                    "a2", app: "Slack", title: "Anna", body: "are you there?",
+                    at: Self.local(11, 5))),
+            snapshot: Self.snapshot(at: Self.local(11, 5), present: false, rules: rules),
+            state: first.state)
+        let open = second.state.cards.filter { $0.kind == .triage && !$0.dismissed }
+        #expect(open.count == 1)
+        guard case .triage(let triage) = try #require(open.first).body else {
+            Issue.record("expected a Triage card")
+            return
+        }
+        #expect(triage.raise.map(\.id) == ["a1", "a2"])
+    }
+
+    @Test func aSecondBreakpointWaitsWhileTheFirstIsJudged() throws {
+        let first = DayEngine.decide(
+            .presenceReturned(awayFrom: Self.local(12)),
+            snapshot: Self.snapshot(at: Self.local(13)), state: Self.awayWithNotifications())
+        #expect(first.state.running == .breakpoint)
+        let card = try #require(first.state.cards.last)
+        // A meeting ends, or the owner steps out and back, while Jarvis judges.
+        let second = DayEngine.decide(
+            .presenceReturned(awayFrom: Self.local(13, 5)),
+            snapshot: Self.snapshot(at: Self.local(13, 20)), state: first.state)
+        #expect(
+            second.state.cards.filter { $0.kind == .breakpoint && !$0.dismissed }.map(\.id)
+                == [card.id])
+        #expect(Self.moments(second.effects).isEmpty)
+    }
+
+    @Test func aGatheredTriageCardLeavesWhatWasDealtWith() throws {
+        let rules = [TriageRule(sender: "Anna", action: .raise, phrase: "always Anna")]
+        let first = DayEngine.decide(
+            .notificationArrived(
+                Self.notification(
+                    "a1", app: "Slack", title: "Anna", body: "ping", at: Self.local(11))),
+            snapshot: Self.snapshot(at: Self.local(11), present: false, rules: rules),
+            state: Self.state())
+        // Read in Slack itself, a while later.
+        let read = DayEngine.decide(
+            .appActivated(name: "Slack", bundleID: "com.tinyspeck.slackmacgap"),
+            snapshot: Self.snapshot(at: Self.local(11, 2), rules: rules), state: first.state)
+        let second = DayEngine.decide(
+            .notificationArrived(
+                Self.notification(
+                    "a2", app: "Slack", title: "Anna", body: "and one more",
+                    at: Self.local(11, 30))),
+            snapshot: Self.snapshot(at: Self.local(11, 30), present: false, rules: rules),
+            state: read.state)
+        let open = second.state.cards.filter { $0.kind == .triage && !$0.dismissed }
+        guard case .triage(let triage) = try #require(open.first).body else {
+            Issue.record("expected a Triage card")
+            return
+        }
+        #expect(triage.raise.map(\.id) == ["a2"])
     }
 
     @Test func aHotMacDefersTriageUntilItCools() {

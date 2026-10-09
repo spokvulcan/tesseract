@@ -118,7 +118,9 @@ nonisolated enum SkillRegistry: Sendable {
             return []
         }
 
-        for entry in entries {
+        // In name order: a directory listing has none, and the skills
+        // section is part of the system prompt the prefix cache keys on.
+        for entry in entries.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
             let isDirectory =
                 (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
 
@@ -160,7 +162,9 @@ nonisolated enum SkillRegistry: Sendable {
             return []
         }
 
-        for entry in entries {
+        // In name order: a directory listing has none, and the skills
+        // section is part of the system prompt the prefix cache keys on.
+        for entry in entries.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
             let isDirectory =
                 (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
             guard isDirectory else { continue }

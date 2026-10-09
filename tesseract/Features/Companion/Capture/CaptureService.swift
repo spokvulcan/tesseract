@@ -48,13 +48,18 @@ final class CaptureService {
         return outcome
     }
 
-    func undoLast() async {
-        guard case .added(let change) = lastOutcome else { return }
+    /// Undo the capture the owner is looking at — that one, not whatever was
+    /// captured last (the panels and Today share this door). True once it is
+    /// undone; otherwise the reason is the latest outcome.
+    @discardableResult
+    func undo(_ change: AgendaChange) async -> Bool {
         do {
             try await agenda.undo(change)
-            lastOutcome = nil
+            if case .added(let last) = lastOutcome, last.id == change.id { lastOutcome = nil }
+            return true
         } catch {
             lastOutcome = .failed("Couldn't undo: \(error.localizedDescription)")
+            return false
         }
     }
 

@@ -4,7 +4,8 @@
 //
 //  Who a banner is from, decided by code before anything reaches the model:
 //  a person (a chat, a mail, a mention), an app's own news (a download
-//  finished, an image is ready), or noise (the system, a game). Only people
+//  finished, an image is ready, a bot posting through a chat app), or noise
+//  (the system, a game). Only people
 //  are worth a Triage; an app's news waits for the next Breakpoint; noise is
 //  never shown. The owner's own rules still come first.
 //
@@ -109,6 +110,16 @@ nonisolated enum NotificationSources {
         "linkedin.com", "mail.proton.me", "fastmail.com",
     ]
 
+    /// Bots and integrations that post through messaging apps: an app's
+    /// news, not a person waiting (a Jira comment, a CI run, a calendar
+    /// digest). Paging tools are not here — a page can't wait.
+    static let integrationSenders: Set<String> = [
+        "jira", "jira cloud", "confluence", "github", "gitlab", "bitbucket", "jenkins",
+        "circleci", "google calendar", "google drive", "slackbot", "workflow builder", "asana",
+        "trello", "linear", "notion", "figma", "loom", "sentry", "datadog", "dependabot",
+        "vercel", "netlify", "zapier", "calendly", "giphy",
+    ]
+
     /// The system's own banners, which are never about the owner's day.
     static let systemNoiseNames: Set<String> = [
         "game mode", "software update", "time machine", "login items",
@@ -121,13 +132,29 @@ nonisolated enum NotificationSources {
         let name = notification.app.lowercased()
         if systemNoiseNames.contains(name) { return .noise }
         if app?.isGame == true { return .noise }
-        if let bundleID = app?.bundleID, personBundleIDs.contains(bundleID) { return .person }
-        if personAppNames.contains(name) { return .person }
+        if let bundleID = app?.bundleID, personBundleIDs.contains(bundleID) {
+            return isIntegration(notification) ? .app : .person
+        }
+        if personAppNames.contains(name) { return isIntegration(notification) ? .app : .person }
         if browserNames.contains(name) {
             let site = "\(notification.subtitle) \(notification.title)".lowercased()
             return messagingSites.contains(where: site.contains) ? .person : .app
         }
         return .app
+    }
+
+    /// A messaging app's banner from a bot: its sender line (Slack's
+    /// subtitle) or the name before a channel message's colon ("Jira: …") is
+    /// a known integration. Never the title: in Slack that is the workspace,
+    /// and a team at GitHub or Notion has one named so.
+    static func isIntegration(_ notification: ObservedNotification) -> Bool {
+        var senders = [notification.subtitle]
+        if let colon = notification.body.firstIndex(of: ":") {
+            senders.append(String(notification.body[..<colon]))
+        }
+        return senders.contains {
+            integrationSenders.contains($0.trimmingCharacters(in: .whitespaces).lowercased())
+        }
     }
 
     /// What code does with a banner no owner rule matched: noise is never

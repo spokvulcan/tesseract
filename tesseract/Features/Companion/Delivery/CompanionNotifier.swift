@@ -18,8 +18,12 @@ final class CompanionNotifier {
 
     nonisolated static let cardCategory = "companion.card"
     nonisolated static let nudgeCategory = "companion.nudge"
+    /// A call's nudge, with a Join button that opens its link.
+    nonisolated static let callCategory = "companion.nudge.call"
+    nonisolated static let joinAction = "companion.join"
     nonisolated static let cardUserInfoKey = "card"
     nonisolated static let eventUserInfoKey = "event"
+    nonisolated static let linkUserInfoKey = "link"
 
     /// A banner or nudge was clicked: open Today.
     var onOpen: (() -> Void)?
@@ -36,9 +40,18 @@ final class CompanionNotifier {
     func activate() async -> Bool {
         let center = UNUserNotificationCenter.current()
         if !isArmed {
-            delegate.onResponse = { [weak self] _ in self?.onOpen?() }
+            delegate.onResponse = { [weak self] action, link in
+                // Join opens the call; any other click opens Today.
+                if let url = Self.joinURL(action: action, link: link) {
+                    NSWorkspace.shared.open(url)
+                } else {
+                    self?.onOpen?()
+                }
+            }
             delegate.onPresent = { [weak self] id, category in
-                if category == Self.nudgeCategory { self?.onNudgeDelivered?(id) }
+                if category == Self.nudgeCategory || category == Self.callCategory {
+                    self?.onNudgeDelivered?(id)
+                }
             }
             center.delegate = delegate
             center.setNotificationCategories([
@@ -46,6 +59,12 @@ final class CompanionNotifier {
                     identifier: Self.cardCategory, actions: [], intentIdentifiers: [], options: []),
                 UNNotificationCategory(
                     identifier: Self.nudgeCategory, actions: [], intentIdentifiers: [], options: []),
+                UNNotificationCategory(
+                    identifier: Self.callCategory,
+                    actions: [
+                        UNNotificationAction(
+                            identifier: Self.joinAction, title: "Join", options: [.foreground])
+                    ], intentIdentifiers: [], options: []),
             ])
             isArmed = true
         }
@@ -77,7 +96,8 @@ final class CompanionNotifier {
     /// The ids of the nudges scheduled with the OS right now.
     func scheduledNudgeIDs() async -> Set<String> {
         let pending = await UNUserNotificationCenter.current().pendingNotificationRequests()
-        return Set(pending.map(\.identifier).filter { $0.hasPrefix(NudgePlanner.idPrefix) })
+        return Set(
+            pending.map(\.identifier).filter { $0.hasPrefix(NudgePlanner.familyPrefix) })
     }
 
     /// The nudges macOS has delivered and still keeps in Notification Center,
@@ -86,10 +106,16 @@ final class CompanionNotifier {
         let delivered = await UNUserNotificationCenter.current().deliveredNotifications()
         return delivered.compactMap { notification in
             let request = notification.request
-            guard request.identifier.hasPrefix(NudgePlanner.idPrefix) else { return nil }
+            guard request.identifier.hasPrefix(NudgePlanner.familyPrefix) else { return nil }
             return DeliveredNudge(
                 id: request.identifier, title: request.content.title, at: notification.date)
         }
+    }
+
+    /// The link a response opens: Join on a call's nudge.
+    nonisolated static func joinURL(action: String, link: String?) -> URL? {
+        guard action == joinAction, let link else { return nil }
+        return URL(string: link)
     }
 
     func schedule(_ nudge: Nudge) async {
@@ -97,17 +123,34 @@ final class CompanionNotifier {
         content.title = nudge.title
         content.body = nudge.body
         content.sound = .default
-        content.categoryIdentifier = Self.nudgeCategory
-        content.userInfo = [Self.eventUserInfoKey: nudge.eventID]
+        // A call's nudge joins it in one click, ten minutes ahead or late.
+        content.categoryIdentifier = nudge.link == nil ? Self.nudgeCategory : Self.callCategory
+        var info: [String: String] = [Self.eventUserInfoKey: nudge.eventID]
+        if let link = nudge.link { info[Self.linkUserInfoKey] = link.absoluteString }
+        content.userInfo = info
         content.interruptionLevel = .timeSensitive
-        let parts = Calendar.current.dateComponents(
-            [.year, .month, .day, .hour, .minute, .second], from: nudge.fireAt)
         let request = UNNotificationRequest(
             identifier: nudge.id, content: content,
-            trigger: UNCalendarNotificationTrigger(dateMatching: parts, repeats: false))
+            trigger: UNCalendarNotificationTrigger(
+                dateMatching: Self.triggerComponents(for: nudge.fireAt), repeats: false))
         do { try await UNUserNotificationCenter.current().add(request) } catch {
             Log.companion.error("Scheduling a nudge failed: \(error)")
         }
+    }
+
+    /// The moment a nudge fires, with its time zone attached: without one a
+    /// calendar trigger matches the clock time wherever the Mac is, and after
+    /// a flight the nudge for a 16:00 Berlin meeting fired at 15:50 London
+    /// time, fifty minutes after it began. Its id doesn't change with the
+    /// zone, so it was never rescheduled.
+    nonisolated static func triggerComponents(for date: Date, calendar: Calendar = .current)
+        -> DateComponents
+    {
+        var parts = calendar.dateComponents(
+            [.year, .month, .day, .hour, .minute, .second], from: date)
+        parts.calendar = calendar
+        parts.timeZone = calendar.timeZone
+        return parts
     }
 
     func cancel(nudgeIDs: [String]) {
@@ -121,8 +164,9 @@ final class CompanionNotifier {
 /// thread; every callback hops to the main-actor notifier.
 nonisolated final class CompanionNotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
 
-    /// Written once on the main actor before the delegate is installed.
-    nonisolated(unsafe) var onResponse: (@MainActor @Sendable (String) -> Void)?
+    /// Written once on the main actor before the delegate is installed. The
+    /// action chosen, and the call's link if the notification carries one.
+    nonisolated(unsafe) var onResponse: (@MainActor @Sendable (String, String?) -> Void)?
     nonisolated(unsafe) var onPresent: (@MainActor @Sendable (String, String) -> Void)?
 
     func userNotificationCenter(
@@ -137,7 +181,10 @@ nonisolated final class CompanionNotificationDelegate: NSObject, UNUserNotificat
     func userNotificationCenter(
         _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse
     ) async {
-        await onResponse?(response.notification.request.identifier)
+        let link =
+            response.notification.request.content.userInfo[CompanionNotifier.linkUserInfoKey]
+            as? String
+        await onResponse?(response.actionIdentifier, link)
     }
 }
 

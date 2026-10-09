@@ -19,23 +19,32 @@ struct NowCardView: View {
 
     var body: some View {
         let state = runtime.state
-        // Jarvis's word: the day's latest card, until it is dismissed or the
-        // day moves past it.
-        let jarvis = state.cards.last.flatMap {
-            $0.dismissed || !$0.isFresh(at: facts.now) ? nil : $0
-        }
+        // Jarvis's word: the day's latest card with something to say, until
+        // it is dismissed or the day moves past it.
+        let jarvis = DayCard.word(in: state.cards, at: facts.now)
         let waiting = Waiting(state: state, now: facts.now)
         VStack(alignment: .leading, spacing: 12) {
             header(jarvis)
             VStack(alignment: .leading, spacing: 3) {
-                Text(card.headline)
-                    .fontWeight(.semibold)
-                    .fixedSize(horizontal: false, vertical: true)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(card.headline)
+                        .fontWeight(.semibold)
+                        .fixedSize(horizontal: false, vertical: true)
+                    // The must-do wears its star here as on the Day Line.
+                    if card.isMustDo {
+                        Image(systemName: "star.fill")
+                            .foregroundStyle(Color.accentColor)
+                            .help("The day's must-do")
+                    }
+                }
                 if let detail = card.detail {
                     Text(detail)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+            }
+            if let span = card.span {
+                TimeLeft(span: span, now: facts.now)
             }
             if !card.actions.isEmpty {
                 actionRow
@@ -96,9 +105,40 @@ struct NowCardView: View {
                     }
                 }
                 .disabled(needsJarvis && thinking)
+                .help(action.help ?? "")
                 .focusable(false)
             }
         }
+    }
+}
+
+// MARK: - Time left
+
+/// How much of the step under way is left: a short bar in the accent that
+/// drains as the minutes go, like a visual timer.
+private struct TimeLeft: View {
+    let span: DateInterval
+    let now: Date
+
+    /// Short, so it reads as a timer and not as the day's progress above.
+    private static let width: CGFloat = 220
+
+    var body: some View {
+        let total = max(span.duration, 60)
+        let left = min(max(span.end.timeIntervalSince(now), 0), total)
+        Capsule()
+            .fill(.quaternary)
+            .frame(width: Self.width, height: 4)
+            .overlay(alignment: .leading) {
+                Capsule()
+                    .fill(Color.accentColor)
+                    .frame(width: Self.width * CGFloat(left / total), height: 4)
+            }
+            .accessibilityElement()
+            .accessibilityLabel("Time left")
+            .accessibilityValue(
+                "\(MomentPrompts.minutesText(Int((left / 60).rounded(.up)))) of \(MomentPrompts.minutesText(Int(total / 60)))"
+            )
     }
 }
 
@@ -188,8 +228,17 @@ private struct JarvisWord: View {
             ForEach(reflection.tomorrow, id: \.self) { line in
                 Text("· \(line)").foregroundStyle(.secondary)
             }
-        case .eveningWrapUp, .triage:
-            // Their items wait below, under Needs you and Left from today.
+        case .eveningWrapUp(let wrapUp):
+            // Its leftovers wait below, under Left from today; the week's
+            // look-back says the week and next week's focus here.
+            if let week = wrapUp.week {
+                Text(week).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            if let focus = wrapUp.focus {
+                Text("Next week: \(focus)").foregroundStyle(.secondary)
+            }
+        case .triage:
+            // Its items wait below, under Needs you.
             EmptyView()
         }
     }
@@ -315,7 +364,7 @@ private struct Leftovers: View {
     var body: some View {
         ForEach(wrapUps, id: \.cardID) { cardID, wrapUp in
             VStack(alignment: .leading, spacing: 8) {
-                Text("Left from today").fontWeight(.semibold)
+                Text(wrapUp.leftoversHeading).fontWeight(.semibold)
                 ForEach(wrapUp.leftovers) { leftover in
                     LeftoverRow(cardID: cardID, leftover: leftover)
                 }
@@ -336,15 +385,21 @@ private struct LeftoverRow: View {
     var body: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 8) {
-                Text(leftover.title).lineLimit(1)
+                title.lineLimit(1)
                 Spacer(minLength: 8)
                 choices
             }
             VStack(alignment: .leading, spacing: 6) {
-                Text(leftover.title).lineLimit(2)
+                title.lineLimit(2)
                 HStack(spacing: 8) { choices }
             }
         }
+    }
+
+    /// The task, and how long it has waited when that is since an earlier day.
+    private var title: Text {
+        guard let waiting = leftover.waiting else { return Text(leftover.title) }
+        return Text(leftover.title) + Text("  \(waiting)").foregroundStyle(.secondary)
     }
 
     @ViewBuilder private var choices: some View {

@@ -23,10 +23,14 @@ nonisolated struct DayCard: Sendable, Equatable, Codable, Identifiable {
     /// Built by code and shown at once; Jarvis is still thinking it through,
     /// and his version will replace it in place.
     var isRefining: Bool = false
+    /// The owner took it in on the panel (Looks Good, Good Night, or closing
+    /// it): it stays in Today, never takes the panel again, and its items
+    /// don't wait on them.
+    var kept: Bool = false
 
     init(
         id: String, kind: MomentKind, createdAt: Date, isFallback: Bool, body: Body,
-        dismissed: Bool = false, isRefining: Bool = false
+        dismissed: Bool = false, isRefining: Bool = false, kept: Bool = false
     ) {
         self.id = id
         self.kind = kind
@@ -35,10 +39,11 @@ nonisolated struct DayCard: Sendable, Equatable, Codable, Identifiable {
         self.body = body
         self.dismissed = dismissed
         self.isRefining = isRefining
+        self.kept = kept
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, kind, createdAt, isFallback, body, dismissed, isRefining
+        case id, kind, createdAt, isFallback, body, dismissed, isRefining, kept
     }
 
     /// A card saved by an earlier build (no `isRefining`) still loads.
@@ -51,6 +56,7 @@ nonisolated struct DayCard: Sendable, Equatable, Codable, Identifiable {
         body = try c.decode(Body.self, forKey: .body)
         dismissed = try c.decodeIfPresent(Bool.self, forKey: .dismissed) ?? false
         isRefining = try c.decodeIfPresent(Bool.self, forKey: .isRefining) ?? false
+        kept = try c.decodeIfPresent(Bool.self, forKey: .kept) ?? false
     }
 
     enum Body: Sendable, Equatable, Codable {
@@ -83,6 +89,44 @@ nonisolated struct MorningPlanCard: Sendable, Equatable, Codable {
     var placements: [Placement]
     /// At most three small suggestions ("start with the two quick replies").
     var suggestions: [String]
+    /// When to leave for the day's events in person.
+    var departures: [Departure] = []
+
+    private enum CodingKeys: String, CodingKey {
+        case line, mustDoID, placements, suggestions, departures
+    }
+
+    init(
+        line: String, mustDoID: String?, placements: [Placement], suggestions: [String],
+        departures: [Departure] = []
+    ) {
+        self.line = line
+        self.mustDoID = mustDoID
+        self.placements = placements
+        self.suggestions = suggestions
+        self.departures = departures
+    }
+
+    /// A card saved before departures existed still loads.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        line = try c.decode(String.self, forKey: .line)
+        mustDoID = try c.decodeIfPresent(String.self, forKey: .mustDoID)
+        placements = try c.decode([Placement].self, forKey: .placements)
+        suggestions = try c.decode([String].self, forKey: .suggestions)
+        departures = (try? c.decodeIfPresent([Departure].self, forKey: .departures)) ?? []
+    }
+}
+
+/// When the owner has to leave for an event in person, from the Morning Plan
+/// (Jarvis knows the bus takes half an hour; the calendar doesn't). The OS
+/// nudges at that time, and the Now Card says it as the event comes up.
+nonisolated struct Departure: Sendable, Equatable, Hashable, Codable {
+    var eventID: String
+    var title: String
+    var at: Date
+    var eventStart: Date
+    var location: String?
 }
 
 /// A reminder given a slot in today's plan. Tesseract-side only: the
@@ -102,6 +146,43 @@ nonisolated struct EveningWrapUpCard: Sendable, Equatable, Codable {
     var leftovers: [Leftover]
     /// Tomorrow's first commitment ("09:30 Standup"), when there is one.
     var tomorrowFirst: String?
+    /// On the week's last day: a line on the week…
+    var week: String?
+    /// …and next week's one focus.
+    var focus: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case line, done, leftovers, tomorrowFirst, week, focus
+    }
+
+    init(
+        line: String, done: [String], leftovers: [Leftover], tomorrowFirst: String?,
+        week: String? = nil, focus: String? = nil
+    ) {
+        self.line = line
+        self.done = done
+        self.leftovers = leftovers
+        self.tomorrowFirst = tomorrowFirst
+        self.week = week
+        self.focus = focus
+    }
+
+    /// A card saved before the week's look-back still loads.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        line = try c.decode(String.self, forKey: .line)
+        done = try c.decode([String].self, forKey: .done)
+        leftovers = try c.decode([Leftover].self, forKey: .leftovers)
+        tomorrowFirst = try c.decodeIfPresent(String.self, forKey: .tomorrowFirst)
+        week = try c.decodeIfPresent(String.self, forKey: .week)
+        focus = try c.decodeIfPresent(String.self, forKey: .focus)
+    }
+
+    /// "Left from today", or "Still open" once the week's look-back also
+    /// asks about what has waited since an earlier day.
+    var leftoversHeading: String {
+        leftovers.contains { $0.since != nil } ? "Still open" : "Left from today"
+    }
 }
 
 nonisolated struct Leftover: Sendable, Equatable, Hashable, Codable, Identifiable {
@@ -118,6 +199,16 @@ nonisolated struct Leftover: Sendable, Equatable, Hashable, Codable, Identifiabl
     var reminderID: String
     var title: String
     var suggestion: Suggestion
+    /// Due on an earlier day (the week's look-back asks about these too):
+    /// the day it has waited since.
+    var since: Date? = nil
+
+    /// "Waiting since Fri 26 Sep", for one due on an earlier day.
+    var waiting: String? {
+        since.map {
+            "Waiting since \($0.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)))"
+        }
+    }
 }
 
 // MARK: - Breakpoint
@@ -191,6 +282,43 @@ nonisolated struct ReflectionCard: Sendable, Equatable, Codable {
     var tomorrow: [String]
     /// Zero to three "Should I remember this?" proposals.
     var proposals: [ProposalDraft]
+    /// Zero to three things the day showed the owner must do that aren't in
+    /// Reminders yet.
+    var tasks: [TaskProposal] = []
+
+    private enum CodingKeys: String, CodingKey {
+        case carryOver, tomorrow, proposals, tasks
+    }
+
+    init(
+        carryOver: String, tomorrow: [String], proposals: [ProposalDraft],
+        tasks: [TaskProposal] = []
+    ) {
+        self.carryOver = carryOver
+        self.tomorrow = tomorrow
+        self.proposals = proposals
+        self.tasks = tasks
+    }
+
+    /// A card saved before task proposals still loads.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        carryOver = try c.decode(String.self, forKey: .carryOver)
+        tomorrow = try c.decode([String].self, forKey: .tomorrow)
+        proposals = try c.decode([ProposalDraft].self, forKey: .proposals)
+        tasks = (try? c.decodeIfPresent([TaskProposal].self, forKey: .tasks)) ?? []
+    }
+}
+
+/// Something the day showed the owner must do that isn't in Reminders yet
+/// ("send the request she asked for"), from the Night Reflection: the owner
+/// adds it with one click, or lets it go. A promise made in a message
+/// shouldn't depend on remembering it.
+nonisolated struct TaskProposal: Sendable, Equatable, Hashable, Codable, Identifiable {
+    let id: String
+    var title: String
+    /// The day it would be due (the reflection's tomorrow), or nil: the Inbox.
+    var due: Date?
 }
 
 nonisolated struct ProposalDraft: Sendable, Equatable, Hashable, Codable {

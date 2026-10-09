@@ -266,6 +266,50 @@ struct VoiceCaptureSessionTests {
         #expect(dump.saved.isEmpty)
     }
 
+    /// The microphone and the recognizer are shared: a session that started
+    /// nothing (a panel closing while dictation records, then transcribes)
+    /// stops no one else's capture and cancels no one else's take.
+    @Test func cancelLeavesAnotherSessionsCaptureAndTake() async throws {
+        let capture = FakeAudioCapture(cannedAudio: makeAudio())
+        let engine = ControllableTranscribing()
+        let dictation = VoiceCaptureSession(audioCapture: capture, transcriptionEngine: engine)
+        let panel = VoiceCaptureSession(audioCapture: capture, transcriptionEngine: engine)
+        guard case .started = dictation.start() else {
+            Issue.record("expected dictation to start")
+            return
+        }
+
+        panel.cancel()
+        #expect(capture.isCapturing)
+        #expect(capture.stopCount == 0)
+
+        guard case .audio(let audio, _) = dictation.stop() else {
+            Issue.record("expected audio")
+            return
+        }
+        let recorder = CommitRecorder()
+        let take = Task {
+            await dictation.transcribeAndCommit(audio, language: "en") { text, duration in
+                try await recorder.commit(text, duration)
+            }
+        }
+        while !engine.isAwaiting { await Task.yield() }
+        panel.cancel()
+        #expect(engine.cancelCount == 0)
+
+        engine.completeWithSuccess()
+        guard case .committed = await take.value else {
+            Issue.record("expected dictation's take to commit")
+            return
+        }
+        #expect(recorder.commits.count == 1)
+
+        // Its own capture a session does stop.
+        _ = panel.start()
+        panel.cancel()
+        #expect(!capture.isCapturing)
+    }
+
     // MARK: - transcribeAndCommit()
 
     @Test func transcribeAndCommitDeliversProcessedTextThenReportsCommitted() async throws {

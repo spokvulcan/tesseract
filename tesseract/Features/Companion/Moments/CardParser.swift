@@ -16,6 +16,32 @@ nonisolated enum CardParse: Sendable, Equatable {
     case invalid(String)
 }
 
+/// An array whose broken entries are skipped, and anything that is not an
+/// array is empty: one stray entry never costs the whole card.
+nonisolated struct Lossy<Element: Decodable>: Decodable {
+    var values: [Element]
+
+    private struct Skip: Decodable {
+        init(from decoder: Decoder) throws {}
+    }
+
+    init(from decoder: Decoder) throws {
+        guard var container = try? decoder.unkeyedContainer() else {
+            values = []
+            return
+        }
+        var values: [Element] = []
+        while !container.isAtEnd {
+            if let value = try? container.decode(Element.self) {
+                values.append(value)
+            } else {
+                _ = try? container.decode(Skip.self)
+            }
+        }
+        self.values = values
+    }
+}
+
 nonisolated enum CardParser {
 
     /// The JSON object inside a reply: code fences and prose around it are
@@ -41,18 +67,30 @@ nonisolated enum CardParser {
             let at: String
             let minutes: Int?
         }
+        struct Leave: Decodable {
+            let event: String
+            let at: String
+        }
         let line: String?
         let mustDo: String?
-        let plan: [Entry]?
-        let suggestions: [String]?
+        let plan: Lossy<Entry>?
+        let suggestions: Lossy<String>?
+        let leave: Lossy<Leave>?
 
         enum CodingKeys: String, CodingKey {
-            case line, plan, suggestions
+            case line, plan, suggestions, leave
             case mustDo = "must_do"
         }
     }
 
-    static func morningPlan(_ reply: String, facts: DayFacts) -> CardParse {
+    /// The longest a departure may come before its event.
+    static let longestTravel: TimeInterval = 3 * 3600
+
+    /// - Parameter eventIDs: the events the request listed for leaving, in
+    ///   the order their short ids ("e1"…) number them.
+    static func morningPlan(_ reply: String, facts: DayFacts, eventIDs: [String] = [])
+        -> CardParse
+    {
         guard let data = jsonObject(in: reply) else { return .invalid("no JSON object") }
         guard let decoded = try? JSONDecoder().decode(MorningPlanReply.self, from: data) else {
             return .invalid("the JSON is not a Morning Plan")
@@ -61,7 +99,7 @@ nonisolated enum CardParser {
         let mustDo = decoded.mustDo.flatMap { facts.task($0) != nil ? $0 : nil }
         let busy = facts.eventsToday.map { DateInterval(start: $0.start, end: $0.end) }
         var seen = Set<String>()
-        let placements: [Placement] = (decoded.plan ?? []).compactMap { entry in
+        let placements: [Placement] = (decoded.plan?.values ?? []).compactMap { entry in
             guard facts.task(entry.id) != nil, !seen.contains(entry.id),
                 let start = AgendaTime.parse(entry.at, now: facts.now, calendar: facts.calendar),
                 start.hasTime, facts.calendar.isDate(start.date, inSameDayAs: facts.now),
@@ -78,13 +116,30 @@ nonisolated enum CardParser {
             seen.insert(entry.id)
             return Placement(reminderID: entry.id, start: start.date, minutes: minutes)
         }
-        let suggestions = (decoded.suggestions ?? []).compactMap(cleanLine).prefix(3)
+        let suggestions = (decoded.suggestions?.values ?? []).compactMap(cleanLine).prefix(3)
+        // A time to leave: for an event the request listed, before it starts
+        // and not hours ahead, and still to come.
+        var leaving = Set<String>()
+        let departures: [Departure] = (decoded.leave?.values ?? []).compactMap { entry in
+            guard entry.event.hasPrefix("e"), let number = Int(entry.event.dropFirst()),
+                number >= 1, number <= eventIDs.count,
+                let event = facts.events.first(where: { $0.id == eventIDs[number - 1] }),
+                !leaving.contains(event.id),
+                let at = AgendaTime.parse(entry.at, now: facts.now, calendar: facts.calendar),
+                at.hasTime, at.date < event.start, at.date > facts.now,
+                event.start.timeIntervalSince(at.date) <= longestTravel
+            else { return nil }
+            leaving.insert(event.id)
+            return Departure(
+                eventID: event.id, title: event.title, at: at.date, eventStart: event.start,
+                location: event.place)
+        }
         return .card(
             .morningPlan(
                 MorningPlanCard(
                     line: line, mustDoID: mustDo,
                     placements: placements.sorted { $0.start < $1.start },
-                    suggestions: Array(suggestions))))
+                    suggestions: Array(suggestions), departures: departures)))
     }
 
     // MARK: Evening Wrap-up
@@ -95,7 +150,9 @@ nonisolated enum CardParser {
             let suggest: String?
         }
         let line: String?
-        let leftovers: [Entry]?
+        let leftovers: Lossy<Entry>?
+        let week: String?
+        let focus: String?
     }
 
     static func eveningWrapUp(
@@ -107,10 +164,19 @@ nonisolated enum CardParser {
         }
         guard let line = cleanLine(decoded.line) else { return .invalid("no line") }
         let suggested = Dictionary(
-            (decoded.leftovers ?? []).map { ($0.id, $0.suggest ?? "") },
+            (decoded.leftovers?.values ?? []).map { ($0.id, $0.suggest ?? "") },
             uniquingKeysWith: { first, _ in first })
         var card = FallbackCards.eveningWrapUp(facts: facts, leftovers: leftovers)
         card.line = line
+        if facts.isWeekReview {
+            card.week = cleanLine(decoded.week) ?? card.week
+            // A focus is a few words: anything longer is cut at a word.
+            card.focus = cleanLine(decoded.focus).map { focus in
+                guard focus.count > 80 else { return focus }
+                let cut = focus.prefix(80)
+                return String(cut[..<(cut.lastIndex(of: " ") ?? cut.endIndex)]) + "…"
+            }
+        }
         card.leftovers = card.leftovers.map { leftover in
             var leftover = leftover
             if let raw = suggested[leftover.reminderID],
@@ -130,17 +196,28 @@ nonisolated enum CardParser {
             let text: String?
             let reason: String?
         }
+        struct Task: Decodable {
+            let title: String
+            let when: String?
+        }
         let carryOver: String?
         let tomorrow: [String]?
         let proposals: [Proposal]?
+        let tasks: Lossy<Task>?
 
         enum CodingKeys: String, CodingKey {
-            case tomorrow, proposals
+            case tomorrow, proposals, tasks
             case carryOver = "carry_over"
         }
     }
 
-    static func nightReflection(_ reply: String) -> CardParse {
+    /// - Parameters:
+    ///   - facts: the night's facts: a proposed task is due on its tomorrow.
+    ///   - open: every open reminder, whatever its date: a proposed task
+    ///     already among them is dropped.
+    static func nightReflection(
+        _ reply: String, facts: DayFacts? = nil, open: [AgendaReminder] = []
+    ) -> CardParse {
         guard let data = jsonObject(in: reply) else { return .invalid("no JSON object") }
         guard let decoded = try? JSONDecoder().decode(ReflectionReply.self, from: data),
             let note = decoded.carryOver?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -150,12 +227,24 @@ nonisolated enum CardParser {
             guard let text = cleanLine(proposal.text) else { return nil }
             return ProposalDraft(text: text, reason: cleanLine(proposal.reason) ?? "")
         }
+        let existing = Set((open + (facts?.openTasks ?? [])).map { $0.title.lowercased() })
+        var seen = Set<String>()
+        let tasks = (decoded.tasks?.values ?? []).compactMap { task -> TaskProposal? in
+            guard var title = cleanLine(task.title) else { return nil }
+            if title.count > 120 { title = String(title.prefix(117)) + "…" }
+            let key = title.lowercased()
+            guard !existing.contains(key), seen.insert(key).inserted else { return nil }
+            let later = task.when?.lowercased() == "later"
+            return TaskProposal(
+                id: "task-" + NudgePlanner.stableHash(key), title: title,
+                due: later ? nil : facts?.endOfToday)
+        }
         return .card(
             .reflection(
                 ReflectionCard(
                     carryOver: String(note.prefix(1200)),
                     tomorrow: (decoded.tomorrow ?? []).compactMap(cleanLine).prefix(5).map { $0 },
-                    proposals: Array(proposals.prefix(3)))))
+                    proposals: Array(proposals.prefix(3)), tasks: Array(tasks.prefix(3)))))
     }
 
     // MARK: Shared
@@ -221,9 +310,15 @@ nonisolated enum FallbackCards {
         }
         return EveningWrapUpCard(
             line: line, done: done,
-            leftovers: leftovers.map {
-                Leftover(reminderID: $0.id, title: $0.title, suggestion: .tomorrow)
+            leftovers: leftovers.map { reminder in
+                // One that has waited since an earlier day is kept without a
+                // date by default: another tomorrow only rebuilds the pile.
+                let since = facts.isWaiting(reminder) ? reminder.due : nil
+                return Leftover(
+                    reminderID: reminder.id, title: reminder.title,
+                    suggestion: since == nil ? .tomorrow : .later, since: since)
             },
-            tomorrowFirst: first)
+            tomorrowFirst: first,
+            week: facts.isWeekReview ? MomentPrompts.weekLine(facts) : nil)
     }
 }

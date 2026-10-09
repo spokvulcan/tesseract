@@ -93,6 +93,57 @@ struct SeenLedgerTests {
         #expect(Set(ledger.untriaged(now: now).map(\.id)) == ["ci-fail", "anna"])
     }
 
+    @Test func aSenderRuleFindsTheSenderWhereverTheBannerShowsIt() {
+        let anna = TriageRule(sender: "Anna", action: .raise, phrase: "always Anna")
+        // Messages: the title is the sender.
+        #expect(anna.matches(Self.notification("m", app: "Messages", title: "Anna")))
+        // Slack: the title is the workspace; a direct message's sender line,
+        // or the name before a channel message's colon, is who wrote.
+        #expect(
+            anna.matches(
+                ObservedNotification(
+                    id: "dm", app: "Slack", title: "Acme", subtitle: "Anna", body: "Got a minute?",
+                    arrivedAt: Self.base)))
+        #expect(
+            anna.matches(
+                ObservedNotification(
+                    id: "ch", app: "Slack", title: "Acme", subtitle: "#qa",
+                    body: "Anna: can you look?", arrivedAt: Self.base)))
+        // Someone else in the same workspace is not Anna.
+        #expect(
+            !anna.matches(
+                ObservedNotification(
+                    id: "roman", app: "Slack", title: "Acme", subtitle: "Roman",
+                    body: "Lunch?", arrivedAt: Self.base)))
+        // Mail's subtitle is the subject: a colleague writing about Jira is
+        // not Jira.
+        let jira = TriageRule(sender: "Jira", action: .ignore, phrase: "never Jira")
+        #expect(
+            !jira.matches(
+                ObservedNotification(
+                    id: "mail", app: "Mail", title: "Roman", subtitle: "Jira migration — sign-off",
+                    body: "Note: today please", arrivedAt: Self.base)))
+    }
+
+    @Test func aBannerReadAgainAfterItWasDroppedIsNotNew() throws {
+        var ledger = SeenLedger()
+        ledger.arrived(Self.notification("old"), present: true, rules: [])
+        ledger.prune(now: Self.base.addingTimeInterval(49 * 3600))
+        #expect(ledger.entry("old") == nil)
+        // Notification Center still lists it, and opening it reads it again.
+        let readAgain = ledger.arrived(Self.notification("old"), present: true, rules: [])
+        #expect(!readAgain)
+        #expect(ledger.untriaged(now: Self.base.addingTimeInterval(49 * 3600)).isEmpty)
+        // Saved and loaded, it still remembers; a ledger saved before
+        // remembering anything still loads.
+        let saved = try JSONEncoder().encode(ledger)
+        var loaded = try JSONDecoder().decode(SeenLedger.self, from: saved)
+        let afterLoad = loaded.arrived(Self.notification("old"), present: true, rules: [])
+        #expect(!afterLoad)
+        let older = try JSONDecoder().decode(SeenLedger.self, from: Data(#"{"entries": []}"#.utf8))
+        #expect(older.entries.isEmpty)
+    }
+
     @Test func aRuleMustNarrowSomething() {
         let everything = TriageRule(action: .ignore, phrase: "")
         #expect(!everything.isSpecific)
@@ -130,6 +181,42 @@ struct DeliveryLadderTests {
         return DaySnapshot(
             now: now, settings: settings, agenda: .empty, ownerPresent: present,
             frontmostBundleID: frontmost, frontmostIsGame: game)
+    }
+
+    @Test func sittingDownEndsTheMorningOfQuietHoursThatStartAfterMidnight() {
+        let at = { (hour: Int, minute: Int) in
+            Calendar.current.date(
+                from: DateComponents(year: 2026, month: 9, day: 30, hour: hour, minute: minute))!
+        }
+        var settings = DaySettings()
+        settings.quietStartMinutes = 60
+        settings.quietEndMinutes = 9 * 60
+        let morning = DaySnapshot(
+            now: at(7, 30), settings: settings, agenda: .empty, ownerPresent: true)
+        #expect(DeliveryLadder.quietHoursAreNight(settings))
+        #expect(DeliveryLadder.dayStarted(at(7, 10), snapshot: morning))
+        // A daytime window holds, sat down or not.
+        settings.quietStartMinutes = 13 * 60
+        settings.quietEndMinutes = 15 * 60
+        let afternoon = DaySnapshot(
+            now: at(13, 30), settings: settings, agenda: .empty, ownerPresent: true)
+        #expect(!DeliveryLadder.quietHoursAreNight(settings))
+        #expect(!DeliveryLadder.dayStarted(at(7, 10), snapshot: afternoon))
+        // An evening window has a bedtime but no morning end: it holds.
+        settings.quietStartMinutes = 20 * 60
+        settings.quietEndMinutes = 23 * 60
+        let evening = DaySnapshot(
+            now: at(21, 0), settings: settings, agenda: .empty, ownerPresent: true)
+        #expect(DeliveryLadder.quietHoursAreNight(settings))
+        #expect(!DeliveryLadder.dayStarted(at(9, 30), snapshot: evening))
+        // A sit-down after the morning lifts nothing that night.
+        settings.quietStartMinutes = 23 * 60
+        settings.quietEndMinutes = 8 * 60
+        let night = DaySnapshot(
+            now: Calendar.current.date(
+                from: DateComponents(year: 2026, month: 10, day: 1, hour: 0, minute: 20))!,
+            settings: settings, agenda: .empty, ownerPresent: true)
+        #expect(!DeliveryLadder.dayStarted(at(14, 43), snapshot: night))
     }
 
     @Test func aGameInFrontGetsNoPanelAndNoVoice() {

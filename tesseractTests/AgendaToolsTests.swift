@@ -256,3 +256,51 @@ struct AgendaToolsTests {
         #expect(f.agenda.areas.map(\.name) == ["Job", "Body"])
     }
 }
+
+/// A calendar location as people read it: a meeting link is its service, a
+/// password never shows, and a place stays as written.
+struct AgendaPlaceTests {
+
+    @Test(
+        arguments: [
+            ("https://us04web.zoom.us/j/78521739484?pwd=abc.1", "Zoom"),
+            ("https://meet.google.com/abc-defg-hij", "Google Meet"),
+            ("Room 4 / https://teams.microsoft.com/l/meetup-join/xyz", "Room 4 · Microsoft Teams"),
+            ("https://www.example.org/call", "example.org"),
+            ("Efstaleiti 1", "Efstaleiti 1"),
+            ("  ", nil),
+            // Every link goes, any case, and a passcode written beside one.
+            ("HTTPS://ZOOM.US/j/123?pwd=x, https://zoom.us/j/123", "Zoom"),
+            ("Zoom Meeting https://zoom.us/j/1 Passcode: 1234", "Zoom Meeting"),
+            ("Room 4 PIN 4455 https://meet.google.com/abc", "Room 4 · Google Meet"),
+            ("Pin Oak Park", "Pin Oak Park"),
+            ("https:///no-host", nil),
+        ] as [(String, String?)])
+    func aLocationReadsAsAPlace(_ location: String, _ label: String?) {
+        #expect(AgendaPlace.label(location) == label)
+    }
+
+    @Test func theAgentKeepsTheLinkButNotItsPassword() {
+        #expect(
+            AgendaPlace.label("https://us04web.zoom.us/j/78521739484?pwd=abc.1", withLink: true)
+                == "Zoom — us04web.zoom.us/j/78521739484")
+    }
+
+    @Test func aCallsLinkIsFoundInItsPlaceItsLinkOrItsNotes() {
+        #expect(
+            AgendaPlace.meetingLink(in: ["https://us04web.zoom.us/j/785?pwd=abc", nil, nil])
+                == URL(string: "https://us04web.zoom.us/j/785?pwd=abc"))
+        // An invite writes it in the notes; a doc linked first isn't a call.
+        let notes = """
+            Agenda: https://docs.google.com/document/d/1
+            Join with Google Meet: https://meet.google.com/abc-defg-hij
+            """
+        #expect(
+            AgendaPlace.meetingLink(in: ["Room 4", nil, notes])
+                == URL(string: "https://meet.google.com/abc-defg-hij"))
+        #expect(
+            AgendaPlace.meetingLink(in: [nil, "https://teams.microsoft.com/l/meetup-join/x", nil])
+                == URL(string: "https://teams.microsoft.com/l/meetup-join/x"))
+        #expect(AgendaPlace.meetingLink(in: ["Efstaleiti 1", nil, "https://example.org"]) == nil)
+    }
+}

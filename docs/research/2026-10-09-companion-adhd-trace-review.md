@@ -1,0 +1,209 @@
+# The Companion as a day manager for an ADHD brain — what ten days of its trace showed
+
+**Date:** 2026-10-09 · **Scope:** the Companion as built by ADR-0080 and its
+amendments, measured against its own record of ten days of use.
+**Method:** the Companion Trace (`~/Library/Application Support/CompanionTrace/trace-*.jsonl`,
+30 September – 9 October 2026), the saved day state (`companion/day-state.json`,
+its seen ledger) and the Day Threads, read locally. Only aggregate counts and
+times appear here; no names, messages or places. The principles section names
+the ideas the changes lean on; it makes no claims beyond them.
+
+---
+
+## What the trace showed
+
+1. **Cards were mostly noise.** 43 Breakpoint cards: 39 went to Today only,
+   with nothing for the owner ("Nothing needs you right now."); 2 were acted
+   on (one notification opened, one reminder done). Each quiet card became
+   Jarvis's word on the Now Card for an hour, and pushed the Morning Plan's
+   line and tips off it after the first break of the day.
+2. **The panel said "Open Today to see it all", and was dismissed.** Every
+   Morning Plan (4) and Evening Wrap-up (5) that reached the panel was
+   dismissed, in 12 s to 8 min. Only 2 leftover decisions were ever made, both
+   from Today.
+3. **The plan was not kept.** A slot (`Placement`) lives only in the Day
+   Engine's state, so nothing marked its start: no cue, no alarm. The owner's
+   only frequent manual actions were placing a task (3) and taking one off the
+   plan (6 — five of them between 23:52 and 00:24, tidying slid tasks off the
+   Now Card before bed).
+4. **The prepared plan never reached the panel.** From 5 October the plan was
+   made ahead; the owner sat down at 06:12, 07:55, 07:58 and 07:59, every time
+   inside the default quiet hours (until 08:00), so it waited unseen in Today.
+5. **A plan cut short was never finished.** On 8 October the plan started at
+   05:25 and the app was killed at 05:28; the relaunch cleared the moment in
+   flight and nothing ran it again. The day had no plan.
+6. **Triage judged bots.** 24 Triage runs; most were offered 1–3 banners and
+   raised none. 7 of the 18 Slack banners in the ledger were a Jira bot, and on
+   7 October three runs judged nothing else.
+7. **Cold prefills cost minutes.** The Evening Wrap-up ran with a cold prefix
+   cache 6 times out of 8, re-reading 8–27k tokens (up to 195 s); each followed
+   a ~7 s model load, that is, an app relaunch.
+8. **The night's draft of tomorrow was lost.** The Night Reflection writes up
+   to five concrete lines for tomorrow; only its carry-over note opened the
+   next day.
+9. **Late nights, early mornings, no word about sleep.** The trace is active
+   past midnight most nights, with commitments at 07:15–08:00; Health's own
+   bedtime banners are held as an app's news.
+10. **Travel was known but not kept.** The Profile says an in-person class
+    means leaving 30 minutes early, and Jarvis wrote "leave by 12:30" as a tip;
+    the only alarm was the event nudge ten minutes before the start.
+
+## Principles the changes lean on
+
+- **Help at the point of performance** (Barkley's phrase for ADHD support):
+  a cue at the moment of doing beats a list the owner has to remember to read.
+- **If-then plans** (Gollwitzer's implementation intentions): a plan that says
+  *when* a step starts works when something marks that moment.
+- **Externalised time:** time left shown, not computed from a clock reading —
+  a draining bar, a countdown in the menu bar.
+- **One thing at a time, less noise:** say each thing once; "nothing needs you"
+  is no news; never stack interruptions.
+- **No shame, credit the win:** nothing is "missed"; finishing the must-do is
+  said aloud, and the rest becomes a bonus.
+- **Transitions and the day's edges:** when to leave, when to wind down, when
+  the day closes.
+
+## What changed (branch `feat/companion-adhd-loop`)
+
+| Finding | Change |
+|---|---|
+| 3 | **Step Cue**: a planned slot comes to the owner on the Jarvis Panel at its start (Start, In 15 min, Tomorrow, Done); a started one checks in at its end; no start interrupts it, a held start is cued once the owner is free |
+| 3 | A cue that came due while the owner was away, in a meeting or behind another panel is shown late when they can see it ("Still time for", "How did it go?"), instead of lapsing after ten minutes |
+| 3 | A step put off twice is offered as five minutes ("Just five minutes?"), and five minutes in the check-in asks to keep going |
+| 2 | The Morning Plan and the Evening Wrap-up are whole on the panel (steps, tips, leftovers with their choices); the panel shows the live card and fits its content; Looks Good keeps the card instead of dismissing it |
+| 2 | When the plan's first step is due, the plan card's main button is Start Now |
+| 4 | The Morning Plan meets the first sit-down on the panel, quiet hours or not; Step Cues follow after an early sit-down |
+| 4 | A day that starts late (4 October: first at the Mac at 14:43) gets its plan at the first sit-down, made then, instead of only on asking |
+| 1 | A quiet Breakpoint no longer takes Jarvis's word; it is titled "While you were away", so the greeting is said once |
+| — | The Now Card leads with the time left of the step under way, over a draining bar; the menu bar shows it from any app, and counts down the last half hour to the next event or time to leave |
+| 3 | In the evening the Now Card closes the day (what is ahead tonight, or what got done and what is still open) instead of heading it with a slid task |
+| 3 | Several tasks that slid are fitted back into the day's free slots in one click ("Fit all 3 in") |
+| 5 | A Morning Plan cut short by a quit runs again, once |
+| 9 | The wind-down: one banner as quiet hours begin, saying when tomorrow starts |
+| 9 | After a night at the Mac past midnight, the Morning Plan is asked to keep the day light |
+| 9 | A done day's Now Card says how far off tomorrow's start is ("— 6 h 50 min from now"), within half a day |
+| 2 | The Evening Wrap-up waits for a step the owner started, as Step Cues do |
+| 6 | A bot posting through a chat app is an app's news, not a person |
+| 8 | The night's draft of tomorrow opens the next day's thread |
+| 10 | The plan sets a time to leave for an event in person; the OS nudges then, the Now Card and the Day Line say it |
+| — | Once the must-do is done, the Now Card says the rest is a bonus; Done on a Step Cue is answered for a moment — the win, and what comes next |
+| — | A week's focus: the week's last evening looks back (done by Area, must-dos kept) and names next week's one thing, shown beside Today's date |
+| — | The week ends on a clean slate: that evening also asks about up to five overdue tasks, oldest first, suggesting Later for what has waited |
+| — | An online meeting reads as its service ("Zoom"), never its link and password |
+| — | The plan's candidates come the likeliest first; collection lists are summed |
+| — | An empty Inbox teaches the capture hotkey; a Step Cue chimes softly |
+| — | The menu bar menu opens on the day: what is on now or next, Open Today, Write a Thought Down… |
+| — | Two code reviews of these changes, with every finding fixed and tested |
+
+The trace measures the new behaviour: `cue.presented` / `cue.reaction`,
+`card.reaction` with `kept` apart from `dismissed`, `night.wind-down`,
+`nudge.scheduled` for `nudge.leave.*`.
+
+### Older Companion code, found by a review
+
+A review of the Companion code this work had not touched found nine faults;
+each is fixed and tested:
+
+| Fault | Fix |
+|---|---|
+| On the night the clocks go forward, 04:00 mapped to the day before: "Tomorrow" re-dated a task to today, and the day began at 05:00 | The day turns at 04:00 on the wall clock |
+| Let go on a repeating reminder deleted its whole series (Undo brought back a copy that no longer repeats); Later failed | A repeating leftover skips to tomorrow instead |
+| A sender rule ("always tell me when Anna writes") never matched Slack, where the title is the workspace | The sender is found in the title, a chat app's sender line, or before a channel message's colon |
+| Jarvis's version of a welcome back dropped what could wait (an app's news, banners already judged) | The request carries them, and the refined card keeps them |
+| A declined or cancelled meeting still got a nudge, a "meeting ended" Breakpoint and busy time | Events leave both out as they are read |
+| Nudges were bare clock times: after a flight they fired on the old zone's clock time | Each nudge carries its time zone |
+| A banner still in Notification Center, read again as it was opened, came in as new after the ledger forgot it | The ledger remembers the ids it dropped |
+| A second raise hid the first (each Triage card replaced the last); a second Breakpoint made while the first was judged left its banners to no one | Triage cards gather what still waits; one Breakpoint at a time |
+| A moment that landed after 04:00 counted for the new day (a late reflection took tonight's, its reply went to the new thread) | A request carries its day; a late reflection opens the morning; the thread turns between moments |
+
+## Trying it
+
+What a day on this branch should feel like, and where to look if it doesn't:
+
+- **Morning.** The first sit-down after the night brings the plan to the
+  panel (whatever the time, until the evening); with its first step due, the
+  main button is Start Now. After a night at the Mac past midnight, the plan
+  is asked to keep the day light.
+- **Each step.** A planned slot comes to the panel as it starts (Start, In 15
+  min, Tomorrow, Done); missed while away, it comes on return ("Still time
+  for"); put off twice, it is offered as five minutes. A started step counts
+  down in the menu bar and checks in at its end; Done is answered for a
+  moment, with what comes next.
+- **From any app.** The menu bar counts down the step under way, or the last
+  half hour to the next meeting or time to leave; its menu opens on the day
+  (now or next, Open Today, Write a Thought Down…).
+- **When the day slides.** Two or more slid steps fit back in with one click
+  on the Now Card.
+- **Evening and night.** The Wrap-up waits for a step under way; on the
+  week's last day it also asks about up to five long-overdue tasks and names
+  next week's focus. Quiet hours begin with one wind-down banner, and a done
+  day's Now Card says how far off tomorrow is.
+- **After a relaunch** a moment should restore the thread from the prefix
+  cache in seconds; the trace report's "cold prefills" line shows whether it
+  does.
+
+After a week, `scripts/companion-trace-report.py 7` shows the cue choices
+(later, startSmall, start), late cues, fitted slots, the night before each
+day, and the cold prefills.
+
+## Recommendations not built
+
+1. **Cold prefills after a relaunch: found and fixed.** The Day Opening is
+   committed once and the SSD prefix cache is on, yet a relaunched thread
+   restored at most a shallow branch point: of the 18 snapshots on disk
+   (4–8 October), no leaf written at the end of a moment's reply was ever read
+   back. The cause was the system prompt itself: the twelve `browser.*` MCP
+   tools reached it in Swift Dictionary order, which Swift seeds per process,
+   so after each relaunch the request's tokens left everything on disk at
+   token 2088, ahead of the 4.4k-token system root and every leaf. Past the
+   system block the threads matched exactly: the stranded leaves would have
+   supplied 12,629 of 12,841, 11,310 of 11,518 and 11,664 of 12,390 tokens.
+   `ExtensionHost.aggregatedTools()` now walks each extension's tools in name
+   order (`ExtensionToolOrderTests`). A lean context for Triage and the
+   Evening Wrap-up (ADR-0080 decision 4) is no longer needed for this; it
+   would still need the owner's call. Two follow-ups for the prefix cache:
+   the emitted-path index is in memory only, so a reply stored under the
+   model's own token split would still miss after a relaunch; and the agent
+   route resolves `preservesThinking` without the model's declared flags, so
+   each moment's leaf is rebuilt by re-reading the whole reply.
+2. **Keep someday lists out of the plan's candidates.** Partly done: the
+   requests now list 15 undated reminders, the Inbox and lists with dated work
+   first, the rest summed by list. Mapping Areas (or marking lists Jarvis
+   never plans from) would go further.
+3. **A weekly look-back.** Built as part of the Evening Wrap-up on the week's
+   last day: the week's done reminders by Area, the must-dos kept, next
+   week's one focus (kept for the week, steering the plan's must-do), and up
+   to five overdue tasks to decide, so the week ends on a clean slate.
+4. **A leaner agenda listing.** Measured and set aside: event and reminder
+   ids are about 2% of the listings' text, and the threads show no tool call
+   that failed on a mistyped id. Meeting links already lose their password.
+5. **Make capture discoverable.** Built: an empty Inbox names the capture
+   hotkey.
+6. **Sleep was read as a return: fixed.** `IdleMonitor` answered
+   `willSleepNotification` with its return path, a leftover of the retired
+   memory consolidation (ADR-0035), which stopped its GPU work that way. With
+   the Companion its only listener, every sleep after an absence sent the
+   engine a "return" (a Breakpoint for nobody, presence stamped at the
+   sleep), and a lid closed mid-work never counted as leaving, so no welcome
+   back followed it. Sleep now starts or continues an absence, from the last
+   input (`IdleMonitorTests`); waking is still a return. The new features
+   also read the last clock tick with the owner at the Mac
+   (`DayState.lastActiveAt`) rather than presence stamps. Dark wakes (Power
+   Nap) still go through the wake path.
+7. **Re-read the trace after a week** with the new events, and keep what moves
+   the owner to act: `scripts/companion-trace-report.py [days]` prints, per
+   day, moments and cold prefills, cards by rung, reactions (kept apart from
+   dismissed), Step Cues (late ones apart) and the owner's choices — "later"
+   and "startSmall" among them, the measure of whether five minutes beats a
+   snooze — the night before (how long the Mac was left, and whether the
+   owner was at it past midnight), the wind-down, event and leave nudges,
+   notifications by source, Triage, and task proposals with what became of
+   them.
+
+## Appendix: the queries
+
+Tallies were made with short scripts over the JSONL: events per day; for
+`card.presented` the pair (moment, rungs); for `card.reaction` the pair
+(moment, action); for `moment.finished` the prompt and cached tokens, prefill
+and generate seconds; for `notification.arrived` the triple (source, app,
+rule); and the seen ledger's Slack entries by sender.

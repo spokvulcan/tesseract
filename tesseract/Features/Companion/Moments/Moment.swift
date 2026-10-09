@@ -28,7 +28,8 @@ nonisolated enum MomentKind: String, Sendable, Equatable, Hashable, Codable, Cas
     var title: String {
         switch self {
         case .morningPlan: "Morning Plan"
-        case .breakpoint: "Welcome back"
+        // Jarvis's line does the greeting; the title says what the card is.
+        case .breakpoint: "While you were away"
         case .triage: "Triage"
         case .eveningWrapUp: "Evening Wrap-up"
         case .nightReflection: "Night Reflection"
@@ -65,6 +66,8 @@ nonisolated enum MomentTrigger: String, Sendable, Equatable, Codable {
     case night
     case retry
     case ownerAsked
+    /// The app quit while it ran: it runs again, once.
+    case resumed
 }
 
 /// A moment the engine wants run.
@@ -79,6 +82,9 @@ nonisolated struct MomentRequest: Sendable, Equatable, Codable {
     /// Card-specific facts the engine needs back with the result (the away
     /// span of a Breakpoint, the notification ids a Triage covered).
     var context: MomentContext = .init()
+    /// The day it ran for: a reply that lands after the 04:00 rollover still
+    /// belongs to it.
+    var day: DayKey? = nil
 }
 
 nonisolated struct MomentContext: Sendable, Equatable, Codable {
@@ -90,6 +96,12 @@ nonisolated struct MomentContext: Sendable, Equatable, Codable {
     /// The card this moment refines (a Breakpoint shows a code-built card at
     /// once; the model's version replaces it in place).
     var cardID: String?
+    /// The events a Morning Plan listed for leaving, in the order their
+    /// short ids ("e1"…) number them.
+    var eventIDs: [String] = []
+    /// The banners a Breakpoint's code card showed besides those the model
+    /// judges (held, already judged, raised by a rule): its version keeps them.
+    var shownIDs: [String] = []
 }
 
 /// What a moment's model call produced, fed back to the engine as a signal.

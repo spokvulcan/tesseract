@@ -112,6 +112,23 @@ final class ProfileStore {
         return removed
     }
 
+    /// The one fact a "forget" means: by its id, by its exact words, or the
+    /// only fact holding every word the owner gave. Nil when that is not one
+    /// fact — a shared word ("allergic to peanuts" against "allergic to
+    /// penicillin") must never delete the wrong one; there is no undo.
+    func factToForget(_ query: String) -> ProfileFact? {
+        if let byID = facts.first(where: { $0.id == query }) { return byID }
+        let words = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let exact = facts.first(where: { $0.text.lowercased() == words }) { return exact }
+        let terms = RecallQuery.terms(query)
+        guard !terms.isEmpty else { return nil }
+        let holding = facts.filter { fact in
+            let text = fact.text.lowercased()
+            return terms.allSatisfy { text.contains($0) }
+        }
+        return holding.count == 1 ? holding[0] : nil
+    }
+
     /// Facts whose words overlap the query, best first.
     func search(_ query: String) -> [ProfileFact] {
         let terms = RecallQuery.terms(query)
@@ -133,11 +150,10 @@ final class ProfileStore {
         for draft in drafts.prefix(3) {
             let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { continue }
+            // Known, open, or already answered "Not true": never asked twice.
             let known =
                 facts.contains { $0.text.lowercased() == text.lowercased() }
-                || proposals.contains {
-                    $0.text.lowercased() == text.lowercased() && $0.status != .dropped
-                }
+                || proposals.contains { $0.text.lowercased() == text.lowercased() }
             guard !known else { continue }
             proposals.append(
                 FactProposal(
@@ -185,7 +201,14 @@ final class ProfileStore {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         guard let file = try? decoder.decode(File.self, from: data) else {
-            Log.companion.error("Profile file unreadable at \(url.path); starting empty")
+            // Kept aside, not overwritten by the next save: the facts may be
+            // recoverable by hand.
+            let aside = url.deletingPathExtension()
+                .appendingPathExtension("unreadable-\(Int(Date().timeIntervalSince1970)).json")
+            try? FileManager.default.moveItem(at: url, to: aside)
+            Log.companion.error(
+                "Profile file unreadable at \(url.path); moved to \(aside.lastPathComponent), starting empty"
+            )
             return
         }
         facts = file.facts

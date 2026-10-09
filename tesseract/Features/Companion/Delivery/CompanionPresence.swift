@@ -3,9 +3,9 @@
 //  tesseract
 //
 //  Jarvis's ambient presence on the menu-bar glyph, the quietest rung of the
-//  Delivery Ladder: whether he is thinking at a moment right now, and whether
-//  anything is waiting on the owner. It says what is happening, never what
-//  he knows.
+//  Delivery Ladder: whether he is thinking at a moment right now, whether
+//  anything is waiting on the owner, and the time left of a step the owner
+//  started. It says what is happening, never what he knows.
 //
 
 import Foundation
@@ -27,8 +27,12 @@ final class CompanionPresence {
     /// How many items are waiting on the owner right now.
     private(set) var waitingCount = 0
 
+    /// What the menu bar counts down: the started step, what comes next.
+    private(set) var clock: MenuBarClock?
+
     /// The menu-bar push: AppKit side, not an Observation consumer.
     @ObservationIgnored var onChange: ((State) -> Void)?
+    @ObservationIgnored var onClockChange: ((MenuBarClock?) -> Void)?
 
     /// Overlapping moments are depth-counted, so one ending does not clear
     /// another that is still running.
@@ -47,6 +51,12 @@ final class CompanionPresence {
     func setWaiting(count: Int) {
         waitingCount = max(0, count)
         recompute()
+    }
+
+    func setClock(_ clock: MenuBarClock?) {
+        guard clock != self.clock else { return }
+        self.clock = clock
+        onClockChange?(clock)
     }
 
     private func recompute() {

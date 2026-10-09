@@ -248,12 +248,11 @@ final class DependencyContainer: ObservableObject {
     )
     /// The floating card rung: the Breakpoint card in a Siri-style glass panel.
     lazy var jarvisPanel: JarvisPanelController = JarvisPanelController(
-        thread: dayThread, voice: panelVoiceInput,
+        thread: dayThread, voice: panelVoiceInput, agenda: agenda,
+        liveCard: { [weak self] id in self?.companionRuntime.state.cards.first { $0.id == id } },
         onAction: { [weak self] action in self?.companionRuntime.act(action) },
         onExpand: { (NSApp.delegate as? AppDelegate)?.navigateToToday() },
-        onCapture: { [weak self] text in
-            Task { await self?.captureService.capture(text, source: "panel") }
-        })
+        capture: captureService)
     lazy var companionRuntime: CompanionRuntime = CompanionRuntime(
         settings: settingsManager, agenda: agenda, notifier: companionNotifier,
         trace: companionTrace, idleMonitor: idleMonitor, presence: companionPresence,
@@ -262,8 +261,17 @@ final class DependencyContainer: ObservableObject {
         frontmost: frontmostApp, power: powerMonitor,
         delivery: CompanionDelivery(
             showPanel: { [weak self] card in self?.jarvisPanel.show(card) },
+            showStep: { [weak self] cue in
+                self?.jarvisPanel.show(cue)
+                // A step's start or end is a moment to notice: a soft chime,
+                // like a timer, with the app's sounds on.
+                if self?.settingsManager.playSounds == true { NSSound(named: "Glass")?.play() }
+            },
+            showBreak: { [weak self] cue in self?.jarvisPanel.show(cue) },
+            retractBreak: { [weak self] in self?.jarvisPanel.retractBreak() },
             retractPanel: { [weak self] cardID in self?.jarvisPanel.retract(cardID: cardID) },
             closePanel: { [weak self] in self?.jarvisPanel.close() },
+            isPanelUp: { [weak self] in self?.jarvisPanel.isShowing ?? false },
             speak: { [weak self] line in self?.speechCoordinator.speakText(line) },
             openApp: { name in AppOpener.open(named: name) }),
         profile: profileStore)
@@ -598,6 +606,13 @@ final class DependencyContainer: ObservableObject {
         companionPresence.onChange = { [weak manager] state in
             manager?.updateState(fromCompanion: state)
         }
+        // The started step's time left, or the time until what comes next,
+        // beside the glyph.
+        companionPresence.onClockChange = { [weak manager] clock in
+            manager?.updateClock(clock)
+        }
+        manager.companionOn = { [settingsManager] in settingsManager.companionHeartbeatEnabled }
+        manager.onCaptureThought = { [weak self] in self?.capturePanel.openForTyping() }
         manager.onTakeAppshot = { [appshotController] in
             Task { await appshotController.takeAppshot() }
         }

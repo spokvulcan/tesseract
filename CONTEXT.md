@@ -1782,13 +1782,23 @@ _Avoid_: dashboard, Mission Control (retired), home screen (unqualified).
 
 **Now Card**:
 The top of Today: the step the day is on (the meeting under way, the task
-whose slot is now, a task that slid, free time and what fits in it, the next
-step, what's left, or a done day and how tomorrow starts) with one-click
-offers that move it on (Done, Start now, "Do it at 16:30", Tomorrow, Plan my
-day, Wrap up the day). Code builds it from the Timeline, so it never waits on
-the model; Jarvis's latest card line rides along while fresh (a plan for four
-hours, a welcome back for one, the evening's cards until the day ends), and
-everything Waiting on You and the evening's leftovers sit on it, each said
+whose slot is now — once the owner started it, how much of it is left, in
+words and a short bar that drains like a visual timer; not started (its cue
+closed, missed or answered by mistake), its time and Start now — a task
+that slid, free time and what fits
+in it, the next step, what's left, or a done day and how tomorrow starts —
+within half a day, how far off that is; in
+the evening it closes the day — what is still ahead tonight, else what got
+done and what is still open, never a slid task at the top) with one-click
+offers that move it on (Done, Start now, "Do it at 16:30", Tomorrow, Join for
+a call under way or starting within a quarter hour, Plan my day, Wrap up the
+day; several tasks that slid are fitted into the day's next
+free slots, in order, with one "Fit all 3 in"). Code builds it from the Timeline, so it never waits on
+the model; the must-do wears the Day Line's star on it, and one that slid
+says so ("Your must-do slid past 10:15."); Jarvis's latest card line rides along while fresh (a plan for four
+hours, a welcome back for one, the evening's cards until the day ends) — a
+Breakpoint with nothing for the owner says nothing, so the plan's word stands —
+and everything Waiting on You and the evening's leftovers sit on it, each said
 once.
 _Avoid_: hero, focus card, "the card" (unqualified: each Moment makes a card).
 
@@ -1808,15 +1818,24 @@ _Avoid_: project, category, domain.
 The Reminders list where captures without a home land, undated. On Today each
 item carries an offer: a free half hour today, clear of the Now Card's offer
 and the items above it ("At 16:30"), or Tomorrow (due tomorrow, for the next
-Morning Plan to place) once today has no room or it is evening.
+Morning Plan to place) once today has no room or it is evening. Empty, it says
+how to catch a thought from any app, naming the capture hotkey.
 
 **Capture**:
 Typed or spoken words turned into a reminder without a model: the capture
 hotkey's panel, the + in the Jarvis Panel's field and the Today composer's
 Add task (⌘↩) all go through one door and the
 deterministic capture parser ("call the dentist tomorrow at 10", "after the
-1:1", "#health"). The hotkey is one key — Right ⌥ alone by default: tap to type,
+1:1", "#health"). Days are counted from now, never the real clock a system
+date reader uses: "on Monday" is the coming Monday (said on a Monday, a week
+on), "this Friday" and "by Friday" count today, "next Friday" is next week's;
+"at noon", "Friday morning", "this weekend" (its Saturday) and "next week"
+(its first day) all land. The hotkey is one key — Right ⌥ alone by default: tap to type,
 hold to speak; another key pressed with it cancels, so ⌥-typing works as usual.
+Each surface says what happened in one line — the reminder added, with an undo
+that takes back that one, or why not — and the words leave the field only once
+saved. Spoken words join words already typed and wait for Return; a take the
+Proofread Pass couldn't make sense of is shown to check, never saved as heard.
 
 **One-key hotkey**:
 A modifier pressed and released on its own (Right ⌥, Right ⌘, Right ⌃, Right ⇧
@@ -1828,14 +1847,76 @@ modifier-only combo.
 
 **Must-do**:
 The day's one optional thing that matters most. It can sit anywhere in the day,
-even late; the owner moves or clears it with one click.
+even late; the owner moves or clears it with one click. Once it is done, the
+Now Card says so: what else fits is "a bonus", and the evening counts it
+("the must-do among them").
 _Avoid_: focus (the day has several goals, not one focus), priority.
 
 **Nudge**:
 A notification scheduled with the OS a few minutes before a calendar event, so
-it fires even with Tesseract closed. Reminders with a due time need none: they
-carry their own alarm, delivered by Reminders on every device.
+it fires even with Tesseract closed — and, for an event in person, at the time
+the Morning Plan set to leave for it ("Time to leave for Class"). A call's
+nudge has a Join button that opens its link — the first meeting-service link in
+its place, its own link or the invite's notes — so ten minutes ahead, or late,
+joining is one click. Reminders with a due time need none: they carry their own
+alarm, delivered by Reminders on every device.
 _Avoid_: wake (retired), alert (unqualified).
+
+**Step Cue**:
+A planned step put on the Jarvis Panel when its slot starts and the owner is at
+the Mac: the task, until when and what follows, with Start (the slot starts
+this minute), In 15 min (it moves on and is cued again then), Tomorrow and
+Did it (done already; not "Done", which at the row's end, a dialog's OK, read
+as closing the cue). The must-do's cue wears Today's star and says so at its
+start ("Time for your must-do"): the day's one goal, not one more step. A Morning Plan's slots and the owner's own "Do it at
+16:30" live only in the day's state, so without it nothing marks their start.
+A step the owner started (Start on a cue, or Start now on Today) checks in
+when its time is up:
+Done, 15 more min (from now, if answered late), Tomorrow; while it runs, no
+other cue interrupts it — what comes due meanwhile waits, named by the
+check-in, and is cued once the owner is free — and the menu bar shows its time
+left beside the glyph ("25m"), so the time can be seen from any app (in the
+half hour before the next event or time to leave, the menu bar counts down
+to that instead: "in 12m", "leave in 12m"). Built by code, no model; each start and
+end once, as soon as the owner can see it; never while away, in quiet hours
+(but not the morning's end of them once the owner sat down to start the
+day), a call, a game or a meeting, nor over a panel that is up or while
+Jarvis is writing a card. What came due meanwhile is cued late — a start while its slot still runs, an end that day —
+and says so ("Still time for", "How did it go?"). A slot whose reminder rings
+at the same minute is left to Reminders. It chimes softly as it appears, with
+the app's sounds on. Done is answered for a moment ("Done in 26 min" for a
+step started and answered at its end, the must-do credited, what comes next)
+before the panel closes, with an Undo: the task
+reopens and the cue is back, to choose again; when what comes next is a call
+within a quarter hour, with Join too. A step put off twice in a
+day is offered as five minutes ("Just five minutes?", Start 5 min), and five
+minutes in it asks to keep going. A meeting ends a step: one started or moved
+ends five minutes before the next meeting with other people or event with a
+place (or the time to leave for one) it would run into — a block of the
+owner's own doesn't — so its check-in is the heads-up to wrap up; where In 15 min or
+15 more min would run into a meeting, the cue offers "At 16:00" or "Go on at
+16:00" instead — after it, with the time that was cut. A meeting added later
+on a step not begun moves the step to the first free time after it (as long,
+before the evening; with none, it stays), and one added into a started step
+ends it five minutes before. Closing it changes
+nothing; a toggle in Settings (Your Day) turns Step Cues off.
+_Avoid_: reminder (Reminders' own alarm), nudge (an event's OS notification).
+
+**Break Cue**:
+Two hours at the Mac with no break of five minutes or more, put on the Jarvis
+Panel: how long and since when, one small thing to do (stand up, water, look
+away — a different one each time that day), with Taking 5 (the two hours
+start again) and In 30 min (asked again then); closing it holds it for two
+hours. Five minutes away is a break whatever the cue said, and one still on
+the panel then comes down. Built by code, no model, by the Step Cue's
+manners: never while away, in quiet hours, a call, a game or a meeting, nor
+over a panel that is up; a step's check-in comes first and the next step's
+start after it, so the break lands between steps. A step the owner started
+holds it back only when it ends within half an hour; a longer one gets it
+midway, naming the step to come back to ("Then back to Write the ADR until
+13:15."). A toggle in Settings (Your Day) turns Break Cues off.
+_Avoid_: break reminder, Pomodoro (no timer the owner sets), Breakpoint (the
+card on coming back).
 
 **Day Engine**:
 The Companion's pure decider: signals (the clock, presence, a meeting ending,
@@ -1850,19 +1931,35 @@ One model call at a point in the day when there is something to judge — the
 Morning Plan, a Breakpoint, a Triage, the Evening Wrap-up, the Night
 Reflection — asking for a JSON card. A reply is validated against the facts it
 was shown; an invalid or failed one gets one retry, then a deterministic card.
-Every moment runs at the owner's own reasoning effort (one cached prefix) and
-under its own output cap. No moment runs without new input.
+One quiet for fifteen minutes the Mac was awake is stopped and counts as
+failed, so a stalled run never holds the day's later moments back. Every moment
+runs at the owner's own reasoning effort (one cached prefix) and under its own
+output cap. No moment runs without new input.
 _Avoid_: turn (a chat word), beat, wake.
 
 **Morning Plan**:
 The moment at the day's first sit-down (after an overnight gap of four hours or
-more, within the morning window), or when Today is first opened that day: small
+more — within the morning window, or later in a day that starts late, before
+the evening), or when Today is first opened that day: small
 tasks into the free time before the first meeting, the Must-do placed where it
 fits. A card built by code goes up at once — the day's shape and where it
 starts — and Jarvis's version replaces it in place when he has thought it
 through; when the Mac is awake and on power before the owner sits down, the plan
-is made ahead and comes forward at the sit-down. Skipping it costs nothing and
-nothing nags.
+is made ahead and comes forward at the sit-down (one made ahead for a sit-down
+after the morning window is made again: its slots have gone by). The first
+sit-down is the
+owner starting the day, so the plan meets them on the panel even before quiet
+hours end. For an event in person it sets a time to leave (Jarvis knows the
+bus takes half an hour; the calendar doesn't): a Nudge fires then, the Now
+Card says "Leave at 12:30" as the event comes up, and the Day Line shows it
+under the event. A plan the app quit in the middle of runs again once when the
+Companion next comes on (not once the owner closed it, nor in the evening).
+After a night at the Mac past midnight it is asked to keep the day light.
+It is told how long the owner's steps really take: a step started whole and
+seen done in time is timed against the minutes it had (two weeks, the last
+thirty), and from five of them, 15% or more off, the plan hears the pace
+("about 1.5× the time planned") and sizes slots by it.
+Skipping it costs nothing and nothing nags.
 
 **Breakpoint**:
 Coming back after the away threshold (ten minutes by default), or a meeting
@@ -1875,13 +1972,19 @@ _Avoid_: summons (retired), welcome-back notification.
 **Breakpoint Card**:
 What needs the owner (people, agents, missed notifications — one action each:
 Open, Later, Done), the next event and what fits before it, where the owner
-was, and how many other things can wait (expandable).
+was, and how many other things can wait (expandable). Titled "While you were
+away"; Jarvis's line does the greeting.
 
 **Jarvis Panel**:
 The floating card rung: a Siri-style Liquid Glass panel near the top-right,
-over any app — close top-left, expand to Today top-right, the card, and an "Ask
-Jarvis" field between + (capture) and a mic. It never steals typing: it turns
-key only when its field is clicked. Replies go to the Day Thread.
+over any app — close top-left, expand to Today top-right, the card or a Step
+Cue, and an "Ask Jarvis" field between + (capture) and a mic. A card on it is
+whole: a Morning Plan lists its steps, an Evening Wrap-up its leftovers with
+their choices, and what the owner handles there leaves it; Looks Good, Good
+Night and closing it keep the card in Today, with what it holds still to
+settle, without bringing it back. As tall as what it
+says. It never steals typing: it turns key only when its field is clicked.
+Replies go to the Day Thread.
 
 **Triage**:
 The moment that judges new unresolved notifications from people while the
@@ -1892,25 +1995,37 @@ Breakpoint.
 **Notification Source**:
 Who a banner is from, decided by code on arrival: a person (a chat, a mail, a
 call — messaging apps, or a messaging site in a browser), an app's own news (an
-image is ready, a download finished), or noise (the system's own banners such
+image is ready, a download finished, a bot such as Jira or CI posting through a
+chat app — paging tools stay people), or noise (the system's own banners such
 as Game Mode, and games). Only people reach Triage; an app's news waits for the
 next Breakpoint; noise is never shown. Owner rules apply first.
 _Avoid_: priority, category (the App Store's).
 
 **Evening Wrap-up**:
-The moment at the evening time (or the next presence before 03:00): what got
+The moment at the evening time (or the next presence before 03:00; after the
+step the owner started, if one is running — it doesn't interrupt a focus
+session): what got
 done, and each leftover rolled to tomorrow or another day, kept for later, or
-let go. Nothing is ever labelled missed or failed.
+let go (a repeating reminder skips to tomorrow instead: it is one item for its
+whole series, so letting it go would delete every occurrence). Nothing is ever labelled missed or failed. On the week's last day (the
+day before the calendar's first weekday) it also looks back on the week — what
+got done, by Area — and names the **Week's Focus**: next week's one thing, in a
+few words, which opens each day's thread, steers the Morning Plan's must-do and
+shows beside Today's date until the next look-back. That evening it also asks
+about up to five overdue tasks, oldest first ("Waiting since…"), so the week
+ends on a clean slate.
 
 **Night Reflection**:
 Once a night, after the Evening Wrap-up — on power, or on a battery at least
 half full with a cool Mac: tomorrow's carry-over note, a first draft of
-tomorrow, and zero to three Fact Proposals.
+tomorrow, and zero to three Fact Proposals. The note and the draft open the
+next day's thread, where the Morning Plan reads them.
 
 **Day Thread**:
 One append-only conversation per day, on its own agent with the same system
 prompt and tools as every chat. It opens with the **Day Opening** (the Profile,
-the Areas, today's agenda, last night's carry-over note); moments append a
+the Areas, today's agenda, last night's carry-over note and first draft of the
+day); moments append a
 request and a card; the owner's Today chat appends too. A new day (at 04:00)
 starts a new thread; within a day compaction runs only past its ceiling.
 _Avoid_: Mission Control, standing conversation (both retired).
@@ -1936,8 +2051,17 @@ People, coding agents and missed notifications that need the owner, under
 How a card reaches the owner, decided by code: the glyph for anything waiting,
 the Jarvis Panel for Breakpoints and urgent items when present, a banner when
 away or locked, a spoken line for urgent items when voice is on. Quiet hours
-silence Jarvis's own deliveries; the owner's reminders and Nudges still fire.
-Nothing unanswered is re-summoned; it stays in Today.
+silence Jarvis's own deliveries — except the Morning Plan at the day's first
+sit-down, which is the owner starting their day; the owner's reminders and
+Nudges still fire. Nothing unanswered is re-summoned; it stays in Today.
+
+**Wind-down**:
+The night's one banner as quiet hours begin with the owner still at the Mac:
+"Time to wind down — Tomorrow starts with All Hands at 07:30 — 8 h 30 min from
+now." Built by code, for quiet hours that start at night, within their first
+hour, once a night; never in a game or a call; the owner can switch it off
+beside quiet hours in Settings.
+_Avoid_: bedtime (Health's own), reminder.
 
 **Governor**:
 No daily budget, usefulness first — but Triage and the Night Reflection wait
@@ -1950,6 +2074,15 @@ and deletable on the Profile page. `remember` saves one (an explicit ask is
 approval), `forget` removes one. Facts ride only the Day Opening; ordinary chats
 get none.
 _Avoid_: memory (unqualified), beliefs, episodes (all retired).
+
+**Task Proposal**:
+Something the day showed the owner must do that isn't in Reminders yet ("send
+the request she asked for"), from the Night Reflection — at most three, most
+nights none, never one already in Reminders. It waits under "Jarvis noticed"
+that night and the next day: Add makes it a reminder (due the reflection's
+tomorrow, or in the Inbox), No lets it go; one the owner wrote down meanwhile
+leaves the question.
+_Avoid_: suggestion (the Morning Plan's tips).
 
 **Fact Proposal**:
 A "Should I remember this?" from the Night Reflection, waiting in Today and on
@@ -1992,7 +2125,9 @@ never rose above silence is not transcribed), post-processing, the **Learned Wor
 (applied after the regex cleanup and before the **Proofread Pass**), the in-flight
 transcription `Task`, and cancellation — behind a small value-returning interface
 (`start`/`stop`/`transcribeAndCommit`/`cancel`), delivering clean text to a
-caller-injected commit closure. Composed *directly* by both `DictationCoordinator` and
+caller-injected commit closure. The microphone and the recognizer are shared, so
+`cancel` stops only the capture and the take this session started: a panel closing
+never cuts off dictation's. Composed *directly* by both `DictationCoordinator` and
 **Voice Input**, which keep only their own state, errors, sounds, and commit. Distinct
 from **Voice Input** (one caller, agent-composer presentation) and from the **Operation
 Guard** it composes (the epoch protocol alone).

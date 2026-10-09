@@ -32,6 +32,24 @@ nonisolated enum CompanionTraceEvent: String, Sendable, Equatable, CaseIterable 
     /// The owner acted on a card or one of its items. Carries the time to react.
     case cardReaction = "card.reaction"
 
+    // MARK: - cue.*: the plan (and the body) keeping time
+
+    /// A planned step's slot started and code put it on the panel (a Step
+    /// Cue). Carries how late it went up and the slot's length — or, with
+    /// phase "break", two hours at the Mac put a Break Cue up: how long.
+    case cuePresented = "cue.presented"
+    /// The owner answered a Step Cue (start, later, resume after a meeting,
+    /// tomorrow, done, undo — Done taken back — or dismiss), or a Break Cue (phase "break": taking,
+    /// later, dismiss, or away — up from the Mac with it on the panel).
+    /// Carries the time to react.
+    case cueReaction = "cue.reaction"
+    /// A meeting landed on a planned step not yet begun: code moved the step
+    /// to the first free time after it. Carries how far, and its length.
+    case cueMoved = "cue.moved"
+    /// A step the owner started whole was seen done in time: the minutes it
+    /// had and the minutes it took, what the Morning Plan's pace is made of.
+    case cueTimed = "cue.timed"
+
     // MARK: - nudge.*: OS-scheduled notifications for events and reminders
 
     /// A nudge was scheduled with the OS.
@@ -69,12 +87,37 @@ nonisolated enum CompanionTraceEvent: String, Sendable, Equatable, CaseIterable 
     /// A Profile fact was added, edited or deleted.
     case profileChanged = "profile.changed"
 
+    // MARK: - task.*: tasks the day showed, proposed for Reminders
+
+    /// The Night Reflection proposed a task the day showed. Carries the count.
+    case taskProposed = "task.proposed"
+    /// The owner added a proposed task or let it go.
+    case taskDecided = "task.decided"
+
     // MARK: - thread.*: the Day Thread
 
     /// A new Day Thread opened with its Day Opening.
     case threadOpened = "thread.opened"
     /// A Day Thread passed its ceiling and was compacted.
     case threadCompacted = "thread.compacted"
+
+    // MARK: - presence.*
+
+    /// The owner came back from five minutes away or more — not the night,
+    /// nor the app starting: how long they had sat at the Mac before it
+    /// (minutes; from a Taking 5 if that came later) and how long they were
+    /// away. What the Break Cue's two hours are tuned by.
+    case breakTaken = "presence.break"
+
+    // MARK: - night.*
+
+    /// Quiet hours began with the owner at the Mac: the night's one banner
+    /// said when tomorrow starts. Carries the minutes until then.
+    case windDown = "night.wind-down"
+    /// The day's first sit-down after the night: how long the Mac was left
+    /// (minutes) and whether the owner was at it past midnight — the
+    /// measure of whether the wind-down and a light day change the nights.
+    case nightEnded = "night.ended"
 
     // MARK: - governor.*
 

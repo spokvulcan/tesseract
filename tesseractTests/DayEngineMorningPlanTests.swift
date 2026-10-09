@@ -102,6 +102,247 @@ struct DayEngineMorningPlanTests {
         #expect(panelCards(sitDown.effects).first?.kind == .morningPlan)
     }
 
+    @Test func aPreparedPlanMeetsAnEarlySitDownOnThePanel() throws {
+        var state = Day.state()
+        state.lastPresentAt = Day.local(29, 23)
+        let early = DayEngine.decide(
+            .tick, snapshot: Day.snapshot(at: Day.local(30, 5), present: false), state: state)
+        var ready = early.state
+        ready.running = nil
+        // 07:40, before quiet hours end at 08:00: the owner is starting the day.
+        let sitDown = DayEngine.decide(
+            .presenceReturned(awayFrom: Day.local(29, 23)),
+            snapshot: Day.snapshot(at: Day.local(30, 7, 40)), state: ready)
+        #expect(panelCards(sitDown.effects).first?.kind == .morningPlan)
+    }
+
+    @Test func aPlanMadeAtAnEarlySitDownGoesUpOnThePanel() {
+        var state = Day.state()
+        state.lastPresentAt = Day.local(29, 23)
+        let sitDown = DayEngine.decide(
+            .presenceReturned(awayFrom: Day.local(29, 23)),
+            snapshot: Day.snapshot(at: Day.local(30, 7, 40)), state: state)
+        #expect(panelCards(sitDown.effects).first?.kind == .morningPlan)
+        #expect(Day.moments(sitDown.effects).first?.trigger == .firstPresence)
+    }
+
+    @Test func quietHoursStillHoldACardThatIsNotTheDaysStart() {
+        var state = Day.state()
+        state.lastPresentAt = Day.local(30, 7)
+        state.morningPlanAt = Day.local(30, 6)
+        state.agents = [
+            AgentSignal(
+                id: "s1", kind: .waiting, agent: "Claude Code", project: "tesseract",
+                directory: "/tmp/tesseract", message: "Needs approval", at: Day.local(30, 7, 10))
+        ]
+        // Back at 07:40 from a break: a Breakpoint, and it waits in Today.
+        let back = DayEngine.decide(
+            .presenceReturned(awayFrom: Day.local(30, 7)),
+            snapshot: Day.snapshot(at: Day.local(30, 7, 40)), state: state)
+        #expect(back.state.cards.last?.kind == .breakpoint)
+        #expect(panelCards(back.effects).isEmpty)
+    }
+
+    @Test func aTimeToLeaveBecomesANudgeTheOSKeeps() throws {
+        let sitDown = DayEngine.decide(
+            .presenceReturned(awayFrom: Day.local(29, 23)),
+            snapshot: Day.snapshot(at: Day.local(30, 7, 40)), state: Day.state())
+        let request = try #require(Day.moments(sitDown.effects).first)
+        #expect(request.context.eventIDs == ["E1"])
+        let reply =
+            #"{"line": "Standup at half past nine.", "leave": [{"event": "e1", "at": "09:00"}]}"#
+        let planned = DayEngine.decide(
+            .momentOutcome(request, .reply(reply, measure)),
+            snapshot: Day.snapshot(at: Day.local(30, 7, 42)), state: sitDown.state)
+        #expect(planned.state.departures.map(\.eventID) == ["E1"])
+        let tick = DayEngine.decide(
+            .tick, snapshot: Day.snapshot(at: Day.local(30, 7, 43)), state: planned.state)
+        let synced = tick.effects.compactMap { effect -> [Nudge]? in
+            if case .syncNudges(let nudges) = effect { nudges } else { nil }
+        }
+        let leave = try #require(
+            synced.first?.first { $0.id.hasPrefix(NudgePlanner.leavePrefix) })
+        #expect(leave.fireAt == Day.local(30, 9))
+        #expect(leave.title == "Time to leave for Standup")
+    }
+
+    // MARK: A plan cut short by a quit
+
+    /// The plan was prepared at 05:00 and the app quit while Jarvis thought.
+    static func cutShort() throws -> DayState {
+        var state = Day.state()
+        state.lastPresentAt = Day.local(29, 23)
+        let early = DayEngine.decide(
+            .tick, snapshot: Day.snapshot(at: Day.local(30, 5), present: false), state: state)
+        #expect(early.state.running == .morningPlan)
+        return early.state.relaunched()
+    }
+
+    @Test func aRelaunchRecordsTheMomentItCutShort() throws {
+        let relaunched = try Self.cutShort()
+        #expect(relaunched.running == nil)
+        #expect(relaunched.interrupted == .morningPlan)
+        #expect(relaunched.cards.allSatisfy { !$0.isRefining })
+    }
+
+    @Test func aPlanTheAppQuitInTheMiddleOfRunsAgainOnce() throws {
+        let relaunched = try Self.cutShort()
+        let back = DayEngine.decide(
+            .companionEnabled, snapshot: Day.snapshot(at: Day.local(30, 5, 10), present: false),
+            state: relaunched)
+        let request = try #require(Day.moments(back.effects).first)
+        #expect(request.kind == .morningPlan)
+        #expect(request.trigger == .resumed)
+        #expect(request.context.cardID == relaunched.cards.last?.id)
+        #expect(back.state.cards.last?.isRefining == true)
+        #expect(back.state.interrupted == nil)
+
+        // Cut short again: the code card stands; no loop of retries.
+        let again = DayEngine.decide(
+            .companionEnabled, snapshot: Day.snapshot(at: Day.local(30, 5, 20), present: false),
+            state: back.state.relaunched())
+        #expect(Day.moments(again.effects).isEmpty)
+    }
+
+    @Test func aClosedOrLatePlanIsNotRunAgain() throws {
+        var closed = try Self.cutShort()
+        closed.cards[closed.cards.count - 1].dismissed = true
+        let afterClose = DayEngine.decide(
+            .companionEnabled, snapshot: Day.snapshot(at: Day.local(30, 7), present: false),
+            state: closed)
+        #expect(Day.moments(afterClose.effects).isEmpty)
+        let evening = DayEngine.decide(
+            .companionEnabled, snapshot: Day.snapshot(at: Day.local(30, 21, 30), present: false),
+            state: try Self.cutShort())
+        #expect(!Day.moments(evening.effects).contains { $0.kind == .morningPlan })
+    }
+
+    @Test func aPlanCutShortIsNotRunAgainInTheSmallHours() throws {
+        // Relaunched at 00:30: still the 30th's day (until 04:00), and night.
+        let night = DayEngine.decide(
+            .companionEnabled,
+            snapshot: Day.snapshot(at: Day.local(31, 0, 30), present: false),
+            state: try Self.cutShort())
+        #expect(!Day.moments(night.effects).contains { $0.kind == .morningPlan })
+    }
+
+    @Test func aResumeStillWaitingSurvivesAnotherRelaunch() throws {
+        var waiting = try Self.cutShort()
+        #expect(waiting.interrupted == .morningPlan)
+        // The Companion was off: nothing picked it up before the next quit.
+        waiting = waiting.relaunched()
+        #expect(waiting.interrupted == .morningPlan)
+    }
+
+    @Test func lookingGoodKeepsThePlansWordOnToday() throws {
+        let sitDown = DayEngine.decide(
+            .presenceReturned(awayFrom: Day.local(29, 23)),
+            snapshot: Day.snapshot(at: Day.local(30, 9, 3)), state: Day.state())
+        let card = try #require(sitDown.state.cards.last)
+        let kept = DayEngine.decide(
+            .cardAction(.keep(cardID: card.id)),
+            snapshot: Day.snapshot(at: Day.local(30, 9, 5)), state: sitDown.state)
+        #expect(kept.state.cards.last?.dismissed == false)
+        #expect(DayCard.word(in: kept.state.cards, at: Day.local(30, 9, 5))?.id == card.id)
+        #expect(
+            kept.effects.contains {
+                if case .trace(.cardReaction, let fields) = $0 {
+                    fields["action"] == .string("kept")
+                } else {
+                    false
+                }
+            })
+    }
+
+    @Test func aKeptPlanThatJarvisRefinesStaysInToday() throws {
+        let sitDown = DayEngine.decide(
+            .presenceReturned(awayFrom: Day.local(29, 23)),
+            snapshot: Day.snapshot(at: Day.local(30, 9, 3)), state: Day.state())
+        let request = try #require(Day.moments(sitDown.effects).first)
+        let card = try #require(sitDown.state.cards.last)
+        let kept = DayEngine.decide(
+            .cardAction(.keep(cardID: card.id)),
+            snapshot: Day.snapshot(at: Day.local(30, 9, 4)), state: sitDown.state)
+        let refined = DayEngine.decide(
+            .momentOutcome(request, .reply(#"{"line": "A calm start."}"#, measure)),
+            snapshot: Day.snapshot(at: Day.local(30, 9, 5)), state: kept.state)
+        #expect(refined.state.cards.last?.line == "A calm start.")
+        #expect(panelCards(refined.effects).isEmpty)
+    }
+
+    @Test func aPlanClosedOnThePanelWhileJarvisThinksUpdatesInTodayOnly() throws {
+        let sitDown = DayEngine.decide(
+            .presenceReturned(awayFrom: Day.local(29, 23)),
+            snapshot: Day.snapshot(at: Day.local(30, 9, 3)), state: Day.state())
+        let request = try #require(Day.moments(sitDown.effects).first)
+        let card = try #require(sitDown.state.cards.last)
+        let closed = DayEngine.decide(
+            .cardAction(.close(cardID: card.id)),
+            snapshot: Day.snapshot(at: Day.local(30, 9, 4)), state: sitDown.state)
+        #expect(DayCard.word(in: closed.state.cards, at: Day.local(30, 9, 4))?.id == card.id)
+        let refined = DayEngine.decide(
+            .momentOutcome(request, .reply(#"{"line": "A calm start."}"#, measure)),
+            snapshot: Day.snapshot(at: Day.local(30, 9, 5)), state: closed.state)
+        #expect(refined.state.cards.last?.line == "A calm start.")
+        #expect(panelCards(refined.effects).isEmpty)
+    }
+
+    @Test func aKeptPlanStaysInTodayWhenJarvisCantThinkItThrough() throws {
+        let sitDown = DayEngine.decide(
+            .presenceReturned(awayFrom: Day.local(29, 23)),
+            snapshot: Day.snapshot(at: Day.local(30, 9, 3)), state: Day.state())
+        let request = try #require(Day.moments(sitDown.effects).first)
+        let card = try #require(sitDown.state.cards.last)
+        let kept = DayEngine.decide(
+            .cardAction(.keep(cardID: card.id)),
+            snapshot: Day.snapshot(at: Day.local(30, 9, 4)), state: sitDown.state)
+        let first = DayEngine.decide(
+            .momentOutcome(request, .failed("model not loaded", nil)),
+            snapshot: Day.snapshot(at: Day.local(30, 9, 5)), state: kept.state)
+        let retry = try #require(Day.moments(first.effects).first)
+        let second = DayEngine.decide(
+            .momentOutcome(retry, .failed("model not loaded", nil)),
+            snapshot: Day.snapshot(at: Day.local(30, 9, 6)), state: first.state)
+        let stood = try #require(second.state.cards.last)
+        #expect(stood.isFallback)
+        #expect(panelCards(second.effects).isEmpty)
+        #expect(second.effects.contains(.presentCard(stood, .today)))
+    }
+
+    @Test func aReplanWithNoDepartureWithdrawsTheOldOne() throws {
+        let sitDown = DayEngine.decide(
+            .presenceReturned(awayFrom: Day.local(29, 23)),
+            snapshot: Day.snapshot(at: Day.local(30, 7, 40)), state: Day.state())
+        let request = try #require(Day.moments(sitDown.effects).first)
+        let planned = DayEngine.decide(
+            .momentOutcome(
+                request,
+                .reply(#"{"line": "Ok.", "leave": [{"event": "e1", "at": "09:00"}]}"#, measure)),
+            snapshot: Day.snapshot(at: Day.local(30, 7, 42)), state: sitDown.state)
+        #expect(!planned.state.departures.isEmpty)
+        // "It's online today": Jarvis plans again, with nothing to leave for.
+        let again = DayEngine.decide(
+            .cardAction(.planNow), snapshot: Day.snapshot(at: Day.local(30, 8)),
+            state: planned.state)
+        #expect(again.state.departures.map(\.eventID) == ["E1"])
+        let replan = try #require(Day.moments(again.effects).first)
+        let replanned = DayEngine.decide(
+            .momentOutcome(replan, .reply(#"{"line": "All at the desk today."}"#, measure)),
+            snapshot: Day.snapshot(at: Day.local(30, 8, 1)), state: again.state)
+        #expect(replanned.state.departures.isEmpty)
+    }
+
+    @Test func otherMomentsCutShortWaitForTheirOwnTriggers() {
+        var state = Day.state()
+        state.morningPlanAt = Day.local(30, 8)
+        state.running = .nightReflection
+        let back = DayEngine.decide(
+            .companionEnabled, snapshot: Day.snapshot(at: Day.local(30, 9), present: false),
+            state: state.relaunched())
+        #expect(Day.moments(back.effects).isEmpty)
+        #expect(back.state.interrupted == nil)
+    }
+
     @Test func noPlanIsPreparedOnBattery() {
         var state = Day.state()
         state.lastPresentAt = Day.local(29, 23)

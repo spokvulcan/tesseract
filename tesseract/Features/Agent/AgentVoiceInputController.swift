@@ -33,6 +33,13 @@ final class AgentVoiceInputController {
     /// words can stop waiting.
     @ObservationIgnored var onVoiceFailure: ((String) -> Void)?
 
+    /// Called instead of `onVoiceTranscription` for a take the Proofread Pass
+    /// judged unintelligible, with its raw text — so a surface that acts on
+    /// the words at once (saves them, sends them) can show them for checking
+    /// first. Unset, the take is emitted like any other: the composer is an
+    /// editable field.
+    @ObservationIgnored var onVoiceRejected: ((String) -> Void)?
+
     // MARK: - Dependencies
 
     /// The shared capture lifecycle. `nil` when capture/transcription dependencies
@@ -143,7 +150,11 @@ final class AgentVoiceInputController {
                     // The composer is an editable field — a rejected take is
                     // still worth staging there; the user edits or clears it.
                     voiceState = .idle
-                    onVoiceTranscription?(raw)
+                    if let onVoiceRejected {
+                        onVoiceRejected(raw)
+                    } else {
+                        onVoiceTranscription?(raw)
+                    }
                 case .empty:
                     setVoiceError("No speech detected")
                 case .failed:

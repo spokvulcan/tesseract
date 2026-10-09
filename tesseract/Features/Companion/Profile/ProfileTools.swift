@@ -68,10 +68,17 @@ func createProfileTools(
                     throw AgendaError.invalid("forget needs the fact.")
                 }
                 return try await MainActor.run {
-                    let target =
-                        profile.facts.first { $0.id == fact }
-                        ?? profile.search(fact).first
-                    guard let target, let removed = profile.delete(target.id) else {
+                    guard let target = profile.factToForget(fact) else {
+                        // Not one fact for sure: name the candidates, delete nothing.
+                        let near = profile.search(fact).prefix(3)
+                        guard !near.isEmpty else {
+                            throw AgendaError.notFound("a Profile fact matching “\(fact)”")
+                        }
+                        throw AgendaError.invalid(
+                            "That could be more than one fact, or none exactly. Ask which, then forget it by its id: "
+                                + near.map { "\($0.id): \($0.text)" }.joined(separator: "; "))
+                    }
+                    guard let removed = profile.delete(target.id) else {
                         throw AgendaError.notFound("a Profile fact matching “\(fact)”")
                     }
                     return .text("Forgotten: \(removed.text)")

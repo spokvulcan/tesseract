@@ -68,6 +68,48 @@ struct AgentVoiceInputControllerTests {
         #expect(controller.voiceState == .idle)
     }
 
+    /// A take the Proofread Pass rejects goes to `onVoiceRejected` when a
+    /// surface set it — the capture panel shows it to check instead of
+    /// saving it as heard — and not to `onVoiceTranscription`.
+    @Test func rejectedTakeGoesToTheRejectedCallbackWhenSet() async throws {
+        let engine = ControllableTranscribing(
+            result: TranscriptionResult(
+                text: "hello world", segments: [], language: "en", processingTime: 0)
+        )
+        let capture = FakeAudioCapture(
+            cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0))
+        let controller = AgentVoiceInputController(
+            audioCapture: capture,
+            transcriptionEngine: engine,
+            settings: SettingsManager(store: InMemorySettingsStore()),
+            proofreadPass: ProofreadPass(
+                isEnabled: { true },
+                isLLMBusy: { false },
+                modelDirectory: { URL(fileURLWithPath: "/tmp/proofread-model") },
+                loadModel: { _ in },
+                runModel: { _, _ in "REJECT: garbled noise" },
+                unloadModel: {}
+            )
+        )
+        let emitted = CallbackRecorder()
+        let rejected = CallbackRecorder()
+        controller.onVoiceTranscription = { emitted.record($0) }
+        controller.onVoiceRejected = { rejected.record($0) }
+
+        controller.start()
+        controller.finishCapture()
+        while !engine.isAwaiting { await Task.yield() }
+        engine.completeWithSuccess()
+        // Milliseconds alone; the full suite's parallel model tests can hold
+        // the main actor for seconds.
+        let deadline = Date().addingTimeInterval(30)
+        while rejected.values.isEmpty, Date() < deadline { await Task.yield() }
+
+        #expect(rejected.values == [TranscriptionPostProcessor().process("hello world")])
+        #expect(emitted.values.isEmpty)
+        #expect(controller.voiceState == .idle)
+    }
+
     // MARK: - Minimum duration (StopResult → local error)
 
     /// A recording shorter than the minimum duration never reaches the engine and

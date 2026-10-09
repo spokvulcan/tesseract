@@ -31,6 +31,49 @@ struct ProfileStoreTests {
         #expect(ProfileStore(url: url).facts.isEmpty)
     }
 
+    @Test func forgettingNeverTakesTheWrongFact() {
+        let store = ProfileStore(url: nil)
+        store.add("Allergic to penicillin.", source: .chat)
+        store.add("Walks the dog at 7.", source: .chat)
+        // A shared word is not the fact.
+        #expect(store.factToForget("Allergic to peanuts") == nil)
+        #expect(store.factToForget("that") == nil)
+        // Its exact words, its id, or every word only it holds.
+        #expect(store.factToForget("allergic to penicillin.")?.text == "Allergic to penicillin.")
+        let dog = store.facts[1]
+        #expect(store.factToForget(dog.id)?.text == "Walks the dog at 7.")
+        #expect(store.factToForget("dog walks")?.text == "Walks the dog at 7.")
+    }
+
+    @Test func aProposalAnsweredNotTrueIsNeverAskedAgain() throws {
+        let store = ProfileStore(url: nil)
+        store.propose(
+            [ProposalDraft(text: "Drinks green tea.", reason: "x")], source: "night-reflection")
+        let tea = try #require(store.openProposals.first)
+        store.decide(tea.id, keep: false)
+        store.propose(
+            [ProposalDraft(text: "Drinks green tea.", reason: "again")], source: "night-reflection")
+        #expect(store.openProposals.isEmpty)
+    }
+
+    @Test func anUnreadableProfileIsKeptAsideNotOverwritten() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("profile-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("profile.json")
+        try Data("{ not json".utf8).write(to: url)
+        let store = ProfileStore(url: url)
+        #expect(store.facts.isEmpty)
+        store.add("Starts fresh.", source: .owner)
+        let kept = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+            .filter { $0.contains("unreadable") }
+        #expect(kept.count == 1)
+        #expect(
+            try String(contentsOf: dir.appendingPathComponent(kept[0]), encoding: .utf8)
+                == "{ not json")
+    }
+
     @Test func proposalsWaitForTheOwnersDecision() throws {
         let store = ProfileStore(url: nil)
         store.add("Works on Tesseract in the evenings.", source: .chat)
@@ -181,11 +224,13 @@ struct NightReflectionTests {
             from: DateComponents(year: 2026, month: 9, day: day, hour: hour, minute: minute))!
     }
 
-    static func snapshot(at now: Date, power: PowerState = .nominal, present: Bool = false)
-        -> DaySnapshot
-    {
+    static func snapshot(
+        at now: Date, power: PowerState = .nominal, present: Bool = false,
+        open: [AgendaReminder] = []
+    ) -> DaySnapshot {
         var agenda = AgendaSnapshot.empty
         agenda.access = .full
+        agenda.open = open
         return DaySnapshot(
             now: now, settings: DaySettings(), agenda: agenda, ownerPresent: present, power: power,
             profile: ["Works on Tesseract in the evenings."])
@@ -241,6 +286,117 @@ struct NightReflectionTests {
             })
     }
 
+    @Test func aTaskTheNightProposedIsAddedWithOneClickOrLetGo() throws {
+        var state = Self.afterWrapUp()
+        state.running = .nightReflection
+        let reply =
+            #"{"carry_over": "Good.", "tasks": [{"title": "Send the request", "when": "tomorrow"}, {"title": "Book the bike service", "when": "later"}]}"#
+        let measure = MomentMeasure(
+            promptTokens: 3000, outputTokens: 400, prefillSeconds: 0.5, generateSeconds: 12,
+            latencySeconds: 13, hitCap: false, modelID: "m")
+        let night = DayEngine.decide(
+            .momentOutcome(
+                MomentRequest(kind: .nightReflection, trigger: .night, text: "x"),
+                .reply(reply, measure)),
+            snapshot: Self.snapshot(at: Self.local(30, 22)), state: state)
+        #expect(night.state.taskProposals.count == 2)
+        #expect(night.effects.contains(.trace(.taskProposed, ["count": .int(2)])))
+        // The next morning: still there, due on what is now today.
+        let morning = DayEngine.decide(
+            .tick, snapshot: Self.snapshot(at: Self.local(31, 7)), state: night.state)
+        let first = try #require(morning.state.taskProposals.first)
+        let added = DayEngine.decide(
+            .cardAction(.taskProposal(id: first.id, add: true)),
+            snapshot: Self.snapshot(at: Self.local(31, 7, 5)), state: morning.state)
+        #expect(
+            added.effects.contains(.mutateAgenda(.add(title: "Send the request", due: first.due))))
+        #expect(added.state.taskProposals.count == 1)
+        let last = try #require(added.state.taskProposals.first)
+        let declined = DayEngine.decide(
+            .cardAction(.taskProposal(id: last.id, add: false)),
+            snapshot: Self.snapshot(at: Self.local(31, 7, 6)), state: added.state)
+        #expect(!declined.effects.contains { if case .mutateAgenda = $0 { true } else { false } })
+        #expect(declined.state.taskProposals.isEmpty)
+        // Left undecided, they don't outlive the next day.
+        let dayAfter = morning.state.rolledOver(to: DayKey(rawValue: "2026-10-02"))
+        #expect(dayAfter.taskProposals.isEmpty)
+    }
+
+    @Test func aTaskAlreadyInRemindersIsNeitherProposedNorAddedTwice() throws {
+        // Already due on Friday: the night proposes it again, and another.
+        let friday = AgendaReminder(
+            id: "R9", title: "Send the request", listID: "w", listTitle: "Work",
+            due: Self.local(33, 9))
+        var state = Self.afterWrapUp()
+        state.running = .nightReflection
+        let reply =
+            #"{"carry_over": "Good.", "tasks": [{"title": "send the request", "when": "tomorrow"}, {"title": "Book the bike service", "when": "later"}]}"#
+        let measure = MomentMeasure(
+            promptTokens: 3000, outputTokens: 400, prefillSeconds: 0.5, generateSeconds: 12,
+            latencySeconds: 13, hitCap: false, modelID: "m")
+        let night = DayEngine.decide(
+            .momentOutcome(
+                MomentRequest(kind: .nightReflection, trigger: .night, text: "x"),
+                .reply(reply, measure)),
+            snapshot: Self.snapshot(at: Self.local(30, 22), open: [friday]), state: state)
+        #expect(night.state.taskProposals.map(\.title) == ["Book the bike service"])
+        // The owner writes the bike service down in the morning: Add adds no twin.
+        let written = AgendaReminder(
+            id: "R10", title: "Book the bike service", listID: "inbox", listTitle: "Reminders")
+        let proposal = try #require(night.state.taskProposals.first)
+        let added = DayEngine.decide(
+            .cardAction(.taskProposal(id: proposal.id, add: true)),
+            snapshot: Self.snapshot(at: Self.local(31, 8), open: [friday, written]),
+            state: night.state)
+        #expect(!added.effects.contains { if case .mutateAgenda = $0 { true } else { false } })
+        #expect(added.state.taskProposals.isEmpty)
+    }
+
+    @Test func aReflectionThatLandsAfterFourOpensThisMorningInstead() throws {
+        // The reflection ran for the 30th; its reply lands at 04:10 on the 1st.
+        var state = Self.afterWrapUp()
+        state.running = .nightReflection
+        let reply =
+            #"{"carry_over": "Finish the spec first.", "tomorrow": ["Finish the spec"], "tasks": [{"title": "Send the request", "when": "tomorrow"}]}"#
+        let measure = MomentMeasure(
+            promptTokens: 3000, outputTokens: 400, prefillSeconds: 0.5, generateSeconds: 12,
+            latencySeconds: 13, hitCap: false, modelID: "m")
+        let request = MomentRequest(
+            kind: .nightReflection, trigger: .night, text: "x",
+            day: DayKey(rawValue: "2026-09-30"))
+        let late = DayEngine.decide(
+            .momentOutcome(request, .reply(reply, measure)),
+            snapshot: Self.snapshot(at: Self.local(31, 4, 10)), state: state)
+        #expect(late.state.day == DayKey(rawValue: "2026-10-01"))
+        #expect(late.state.carryOver == "Finish the spec first.")
+        #expect(late.state.draft == ["Finish the spec"])
+        #expect(late.state.taskProposals.map(\.title) == ["Send the request"])
+        // Its "tomorrow" is this morning's date, not the day after.
+        #expect(late.state.taskProposals.first?.due == Self.local(31, 0))
+        // Tonight's reflection is still to come.
+        #expect(late.state.nightReflectionAt == nil)
+        // Two days late (the Mac asleep since), it opens nothing.
+        let stale = MomentRequest(
+            kind: .nightReflection, trigger: .night, text: "x",
+            day: DayKey(rawValue: "2026-09-29"))
+        let dropped2 = DayEngine.decide(
+            .momentOutcome(stale, .reply(reply, measure)),
+            snapshot: Self.snapshot(at: Self.local(31, 4, 10)), state: state)
+        #expect(dropped2.state.carryOver == nil)
+        // A wrap-up that lands late is dropped: its leftovers were that day's.
+        var evening = Self.afterWrapUp()
+        evening.eveningWrapUpAt = nil
+        evening.running = .eveningWrapUp
+        let wrapUp = MomentRequest(
+            kind: .eveningWrapUp, trigger: .eveningTime, text: "x",
+            day: DayKey(rawValue: "2026-09-30"))
+        let dropped = DayEngine.decide(
+            .momentOutcome(wrapUp, .reply(#"{"line": "Good day.", "leftovers": []}"#, measure)),
+            snapshot: Self.snapshot(at: Self.local(31, 4, 10)), state: evening)
+        #expect(dropped.state.eveningWrapUpAt == nil)
+        #expect(!dropped.state.cards.contains { $0.kind == .eveningWrapUp })
+    }
+
     @Test func itsNoteOpensTomorrowAndItsProposalsGoToTheProfile() throws {
         var state = Self.afterWrapUp()
         state.running = .nightReflection
@@ -268,5 +424,12 @@ struct NightReflectionTests {
         let morning = DayEngine.decide(
             .tick, snapshot: Self.snapshot(at: Self.local(31, 7)), state: decided.state)
         #expect(morning.state.carryOver == "The spec is nearly done; finish it first.")
+        // Its first draft of tomorrow opens the next day too, for the plan.
+        #expect(decided.state.draftForNextDay == ["Finish the spec"])
+        #expect(morning.state.draft == ["Finish the spec"])
+        #expect(morning.state.draftForNextDay.isEmpty)
+        // A day skipped: last night's draft is no longer last night's.
+        let skipped = decided.state.rolledOver(to: DayKey(rawValue: "2026-10-02"))
+        #expect(skipped.draft.isEmpty)
     }
 }

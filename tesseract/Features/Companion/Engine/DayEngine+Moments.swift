@@ -30,9 +30,11 @@ nonisolated extension DayEngine {
         }
         state.deferred.remove(kind)
         let facts = snapshot.facts(state: state)
+        var context = context
         let body: String
         switch kind {
         case .morningPlan:
+            if text == nil { context.eventIDs = MomentPrompts.leavingEvents(facts).map(\.id) }
             body = text ?? MomentPrompts.morningPlan(facts: facts)
         case .eveningWrapUp:
             body = text ?? MomentPrompts.eveningWrapUp(facts: facts, leftovers: leftovers(facts))
@@ -42,7 +44,10 @@ nonisolated extension DayEngine {
         }
         state.running = kind
         let request = MomentRequest(
-            kind: kind, trigger: trigger, text: body, attempt: attempt, context: context)
+            kind: kind, trigger: trigger, text: body, attempt: attempt, context: context,
+            day: state.day)
+        state.runningRequest = request
+        state.runningSince = snapshot.now
         return [
             .trace(
                 .momentStarted,
@@ -61,14 +66,43 @@ nonisolated extension DayEngine {
         trigger: MomentTrigger, snapshot: DaySnapshot, state: inout DayState
     ) -> [DayEffect] {
         guard state.running == nil, !snapshot.chatBusy else { return [] }
+        // Whatever starts it (Today opened, Plan my day), a plan that waited
+        // for the model is no longer waiting.
+        state.morningPlanWaiting = false
         let facts = snapshot.facts(state: state)
+        // The day's first sit-down is the owner starting their day: the plan
+        // meets them on the panel, even before quiet hours end.
+        let rungs =
+            trigger == .firstPresence
+            ? DeliveryLadder.rungs(for: .normal, snapshot: snapshot, sittingDown: true) : nil
         var effects = accept(
             .morningPlan(FallbackCards.morningPlan(facts: facts)), kind: .morningPlan,
-            fallback: false, snapshot: snapshot, state: &state, refining: true)
+            fallback: false, snapshot: snapshot, state: &state, refining: true, rungs: rungs)
         let cardID = state.cards.last?.id
         effects += run(
             .morningPlan, trigger: trigger, snapshot: snapshot, state: &state,
             context: MomentContext(cardID: cardID))
+        return effects
+    }
+
+    /// A Morning Plan the app quit in the middle of runs again, once: its
+    /// time was set when the code card went up, so nothing else would ever
+    /// finish it, and the day would go by with no plan. Not once the owner
+    /// closed the card, nor in the evening. The other moments run again on
+    /// their own triggers.
+    static func resumeInterrupted(snapshot: DaySnapshot, state: inout DayState) -> [DayEffect] {
+        guard let kind = state.interrupted else { return [] }
+        state.interrupted = nil
+        guard kind == .morningPlan, !state.morningPlanResumed, !isEvening(snapshot),
+            let index = state.cards.lastIndex(where: { $0.kind == .morningPlan }),
+            !state.cards[index].dismissed
+        else { return [] }
+        state.morningPlanResumed = true
+        state.cards[index].isRefining = true
+        let effects = run(
+            .morningPlan, trigger: .resumed, snapshot: snapshot, state: &state,
+            context: MomentContext(cardID: state.cards[index].id))
+        if state.running == nil { state.cards[index].isRefining = false }
         return effects
     }
 
@@ -97,9 +131,8 @@ nonisolated extension DayEngine {
                 $0.kind == .morningPlan && !$0.dismissed && $0.createdAt >= awayFrom
             })
         else { return [] }
-        let rungs = DeliveryLadder.rungs(for: .normal, snapshot: snapshot).filter {
-            $0 == .panel || $0 == .today
-        }
+        let rungs = DeliveryLadder.rungs(for: .normal, snapshot: snapshot, sittingDown: true)
+            .filter { $0 == .panel || $0 == .today }
         return rungs.map { .presentCard(card, $0) } + [
             .trace(
                 .cardPresented,
@@ -111,23 +144,70 @@ nonisolated extension DayEngine {
         ]
     }
 
-    /// Open tasks that belonged to today: due today, or planned today.
+    /// What the Evening Wrap-up asks about: today's open tasks, planned or
+    /// due today. On the week's last day also what has waited longest — up
+    /// to five overdue tasks, oldest first — so the week ends on a clean
+    /// slate, not a pile carried from day to day.
     static func leftovers(_ facts: DayFacts) -> [AgendaReminder] {
         let planned = Set(facts.plan.map(\.reminderID))
-        return facts.openTasks.filter { reminder in
+        let today = facts.openTasks.filter { reminder in
             if planned.contains(reminder.id) { return true }
             guard let due = reminder.due else { return false }
             return due >= facts.startOfToday && due < facts.endOfToday
         }
+        guard facts.isWeekReview else { return today }
+        let asked = Set(today.map(\.id))
+        let waiting = facts.dueOrOverdue
+            .filter { facts.isWaiting($0) && !asked.contains($0.id) }
+            .sorted { ($0.due ?? .distantPast) < ($1.due ?? .distantPast) }
+        return today + waiting.prefix(waitingAsked)
     }
 
+    /// The most overdue tasks the week's look-back asks about.
+    static let waitingAsked = 5
+
     // MARK: - Outcomes
+
+    /// How long a moment may stay quiet, the Mac awake: the slowest run
+    /// (a cold Night Reflection, waiting on the owner's own chat) takes a
+    /// few minutes.
+    static let momentPatience: TimeInterval = 15 * 60
+
+    /// A moment quiet past `momentPatience` is given up on: its generation
+    /// is cancelled, and it fails as any failed call does — one retry, then
+    /// the card code built. A stalled run held every later moment back (no
+    /// Triage, no Breakpoint, no Evening Wrap-up) until the app restarted.
+    /// Time the Mac slept doesn't count: the run slept with it.
+    static func giveUpOnQuietMoment(snapshot: DaySnapshot, state: inout DayState)
+        -> [DayEffect]
+    {
+        guard let request = state.runningRequest, let since = state.runningSince else {
+            return []
+        }
+        if let last = state.lastTickAt, snapshot.now.timeIntervalSince(last) > 3 * 60 {
+            state.runningSince = since.addingTimeInterval(snapshot.now.timeIntervalSince(last))
+            return []
+        }
+        guard snapshot.now.timeIntervalSince(since) >= momentPatience else { return [] }
+        let minutes = Int(momentPatience / 60)
+        return [.cancelMoment]
+            + momentFinished(
+                request, .failed("no answer in \(minutes) min", nil), snapshot: snapshot,
+                state: &state)
+    }
 
     static func momentFinished(
         _ request: MomentRequest, _ outcome: MomentOutcome, snapshot: DaySnapshot,
         state: inout DayState
     ) -> [DayEffect] {
+        if let day = request.day, day != state.day {
+            return lateMomentFinished(request, outcome, snapshot: snapshot, state: &state)
+        }
+        // A reply to a moment given up on: the one running now isn't it.
+        if let running = state.runningRequest, running != request { return [] }
         state.running = nil
+        state.runningRequest = nil
+        state.runningSince = nil
         var fields = traceFields(request, outcome: outcome, power: snapshot.power)
         var failure = "unknown"
         if case .reply(let text, let measure) = outcome {
@@ -170,9 +250,10 @@ nonisolated extension DayEngine {
         let facts = snapshot.facts(state: state)
         switch request.kind {
         case .morningPlan:
-            guard case .card(let body) = CardParser.morningPlan(reply, facts: facts) else {
-                return nil
-            }
+            guard
+                case .card(let body) = CardParser.morningPlan(
+                    reply, facts: facts, eventIDs: request.context.eventIDs)
+            else { return nil }
             return accept(
                 body, kind: .morningPlan, fallback: false, snapshot: snapshot, state: &state,
                 cardID: request.context.cardID)
@@ -188,7 +269,10 @@ nonisolated extension DayEngine {
         case .triage:
             return triageReplied(request, reply: reply, snapshot: snapshot, state: &state)
         case .nightReflection:
-            guard case .card(let body) = CardParser.nightReflection(reply) else { return nil }
+            guard
+                case .card(let body) = CardParser.nightReflection(
+                    reply, facts: facts, open: snapshot.agenda.open)
+            else { return nil }
             return accept(
                 body, kind: .nightReflection, fallback: false, snapshot: snapshot, state: &state)
         }
@@ -208,6 +292,8 @@ nonisolated extension DayEngine {
                 state.cards[index].isRefining = false
                 let card = state.cards[index]
                 guard !card.dismissed else { return [] }
+                // Taken in already: it stays in Today, never on the panel again.
+                guard !card.kept else { return [.presentCard(card, .today)] }
                 return DeliveryLadder.rungs(for: .normal, snapshot: snapshot)
                     .filter { $0 == .panel || $0 == .today }
                     .map { .presentCard(card, $0) }
@@ -237,22 +323,45 @@ nonisolated extension DayEngine {
 
     /// Put a new card on the day and deliver it. With `cardID`, the model's
     /// version replaces the card code put up first; `refining` marks a code
-    /// card the model is still working on.
+    /// card the model is still working on; `rungs` overrides where a new card
+    /// goes.
     static func accept(
         _ body: DayCard.Body, kind: MomentKind, fallback: Bool, snapshot: DaySnapshot,
         state: inout DayState, importance: Importance = .normal, cardID: String? = nil,
-        refining: Bool = false
+        refining: Bool = false, rungs: [DeliveryRung]? = nil
     ) -> [DayEffect] {
         switch body {
         case .morningPlan(let card):
             state.morningPlanAt = snapshot.now
-            if let mustDo = card.mustDoID { state.mustDoID = mustDo }
-            if !card.placements.isEmpty { state.plan = card.placements }
-        case .eveningWrapUp:
+            if let mustDo = card.mustDoID { setMustDo(mustDo, state: &state) }
+            if !card.placements.isEmpty {
+                // A step the owner started and is still in keeps its slot.
+                let running = state.plan.filter { slot in
+                    state.startedSteps.contains(StepCue.key(slot)) && slot.start <= snapshot.now
+                        && snapshot.now
+                            < slot.start.addingTimeInterval(TimeInterval(slot.minutes * 60))
+                }
+                state.plan =
+                    (card.placements.filter { placement in
+                        !running.contains { $0.reminderID == placement.reminderID }
+                    } + running).sorted { $0.start < $1.start }
+            }
+            // Jarvis's own plan sets the day's departures, none included (a
+            // class that went online); the code card leaves them be.
+            if !fallback, !refining { state.departures = card.departures }
+        case .eveningWrapUp(let card):
             state.eveningWrapUpAt = snapshot.now
+            // The week's look-back names next week's focus: it rides each
+            // day's opening and the plan until the next one.
+            if let focus = card.focus {
+                state.weekFocus = focus
+                state.weekFocusSetAt = snapshot.now
+            }
         case .reflection(let card):
             state.nightReflectionAt = snapshot.now
             state.carryOverForNextDay = card.carryOver
+            state.taskProposals = card.tasks
+            state.draftForNextDay = card.tomorrow
         case .breakpoint, .triage:
             break
         }
@@ -269,11 +378,29 @@ nonisolated extension DayEngine {
             state.cards[index].body = body
             state.cards[index].isFallback = fallback
             let card = state.cards[index]
+            // Taken in already: it updates in Today, never on the panel again.
             let rungs =
-                wasQuiet
-                ? deliveryRungs(body, importance: importance, snapshot: snapshot)
-                : DeliveryLadder.rungs(for: importance, snapshot: snapshot)
+                card.kept
+                ? [.today]
+                : wasQuiet
+                    ? deliveryRungs(body, importance: importance, snapshot: snapshot)
+                    : DeliveryLadder.rungs(for: importance, snapshot: snapshot)
             return rungs.filter { $0 == .panel || $0 == .today }.map { .presentCard(card, $0) }
+        }
+        // Triage cards gather: what still waits on an open one stays, the
+        // new items after it — a second raise mustn't hide the first.
+        var body = body
+        if case .triage(var incoming) = body {
+            let fresh = Set(incoming.raise.map(\.id))
+            let waiting = state.cards.filter { $0.kind == .triage && !$0.dismissed }
+                .flatMap { card -> [WaitingItem] in
+                    if case .triage(let old) = card.body { old.raise } else { [] }
+                }
+                .filter {
+                    !fresh.contains($0.id) && stillWaits($0, snapshot: snapshot, state: state)
+                }
+            incoming.raise = waiting + incoming.raise
+            body = .triage(incoming)
         }
         // A newer card of the same kind replaces the older one.
         var effects: [DayEffect] = []
@@ -287,7 +414,7 @@ nonisolated extension DayEngine {
             kind: kind, createdAt: snapshot.now, isFallback: fallback, body: body,
             isRefining: refining)
         state.cards.append(card)
-        let rungs = deliveryRungs(body, importance: importance, snapshot: snapshot)
+        let rungs = rungs ?? deliveryRungs(body, importance: importance, snapshot: snapshot)
         for rung in rungs {
             if rung == .voice {
                 effects.append(.speak(card.line))
@@ -306,6 +433,9 @@ nonisolated extension DayEngine {
                 ]))
         if case .reflection(let reflection) = body, !reflection.proposals.isEmpty {
             effects.append(.proposeFacts(reflection.proposals))
+        }
+        if case .reflection(let reflection) = body, !reflection.tasks.isEmpty {
+            effects.append(.trace(.taskProposed, ["count": .int(reflection.tasks.count)]))
         }
         return effects
     }
@@ -370,7 +500,7 @@ nonisolated extension DayEngine {
             ]
 
         case .setMustDo(let reminderID):
-            state.mustDoID = reminderID
+            setMustDo(reminderID, state: &state)
             return [.trace(.cardReaction, ["action": "mustDo", "set": .bool(reminderID != nil)])]
 
         case .removeFromPlan(let reminderID):
@@ -378,10 +508,13 @@ nonisolated extension DayEngine {
             return [.trace(.cardReaction, ["action": "unplanned"])]
 
         case .place(let reminderID, let start, let minutes):
-            state.plan.removeAll { $0.reminderID == reminderID }
-            state.plan.append(Placement(reminderID: reminderID, start: start, minutes: minutes))
-            state.plan.sort { $0.start < $1.start }
+            let slot = Placement(reminderID: reminderID, start: start, minutes: minutes)
+            place(slot, snapshot: snapshot, state: &state)
             return [.trace(.cardReaction, ["action": "placed", "minutes": .int(minutes)])]
+
+        case .placeAll(let slots):
+            for slot in slots { place(slot, snapshot: snapshot, state: &state) }
+            return [.trace(.cardReaction, ["action": "fitted", "count": .int(slots.count)])]
 
         case .leftover(let cardID, let reminderID, let suggestion):
             guard let index = state.cards.firstIndex(where: { $0.id == cardID }),
@@ -392,7 +525,8 @@ nonisolated extension DayEngine {
             state.cards[index].body = .eveningWrapUp(card)
             state.plan.removeAll { $0.reminderID == reminderID }
             return [
-                .mutateAgenda(mutation(for: suggestion, reminderID: reminderID)),
+                .mutateAgenda(
+                    mutation(for: suggestion, reminderID: reminderID, snapshot: snapshot)),
                 reaction(
                     "leftover.\(suggestion.rawValue)", card: state.cards[index], snapshot: snapshot),
             ]
@@ -402,7 +536,8 @@ nonisolated extension DayEngine {
                 case .eveningWrapUp(var card) = state.cards[index].body
             else { return [] }
             let mutations = card.leftovers.map {
-                DayEffect.mutateAgenda(mutation(for: $0.suggestion, reminderID: $0.reminderID))
+                DayEffect.mutateAgenda(
+                    mutation(for: $0.suggestion, reminderID: $0.reminderID, snapshot: snapshot))
             }
             let moved = Set(card.leftovers.map(\.reminderID))
             card.leftovers = []
@@ -481,7 +616,112 @@ nonisolated extension DayEngine {
 
         case .wrapUpNow:
             return run(.eveningWrapUp, trigger: .ownerAsked, snapshot: snapshot, state: &state)
+
+        case .step(let reminderID, let choice):
+            return stepChosen(reminderID, choice, snapshot: snapshot, state: &state)
+
+        case .breakCue(let choice):
+            return breakChosen(choice, snapshot: snapshot, state: &state)
+
+        case .taskProposal(let id, let add):
+            guard let proposal = state.taskProposals.first(where: { $0.id == id }) else {
+                return []
+            }
+            state.taskProposals.removeAll { $0.id == id }
+            // Already in Reminders (the owner wrote it down meanwhile): no twin.
+            let exists = snapshot.agenda.open.contains {
+                $0.title.lowercased() == proposal.title.lowercased()
+            }
+            let decided = DayEffect.trace(
+                .taskDecided,
+                [
+                    "added": .bool(add && !exists), "dated": .bool(proposal.due != nil),
+                    "existed": .bool(exists),
+                ])
+            return add && !exists
+                ? [.mutateAgenda(.add(title: proposal.title, due: proposal.due)), decided]
+                : [decided]
+
+        case .keep(let cardID), .close(let cardID):
+            // Taken in: off the panel (the panel closes itself), still in Today.
+            guard let index = state.cards.firstIndex(where: { $0.id == cardID }) else { return [] }
+            state.cards[index].kept = true
+            let said = if case .close = action { "closed" } else { "kept" }
+            return [reaction(said, card: state.cards[index], snapshot: snapshot)]
         }
+    }
+
+    /// An item a card raised that still waits on the owner: a banner not
+    /// seen since (read in its own app), an agent still waiting (not answered
+    /// in the terminal), a reminder still open.
+    private static func stillWaits(_ item: WaitingItem, snapshot: DaySnapshot, state: DayState)
+        -> Bool
+    {
+        switch item.kind {
+        case .notification:
+            return state.ledger.entry(item.id).map { $0.seenAt == nil } ?? false
+        case .agent:
+            let id = String(item.id.dropFirst("agent:".count))
+            return state.agentsWaiting(now: snapshot.now).contains { $0.id == id }
+        case .reminder:
+            let id = String(item.id.dropFirst("reminder:".count))
+            return snapshot.agenda.open.contains { $0.id == id }
+        }
+    }
+
+    /// A task's slot in today's plan, in place of any it had; one from now
+    /// is started, and ends before the next meeting.
+    private static func place(_ slot: Placement, snapshot: DaySnapshot, state: inout DayState) {
+        state.plan.removeAll { $0.reminderID == slot.reminderID }
+        state.plan.append(slot)
+        state.plan.sort { $0.start < $1.start }
+        guard slot.start <= snapshot.now.addingTimeInterval(60) else { return }
+        keepClear(slot.reminderID, snapshot: snapshot, state: &state)
+        markStartedIfNow(slot, snapshot: snapshot, state: &state)
+    }
+
+    /// A reply that landed after the 04:00 rollover (the lid closed on the
+    /// Night Reflection, the Mac woke past four) belongs to the day it ran
+    /// for. A night's reflection opens this morning instead — its note, its
+    /// draft and its proposed tasks, where the morning has none — without
+    /// taking tonight's; anything else is dropped (a wrap-up's leftovers were
+    /// that day's). The new day's own moment, if one runs, keeps running.
+    private static func lateMomentFinished(
+        _ request: MomentRequest, _ outcome: MomentOutcome, snapshot: DaySnapshot,
+        state: inout DayState
+    ) -> [DayEffect] {
+        var fields = traceFields(request, outcome: outcome, power: snapshot.power)
+        fields["late"] = true
+        guard request.kind == .nightReflection, case .reply(let text, _) = outcome,
+            request.day?.next(calendar: snapshot.calendar) == state.day,
+            case .card(.reflection(let card)) = CardParser.nightReflection(
+                text, facts: snapshot.facts(state: state), open: snapshot.agenda.open)
+        else {
+            fields["reason"] = "after the rollover"
+            return [.trace(.momentFailed, fields)]
+        }
+        state.carryOver = state.carryOver ?? card.carryOver
+        if state.draft.isEmpty { state.draft = card.tomorrow }
+        // Its "tomorrow" is this day: read with this day's facts, a task's
+        // due date would be the day after.
+        let today = state.day.date(calendar: snapshot.calendar)
+        if state.taskProposals.isEmpty {
+            state.taskProposals = card.tasks.map { task in
+                var task = task
+                if task.due != nil { task.due = today }
+                return task
+            }
+        }
+        var effects: [DayEffect] = [.trace(.momentFinished, fields)]
+        if !card.proposals.isEmpty { effects.append(.proposeFacts(card.proposals)) }
+        return effects
+    }
+
+    /// The day's must-do. A different one starts undone: the done mark was
+    /// the old one's.
+    static func setMustDo(_ reminderID: String?, state: inout DayState) {
+        if state.mustDoID != reminderID { state.mustDoDoneAt = nil }
+        state.mustDoID = reminderID
     }
 
     /// Take an item off a Breakpoint or Triage card.
@@ -526,13 +766,18 @@ nonisolated extension DayEngine {
         }
     }
 
-    private static func mutation(for suggestion: Leftover.Suggestion, reminderID: String)
-        -> AgendaMutation
-    {
+    /// A repeating reminder is one item for its whole series: Later can't
+    /// take its date (EventKit refuses) and Let go would delete every
+    /// occurrence, so for it both skip to tomorrow and the series goes on.
+    private static func mutation(
+        for suggestion: Leftover.Suggestion, reminderID: String, snapshot: DaySnapshot
+    ) -> AgendaMutation {
+        let repeats = snapshot.agenda.open.first { $0.id == reminderID }?.repeats == true
         switch suggestion {
-        case .tomorrow: .dueTomorrow(reminderID: reminderID)
-        case .later: .clearDue(reminderID: reminderID)
-        case .drop: .delete(reminderID: reminderID)
+        case .tomorrow: return .dueTomorrow(reminderID: reminderID)
+        case .later where !repeats: return .clearDue(reminderID: reminderID)
+        case .drop where !repeats: return .delete(reminderID: reminderID)
+        case .later, .drop: return .dueTomorrow(reminderID: reminderID)
         }
     }
 

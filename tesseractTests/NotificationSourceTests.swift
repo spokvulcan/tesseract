@@ -67,6 +67,40 @@ struct NotificationSourceTests {
             name: "an image is ready is an app's news",
             notification: banner("ChatGPT", title: "Your image is ready to review"), app: nil,
             source: .app),
+        Row(
+            name: "a bot's message in Slack is an app's news",
+            notification: banner(
+                "Slack", title: "Acme", subtitle: "Jira",
+                body: "🔔 Jira bot commented on a Sub-task you are assigned to"),
+            app: slack, source: .app),
+        Row(
+            name: "a bot posting in a Slack channel is an app's news",
+            notification: banner(
+                "Slack", title: "Acme", subtitle: "#builds", body: "CircleCI: build 812 passed"),
+            app: slack, source: .app),
+        Row(
+            name: "a person in a Slack channel is a person",
+            notification: banner(
+                "Slack", title: "Acme", subtitle: "#qa", body: "Roman: moved the ticket to test"),
+            app: slack, source: .person),
+        Row(
+            name: "a person's direct message is a person",
+            notification: banner("Slack", title: "Acme", subtitle: "Anna", body: "Got a minute?"),
+            app: slack, source: .person),
+        Row(
+            name: "a workspace named like a tool is still people",
+            notification: banner(
+                "Slack", title: "GitHub", subtitle: "Anna", body: "Can you review my PR?"),
+            app: slack, source: .person),
+        Row(
+            name: "a colleague called Polly is a person",
+            notification: banner("Slack", title: "Acme", subtitle: "Polly", body: "Lunch?"),
+            app: slack, source: .person),
+        Row(
+            name: "a page can't wait",
+            notification: banner(
+                "Slack", title: "Acme", subtitle: "PagerDuty", body: "Triggered: API is down"),
+            app: slack, source: .person),
     ]
 
     @Test(arguments: rows)

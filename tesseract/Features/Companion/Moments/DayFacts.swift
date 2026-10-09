@@ -30,12 +30,34 @@ nonisolated struct DayFacts: Sendable, Equatable {
     /// Today's must-do and plan, as they stand.
     var mustDoID: String?
     var plan: [Placement]
+    /// Completed in the last seven days, today included.
+    var doneThisWeek: [AgendaReminder]
+    /// The week's one focus, set by the last week's look-back.
+    var weekFocus: String?
+    /// The last days' must-dos, today's included: done or not, by day.
+    var mustDoDays: [String: Bool] = [:]
+    /// Last night the owner was at the Mac past midnight, until then: the
+    /// day's plan is asked to stay light.
+    var upLateUntil: Date?
+    /// When to leave for the day's events in person: the way there is busy.
+    var departures: [Departure] = []
+    /// How long the owner's started steps took against their plan, lately.
+    var stepRuns: [StepRun] = []
+
+    /// Actual over planned minutes across at least five recent steps: how
+    /// far the owner's days run past (or short of) their plans.
+    var stepPace: (ratio: Double, count: Int)? {
+        let planned = stepRuns.reduce(0) { $0 + $1.planned }
+        guard stepRuns.count >= 5, planned > 0 else { return nil }
+        return (Double(stepRuns.reduce(0) { $0 + $1.actual }) / Double(planned), stepRuns.count)
+    }
 
     init(
         now: Date, calendar: Calendar = .current, events: [AgendaEvent] = [],
         dueOrOverdue: [AgendaReminder] = [], dueTomorrow: [AgendaReminder] = [],
         undated: [AgendaReminder] = [], doneToday: [AgendaReminder] = [], areas: [Area] = [],
-        inboxListID: String? = nil, mustDoID: String? = nil, plan: [Placement] = []
+        inboxListID: String? = nil, mustDoID: String? = nil, plan: [Placement] = [],
+        doneThisWeek: [AgendaReminder] = [], weekFocus: String? = nil
     ) {
         self.now = now
         self.calendar = calendar
@@ -48,12 +70,15 @@ nonisolated struct DayFacts: Sendable, Equatable {
         self.inboxListID = inboxListID
         self.mustDoID = mustDoID
         self.plan = plan
+        self.doneThisWeek = doneThisWeek
+        self.weekFocus = weekFocus
     }
 
     /// Build from the Agenda's snapshot.
     init(
         snapshot: AgendaSnapshot, areas: [Area], inboxListID: String?, now: Date,
-        calendar: Calendar = .current, mustDoID: String? = nil, plan: [Placement] = []
+        calendar: Calendar = .current, mustDoID: String? = nil, plan: [Placement] = [],
+        weekFocus: String? = nil, departures: [Departure] = []
     ) {
         let startOfToday = Self.startOfDay(for: now, calendar: calendar)
         let endOfToday = calendar.date(byAdding: .day, value: 1, to: startOfToday) ?? now
@@ -67,7 +92,33 @@ nonisolated struct DayFacts: Sendable, Equatable {
             },
             undated: snapshot.open.filter { $0.due == nil },
             doneToday: snapshot.doneToday, areas: areas, inboxListID: inboxListID,
-            mustDoID: mustDoID, plan: plan)
+            mustDoID: mustDoID, plan: plan, doneThisWeek: snapshot.doneThisWeek,
+            weekFocus: weekFocus)
+        self.departures = departures
+    }
+
+    /// The owner's day is the week's last (the day before the calendar's
+    /// first weekday): the Evening Wrap-up looks back on the week.
+    var isWeekReview: Bool {
+        let weekday = calendar.component(.weekday, from: startOfToday)
+        return weekday == (calendar.firstWeekday + 5) % 7 + 1
+    }
+
+    /// "The must-do got done on 4 of the 6 days it was set."
+    var mustDoLine: String? {
+        guard !mustDoDays.isEmpty else { return nil }
+        let done = mustDoDays.values.filter { $0 }.count
+        let set = mustDoDays.count
+        return "The must-do got done on \(done) of the \(set) day\(set == 1 ? "" : "s") it was set."
+    }
+
+    /// The week's done reminders by Area, the most first.
+    var doneThisWeekByArea: [(area: String, count: Int)] {
+        var counts: [String: Int] = [:]
+        for reminder in doneThisWeek { counts[areaName(of: reminder), default: 0] += 1 }
+        return counts.map { ($0.key, $0.value) }.sorted {
+            ($0.count, $1.area) > ($1.count, $0.area)
+        }
     }
 
     /// Midnight on the owner's day: before 04:00, the previous date's.
@@ -103,6 +154,14 @@ nonisolated struct DayFacts: Sendable, Equatable {
     var openTasks: [AgendaReminder] { dueOrOverdue + undated }
 
     func task(_ id: String) -> AgendaReminder? { openTasks.first { $0.id == id } }
+
+    /// Overdue and not in today's plan: what the week's look-back asks about
+    /// as waiting since an earlier day. A task planned today is today's,
+    /// whatever its date.
+    func isWaiting(_ reminder: AgendaReminder) -> Bool {
+        (reminder.due ?? .distantFuture) < startOfToday
+            && !plan.contains { $0.reminderID == reminder.id }
+    }
 
     func areaName(of reminder: AgendaReminder) -> String {
         if reminder.listID == inboxListID { return "Inbox" }

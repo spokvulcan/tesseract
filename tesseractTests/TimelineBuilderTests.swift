@@ -100,6 +100,32 @@ struct TimelineBuilderTests {
         #expect(timeline.doneCount == 1)
     }
 
+    @Test func theWayToAnEventIsBusyOnlyWhileTheEventStands() {
+        func freeBeforeTheOneOnOne(_ departure: Departure) -> [Int] {
+            var facts = Self.facts(now: Self.local(30, 10, 30))
+            facts.departures = [departure]
+            return TimelineBuilder.build(facts: facts).rows.compactMap { row in
+                guard case .free(let minutes) = row.kind, row.start >= Self.local(30, 11),
+                    row.start < Self.local(30, 13)
+                else { return nil }
+                return minutes
+            }
+        }
+        // Leave at 12:30 for the 1:1 at 13:00: the way there is not free.
+        let leave = Departure(
+            eventID: "E2", title: "1:1", at: Self.local(30, 12, 30),
+            eventStart: Self.local(30, 13))
+        #expect(freeBeforeTheOneOnOne(leave) == [75])
+        // Planned for a start the 1:1 no longer has, or for an event since
+        // cancelled: the time is free again.
+        var moved = leave
+        moved.eventStart = Self.local(30, 13, 30)
+        #expect(freeBeforeTheOneOnOne(moved) == [105])
+        var cancelled = leave
+        cancelled.eventID = "E9"
+        #expect(freeBeforeTheOneOnOne(cancelled) == [105])
+    }
+
     @Test func freeGapsSkipShortOnes() {
         let gaps = TimelineBuilder.freeGaps(
             from: Self.local(30, 9), to: Self.local(30, 12),
@@ -254,5 +280,96 @@ struct CardParserTests {
     @Test func aLongLineIsTrimmed() {
         let line = String(repeating: "a", count: 500)
         #expect(CardParser.cleanLine(line)?.count == 318)
+    }
+
+    @Test func aTimeToLeaveIsKeptOnlyJustBeforeAnEventTheRequestListed() {
+        // As the request listed them: e1 the standup at 09:30, e2 the 1:1 at 13:00.
+        let reply =
+            #"{"line": "Ok", "leave": [{"event": "e2", "at": "08:00"}, {"event": "e1", "at": "09:45"}, {"event": "e9", "at": "10:00"}, {"event": "e2", "at": "12:30"}, {"event": "e2", "at": "12:40"}]}"#
+        guard
+            case .card(.morningPlan(let card)) = CardParser.morningPlan(
+                reply, facts: Self.facts, eventIDs: ["E1", "E2"])
+        else {
+            Issue.record("expected a Morning Plan card")
+            return
+        }
+        // Hours ahead, after the start, unknown, and a second time: dropped.
+        #expect(card.departures.map(\.eventID) == ["E2"])
+        #expect(card.departures.first?.at == TimelineBuilderTests.local(30, 12, 30))
+        #expect(card.departures.first?.eventStart == TimelineBuilderTests.local(30, 13))
+    }
+
+    @Test func theWeeksLookBackKeepsAShortFocusOnlyOnItsDay() {
+        let reply =
+            #"{"line": "A good week.", "leftovers": [], "week": "Steady work and the streak held.", "focus": "Send three applications and keep the evenings for the Companion work, every single day of it"}"#
+        guard
+            case .card(.eveningWrapUp(let sunday)) = CardParser.eveningWrapUp(
+                reply, facts: MomentPromptsTests.weekFacts(day: 4), leftovers: [])
+        else {
+            Issue.record("expected a wrap-up card")
+            return
+        }
+        #expect(sunday.week == "Steady work and the streak held.")
+        #expect(
+            sunday.focus
+                == "Send three applications and keep the evenings for the Companion work, every…")
+        guard
+            case .card(.eveningWrapUp(let saturday)) = CardParser.eveningWrapUp(
+                reply, facts: MomentPromptsTests.weekFacts(day: 3), leftovers: [])
+        else {
+            Issue.record("expected a wrap-up card")
+            return
+        }
+        #expect(saturday.week == nil)
+        #expect(saturday.focus == nil)
+    }
+
+    @Test func aWrapUpSavedBeforeTheLookBackStillLoads() throws {
+        let json = #"{"line": "Done.", "done": [], "leftovers": []}"#
+        let card = try JSONDecoder().decode(EveningWrapUpCard.self, from: Data(json.utf8))
+        #expect(card.week == nil)
+        #expect(card.focus == nil)
+    }
+
+    @Test func aBrokenEntryIsDroppedNotTheWholePlan() {
+        let reply =
+            #"{"line": "Ok", "must_do": "rent", "plan": [{"id": "rent", "at": null}, {"id": "rent", "at": "08:15"}], "suggestions": ["a", 3], "leave": {}}"#
+        guard case .card(.morningPlan(let card)) = CardParser.morningPlan(reply, facts: Self.facts)
+        else {
+            Issue.record("a stray entry must not cost the card")
+            return
+        }
+        #expect(card.mustDoID == "rent")
+        #expect(card.placements.map(\.reminderID) == ["rent"])
+        #expect(card.suggestions == ["a"])
+        #expect(card.departures.isEmpty)
+    }
+
+    @Test func theNightProposesTasksTheDayShowedOnlyOnce() {
+        // "Pay rent" is already an open task: not proposed again.
+        let reply =
+            #"{"carry_over": "A good day.", "tasks": [{"title": "Send Anna the request", "when": "tomorrow"}, {"title": "pay rent"}, {"title": "Look into evening classes", "when": "later"}, {"title": "Send Anna the request"}, {"title": 7}]}"#
+        guard
+            case .card(.reflection(let card)) = CardParser.nightReflection(
+                reply, facts: Self.facts)
+        else {
+            Issue.record("expected a Night Reflection card")
+            return
+        }
+        #expect(card.tasks.map(\.title) == ["Send Anna the request", "Look into evening classes"])
+        #expect(card.tasks.first?.due == Self.facts.endOfToday)
+        #expect(card.tasks.last?.due == nil)
+    }
+
+    @Test func aReflectionSavedBeforeTasksStillLoads() throws {
+        let json = #"{"carryOver": "Night.", "tomorrow": [], "proposals": []}"#
+        let card = try JSONDecoder().decode(ReflectionCard.self, from: Data(json.utf8))
+        #expect(card.tasks.isEmpty)
+    }
+
+    @Test func aCardSavedBeforeDeparturesStillLoads() throws {
+        let json = #"{"line": "Hi", "placements": [], "suggestions": []}"#
+        let card = try JSONDecoder().decode(MorningPlanCard.self, from: Data(json.utf8))
+        #expect(card.departures.isEmpty)
     }
 }

@@ -57,6 +57,10 @@ final class MenuBarManager: NSObject {
 
     // Feature callbacks (wired by the container).
     var onTakeAppshot: (() -> Void)?
+    /// The Companion's entries: whether it is on, Today, and the capture bar.
+    var companionOn: (() -> Bool)?
+    var onOpenToday: (() -> Void)?
+    var onCaptureThought: (() -> Void)?
     var onOffloadModel: (() -> Void)?
     var onClearMemoryCache: (() -> Void)?
     var onClearDiskCache: (() -> Void)?
@@ -73,6 +77,10 @@ final class MenuBarManager: NSObject {
 
     private var statusItem: NSStatusItem?
     private var iconView: NSImageView?
+    /// The time left of a step the owner started, beside the glyph.
+    private var clockLabel: NSTextField?
+    private var clock: MenuBarClock?
+    private var clockRefresh: Timer?
     private var settingsObservationTask: Task<Void, Never>?
     /// The Models section's live state, and the clock that refreshes it while
     /// the menu is open.
@@ -129,6 +137,42 @@ final class MenuBarManager: NSObject {
         applyActivityToIcon()
     }
 
+    /// The started step's time left, or the time until what comes next (or
+    /// nil: nothing to count down) shows beside the glyph, refreshed on its
+    /// own clock, so the time can be seen from any app.
+    func updateClock(_ clock: MenuBarClock?) {
+        self.clock = clock
+        clockRefresh?.invalidate()
+        clockRefresh = nil
+        if clock != nil {
+            let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.applyClock() }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            clockRefresh = timer
+        }
+        applyClock()
+    }
+
+    private func applyClock() {
+        guard let item = statusItem, let label = clockLabel else { return }
+        let now = Date()
+        if let clock, clock.until > now {
+            label.stringValue = MenuBarClockText.label(clock, now: now)
+            label.isHidden = false
+            item.length = 22 + 3 + label.intrinsicContentSize.width + 6
+            item.button?.toolTip = MenuBarClockText.tooltip(clock, now: now)
+        } else {
+            label.isHidden = true
+            item.length = NSStatusItem.squareLength
+            item.button?.toolTip = nil
+            if clock != nil {
+                clockRefresh?.invalidate()
+                clockRefresh = nil
+            }
+        }
+    }
+
     // MARK: - Status item
 
     private func setMenuBarVisible(_ isVisible: Bool) {
@@ -146,6 +190,7 @@ final class MenuBarManager: NSObject {
         }
         statusItem = nil
         iconView = nil
+        clockLabel = nil
     }
 
     private func createStatusItem() {
@@ -153,18 +198,14 @@ final class MenuBarManager: NSObject {
         statusItem = item
 
         if let button = item.button {
-            // The glyph lives in an embedded image view, not `button.image`:
-            // `addSymbolEffect` is public on `NSImageView` only. The view is
-            // click-through so the button keeps owning the menu.
-            let icon = ClickThroughImageView()
-            icon.translatesAutoresizingMaskIntoConstraints = false
-            icon.imageScaling = .scaleNone
-            button.addSubview(icon)
+            let (stack, icon, label) = Self.makeStatusContent()
+            button.addSubview(stack)
             NSLayoutConstraint.activate([
-                icon.centerXAnchor.constraint(equalTo: button.centerXAnchor),
-                icon.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+                stack.centerXAnchor.constraint(equalTo: button.centerXAnchor),
+                stack.centerYAnchor.constraint(equalTo: button.centerYAnchor),
             ])
             iconView = icon
+            clockLabel = label
         }
 
         let menu = NSMenu()
@@ -174,6 +215,25 @@ final class MenuBarManager: NSObject {
 
         appliedActivity = .idle
         setIcon(for: .idle)
+        applyClock()
+    }
+
+    /// The status item's content. The glyph lives in an embedded image view,
+    /// not `button.image`: `addSymbolEffect` is public on `NSImageView` only.
+    /// Beside it, the menu bar's clock, hidden until there is something to
+    /// count down; a hidden view leaves the stack, so the glyph alone stays
+    /// centred. Both are click-through so the button keeps owning the menu.
+    static func makeStatusContent() -> (stack: NSStackView, icon: NSImageView, label: NSTextField) {
+        let icon = ClickThroughImageView()
+        icon.imageScaling = .scaleNone
+        let label = ClickThroughLabel(labelWithString: "")
+        label.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+        label.isHidden = true
+        let stack = NSStackView(views: [icon, label])
+        stack.orientation = .horizontal
+        stack.spacing = 3
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        return (stack, icon, label)
     }
 
     // MARK: - Icon
@@ -317,6 +377,7 @@ extension MenuBarManager: NSMenuDelegate {
     /// and nothing can go stale between opens.
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        addJarvisSection(to: menu)
         addModelsSection(to: menu)
         addDictationSection(to: menu)
         addAgentSection(to: menu)
@@ -347,6 +408,37 @@ extension MenuBarManager: NSMenuDelegate {
     }
 
     // MARK: Sections
+
+    /// The day from any app: what the clock counts down, in words, Today,
+    /// and the capture bar — the one-key hotkey, named, for whoever never
+    /// found it.
+    private func addJarvisSection(to menu: NSMenu) {
+        guard companionOn?() == true else { return }
+        menu.addItem(.sectionHeader(title: "Jarvis"))
+        let now = Date()
+        if let clock, clock.until > now {
+            let line = NSMenuItem(
+                title: MenuBarClockText.tooltip(clock, now: now), action: nil, keyEquivalent: "")
+            line.isEnabled = false
+            menu.addItem(line)
+        }
+        menu.addItem(
+            actionItem(
+                title: "Open Today", symbol: "sun.max", action: #selector(openToday), badge: nil))
+        let capture = actionItem(
+            title: "Write a Thought Down…", symbol: "square.and.pencil",
+            action: #selector(captureThought), badge: nil)
+        let key = settings.captureHotkey
+        capture.toolTip =
+            key.isSingleModifier
+            ? "Or tap \(key.displayString) in any app; hold it to say one."
+            : "Or press \(key.displayString) in any app."
+        menu.addItem(capture)
+    }
+
+    @objc private func openToday() { onOpenToday?() }
+
+    @objc private func captureThought() { onCaptureThought?() }
 
     /// What is loaded and what it is doing — always visible, no submenu.
     private func addModelsSection(to menu: NSMenu) {
@@ -619,6 +711,49 @@ extension MenuBarManager: NSMenuDelegate {
 /// clicks — the button keeps owning menu presentation.
 private final class ClickThroughImageView: NSImageView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+private final class ClickThroughLabel: NSTextField {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+/// How the menu bar says its clock: short beside the glyph ("25m" left of a
+/// started step, "in 12m" to an event, "leave in 12m"), whole in its tooltip.
+nonisolated enum MenuBarClockText {
+    static func label(_ clock: MenuBarClock, now: Date) -> String {
+        let time = timeLeft(until: clock.until, now: now)
+        switch clock.kind {
+        case .focus: return time
+        case .event: return "in \(time)"
+        case .leave: return "leave in \(time)"
+        }
+    }
+
+    static func tooltip(_ clock: MenuBarClock, now: Date, calendar: Calendar = .current)
+        -> String
+    {
+        let at = AgendaTime.clock(clock.until, calendar: calendar)
+        let minutes = MomentPrompts.minutesText(minutesLeft(until: clock.until, now: now))
+        switch clock.kind {
+        case .focus: return "\(clock.title) — \(minutes) left"
+        case .event: return "\(clock.title) at \(at) — in \(minutes)"
+        case .leave: return "Leave for \(clock.title) at \(at) — in \(minutes)"
+        }
+    }
+
+    static func timeLeft(until end: Date, now: Date) -> String {
+        let minutes = minutesLeft(until: end, now: now)
+        if minutes < 60 { return "\(minutes)m" }
+        return minutes % 60 == 0 ? "\(minutes / 60)h" : "\(minutes / 60)h \(minutes % 60)m"
+    }
+
+    static func spoken(until end: Date, now: Date) -> String {
+        "\(MomentPrompts.minutesText(minutesLeft(until: end, now: now))) left"
+    }
+
+    private static func minutesLeft(until end: Date, now: Date) -> Int {
+        max(1, Int((end.timeIntervalSince(now) / 60).rounded(.up)))
+    }
 }
 
 // MARK: - Pinned-language derivation

@@ -151,11 +151,22 @@ nonisolated enum TimelineBuilder {
             calendar.date(bySettingHour: dayEndHour, minute: 0, second: 0, of: startOfToday)
                 ?? endOfToday,
             events.map(\.end).max() ?? .distantPast)
-        let busy = rows.compactMap { row -> DateInterval? in
-            guard let end = row.end, end > row.start else { return nil }
-            if case .task(let item) = row.kind, item.isDone { return nil }
-            return DateInterval(start: row.start, end: end)
-        }
+        let busy =
+            rows.compactMap { row -> DateInterval? in
+                guard let end = row.end, end > row.start else { return nil }
+                if case .task(let item) = row.kind, item.isDone { return nil }
+                return DateInterval(start: row.start, end: end)
+            }
+            // The way to an event in person is not free time, while the
+            // event is still on the calendar at that time.
+            + facts.departures.compactMap { departure in
+                guard departure.at < departure.eventStart,
+                    events.contains(where: {
+                        $0.id == departure.eventID && $0.start == departure.eventStart
+                    })
+                else { return nil }
+                return DateInterval(start: departure.at, end: departure.eventStart)
+            }
         rows += freeGaps(from: now, to: dayEnd, busy: busy).map { gap in
             TimelineRow(
                 id: "free-\(Int(gap.start.timeIntervalSince1970))", start: gap.start, end: gap.end,
@@ -275,6 +286,22 @@ nonisolated enum TimelineBuilder {
             }
         }
         return nil
+    }
+
+    /// Each task, in order, at the next free slot after the ones before it —
+    /// what "Fit them in" places for tasks that slid. Stops at the first that
+    /// no longer fits today.
+    static func fit(_ tasks: [TimelineTask], facts: DayFacts) -> [Placement] {
+        var facts = facts
+        var placed: [Placement] = []
+        for task in tasks {
+            guard let start = firstFreeSlot(minutes: task.minutes, facts: facts) else { break }
+            let placement = Placement(reminderID: task.id, start: start, minutes: task.minutes)
+            facts.plan.removeAll { $0.reminderID == task.id }
+            facts.plan.append(placement)
+            placed.append(placement)
+        }
+        return placed
     }
 
     private static func order(_ a: TimelineRow, _ b: TimelineRow) -> Bool {

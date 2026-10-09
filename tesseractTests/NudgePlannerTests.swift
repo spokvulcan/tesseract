@@ -43,6 +43,68 @@ struct NudgePlannerTests {
         #expect(nudges.first?.body == "In 10 min · 10:00–10:30 · Room 2")
     }
 
+    @Test func aCallsNudgeCarriesItsLink() throws {
+        var call = Self.event("call", Self.local(30, 10))
+        call.location = nil
+        call.notes = "Join with Google Meet: https://meet.google.com/abc-defg-hij"
+        let nudge = try #require(
+            NudgePlanner.plan(events: [call], now: Self.now, leadMinutes: 10).first)
+        #expect(nudge.link == URL(string: "https://meet.google.com/abc-defg-hij"))
+        // A room has no link.
+        #expect(
+            NudgePlanner.plan(
+                events: [Self.event("room", Self.local(30, 10))], now: Self.now,
+                leadMinutes: 10
+            ).first?.link == nil)
+        // A new link, or a later end, is nudged again with what is true now.
+        var moved = call
+        moved.notes = "Join with Google Meet: https://meet.google.com/new-link-xyz"
+        let relinked = try #require(
+            NudgePlanner.plan(events: [moved], now: Self.now, leadMinutes: 10).first)
+        #expect(relinked.id != nudge.id)
+        var longer = call
+        longer.end = Self.local(30, 11)
+        let extended = try #require(
+            NudgePlanner.plan(events: [longer], now: Self.now, leadMinutes: 10).first)
+        #expect(extended.id != nudge.id)
+        #expect(extended.body == "In 10 min · 10:00–11:00")
+    }
+
+    @Test func joinOpensTheCallAndAnyOtherClickToday() {
+        let link = "https://meet.google.com/abc-defg-hij"
+        #expect(
+            CompanionNotifier.joinURL(action: CompanionNotifier.joinAction, link: link)
+                == URL(string: link))
+        #expect(
+            CompanionNotifier.joinURL(
+                action: "com.apple.UNNotificationDefaultActionIdentifier", link: link) == nil)
+        #expect(CompanionNotifier.joinURL(action: CompanionNotifier.joinAction, link: nil) == nil)
+    }
+
+    @Test func aDepartureIsNudgedAtItsTime() {
+        let course = AgendaEvent(
+            id: "course", title: "Course", start: Self.local(30, 13), end: Self.local(30, 14),
+            calendarID: "c", calendarTitle: "Home", location: "Main St 4")
+        let leave = Departure(
+            eventID: "course", title: "Course", at: Self.local(30, 12, 30),
+            eventStart: Self.local(30, 13))
+        let nudges = NudgePlanner.plan(departures: [leave], events: [course], now: Self.now)
+        #expect(nudges.count == 1)
+        #expect(nudges.first?.id.hasPrefix(NudgePlanner.leavePrefix) == true)
+        #expect(nudges.first?.id.hasPrefix(NudgePlanner.familyPrefix) == true)
+        #expect(nudges.first?.fireAt == Self.local(30, 12, 30))
+        #expect(nudges.first?.title == "Time to leave for Course")
+        #expect(nudges.first?.body == "It starts at 13:00 · Main St 4")
+        // Gone from the calendar, moved, or already past: nothing.
+        #expect(NudgePlanner.plan(departures: [leave], events: [], now: Self.now).isEmpty)
+        var moved = course
+        moved.start = Self.local(30, 15)
+        #expect(NudgePlanner.plan(departures: [leave], events: [moved], now: Self.now).isEmpty)
+        #expect(
+            NudgePlanner.plan(departures: [leave], events: [course], now: Self.local(30, 12, 31))
+                .isEmpty)
+    }
+
     @Test func aChangedTitleOrLeadGetsANewID() {
         let event = Self.event("x", Self.local(30, 12))
         var renamed = event
@@ -112,5 +174,19 @@ struct DayEngineNudgeTests {
             .tick, snapshot: snapshot(events: events, access: .none),
             state: DayState(day: DayKey(for: NudgePlannerTests.now)))
         #expect(decision.effects.isEmpty)
+    }
+
+    @Test func aNudgeFiresAtItsMomentInAnyTimeZone() throws {
+        var berlin = Calendar(identifier: .gregorian)
+        berlin.timeZone = TimeZone(identifier: "Europe/Berlin")!
+        let fireAt = berlin.date(
+            from: DateComponents(year: 2026, month: 10, day: 9, hour: 15, minute: 50))!
+        let parts = CompanionNotifier.triggerComponents(for: fireAt, calendar: berlin)
+        #expect(parts.timeZone == berlin.timeZone)
+        // Read in London, the same moment: 14:50 there.
+        var london = Calendar(identifier: .gregorian)
+        london.timeZone = TimeZone(identifier: "Europe/London")!
+        #expect(london.date(from: parts) == fireAt)
+        #expect(try #require(parts.date) == fireAt)
     }
 }

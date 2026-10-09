@@ -78,7 +78,9 @@ nonisolated enum AgendaListing {
                         ? "all day"
                         : "\(AgendaTime.clock(event.start, calendar: calendar))–\(AgendaTime.clock(event.end, calendar: calendar))"
                     var line = "- \(when) \(event.title)"
-                    if let location = event.location, !location.isEmpty { line += " @ \(location)" }
+                    if let place = AgendaPlace.label(event.location, withLink: true) {
+                        line += " @ \(place)"
+                    }
                     line += " [\(event.calendarTitle); id \(event.id)]"
                     lines.append(line)
                 }

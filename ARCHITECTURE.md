@@ -656,7 +656,9 @@ same system prompt and tools as every chat, so all share one cached prefix);
 its JSON card is validated, retried once, or replaced by a deterministic card.
 Cards reach the owner through the **Delivery Ladder**: the glyph, the **Jarvis
 Panel** (`Platform/GlassPanel.swift`, a borderless non-activating panel over
-`NSGlassEffectView`), a banner, or voice. The system prompt carries no time;
+`NSGlassEffectView`), a banner, or voice. The day's plan keeps its own time:
+when a planned slot starts and the owner is at the Mac, the engine puts it on
+the panel as a **Step Cue** (`DayEngine+Steps`), built by code. The system prompt carries no time;
 every user message carries a stored **Now Tag**. Other apps' banners are sorted
 by code on arrival (`NotificationSources`: a person, an app's news, or noise —
 the system's banners and games, recognised by `AppIdentityResolver`), so only

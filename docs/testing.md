@@ -230,10 +230,24 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # no store is touched), capture and the one-key hotkey,
 # the Timeline (tomorrow after today, and the small hours past midnight), the
 # Now Card (its decision table, the Inbox's slot offers, how
-# long a card's line stays fresh), Today rendered with the app's wiring over
-# fixture days at a wide, a regular and a phone width
+# long a card's line stays fresh, the time left of the step under way), Today
+# rendered with the app's wiring over fixture days (one deep in a slot, its
+# time left draining) at a wide, a regular and a phone width
 # (TEST_RUNNER_TODAY_GALLERY_DIR=<dir> also writes each render there as a PNG,
-# dark and light), cards and prompts, the Day Thread's store, the seen ledger, the
+# dark and light), the Step Cue (a planned slot put on the panel at its start,
+# once, and never while away, quiet, in a call, a game or a meeting, or over a
+# panel that is up — what came due meanwhile is cued late once the owner can
+# see it; a started step's check-in at its end, which no other start
+# interrupts; and what each choice does), the wind-down (one banner as quiet
+# hours begin with the owner at the Mac), the Jarvis Panel's content over
+# fixture cards at the height it fits them (the plan's steps, the wrap-up's
+# leftovers; TEST_RUNNER_PANEL_GALLERY_DIR=<dir> writes the PNGs), the menu
+# bar's clock beside the glyph (a started step's time left, the next event or
+# time to leave in its last half hour; the same directory gets its PNGs), one
+# day walked through the engine signal by signal where those rules meet (the
+# plan, a cue started, an absence and the late check-in, the must-do put off
+# and started small, the clock, the evening),
+# cards and prompts, the Day Thread's store, the seen ledger, the
 # Delivery Ladder and governor, the Claude Code merge, the Profile and recall
 # (fixture conversation files), the trace, the voice overlay's placements, and
 # the prefix-cache contract (a byte-identical system prompt; the Now Tag on
@@ -244,12 +258,18 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/DayEngineMomentTests \
   -only-testing:tesseractTests/DayEngineBreakpointTests \
   -only-testing:tesseractTests/DayEngineMorningPlanTests \
+  -only-testing:tesseractTests/DayEngineStepCueTests \
+  -only-testing:tesseractTests/DayEngineWindDownTests \
+  -only-testing:tesseractTests/JarvisPanelGalleryTests \
+  -only-testing:tesseractTests/MenuBarClockGalleryTests \
+  -only-testing:tesseractTests/DayWalkTests \
   -only-testing:tesseractTests/NotificationSourceTests \
   -only-testing:tesseractTests/ModifierKeyDetectorTests \
   -only-testing:tesseractTests/CardItemActionTests \
   -only-testing:tesseractTests/NightReflectionTests \
   -only-testing:tesseractTests/DayStateStoreTests \
   -only-testing:tesseractTests/AgendaToolsTests \
+  -only-testing:tesseractTests/AgendaPlaceTests \
   -only-testing:tesseractTests/EventKitAgendaStoreTests \
   -only-testing:tesseractTests/AgendaTimeTests \
   -only-testing:tesseractTests/CaptureParserTests \

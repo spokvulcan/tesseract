@@ -23,6 +23,10 @@ nonisolated extension DayEngine {
     static func breakpoint(
         awayFrom: Date, trigger: MomentTrigger, snapshot: DaySnapshot, state: inout DayState
     ) -> [DayEffect] {
+        // One at a time: while Jarvis judges one welcome back (a meeting
+        // ending a minute after the owner came back), a second would replace
+        // its card and leave its banners to no one.
+        guard state.running != .breakpoint else { return [] }
         let inputs = breakpointInputs(awayFrom: awayFrom, snapshot: snapshot, state: state)
         guard !inputs.isEmpty else {
             return [
@@ -38,10 +42,10 @@ nonisolated extension DayEngine {
         )
         let cardID = state.cards.last?.id
         let offered = inputs.toJudge.map(\.id)
+        let shown = (inputs.alreadyWaiting + inputs.raisedByRule).map(\.id)
         // Everything the card shows is now in front of the owner, except what
         // the model is about to judge.
-        state.ledger.markPresented(
-            (inputs.alreadyWaiting + inputs.raisedByRule).map(\.id), at: snapshot.now)
+        state.ledger.markPresented(shown, at: snapshot.now)
         guard !inputs.toJudge.isEmpty else {
             return effects
         }
@@ -50,7 +54,7 @@ nonisolated extension DayEngine {
             text: BreakpointMoment.request(inputs, calendar: snapshot.calendar),
             context: MomentContext(
                 awayFrom: awayFrom, awayUntil: snapshot.now, notificationIDs: offered,
-                cardID: cardID))
+                cardID: cardID, shownIDs: shown))
         if state.running != .breakpoint {
             // It couldn't run (the owner is chatting): the code-built card stands.
             state.ledger.markPresented(offered, at: snapshot.now)
@@ -99,9 +103,12 @@ nonisolated extension DayEngine {
     static func breakpointReplied(
         _ request: MomentRequest, reply: String, snapshot: DaySnapshot, state: inout DayState
     ) -> [DayEffect]? {
-        let offered = request.context.notificationIDs.compactMap { state.ledger.entry($0) }
+        // By the request's numbering: one gone from the ledger meanwhile
+        // leaves a gap, not a shift onto the next banner.
+        let numbered = request.context.notificationIDs.map { state.ledger.entry($0) }
+        let offered = numbered.compactMap { $0 }
         guard
-            let choice = BreakpointMoment.choose(reply, from: offered, field: .needsYou),
+            let choice = BreakpointMoment.choose(reply, from: numbered, field: .needsYou),
             choice.line != nil
         else { return nil }
         state.ledger.markPresented(request.context.notificationIDs, at: snapshot.now)
@@ -112,6 +119,14 @@ nonisolated extension DayEngine {
         inputs.now = request.context.awayUntil ?? snapshot.now
         let stillOpen = Set(offered.filter { $0.seenAt == nil }.map(\.id))
         inputs.toJudge = offered.filter { stillOpen.contains($0.id) }
+        // What the code card showed besides them still waits: marked
+        // presented, it is no longer unresolved, so the rebuild alone would
+        // drop it.
+        let shown = request.context.shownIDs.compactMap { state.ledger.entry($0) }
+            .filter { $0.seenAt == nil }
+        let fresh = Set((inputs.raisedByRule + inputs.alreadyWaiting).map(\.id))
+        inputs.raisedByRule += shown.filter { $0.rule == .raise && !fresh.contains($0.id) }
+        inputs.alreadyWaiting += shown.filter { $0.rule != .raise && !fresh.contains($0.id) }
         let card = BreakpointMoment.card(
             inputs, line: choice.line,
             important: choice.entries.filter { stillOpen.contains($0.id) })
@@ -147,8 +162,11 @@ nonisolated extension DayEngine {
     static func triageReplied(
         _ request: MomentRequest, reply: String, snapshot: DaySnapshot, state: inout DayState
     ) -> [DayEffect]? {
-        let offered = request.context.notificationIDs.compactMap { state.ledger.entry($0) }
-        guard let choice = BreakpointMoment.choose(reply, from: offered, field: .raise) else {
+        // By the request's numbering: one gone from the ledger meanwhile
+        // leaves a gap, not a shift onto the next banner.
+        let numbered = request.context.notificationIDs.map { state.ledger.entry($0) }
+        let offered = numbered.compactMap { $0 }
+        guard let choice = BreakpointMoment.choose(reply, from: numbered, field: .raise) else {
             return nil
         }
         let raised = choice.entries.filter { $0.seenAt == nil }

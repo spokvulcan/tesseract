@@ -56,6 +56,8 @@ nonisolated enum CardAction: Sendable, Equatable {
     case removeFromPlan(reminderID: String)
     /// Put a task into today's plan at a time ("Find a time").
     case place(reminderID: String, start: Date, minutes: Int)
+    /// Tasks that slid, back into today's plan in one go ("Fit all 3 in").
+    case placeAll([Placement])
     case leftover(cardID: String, reminderID: String, Leftover.Suggestion)
     /// Every remaining leftover, each with its own suggestion.
     case allLeftovers(cardID: String)
@@ -75,6 +77,154 @@ nonisolated enum CardAction: Sendable, Equatable {
     case planNow
     /// Wrap up now, whatever the hour.
     case wrapUpNow
+    /// The owner answered a Step Cue.
+    case step(reminderID: String, StepChoice)
+    /// The owner answered a Break Cue.
+    case breakCue(BreakChoice)
+    /// The owner took a card in on the panel (Looks Good, Good Night): it
+    /// leaves the panel and stays in Today.
+    case keep(cardID: String)
+    /// The owner closed the panel on a card: taken in, as with Looks Good —
+    /// it stays in Today with whatever it holds still to settle (an
+    /// evening's leftovers, someone waiting), never back on the panel.
+    case close(cardID: String)
+    /// The owner added a proposed task to Reminders, or let it go.
+    case taskProposal(id: String, add: Bool)
+}
+
+/// The step the owner started and is in now.
+nonisolated struct StepFocus: Sendable, Equatable {
+    var reminderID: String
+    var title: String
+    var end: Date
+}
+
+/// What the menu bar counts down beside the glyph, so time can be seen from
+/// any app: the started step's time left, or the time until what comes next.
+nonisolated struct MenuBarClock: Sendable, Equatable {
+    enum Kind: Sendable, Equatable {
+        /// The step the owner started: "25m" left.
+        case focus
+        /// An event starts: "in 12m".
+        case event
+        /// Time to leave for an event in person: "leave in 12m".
+        case leave
+    }
+
+    var kind: Kind
+    var title: String
+    var until: Date
+}
+
+/// What the owner chose on a Step Cue.
+nonisolated enum StepChoice: String, Sendable, Equatable {
+    /// Doing it now: the slot starts this minute.
+    case start
+    /// Just five minutes, then decide: offered once a step was put off
+    /// twice. The slot starts this minute, five minutes long.
+    case startSmall
+    /// Not yet: the slot moves a quarter of an hour on, and is cued again then.
+    case later
+    /// Not finished: the slot runs a quarter of an hour longer, and checks in
+    /// again at its new end.
+    case extend
+    /// A meeting, or the way to one, comes before a quarter hour more
+    /// would: the slot moves to when it is over and is cued again then —
+    /// the rest of a started step, or the whole of one not begun.
+    case resume
+    /// Not today: due tomorrow, off today's plan.
+    case tomorrow
+    /// Already done.
+    case done
+    /// Not done after all (Undo, as the panel says "Done"): the task reopens
+    /// and its cue is back on the panel, to choose again.
+    case undo
+    /// Closed: nothing changes.
+    case dismiss
+}
+
+/// A planned step at its start or, once the owner started it, at its end,
+/// as the Jarvis Panel shows it.
+nonisolated struct StepCue: Sendable, Equatable {
+    enum Phase: String, Sendable, Equatable {
+        /// Its slot starts now.
+        case start
+        /// The slot the owner started is over: done, longer, or another day?
+        case end
+    }
+
+    var reminderID: String
+    var title: String
+    var start: Date
+    var minutes: Int
+    var areaName: String
+    var isMustDo: Bool
+    /// What comes after it ("Design review at 15:00"), and when it starts
+    /// (nil: a step already under way).
+    var next: String?
+    var nextAt: Date? = nil
+    /// What comes next is a call: its link, to join from the panel.
+    var nextLink: URL? = nil
+    var phase: Phase = .start
+    /// Shown well after its moment — the owner was away, busy or behind
+    /// another panel — so it says so ("Still time for", "How did it go?").
+    var late = false
+    /// How often today the owner put this task off ("In 15 min"): from the
+    /// second time, its start is offered as five minutes.
+    var putOff = 0
+    /// A five-minute start ("Start 5 min"): its end asks to keep going.
+    var small = false
+    /// A meeting, or the way to one, would cut into "In 15 min" or "15 more
+    /// min": when it is over, offered instead ("At 16:00", "Go on at 16:00").
+    var resumeAt: Date? = nil
+
+    /// The start is offered small: starting is the hard part.
+    var offersSmallStart: Bool { phase == .start && putOff >= 2 }
+
+    var end: Date { start.addingTimeInterval(TimeInterval(minutes * 60)) }
+
+    /// One slot, one cue: a task moved to another time is a new slot.
+    static func key(_ placement: Placement) -> String {
+        "\(placement.reminderID)@\(Int(placement.start.timeIntervalSince1970))"
+    }
+
+    /// One end, one check-in: a slot made longer has a new end.
+    static func endKey(_ placement: Placement) -> String {
+        "\(key(placement))+\(placement.minutes)"
+    }
+}
+
+/// A step the owner started whole and saw done in time: the minutes it
+/// had, and the minutes it took.
+nonisolated struct StepRun: Sendable, Equatable, Codable {
+    var planned: Int
+    var actual: Int
+    var at: Date
+}
+
+/// What the owner chose on a Break Cue.
+nonisolated enum BreakChoice: String, Sendable, Equatable {
+    /// Up from the Mac now: the time at it starts again from here.
+    case taking
+    /// Not yet: asked again in half an hour.
+    case later
+    /// Closed: not asked again for two hours.
+    case dismiss
+}
+
+/// Two hours at the Mac with no break, as the Jarvis Panel shows it.
+nonisolated struct BreakCue: Sendable, Equatable {
+    /// When the owner sat down: the last return from five minutes away or
+    /// more.
+    var since: Date
+    /// How long they have been at it.
+    var minutes: Int
+    /// The day's how-manyth Break Cue, from 1: each says something different.
+    var number: Int
+    /// The step the owner started, which runs on through the break, and
+    /// when it ends.
+    var step: String? = nil
+    var stepEnd: Date? = nil
 }
 
 // MARK: - Effects
@@ -84,12 +234,22 @@ nonisolated enum DayEffect: Sendable, Equatable {
     case syncNudges([Nudge])
     /// Run one moment: append its request to the Day Thread and generate.
     case runMoment(MomentRequest)
+    /// Stop the moment's generation: it went quiet and was given up on.
+    case cancelMoment
     /// Show a card on a delivery rung (voice is `speak`).
     case presentCard(DayCard, DeliveryRung)
+    /// Put a planned step that starts now on the Jarvis Panel.
+    case presentStep(StepCue)
+    /// Suggest a break on the Jarvis Panel.
+    case presentBreak(BreakCue)
+    /// Take the Break Cue off the panel: the owner took one meanwhile.
+    case retractBreak
     /// Take a card off the panel.
     case retractCard(cardID: String)
     /// Say one line aloud.
     case speak(String)
+    /// Post one banner of Jarvis's own (the wind-down).
+    case postBanner(title: String, body: String)
     /// Bring an app to the front (a card item's "Open").
     case openApp(name: String)
     /// Change the owner's Reminders.
@@ -123,12 +283,17 @@ nonisolated enum AgendaMutation: Sendable, Equatable {
     case delete(reminderID: String)
     /// Done.
     case complete(reminderID: String)
+    /// Not done after all: open again.
+    case reopen(reminderID: String)
     /// Due on this day, keeping a time of day if it had one.
     case dueOn(reminderID: String, day: Date)
     /// Due at this moment.
     case dueAt(reminderID: String, at: Date)
     /// A new reminder: a follow-up for something that can't be handled now.
     case followUp(title: String, at: Date)
+    /// A new reminder the owner accepted from a proposal: due that day, or
+    /// in the Inbox.
+    case add(title: String, due: Date?)
 }
 
 // MARK: - Snapshot
@@ -156,13 +321,16 @@ nonisolated struct DaySnapshot: Sendable, Equatable {
     var power: PowerState
     /// The owner's Profile facts (for the reflection's "don't propose again").
     var profile: [String]
+    /// The Jarvis Panel is up, with a card or a cue the owner hasn't closed.
+    var panelUp: Bool
 
     init(
         now: Date, calendar: Calendar = .current, settings: DaySettings,
         agenda: AgendaSnapshot, areas: [Area] = [], inboxListID: String? = nil,
         ownerPresent: Bool = true, chatBusy: Bool = false, frontmostAppName: String? = nil,
         frontmostBundleID: String? = nil, frontmostIsGame: Bool = false,
-        lastTerminalFrontAt: Date? = nil, power: PowerState = .nominal, profile: [String] = []
+        lastTerminalFrontAt: Date? = nil, power: PowerState = .nominal, profile: [String] = [],
+        panelUp: Bool = false
     ) {
         self.now = now
         self.calendar = calendar
@@ -178,12 +346,28 @@ nonisolated struct DaySnapshot: Sendable, Equatable {
         self.lastTerminalFrontAt = lastTerminalFrontAt
         self.power = power
         self.profile = profile
+        self.panelUp = panelUp
     }
 
     func facts(state: DayState) -> DayFacts {
-        DayFacts(
+        var facts = DayFacts(
             snapshot: agenda, areas: areas, inboxListID: inboxListID, now: now,
-            calendar: calendar, mustDoID: state.mustDoID, plan: state.plan)
+            calendar: calendar, mustDoID: state.mustDoID, plan: state.plan,
+            weekFocus: state.weekFocus)
+        facts.mustDoDays = state.mustDoDays
+        facts.departures = state.departures
+        facts.stepRuns = state.stepRuns
+        // At the Mac past midnight (until 05:00) on this day's date.
+        if let last = state.lastActiveAt, let midnight = state.day.date(calendar: calendar),
+            last >= midnight, last < midnight.addingTimeInterval(5 * 3600),
+            last <= now, now.timeIntervalSince(last) < 12 * 3600
+        {
+            facts.upLateUntil = last
+        }
+        if state.mustDoID != nil {
+            facts.mustDoDays[state.day.rawValue] = state.mustDoDoneAt != nil
+        }
+        return facts
     }
 
     /// Minutes after local midnight.
@@ -203,6 +387,13 @@ nonisolated struct DaySettings: Sendable, Equatable {
     var speaks: Bool = true
     var quietStartMinutes: Int = 23 * 60
     var quietEndMinutes: Int = 8 * 60
+    /// Say when tomorrow starts, once, as quiet hours begin.
+    var windDown: Bool = true
+    /// Put a planned step on the panel at its start, and check in at the end
+    /// of one the owner started.
+    var stepCues: Bool = true
+    /// Suggest a break after two hours at the Mac without one.
+    var breakCues: Bool = true
     /// The owner's notification rules.
     var rules: [TriageRule] = []
 
@@ -236,10 +427,16 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     var cards: [DayCard] = []
     var mustDoID: String?
     var plan: [Placement] = []
+    /// When to leave for the day's events in person, from the plan.
+    var departures: [Departure] = []
     /// Last night's carry-over note, for this day's opening.
     var carryOver: String?
     /// Tonight's note, handed to the next day.
     var carryOverForNextDay: String?
+    /// Last night's first draft of this day, for its opening.
+    var draft: [String] = []
+    /// Tonight's first draft of tomorrow, handed to the next day.
+    var draftForNextDay: [String] = []
 
     /// Other apps' banners and what the owner has seen (carried across days:
     /// unresolved items expire on their own).
@@ -258,6 +455,71 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     /// Event nudges already recorded as delivered (carried: a nudge stays in
     /// Notification Center past midnight).
     var firedNudgeIDs: Set<String> = []
+    /// Planned slots whose start was cued, by `StepCue.key`, and whose end
+    /// was checked in, by `StepCue.endKey`, with when.
+    var cuedSteps: [String: Date] = [:]
+    /// Slots the owner started (Start on a cue, Start now on Today), by
+    /// `StepCue.key`: their end checks in.
+    var startedSteps: Set<String> = []
+    /// How often today each task was put off on its cue ("In 15 min").
+    var putOff: [String: Int] = [:]
+    /// Five-minute starts, by `StepCue.key`: their end asks to keep going.
+    var smallStarts: Set<String> = []
+    /// Minutes taken off a step so it ends before the next meeting, by task:
+    /// going on after the meeting gives them back.
+    var cutShort: [String: Int] = [:]
+    /// The moment running, as asked, and since when: one that stays quiet
+    /// is given up on, and a reply to one given up on doesn't end another.
+    var runningRequest: MomentRequest?
+    var runningSince: Date?
+    /// The cue on the panel now, by its key, until the owner answers it.
+    var cueOnPanel: String?
+    /// Tasks the Night Reflection proposed, until the owner decides (kept
+    /// that night and the next day).
+    var taskProposals: [TaskProposal] = []
+    /// When the owner sat down to start this day (the first sit-down after
+    /// the night): for them, the morning's end of quiet hours is over.
+    var satDownAt: Date?
+    /// The last clock tick with the owner at the Mac (carried). Unlike
+    /// `lastPresentAt`, no presence signal stamps it: the Mac going to sleep
+    /// reads as a return, and idle is noticed minutes after the last input.
+    var lastActiveAt: Date?
+    /// Today's first sit-down measured the night before it (`night.ended`).
+    var nightMeasured = false
+    /// The week's one focus, from the last week's look-back, and when it was
+    /// set (carried a week).
+    var weekFocus: String?
+    var weekFocusSetAt: Date?
+    /// When today's must-do was seen done.
+    var mustDoDoneAt: Date?
+    /// The last days' must-dos, by day: done or not (days with none are
+    /// absent). Carried a week, for the week's look-back.
+    var mustDoDays: [String: Bool] = [:]
+    /// A moment the app quit in the middle of, until the engine picks it up.
+    var interrupted: MomentKind?
+    /// The Morning Plan was run again once after a quit cut it short.
+    var morningPlanResumed = false
+    /// The first sit-down wanted a plan while the model was busy (a moment
+    /// running, a chat): it runs at the next tick the model is free.
+    var morningPlanWaiting = false
+    /// When tonight's wind-down banner went out.
+    var windDownAt: Date?
+    /// When the owner sat down at the Mac: the last return from five minutes
+    /// away or more (carried: 04:00 is no break).
+    var sittingSince: Date?
+    /// No Break Cue before this: "In 30 min", or one closed (carried).
+    var breakNotBefore: Date?
+    /// The Break Cue on the panel, since when, until the owner answers it.
+    var breakCuedAt: Date?
+    /// Break Cues shown today: each says something different.
+    var breakCues = 0
+    /// Steps started whole (Start, Start now), by `StepCue.key`, with their
+    /// minutes then: once seen done, how long they took joins `stepRuns`.
+    var startedMinutes: [String: Int] = [:]
+    /// Planned against actual minutes of the steps the owner started and saw
+    /// done in time (carried two weeks, the last 30): the Morning Plan sizes
+    /// slots by them.
+    var stepRuns: [StepRun] = []
 
     init(day: DayKey, syncedNudgeIDs: Set<String>? = nil) {
         self.day = day
@@ -268,6 +530,12 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         case day, syncedNudgeIDs, lastPresentAt, morningPlanAt, eveningWrapUpAt, nightReflectionAt
         case running, cards, mustDoID, plan, carryOver, carryOverForNextDay, ledger, agents
         case agentSpokenAt, lastTickAt, lastTriageAt, whereYouWere, deferred, firedNudgeIDs
+        case cuedSteps, startedSteps, interrupted, morningPlanResumed, windDownAt
+        case draft, draftForNextDay, departures, satDownAt, weekFocus
+        case weekFocusSetAt, mustDoDoneAt, mustDoDays, cueOnPanel, taskProposals
+        case putOff, smallStarts, lastActiveAt, nightMeasured, morningPlanWaiting, cutShort
+        case runningRequest, runningSince, sittingSince, breakNotBefore, breakCuedAt, breakCues
+        case startedMinutes, stepRuns
     }
 
     /// Every field but the day is optional on disk, so a state saved by an
@@ -294,13 +562,103 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         whereYouWere = try c.decodeIfPresent(String.self, forKey: .whereYouWere)
         deferred = (try? c.decodeIfPresent(Set<MomentKind>.self, forKey: .deferred)) ?? []
         firedNudgeIDs = (try? c.decodeIfPresent(Set<String>.self, forKey: .firedNudgeIDs)) ?? []
+        cuedSteps = (try? c.decodeIfPresent([String: Date].self, forKey: .cuedSteps)) ?? [:]
+        startedSteps = (try? c.decodeIfPresent(Set<String>.self, forKey: .startedSteps)) ?? []
+        interrupted = try? c.decodeIfPresent(MomentKind.self, forKey: .interrupted)
+        morningPlanResumed =
+            (try? c.decodeIfPresent(Bool.self, forKey: .morningPlanResumed)) ?? false
+        windDownAt = try? c.decodeIfPresent(Date.self, forKey: .windDownAt)
+        draft = (try? c.decodeIfPresent([String].self, forKey: .draft)) ?? []
+        draftForNextDay = (try? c.decodeIfPresent([String].self, forKey: .draftForNextDay)) ?? []
+        departures = (try? c.decodeIfPresent([Departure].self, forKey: .departures)) ?? []
+        satDownAt = try? c.decodeIfPresent(Date.self, forKey: .satDownAt)
+        weekFocus = try? c.decodeIfPresent(String.self, forKey: .weekFocus)
+        weekFocusSetAt = try? c.decodeIfPresent(Date.self, forKey: .weekFocusSetAt)
+        mustDoDoneAt = try? c.decodeIfPresent(Date.self, forKey: .mustDoDoneAt)
+        mustDoDays = (try? c.decodeIfPresent([String: Bool].self, forKey: .mustDoDays)) ?? [:]
+        cueOnPanel = try? c.decodeIfPresent(String.self, forKey: .cueOnPanel)
+        taskProposals =
+            (try? c.decodeIfPresent([TaskProposal].self, forKey: .taskProposals)) ?? []
+        putOff = (try? c.decodeIfPresent([String: Int].self, forKey: .putOff)) ?? [:]
+        smallStarts = (try? c.decodeIfPresent(Set<String>.self, forKey: .smallStarts)) ?? []
+        cutShort = (try? c.decodeIfPresent([String: Int].self, forKey: .cutShort)) ?? [:]
+        runningRequest = try? c.decodeIfPresent(MomentRequest.self, forKey: .runningRequest)
+        runningSince = try? c.decodeIfPresent(Date.self, forKey: .runningSince)
+        lastActiveAt = try? c.decodeIfPresent(Date.self, forKey: .lastActiveAt)
+        nightMeasured = (try? c.decodeIfPresent(Bool.self, forKey: .nightMeasured)) ?? false
+        morningPlanWaiting =
+            (try? c.decodeIfPresent(Bool.self, forKey: .morningPlanWaiting)) ?? false
+        sittingSince = try? c.decodeIfPresent(Date.self, forKey: .sittingSince)
+        breakNotBefore = try? c.decodeIfPresent(Date.self, forKey: .breakNotBefore)
+        breakCuedAt = try? c.decodeIfPresent(Date.self, forKey: .breakCuedAt)
+        breakCues = (try? c.decodeIfPresent(Int.self, forKey: .breakCues)) ?? 0
+        startedMinutes =
+            (try? c.decodeIfPresent([String: Int].self, forKey: .startedMinutes)) ?? [:]
+        stepRuns = (try? c.decodeIfPresent([StepRun].self, forKey: .stepRuns)) ?? []
+    }
+
+    /// The day as a relaunch finds it: the moment in flight never finished,
+    /// so it is recorded as interrupted for the engine to pick up, a card it
+    /// was refining keeps the version code built, and a Step or Break Cue
+    /// left on the panel is cued again.
+    func relaunched() -> DayState {
+        var state = self
+        // One still waiting from an earlier launch is kept.
+        state.interrupted = running ?? interrupted
+        state.running = nil
+        state.runningRequest = nil
+        state.runningSince = nil
+        for index in state.cards.indices { state.cards[index].isRefining = false }
+        // The cue on the panel went with the app: it comes back by its rules.
+        if let key = state.cueOnPanel {
+            state.cuedSteps[key] = nil
+            state.cueOnPanel = nil
+        }
+        state.breakCuedAt = nil
+        return state
     }
 
     /// The next day's state: what must survive the rollover survives.
     func rolledOver(to day: DayKey) -> DayState {
         var next = DayState(day: day, syncedNudgeIDs: syncedNudgeIDs)
         next.lastPresentAt = lastPresentAt
+        next.lastActiveAt = lastActiveAt
         next.carryOver = carryOverForNextDay
+        // "Last night's draft" only for the morning after it, and tonight's
+        // proposed tasks through tomorrow.
+        if self.day.next() == day {
+            next.draft = draftForNextDay
+            // Only this night's: last night's lapse unless tonight made new ones.
+            if nightReflectionAt != nil { next.taskProposals = taskProposals }
+        }
+        // Quiet hours that begin just before 04:00 are still the same night.
+        next.windDownAt = windDownAt
+        // Two weeks of how long steps took, for the plan's sizing.
+        if let date = day.date(),
+            let since = Calendar.current.date(
+                byAdding: .day, value: -14, to: date)
+        {
+            next.stepRuns = stepRuns.filter { $0.at >= since }
+        }
+        // At the Mac across 04:00: the same sitting.
+        next.sittingSince = sittingSince
+        next.breakNotBefore = breakNotBefore
+        next.breakCuedAt = breakCuedAt
+        // Whether this day's must-do got done, kept a week for the look-back.
+        var days = mustDoDays
+        if mustDoID != nil { days[self.day.rawValue] = mustDoDoneAt != nil }
+        next.mustDoDays = days.filter { $0.key > Self.weekBefore(day) }
+        // The week's focus holds until the next look-back (a week, a day's
+        // grace), counted from the day it was set: a look-back after
+        // midnight belongs to the evening before.
+        if let setAt = weekFocusSetAt, let from = DayKey(for: setAt).date(),
+            let to = day.date(),
+            let days = Calendar.current.dateComponents([.day], from: from, to: to).day,
+            days <= 8
+        {
+            next.weekFocus = weekFocus
+            next.weekFocusSetAt = setAt
+        }
         next.ledger = ledger
         next.agents = agents
         next.agentSpokenAt = agentSpokenAt
@@ -308,6 +666,14 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         next.whereYouWere = whereYouWere
         next.firedNudgeIDs = firedNudgeIDs
         return next
+    }
+
+    /// The day key a week before `day`: older must-dos leave the record.
+    static func weekBefore(_ day: DayKey) -> String {
+        guard let date = day.date(),
+            let earlier = Calendar.current.date(byAdding: .day, value: -7, to: date)
+        else { return "" }
+        return DayKey(for: earlier.addingTimeInterval(12 * 3600)).rawValue
     }
 
     /// Cards the owner hasn't dismissed.

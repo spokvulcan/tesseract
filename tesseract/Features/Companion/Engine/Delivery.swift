@@ -35,8 +35,12 @@ nonisolated enum DeliveryLadder {
         "com.cisco.webexmeetingsapp", "com.apple.iWork.Keynote",
     ]
 
-    static func rungs(for importance: Importance, snapshot: DaySnapshot) -> [DeliveryRung] {
-        if isQuietHours(snapshot) { return [.today] }
+    /// - Parameter sittingDown: the owner just sat down to start the day (the
+    ///   first sit-down after the night): for them quiet hours are over.
+    static func rungs(for importance: Importance, snapshot: DaySnapshot, sittingDown: Bool = false)
+        -> [DeliveryRung]
+    {
+        if isQuietHours(snapshot), !sittingDown { return [.today] }
         guard snapshot.ownerPresent else {
             // Away or locked: a banner waits on the lock screen; normal cards
             // wait in Today.
@@ -53,6 +57,43 @@ nonisolated enum DeliveryLadder {
         case .urgent:
             return snapshot.settings.speaks ? [.panel, .voice] : [.panel, .banner]
         }
+    }
+
+    /// The owner sat down to start the day and it is still the morning part
+    /// of quiet hours: for them, quiet hours are over.
+    static func dayStarted(_ satDownAt: Date?, snapshot: DaySnapshot) -> Bool {
+        let settings = snapshot.settings
+        // Only a window that ends in the morning has a morning end; a daytime
+        // one, or an evening one (20:00–23:00), holds.
+        guard let satDownAt, satDownAt <= snapshot.now,
+            snapshot.now.timeIntervalSince(satDownAt) < 12 * 3600,
+            quietHoursEndInTheMorning(settings)
+        else { return false }
+        // The sit-down itself in that morning part, the same morning: one at
+        // 14:43 lifts nothing that night.
+        let calendar = snapshot.calendar
+        let parts = calendar.dateComponents([.hour, .minute], from: satDownAt)
+        let satMinute = (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
+        return calendar.isDate(satDownAt, inSameDayAs: snapshot.now)
+            && satMinute < settings.quietEndMinutes
+            && snapshot.minuteOfDay < settings.quietEndMinutes
+    }
+
+    /// Quiet hours over the night that end in the morning (23:00–08:00,
+    /// 01:00–09:00): the first sit-down can end them early.
+    static func quietHoursEndInTheMorning(_ settings: DaySettings) -> Bool {
+        let start = settings.quietStartMinutes
+        let end = settings.quietEndMinutes
+        let overnight = start > end || start < 4 * 60
+        return start != end && overnight && end <= 12 * 60
+    }
+
+    /// Quiet hours that start in the evening or the small hours (18:00 to
+    /// 04:00, 23:00–08:00 or 01:00–09:00 alike) are the owner's night: they
+    /// have a bedtime and a morning end. Others are a daytime window.
+    static func quietHoursAreNight(_ settings: DaySettings) -> Bool {
+        let start = settings.quietStartMinutes
+        return start != settings.quietEndMinutes && (start >= 18 * 60 || start < 4 * 60)
     }
 
     static func isQuietHours(_ snapshot: DaySnapshot) -> Bool {

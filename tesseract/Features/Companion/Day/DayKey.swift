@@ -23,10 +23,14 @@ nonisolated struct DayKey: Hashable, Comparable, Sendable, Codable, CustomString
         self.rawValue = rawValue
     }
 
-    /// The day `date` belongs to: before 04:00 it is still the previous day.
+    /// The day `date` belongs to: before 04:00 it is still the previous day —
+    /// by the wall clock, not four hours back: on the night the clocks go
+    /// forward, 04:00 is three hours after midnight, and four hours back
+    /// landed on the day before (so "tomorrow" was today).
     init(for date: Date, calendar: Calendar = .current) {
-        let shifted = date.addingTimeInterval(-TimeInterval(Self.rolloverHour) * 3600)
-        let parts = calendar.dateComponents([.year, .month, .day], from: shifted)
+        let early = calendar.component(.hour, from: date) < Self.rolloverHour
+        let day = early ? calendar.date(byAdding: .day, value: -1, to: date) ?? date : date
+        let parts = calendar.dateComponents([.year, .month, .day], from: day)
         self.rawValue = String(
             format: "%04d-%02d-%02d", parts.year ?? 1970, parts.month ?? 1, parts.day ?? 1)
     }
@@ -53,10 +57,11 @@ nonisolated struct DayKey: Hashable, Comparable, Sendable, Codable, CustomString
             from: DateComponents(year: parts[0], month: parts[1], day: parts[2]))
     }
 
-    /// When this day begins: 04:00 local on its date.
+    /// When this day begins: 04:00 local on its date, by the wall clock (four
+    /// hours after midnight is 05:00 the day the clocks go forward).
     func start(calendar: Calendar = .current) -> Date? {
         date(calendar: calendar).flatMap {
-            calendar.date(byAdding: .hour, value: Self.rolloverHour, to: $0)
+            calendar.date(bySettingHour: Self.rolloverHour, minute: 0, second: 0, of: $0)
         }
     }
 

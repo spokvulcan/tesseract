@@ -114,7 +114,10 @@ nonisolated enum BreakpointMoment {
 
     /// The notification entries a reply names, by short id, in the reply's
     /// order; nil when there is no readable reply.
-    static func choose(_ reply: String, from entries: [SeenLedger.Entry], field: ChoiceField)
+    /// - Parameter entries: what the request numbered "n1", "n2"…, in its
+    ///   order — nil where an entry left the ledger during the call, so the
+    ///   later numbers still name their own banners.
+    static func choose(_ reply: String, from entries: [SeenLedger.Entry?], field: ChoiceField)
         -> (line: String?, entries: [SeenLedger.Entry])?
     {
         guard let data = CardParser.jsonObject(in: reply),
