@@ -48,6 +48,8 @@ final class IdleMonitor {
     var onReturn: (@MainActor () -> Void)?
 
     private var pollTask: Task<Void, Never>?
+    /// Between the Mac's willSleep and its wake.
+    private var sleeping = false
     private var observers: [any NSObjectProtocol] = []
 
     /// The poll interval while the owner is present. Fifteen seconds only
@@ -117,6 +119,7 @@ final class IdleMonitor {
             ) { [weak self] _ in
                 Task { @MainActor [weak self] in
                     guard let self, self.pollTask != nil else { return }
+                    self.sleeping = false
                     self.ownerReturned()
                 }
             })
@@ -150,6 +153,7 @@ final class IdleMonitor {
 
     /// Exposed as the poll's test seam.
     func poll() {
+        guard !sleeping else { return }
         // A locked screen is idle regardless of what the HID clock says — and it
         // says zero right after the lock keystroke.
         let idle = isScreenLocked || secondsSinceLastEvent() >= Self.idleThreshold
@@ -172,6 +176,9 @@ final class IdleMonitor {
     /// consolidation, which stopped its GPU work that way — made a Breakpoint
     /// for nobody, stamped presence at the sleep, and cut the night short.
     func machineSleeps() {
+        // Until the Mac wakes, a poll in the seconds before sleep (the last
+        // input under the idle threshold) mustn't read the owner back.
+        sleeping = true
         guard !isIdle else { return }
         isIdle = true
         awaySince = Date().addingTimeInterval(-secondsSinceLastEvent())

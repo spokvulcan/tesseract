@@ -85,6 +85,16 @@ struct IdleMonitorTests {
         #expect(busy.isIdle)
         #expect(returns == 0)
         #expect(busy.awaySince.map { Date().timeIntervalSince($0) >= 5 } == true)
+        // A poll before the Mac is actually asleep doesn't read them back…
+        busy.poll()
+        #expect(busy.isIdle)
+        #expect(returns == 0)
+        // …until it wakes.
+        await confirmation("back on wake") { back in
+            busy.onReturn = { back() }
+            workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
+            for _ in 0..<10 where busy.isIdle { await Task.yield() }
+        }
         busy.stop()
     }
 

@@ -23,6 +23,10 @@ nonisolated extension DayEngine {
     static func breakpoint(
         awayFrom: Date, trigger: MomentTrigger, snapshot: DaySnapshot, state: inout DayState
     ) -> [DayEffect] {
+        // One at a time: while Jarvis judges one welcome back (a meeting
+        // ending a minute after the owner came back), a second would replace
+        // its card and leave its banners to no one.
+        guard state.running != .breakpoint else { return [] }
         let inputs = breakpointInputs(awayFrom: awayFrom, snapshot: snapshot, state: state)
         guard !inputs.isEmpty else {
             return [
@@ -99,17 +103,6 @@ nonisolated extension DayEngine {
     static func breakpointReplied(
         _ request: MomentRequest, reply: String, snapshot: DaySnapshot, state: inout DayState
     ) -> [DayEffect]? {
-        // A newer Breakpoint replaced this one's card while the model ran:
-        // it judges the same banners, so this reply marks nothing.
-        if let cardID = request.context.cardID,
-            let card = state.cards.first(where: { $0.id == cardID }), card.dismissed,
-            state.cards.contains(where: {
-                $0.kind == .breakpoint && !$0.dismissed && $0.createdAt >= card.createdAt
-                    && $0.id != cardID
-            })
-        {
-            return []
-        }
         // By the request's numbering: one gone from the ledger meanwhile
         // leaves a gap, not a shift onto the next banner.
         let numbered = request.context.notificationIDs.map { state.ledger.entry($0) }

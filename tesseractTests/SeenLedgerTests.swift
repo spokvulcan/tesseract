@@ -115,6 +115,14 @@ struct SeenLedgerTests {
                 ObservedNotification(
                     id: "roman", app: "Slack", title: "Acme", subtitle: "Roman",
                     body: "Lunch?", arrivedAt: Self.base)))
+        // Mail's subtitle is the subject: a colleague writing about Jira is
+        // not Jira.
+        let jira = TriageRule(sender: "Jira", action: .ignore, phrase: "never Jira")
+        #expect(
+            !jira.matches(
+                ObservedNotification(
+                    id: "mail", app: "Mail", title: "Roman", subtitle: "Jira migration — sign-off",
+                    body: "Note: today please", arrivedAt: Self.base)))
     }
 
     @Test func aBannerReadAgainAfterItWasDroppedIsNotNew() throws {

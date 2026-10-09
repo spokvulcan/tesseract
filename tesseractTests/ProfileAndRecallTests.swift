@@ -328,8 +328,18 @@ struct NightReflectionTests {
         #expect(late.state.carryOver == "Finish the spec first.")
         #expect(late.state.draft == ["Finish the spec"])
         #expect(late.state.taskProposals.map(\.title) == ["Send the request"])
+        // Its "tomorrow" is this morning's date, not the day after.
+        #expect(late.state.taskProposals.first?.due == Self.local(31, 0))
         // Tonight's reflection is still to come.
         #expect(late.state.nightReflectionAt == nil)
+        // Two days late (the Mac asleep since), it opens nothing.
+        let stale = MomentRequest(
+            kind: .nightReflection, trigger: .night, text: "x",
+            day: DayKey(rawValue: "2026-09-29"))
+        let dropped2 = DayEngine.decide(
+            .momentOutcome(stale, .reply(reply, measure)),
+            snapshot: Self.snapshot(at: Self.local(31, 4, 10)), state: state)
+        #expect(dropped2.state.carryOver == nil)
         // A wrap-up that lands late is dropped: its leftovers were that day's.
         var evening = Self.afterWrapUp()
         evening.eveningWrapUpAt = nil

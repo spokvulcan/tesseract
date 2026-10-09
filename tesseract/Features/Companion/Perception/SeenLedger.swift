@@ -211,14 +211,22 @@ nonisolated struct TriageRule: Sendable, Equatable, Hashable, Codable, Identifia
 }
 
 nonisolated extension TriageRule {
+    /// Chat apps whose banner title is the workspace or server, not who
+    /// wrote: the sender is the subtitle of a direct message, or the name
+    /// before a channel message's colon.
+    static let workspaceChatApps: Set<String> = ["slack", "discord"]
+
     /// Where a banner says who it is from: the title (Messages, Mail,
-    /// WhatsApp), a chat app's sender line (Slack's subtitle in a direct
-    /// message, where the title is the workspace), or the name before a
-    /// channel message's colon ("Anna: can you look?").
+    /// WhatsApp); in a workspace chat app, its sender line or the name before
+    /// a channel message's colon ("Anna: can you look?"). Never Mail's
+    /// subtitle, its subject.
     static func senderLines(of notification: ObservedNotification) -> [String] {
-        var lines = [notification.title, notification.subtitle]
-        if let colon = notification.body.firstIndex(of: ":") {
-            lines.append(String(notification.body[..<colon]))
+        var lines = [notification.title]
+        if workspaceChatApps.contains(notification.app.lowercased()) {
+            lines.append(notification.subtitle)
+            if let colon = notification.body.firstIndex(of: ":") {
+                lines.append(String(notification.body[..<colon]))
+            }
         }
         return lines.map { $0.lowercased() }
     }

@@ -359,7 +359,10 @@ nonisolated extension DayEngine {
                 .flatMap { card -> [WaitingItem] in
                     if case .triage(let old) = card.body { old.raise } else { [] }
                 }
-            incoming.raise = waiting.filter { !fresh.contains($0.id) } + incoming.raise
+                .filter {
+                    !fresh.contains($0.id) && stillWaits($0, snapshot: snapshot, state: state)
+                }
+            incoming.raise = waiting + incoming.raise
             body = .triage(incoming)
         }
         // A newer card of the same kind replaces the older one.
@@ -607,6 +610,24 @@ nonisolated extension DayEngine {
         }
     }
 
+    /// An item a card raised that still waits on the owner: a banner not
+    /// seen since (read in its own app), an agent still waiting (not answered
+    /// in the terminal), a reminder still open.
+    private static func stillWaits(_ item: WaitingItem, snapshot: DaySnapshot, state: DayState)
+        -> Bool
+    {
+        switch item.kind {
+        case .notification:
+            return state.ledger.entry(item.id).map { $0.seenAt == nil } ?? false
+        case .agent:
+            let id = String(item.id.dropFirst("agent:".count))
+            return state.agentsWaiting(now: snapshot.now).contains { $0.id == id }
+        case .reminder:
+            let id = String(item.id.dropFirst("reminder:".count))
+            return snapshot.agenda.open.contains { $0.id == id }
+        }
+    }
+
     /// A task's slot in today's plan, in place of any it had; one from now
     /// is started.
     private static func place(_ slot: Placement, snapshot: DaySnapshot, state: inout DayState) {
@@ -629,6 +650,7 @@ nonisolated extension DayEngine {
         var fields = traceFields(request, outcome: outcome, power: snapshot.power)
         fields["late"] = true
         guard request.kind == .nightReflection, case .reply(let text, _) = outcome,
+            request.day?.next(calendar: snapshot.calendar) == state.day,
             case .card(.reflection(let card)) = CardParser.nightReflection(
                 text, facts: snapshot.facts(state: state), open: snapshot.agenda.open)
         else {
@@ -637,7 +659,16 @@ nonisolated extension DayEngine {
         }
         state.carryOver = state.carryOver ?? card.carryOver
         if state.draft.isEmpty { state.draft = card.tomorrow }
-        if state.taskProposals.isEmpty { state.taskProposals = card.tasks }
+        // Its "tomorrow" is this day: read with this day's facts, a task's
+        // due date would be the day after.
+        let today = state.day.date(calendar: snapshot.calendar)
+        if state.taskProposals.isEmpty {
+            state.taskProposals = card.tasks.map { task in
+                var task = task
+                if task.due != nil { task.due = today }
+                return task
+            }
+        }
         var effects: [DayEffect] = [.trace(.momentFinished, fields)]
         if !card.proposals.isEmpty { effects.append(.proposeFacts(card.proposals)) }
         return effects
