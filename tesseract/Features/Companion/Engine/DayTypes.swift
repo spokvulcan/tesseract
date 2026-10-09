@@ -84,6 +84,10 @@ nonisolated enum CardAction: Sendable, Equatable {
     /// The owner took a card in on the panel (Looks Good, Good Night): it
     /// leaves the panel and stays in Today.
     case keep(cardID: String)
+    /// The owner closed the panel on a card: taken in, as with Looks Good —
+    /// it stays in Today with whatever it holds still to settle (an
+    /// evening's leftovers, someone waiting), never back on the panel.
+    case close(cardID: String)
     /// The owner added a proposed task to Reminders, or let it go.
     case taskProposal(id: String, add: Bool)
 }

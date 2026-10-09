@@ -642,11 +642,12 @@ nonisolated extension DayEngine {
                 ? [.mutateAgenda(.add(title: proposal.title, due: proposal.due)), decided]
                 : [decided]
 
-        case .keep(let cardID):
+        case .keep(let cardID), .close(let cardID):
             // Taken in: off the panel (the panel closes itself), still in Today.
             guard let index = state.cards.firstIndex(where: { $0.id == cardID }) else { return [] }
             state.cards[index].kept = true
-            return [reaction("kept", card: state.cards[index], snapshot: snapshot)]
+            let said = if case .close = action { "closed" } else { "kept" }
+            return [reaction(said, card: state.cards[index], snapshot: snapshot)]
         }
     }
 

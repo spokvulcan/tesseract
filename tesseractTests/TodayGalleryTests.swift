@@ -6,7 +6,8 @@
 //  Agenda and a saved day state, ADR-0073): the morning after the plan, the
 //  same day at 14:20 deep in the must-do's slot (started: its time left
 //  drains on the Now Card; not started: one click from starting), a busy
-//  midday with two slid steps and things waiting, an evening
+//  midday with two slid steps and things waiting, an evening whose wrap-up
+//  was closed on the panel (its leftovers wait in Today), an evening
 //  with the day done, and the same night past midnight, still that day until
 //  04:00. Each renders at a wide, a regular and a phone width, so every
 //  layout's body runs. With TODAY_GALLERY_DIR set (TEST_RUNNER_TODAY_GALLERY_DIR
@@ -85,6 +86,7 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
     case focus
     case unstarted
     case midday
+    case wrapUpClosed
     case evening
     case night
 
@@ -100,6 +102,7 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
         case .morning: Self.at(8, 20)
         case .focus, .unstarted: Self.at(14, 20)
         case .midday: Self.at(14, 10)
+        case .wrapUpClosed: Self.at(21, 10)
         case .evening: Self.at(22, 1)
         case .night: Self.at(0, 40, day: 5)
         }
@@ -179,8 +182,14 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
                 Self.reminder("izaro", "Izaro voice lines (PoE)", list: "inbox"),
                 Self.reminder("chain", "Order a new bike chain", list: "inbox"),
             ]
-        case .evening, .night:
-            return [
+        case .evening, .night, .wrapUpClosed:
+            let leftovers =
+                self == .wrapUpClosed
+                ? [
+                    Self.reminder("adr", "Write the cache ADR", list: "work", due: today),
+                    Self.reminder("rent", "Pay rent", list: "life", due: today),
+                ] : []
+            return leftovers + [
                 Self.reminder(
                     "duolingo", "Пройти урок у Duolingo 💚", list: "duolingo",
                     due: Self.at(21, 30), timed: true, doneAt: Self.at(21, 44)),
@@ -235,7 +244,7 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
                     "c", "Climbing", Self.at(18, 30), Self.at(20), calendar: "personal",
                     location: "Boulderhalle"),
             ] + tomorrow
-        case .evening, .night:
+        case .evening, .night, .wrapUpClosed:
             return tomorrow
         }
     }
@@ -317,11 +326,34 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
                                     app: "Mail", lines: ["Your order shipped", "Weekly digest"])
                             ]))),
             ]
-        case .evening, .night:
+        case .evening, .night, .wrapUpClosed:
             state.morningPlanAt = Self.at(9)
             state.eveningWrapUpAt = Self.at(21)
             state.weekFocus = "Ship the Companion"
             state.weekFocusSetAt = Self.at(21)
+            if self == .wrapUpClosed {
+                // Closed on the panel at 21:01: taken in, its leftovers wait here.
+                state.cards = [
+                    DayCard(
+                        id: "eveningWrapUp-0", kind: .eveningWrapUp, createdAt: Self.at(21),
+                        isFallback: false,
+                        body: .eveningWrapUp(
+                            EveningWrapUpCard(
+                                line: "The Companion shipped and the streak held.",
+                                done: ["Implement the Companion", "Ножнички для нігтів"],
+                                leftovers: [
+                                    Leftover(
+                                        reminderID: "adr", title: "Write the cache ADR",
+                                        suggestion: .tomorrow),
+                                    Leftover(
+                                        reminderID: "rent", title: "Pay rent",
+                                        suggestion: .later),
+                                ],
+                                tomorrowFirst: "09:00 Work")),
+                        kept: true)
+                ]
+                return state
+            }
             state.taskProposals = [
                 TaskProposal(
                     id: "task-1", title: "Send the case worker the bus receipts",

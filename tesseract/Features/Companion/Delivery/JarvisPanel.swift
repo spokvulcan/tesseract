@@ -241,7 +241,8 @@ final class JarvisPanelController {
                 model: model, thread: thread, agenda: agenda, liveCard: liveCard,
                 close: { [weak self] in
                     guard let self else { return }
-                    if let card = self.model.card { self.onAction(.dismiss(cardID: card.id)) }
+                    // Off the panel, not thrown away: what it holds stays in Today.
+                    if let card = self.model.card { self.onAction(.close(cardID: card.id)) }
                     if let cue = self.model.cue {
                         self.onAction(.step(reminderID: cue.reminderID, .dismiss))
                     }
@@ -377,7 +378,7 @@ struct JarvisPanelView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                CircleButton(symbol: "xmark", help: "Dismiss", action: close)
+                CircleButton(symbol: "xmark", help: "Close (it stays in Today)", action: close)
                 Spacer()
                 Text("Jarvis").fontWeight(.semibold)
                 Spacer()

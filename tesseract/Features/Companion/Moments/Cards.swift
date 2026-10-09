@@ -23,8 +23,9 @@ nonisolated struct DayCard: Sendable, Equatable, Codable, Identifiable {
     /// Built by code and shown at once; Jarvis is still thinking it through,
     /// and his version will replace it in place.
     var isRefining: Bool = false
-    /// The owner took it in on the panel (Looks Good, Good Night): it stays in
-    /// Today, never takes the panel again, and its items don't wait on them.
+    /// The owner took it in on the panel (Looks Good, Good Night, or closing
+    /// it): it stays in Today, never takes the panel again, and its items
+    /// don't wait on them.
     var kept: Bool = false
 
     init(

@@ -329,9 +329,18 @@ the owner must remember to read does not. What changed:
   doing, not Looks Good and then a cue. A plan that lands while the owner is
   in a step they started keeps that step's slot. Looks Good and
   Good Night take the card in (`card.reaction` "kept"): it leaves the panel
-  and stays in Today, unlike the close button; a kept card never takes the
+  and stays in Today; a kept card never takes the
   panel again (Jarvis's version of a kept plan updates in Today) and its
-  items no longer light the glyph. A cue a card takes the panel from is
+  items no longer light the glyph. The close button first dismissed the
+  card instead, and the owner closes rather than says Looks Good: the four
+  Evening Wrap-ups that reached the panel in a week were closed within
+  twelve seconds to five and a half minutes, which took their leftovers off
+  Today too, while the two that reached only Today had leftovers settled
+  there 45 and 53 minutes later. Closing
+  now takes a card in as Looks Good does (`card.reaction` "closed"): off
+  the panel, never back on it, with what it holds still in Today — this
+  ADR's own rule that nothing unanswered is re-summoned and it stays in
+  Today. Today's own close button still dismisses. A cue a card takes the panel from is
   un-cued by the engine, which knows the cue on the panel, and comes back by
   the cue's own rules once the panel is free (a start while its slot still
   runs, an end that day). The panel

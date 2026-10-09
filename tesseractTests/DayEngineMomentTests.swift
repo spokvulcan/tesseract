@@ -685,6 +685,53 @@ struct KeptCardWaitingTests {
     }
 }
 
+/// Closing the panel (its ×) takes a card in, as Looks Good does: off the
+/// panel, still in Today with what it holds to settle. It used to dismiss
+/// the card: an evening's leftovers, closed in seconds as the panel came
+/// up, were gone from Today too.
+struct PanelCloseTests {
+
+    @Test func aWrapUpClosedOnThePanelKeepsItsLeftoversInToday() throws {
+        var state = DayState(day: DayKey(rawValue: "2026-09-30"))
+        state.syncedNudgeIDs = []
+        state.cards = [
+            DayCard(
+                id: "w", kind: .eveningWrapUp, createdAt: DayEngineMomentTests.local(30, 21),
+                isFallback: false,
+                body: .eveningWrapUp(
+                    EveningWrapUpCard(
+                        line: "Done.", done: [],
+                        leftovers: [
+                            Leftover(reminderID: "R1", title: "Spec", suggestion: .tomorrow)
+                        ],
+                        tomorrowFirst: nil)))
+        ]
+        let closed = DayEngine.decide(
+            .cardAction(.close(cardID: "w")),
+            snapshot: DayEngineMomentTests.snapshot(at: DayEngineMomentTests.local(30, 21, 1)),
+            state: state)
+        let card = try #require(closed.state.openCards.first)
+        #expect(card.id == "w")
+        #expect(card.kept)
+        #expect(closed.effects.contains(.setWaiting(0)))
+        #expect(!closed.effects.contains(.retractCard(cardID: "w")))
+        #expect(
+            closed.effects.contains {
+                if case .trace(.cardReaction, let fields) = $0 {
+                    fields["action"] == .string("closed")
+                } else {
+                    false
+                }
+            })
+        // A leftover settled later, from Today.
+        let settled = DayEngine.decide(
+            .cardAction(.leftover(cardID: "w", reminderID: "R1", .tomorrow)),
+            snapshot: DayEngineMomentTests.snapshot(at: DayEngineMomentTests.local(30, 21, 50)),
+            state: closed.state)
+        #expect(settled.effects.contains(.mutateAgenda(.dueTomorrow(reminderID: "R1"))))
+    }
+}
+
 struct MustDoDaysTests {
 
     @Test func eachDaysMustDoIsKeptForTheWeek() {

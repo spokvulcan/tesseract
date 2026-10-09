@@ -270,6 +270,23 @@ struct DayEngineMorningPlanTests {
         #expect(panelCards(refined.effects).isEmpty)
     }
 
+    @Test func aPlanClosedOnThePanelWhileJarvisThinksUpdatesInTodayOnly() throws {
+        let sitDown = DayEngine.decide(
+            .presenceReturned(awayFrom: Day.local(29, 23)),
+            snapshot: Day.snapshot(at: Day.local(30, 9, 3)), state: Day.state())
+        let request = try #require(Day.moments(sitDown.effects).first)
+        let card = try #require(sitDown.state.cards.last)
+        let closed = DayEngine.decide(
+            .cardAction(.close(cardID: card.id)),
+            snapshot: Day.snapshot(at: Day.local(30, 9, 4)), state: sitDown.state)
+        #expect(DayCard.word(in: closed.state.cards, at: Day.local(30, 9, 4))?.id == card.id)
+        let refined = DayEngine.decide(
+            .momentOutcome(request, .reply(#"{"line": "A calm start."}"#, measure)),
+            snapshot: Day.snapshot(at: Day.local(30, 9, 5)), state: closed.state)
+        #expect(refined.state.cards.last?.line == "A calm start.")
+        #expect(panelCards(refined.effects).isEmpty)
+    }
+
     @Test func aKeptPlanStaysInTodayWhenJarvisCantThinkItThrough() throws {
         let sitDown = DayEngine.decide(
             .presenceReturned(awayFrom: Day.local(29, 23)),
