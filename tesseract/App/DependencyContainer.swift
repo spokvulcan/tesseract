@@ -263,7 +263,12 @@ final class DependencyContainer: ObservableObject {
         frontmost: frontmostApp, power: powerMonitor,
         delivery: CompanionDelivery(
             showPanel: { [weak self] card in self?.jarvisPanel.show(card) },
-            showStep: { [weak self] cue in self?.jarvisPanel.show(cue) },
+            showStep: { [weak self] cue in
+                self?.jarvisPanel.show(cue)
+                // A step's start or end is a moment to notice: a soft chime,
+                // like a timer, with the app's sounds on.
+                if self?.settingsManager.playSounds == true { NSSound(named: "Glass")?.play() }
+            },
             retractPanel: { [weak self] cardID in self?.jarvisPanel.retract(cardID: cardID) },
             closePanel: { [weak self] in self?.jarvisPanel.closeAll() },
             isPanelUp: { [weak self] in self?.jarvisPanel.isShowing ?? false },

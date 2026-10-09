@@ -1860,8 +1860,9 @@ left beside the glyph ("25m"), so the time can be seen from any app. Built by co
 end once, within ten minutes; never while away, in quiet hours (but not the
 morning's end of them once the owner sat down to start the day), a call, a
 game or a meeting, nor over a panel that is up; a slot whose reminder rings
-at the same minute is left to Reminders. Closing it changes nothing; a toggle
-in Settings (Your Day) turns Step Cues off.
+at the same minute is left to Reminders. It chimes softly as it appears, with
+the app's sounds on. Closing it changes nothing; a toggle in Settings (Your
+Day) turns Step Cues off.
 _Avoid_: reminder (Reminders' own alarm), nudge (an event's OS notification).
 
 **Day Engine**:
