@@ -254,6 +254,45 @@ struct DayEngineMorningPlanTests {
             })
     }
 
+    @Test func aKeptPlanThatJarvisRefinesStaysInToday() throws {
+        let sitDown = DayEngine.decide(
+            .presenceReturned(awayFrom: Day.local(29, 23)),
+            snapshot: Day.snapshot(at: Day.local(30, 9, 3)), state: Day.state())
+        let request = try #require(Day.moments(sitDown.effects).first)
+        let card = try #require(sitDown.state.cards.last)
+        let kept = DayEngine.decide(
+            .cardAction(.keep(cardID: card.id)),
+            snapshot: Day.snapshot(at: Day.local(30, 9, 4)), state: sitDown.state)
+        let refined = DayEngine.decide(
+            .momentOutcome(request, .reply(#"{"line": "A calm start."}"#, measure)),
+            snapshot: Day.snapshot(at: Day.local(30, 9, 5)), state: kept.state)
+        #expect(refined.state.cards.last?.line == "A calm start.")
+        #expect(panelCards(refined.effects).isEmpty)
+    }
+
+    @Test func aReplanWithNoDepartureWithdrawsTheOldOne() throws {
+        let sitDown = DayEngine.decide(
+            .presenceReturned(awayFrom: Day.local(29, 23)),
+            snapshot: Day.snapshot(at: Day.local(30, 7, 40)), state: Day.state())
+        let request = try #require(Day.moments(sitDown.effects).first)
+        let planned = DayEngine.decide(
+            .momentOutcome(
+                request,
+                .reply(#"{"line": "Ok.", "leave": [{"event": "e1", "at": "09:00"}]}"#, measure)),
+            snapshot: Day.snapshot(at: Day.local(30, 7, 42)), state: sitDown.state)
+        #expect(!planned.state.departures.isEmpty)
+        // "It's online today": Jarvis plans again, with nothing to leave for.
+        let again = DayEngine.decide(
+            .cardAction(.planNow), snapshot: Day.snapshot(at: Day.local(30, 8)),
+            state: planned.state)
+        #expect(again.state.departures.map(\.eventID) == ["E1"])
+        let replan = try #require(Day.moments(again.effects).first)
+        let replanned = DayEngine.decide(
+            .momentOutcome(replan, .reply(#"{"line": "All at the desk today."}"#, measure)),
+            snapshot: Day.snapshot(at: Day.local(30, 8, 1)), state: again.state)
+        #expect(replanned.state.departures.isEmpty)
+    }
+
     @Test func otherMomentsCutShortWaitForTheirOwnTriggers() {
         var state = Day.state()
         state.morningPlanAt = Day.local(30, 8)

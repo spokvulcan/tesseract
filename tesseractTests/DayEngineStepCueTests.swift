@@ -176,6 +176,37 @@ struct DayEngineStepCueTests {
         #expect(Self.traced(.cuePresented, in: free.effects)?["late"] == .int(180))
     }
 
+    @Test func aCueACardTakesThePanelFromComesBackOnceThePanelIsFree() throws {
+        let cued = Self.cued()
+        #expect(cued.cueOnPanel != nil)
+        // At 11:12 a coding agent waits: a Breakpoint card takes the panel.
+        var waiting = cued
+        waiting.agents = [
+            AgentSignal(
+                id: "s1", kind: .waiting, agent: "Claude Code", project: "tesseract",
+                directory: "/tmp/tesseract", message: "Needs approval", at: Self.local(11, 11))
+        ]
+        let back = DayEngine.decide(
+            .presenceReturned(awayFrom: Self.local(10, 55)),
+            snapshot: Self.snapshot(at: Self.local(11, 12), panelUp: true), state: waiting)
+        #expect(
+            back.effects.contains { if case .presentCard(_, .panel) = $0 { true } else { false } })
+        #expect(back.state.cueOnPanel == nil)
+        // Up until 11:25: nothing over it; then the letter comes back.
+        #expect(
+            Self.cues(Self.tick(back.state, at: Self.local(11, 20), panelUp: true).effects).isEmpty)
+        let again = try #require(
+            Self.cues(Self.tick(back.state, at: Self.local(11, 25)).effects).first)
+        #expect(again.reminderID == "letter")
+        // Done meanwhile: it doesn't come back.
+        let done = DayEngine.decide(
+            .tick,
+            snapshot: Self.snapshot(
+                at: Self.local(11, 25), open: [Self.deck, Self.dentist], done: [Self.letter]),
+            state: back.state)
+        #expect(Self.cues(done.effects).isEmpty)
+    }
+
     @Test func aCardThatTakesThePanelOnTheSameTickGoesFirst() {
         // The standup ends at 11:10 with a coding agent waiting: its
         // Breakpoint card takes the panel; the letter waits a tick.
@@ -423,6 +454,12 @@ struct DayEngineStepCueTests {
             .tick, snapshot: Self.snapshot(at: Self.local(6, 30), quiet: (23 * 60, 8 * 60)),
             state: state)
         #expect(try #require(Self.cues(up.effects).first).reminderID == "letter")
+        // A daytime quiet window holds, sit-down or not.
+        state.plan = [Placement(reminderID: "letter", start: Self.local(13, 30), minutes: 20)]
+        let daytime = DayEngine.decide(
+            .tick, snapshot: Self.snapshot(at: Self.local(13, 30), quiet: (13 * 60, 15 * 60)),
+            state: state)
+        #expect(Self.cues(daytime.effects).isEmpty)
         // The evening's quiet hours still hold.
         state.plan = [Placement(reminderID: "letter", start: Self.local(23, 30), minutes: 20)]
         let night = DayEngine.decide(

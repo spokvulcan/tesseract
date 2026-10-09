@@ -272,5 +272,8 @@ struct NightReflectionTests {
         #expect(decided.state.draftForNextDay == ["Finish the spec"])
         #expect(morning.state.draft == ["Finish the spec"])
         #expect(morning.state.draftForNextDay.isEmpty)
+        // A day skipped: last night's draft is no longer last night's.
+        let skipped = decided.state.rolledOver(to: DayKey(rawValue: "2026-10-02"))
+        #expect(skipped.draft.isEmpty)
     }
 }

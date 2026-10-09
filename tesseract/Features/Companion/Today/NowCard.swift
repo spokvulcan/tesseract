@@ -54,8 +54,6 @@ nonisolated enum NowCardBuilder {
         var wrappedUp: Bool
         var eveningMinutes: Int
         var inboxCount: Int = 0
-        /// When to leave for the day's events in person, from the plan.
-        var departures: [Departure] = []
     }
 
     static let maxActions = 3
@@ -107,6 +105,13 @@ nonisolated enum NowCardBuilder {
             let minutes = max(1, Int((end.timeIntervalSince(now) / 60).rounded(.up)))
             return "\(MomentPrompts.minutesText(minutes)) left, until \(clock(end))"
         }
+        // When to leave for an event in person, if the plan set a time.
+        func departure(for row: TimelineRow) -> Departure? {
+            guard case .event(let event) = row.kind else { return nil }
+            return facts.departures.first {
+                $0.eventID == event.id && $0.eventStart == event.start
+            }
+        }
 
         // In a meeting or a block.
         for row in timeline.rows {
@@ -121,6 +126,14 @@ nonisolated enum NowCardBuilder {
 
         let timed = timeline.rows.compactMap { row -> TimelineTask? in
             if case .task(let task) = row.kind, !task.isDone { task } else { nil }
+        }
+
+        // Time to leave for an event in person: that is the step now, over
+        // any task still running.
+        if let next = ahead.first(where: { departure(for: $0).map { $0.at <= now } ?? false }) {
+            return NowCard(
+                headline: title(of: next),
+                detail: "Time to leave. It starts at \(clock(next.start)).", actions: [])
         }
 
         // A task whose slot is now.
@@ -139,21 +152,6 @@ nonisolated enum NowCardBuilder {
         // The day's one thing that mattered most is done: the rest is a
         // bonus, and the card says so.
         let mustDoDone = timeline.mustDo?.isDone == true
-
-        // When to leave for an event in person, if the plan set a time.
-        func departure(for row: TimelineRow) -> Departure? {
-            guard case .event(let event) = row.kind else { return nil }
-            return context.departures.first {
-                $0.eventID == event.id && $0.eventStart == event.start
-            }
-        }
-
-        // Time to leave for an event in person: that is the step now.
-        if let next = ahead.first, let leave = departure(for: next), leave.at <= now {
-            return NowCard(
-                headline: title(of: next),
-                detail: "Time to leave. It starts at \(clock(next.start)).", actions: [])
-        }
 
         // The next step. A task can start early; an event in person says
         // when to leave for it.

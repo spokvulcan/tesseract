@@ -80,11 +80,26 @@ nonisolated extension DayEngine {
             if task.dueHasTime, let due = task.due, abs(due.timeIntervalSince(slot.start)) < 60 {
                 continue
             }
+            state.cueOnPanel = StepCue.key(slot)
             return present(
                 cue(task, slot: slot, phase: .start, facts: facts, state: state),
                 late: now.timeIntervalSince(slot.start))
         }
         return nil
+    }
+
+    /// A card took the panel from the cue on it: the cue is held, to come
+    /// back by the rules above once the panel is free again.
+    static func holdCueUnderCard(
+        _ effects: [DayEffect], snapshot: DaySnapshot, state: inout DayState
+    ) {
+        guard let key = state.cueOnPanel, snapshot.panelUp,
+            effects.contains(where: { if case .presentCard(_, .panel) = $0 { true } else { false } }
+            )
+        else { return }
+        state.cueOnPanel = nil
+        state.cuedSteps[key] = nil
+        state.heldSteps.insert(key)
     }
 
     /// The first slot the owner started whose time is up, its task still open.
@@ -95,12 +110,14 @@ nonisolated extension DayEngine {
         let facts = snapshot.facts(state: state)
         let ended = state.plan.filter { slot in
             state.startedSteps.contains(StepCue.key(slot)) && end(of: slot) <= now
-                && now.timeIntervalSince(end(of: slot)) < stepCueWindow
+                && (now.timeIntervalSince(end(of: slot)) < stepCueWindow
+                    || state.heldSteps.contains(StepCue.endKey(slot)))
                 && state.cuedSteps[StepCue.endKey(slot)] == nil
         }
         for slot in ended.sorted(by: { $0.start < $1.start }) {
             guard let task = facts.task(slot.reminderID) else { continue }
             state.cuedSteps[StepCue.endKey(slot)] = now
+            state.cueOnPanel = StepCue.endKey(slot)
             return present(
                 cue(task, slot: slot, phase: .end, facts: facts, state: state),
                 late: now.timeIntervalSince(end(of: slot)))
@@ -196,6 +213,7 @@ nonisolated extension DayEngine {
         let minute =
             snapshot.calendar.dateInterval(of: .minute, for: snapshot.now)?.start ?? snapshot.now
         let cuedAt = state.cuedSteps.filter { $0.key.hasPrefix("\(reminderID)@") }.values.max()
+        if state.cueOnPanel?.hasPrefix("\(reminderID)@") == true { state.cueOnPanel = nil }
         var effects: [DayEffect] = []
         switch choice {
         case .start:

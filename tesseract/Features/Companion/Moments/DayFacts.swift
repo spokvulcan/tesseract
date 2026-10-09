@@ -36,6 +36,8 @@ nonisolated struct DayFacts: Sendable, Equatable {
     var weekFocus: String?
     /// The last days' must-dos, today's included: done or not, by day.
     var mustDoDays: [String: Bool] = [:]
+    /// When to leave for the day's events in person: the way there is busy.
+    var departures: [Departure] = []
 
     init(
         now: Date, calendar: Calendar = .current, events: [AgendaEvent] = [],
@@ -63,7 +65,7 @@ nonisolated struct DayFacts: Sendable, Equatable {
     init(
         snapshot: AgendaSnapshot, areas: [Area], inboxListID: String?, now: Date,
         calendar: Calendar = .current, mustDoID: String? = nil, plan: [Placement] = [],
-        weekFocus: String? = nil
+        weekFocus: String? = nil, departures: [Departure] = []
     ) {
         let startOfToday = Self.startOfDay(for: now, calendar: calendar)
         let endOfToday = calendar.date(byAdding: .day, value: 1, to: startOfToday) ?? now
@@ -79,6 +81,7 @@ nonisolated struct DayFacts: Sendable, Equatable {
             doneToday: snapshot.doneToday, areas: areas, inboxListID: inboxListID,
             mustDoID: mustDoID, plan: plan, doneThisWeek: snapshot.doneThisWeek,
             weekFocus: weekFocus)
+        self.departures = departures
     }
 
     /// The owner's day is the week's last (the day before the calendar's

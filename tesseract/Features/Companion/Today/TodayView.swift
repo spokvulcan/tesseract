@@ -161,7 +161,8 @@ private struct TodayDayPage: View {
         let state = runtime.state
         let facts = DayFacts(
             snapshot: agenda.snapshot, areas: agenda.areas, inboxListID: agenda.inbox?.id,
-            now: now, mustDoID: state.mustDoID, plan: state.plan, weekFocus: state.weekFocus)
+            now: now, mustDoID: state.mustDoID, plan: state.plan, weekFocus: state.weekFocus,
+            departures: state.departures)
         let timeline = TimelineBuilder.build(facts: facts)
         let isEvening = NowCardBuilder.isEvening(
             now, eveningMinutes: settings.companionEveningMinutes, calendar: facts.calendar)
@@ -171,8 +172,7 @@ private struct TodayDayPage: View {
                 companionOn: settings.companionHeartbeatEnabled,
                 planned: state.morningPlanAt != nil, wrappedUp: state.eveningWrapUpAt != nil,
                 eveningMinutes: settings.companionEveningMinutes,
-                inboxCount: TodaySideColumn.inbox(agenda: agenda, plan: state.plan).count,
-                departures: state.departures))
+                inboxCount: TodaySideColumn.inbox(agenda: agenda, plan: state.plan).count))
         // The Inbox's offers keep clear of the card's own.
         let offerFacts = card.reserving(facts)
         let motion: Animation? = reduceMotion ? nil : .smooth(duration: 0.25)

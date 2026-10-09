@@ -352,6 +352,39 @@ struct WeekFocusTests {
     }
 }
 
+struct KeptCardWaitingTests {
+
+    @Test func aKeptWrapUpWaitsOnNobodyAndANewDayClearsTheGlyph() {
+        var state = DayState(day: DayKey(rawValue: "2026-09-30"))
+        state.syncedNudgeIDs = []
+        state.cards = [
+            DayCard(
+                id: "w", kind: .eveningWrapUp, createdAt: DayEngineMomentTests.local(30, 21),
+                isFallback: false,
+                body: .eveningWrapUp(
+                    EveningWrapUpCard(
+                        line: "Done.", done: [],
+                        leftovers: [
+                            Leftover(reminderID: "R1", title: "Spec", suggestion: .tomorrow)
+                        ],
+                        tomorrowFirst: nil)))
+        ]
+        #expect(DayEngine.waitingCount(state, now: DayEngineMomentTests.local(30, 21)) == 1)
+        let kept = DayEngine.decide(
+            .cardAction(.keep(cardID: "w")),
+            snapshot: DayEngineMomentTests.snapshot(at: DayEngineMomentTests.local(30, 22)),
+            state: state)
+        #expect(kept.effects.contains(.setWaiting(0)))
+        // Not kept: the 04:00 rollover clears the card, and the glyph with it.
+        let morning = DayEngine.decide(
+            .tick,
+            snapshot: DayEngineMomentTests.snapshot(
+                at: DayEngineMomentTests.local(31, 9), present: false),
+            state: state)
+        #expect(morning.effects.contains(.setWaiting(0)))
+    }
+}
+
 struct MustDoDaysTests {
 
     @Test func eachDaysMustDoIsKeptForTheWeek() {

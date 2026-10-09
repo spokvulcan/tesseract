@@ -23,10 +23,13 @@ nonisolated struct DayCard: Sendable, Equatable, Codable, Identifiable {
     /// Built by code and shown at once; Jarvis is still thinking it through,
     /// and his version will replace it in place.
     var isRefining: Bool = false
+    /// The owner took it in on the panel (Looks Good, Good Night): it stays in
+    /// Today, never takes the panel again, and its items don't wait on them.
+    var kept: Bool = false
 
     init(
         id: String, kind: MomentKind, createdAt: Date, isFallback: Bool, body: Body,
-        dismissed: Bool = false, isRefining: Bool = false
+        dismissed: Bool = false, isRefining: Bool = false, kept: Bool = false
     ) {
         self.id = id
         self.kind = kind
@@ -35,10 +38,11 @@ nonisolated struct DayCard: Sendable, Equatable, Codable, Identifiable {
         self.body = body
         self.dismissed = dismissed
         self.isRefining = isRefining
+        self.kept = kept
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, kind, createdAt, isFallback, body, dismissed, isRefining
+        case id, kind, createdAt, isFallback, body, dismissed, isRefining, kept
     }
 
     /// A card saved by an earlier build (no `isRefining`) still loads.
@@ -51,6 +55,7 @@ nonisolated struct DayCard: Sendable, Equatable, Codable, Identifiable {
         body = try c.decode(Body.self, forKey: .body)
         dismissed = try c.decodeIfPresent(Bool.self, forKey: .dismissed) ?? false
         isRefining = try c.decodeIfPresent(Bool.self, forKey: .isRefining) ?? false
+        kept = try c.decodeIfPresent(Bool.self, forKey: .kept) ?? false
     }
 
     enum Body: Sendable, Equatable, Codable {

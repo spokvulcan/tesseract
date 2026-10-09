@@ -256,6 +256,7 @@ nonisolated struct DaySnapshot: Sendable, Equatable {
             calendar: calendar, mustDoID: state.mustDoID, plan: state.plan,
             weekFocus: state.weekFocus)
         facts.mustDoDays = state.mustDoDays
+        facts.departures = state.departures
         if state.mustDoID != nil {
             facts.mustDoDays[state.day.rawValue] = state.mustDoDoneAt != nil
         }
@@ -351,9 +352,13 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     /// Slots the owner started (Start on a cue, Start now on Today), by
     /// `StepCue.key`: their end checks in.
     var startedSteps: Set<String> = []
-    /// Slots whose start came while a started step ran, by `StepCue.key`:
-    /// they are cued once the owner is free, while they still run.
+    /// Cues held back, by `StepCue.key` (a start whose time came while a
+    /// started step ran) or `StepCue.endKey` (a cue a card took the panel
+    /// from): they come once the owner and the panel are free, while their
+    /// slot still runs.
     var heldSteps: Set<String> = []
+    /// The cue on the panel now, by its key, until the owner answers it.
+    var cueOnPanel: String?
     /// When the owner sat down to start this day (the first sit-down after
     /// the night): for them, the morning's end of quiet hours is over.
     var satDownAt: Date?
@@ -384,7 +389,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         case agentSpokenAt, lastTickAt, lastTriageAt, whereYouWere, deferred, firedNudgeIDs
         case cuedSteps, startedSteps, interrupted, morningPlanResumed, windDownAt
         case draft, draftForNextDay, departures, heldSteps, satDownAt, weekFocus
-        case weekFocusSetAt, mustDoDoneAt, mustDoDays
+        case weekFocusSetAt, mustDoDoneAt, mustDoDays, cueOnPanel
     }
 
     /// Every field but the day is optional on disk, so a state saved by an
@@ -426,6 +431,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         weekFocusSetAt = try? c.decodeIfPresent(Date.self, forKey: .weekFocusSetAt)
         mustDoDoneAt = try? c.decodeIfPresent(Date.self, forKey: .mustDoDoneAt)
         mustDoDays = (try? c.decodeIfPresent([String: Bool].self, forKey: .mustDoDays)) ?? [:]
+        cueOnPanel = try? c.decodeIfPresent(String.self, forKey: .cueOnPanel)
     }
 
     /// The day as a relaunch finds it: the moment in flight never finished,
@@ -445,7 +451,8 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         var next = DayState(day: day, syncedNudgeIDs: syncedNudgeIDs)
         next.lastPresentAt = lastPresentAt
         next.carryOver = carryOverForNextDay
-        next.draft = draftForNextDay
+        // "Last night's draft" only for the morning after it.
+        if self.day.next() == day { next.draft = draftForNextDay }
         // Quiet hours that begin just before 04:00 are still the same night.
         next.windDownAt = windDownAt
         // Whether this day's must-do got done, kept a week for the look-back.

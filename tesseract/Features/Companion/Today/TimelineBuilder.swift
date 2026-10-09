@@ -151,11 +151,17 @@ nonisolated enum TimelineBuilder {
             calendar.date(bySettingHour: dayEndHour, minute: 0, second: 0, of: startOfToday)
                 ?? endOfToday,
             events.map(\.end).max() ?? .distantPast)
-        let busy = rows.compactMap { row -> DateInterval? in
-            guard let end = row.end, end > row.start else { return nil }
-            if case .task(let item) = row.kind, item.isDone { return nil }
-            return DateInterval(start: row.start, end: end)
-        }
+        let busy =
+            rows.compactMap { row -> DateInterval? in
+                guard let end = row.end, end > row.start else { return nil }
+                if case .task(let item) = row.kind, item.isDone { return nil }
+                return DateInterval(start: row.start, end: end)
+            }
+            // The way to an event in person is not free time.
+            + facts.departures.compactMap { departure in
+                departure.at < departure.eventStart
+                    ? DateInterval(start: departure.at, end: departure.eventStart) : nil
+            }
         rows += freeGaps(from: now, to: dayEnd, busy: busy).map { gap in
             TimelineRow(
                 id: "free-\(Int(gap.start.timeIntervalSince1970))", start: gap.start, end: gap.end,

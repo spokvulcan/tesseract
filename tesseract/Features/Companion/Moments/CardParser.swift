@@ -16,6 +16,32 @@ nonisolated enum CardParse: Sendable, Equatable {
     case invalid(String)
 }
 
+/// An array whose broken entries are skipped, and anything that is not an
+/// array is empty: one stray entry never costs the whole card.
+nonisolated struct Lossy<Element: Decodable>: Decodable {
+    var values: [Element]
+
+    private struct Skip: Decodable {
+        init(from decoder: Decoder) throws {}
+    }
+
+    init(from decoder: Decoder) throws {
+        guard var container = try? decoder.unkeyedContainer() else {
+            values = []
+            return
+        }
+        var values: [Element] = []
+        while !container.isAtEnd {
+            if let value = try? container.decode(Element.self) {
+                values.append(value)
+            } else {
+                _ = try? container.decode(Skip.self)
+            }
+        }
+        self.values = values
+    }
+}
+
 nonisolated enum CardParser {
 
     /// The JSON object inside a reply: code fences and prose around it are
@@ -47,9 +73,9 @@ nonisolated enum CardParser {
         }
         let line: String?
         let mustDo: String?
-        let plan: [Entry]?
-        let suggestions: [String]?
-        let leave: [Leave]?
+        let plan: Lossy<Entry>?
+        let suggestions: Lossy<String>?
+        let leave: Lossy<Leave>?
 
         enum CodingKeys: String, CodingKey {
             case line, plan, suggestions, leave
@@ -73,7 +99,7 @@ nonisolated enum CardParser {
         let mustDo = decoded.mustDo.flatMap { facts.task($0) != nil ? $0 : nil }
         let busy = facts.eventsToday.map { DateInterval(start: $0.start, end: $0.end) }
         var seen = Set<String>()
-        let placements: [Placement] = (decoded.plan ?? []).compactMap { entry in
+        let placements: [Placement] = (decoded.plan?.values ?? []).compactMap { entry in
             guard facts.task(entry.id) != nil, !seen.contains(entry.id),
                 let start = AgendaTime.parse(entry.at, now: facts.now, calendar: facts.calendar),
                 start.hasTime, facts.calendar.isDate(start.date, inSameDayAs: facts.now),
@@ -90,11 +116,11 @@ nonisolated enum CardParser {
             seen.insert(entry.id)
             return Placement(reminderID: entry.id, start: start.date, minutes: minutes)
         }
-        let suggestions = (decoded.suggestions ?? []).compactMap(cleanLine).prefix(3)
+        let suggestions = (decoded.suggestions?.values ?? []).compactMap(cleanLine).prefix(3)
         // A time to leave: for an event the request listed, before it starts
         // and not hours ahead, and still to come.
         var leaving = Set<String>()
-        let departures: [Departure] = (decoded.leave ?? []).compactMap { entry in
+        let departures: [Departure] = (decoded.leave?.values ?? []).compactMap { entry in
             guard entry.event.hasPrefix("e"), let number = Int(entry.event.dropFirst()),
                 number >= 1, number <= eventIDs.count,
                 let event = facts.events.first(where: { $0.id == eventIDs[number - 1] }),
@@ -124,7 +150,7 @@ nonisolated enum CardParser {
             let suggest: String?
         }
         let line: String?
-        let leftovers: [Entry]?
+        let leftovers: Lossy<Entry>?
         let week: String?
         let focus: String?
     }
@@ -138,7 +164,7 @@ nonisolated enum CardParser {
         }
         guard let line = cleanLine(decoded.line) else { return .invalid("no line") }
         let suggested = Dictionary(
-            (decoded.leftovers ?? []).map { ($0.id, $0.suggest ?? "") },
+            (decoded.leftovers?.values ?? []).map { ($0.id, $0.suggest ?? "") },
             uniquingKeysWith: { first, _ in first })
         var card = FallbackCards.eveningWrapUp(facts: facts, leftovers: leftovers)
         card.line = line

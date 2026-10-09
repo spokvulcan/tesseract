@@ -270,7 +270,7 @@ final class DependencyContainer: ObservableObject {
                 if self?.settingsManager.playSounds == true { NSSound(named: "Glass")?.play() }
             },
             retractPanel: { [weak self] cardID in self?.jarvisPanel.retract(cardID: cardID) },
-            closePanel: { [weak self] in self?.jarvisPanel.closeAll() },
+            closePanel: { [weak self] in self?.jarvisPanel.close() },
             isPanelUp: { [weak self] in self?.jarvisPanel.isShowing ?? false },
             speak: { [weak self] line in self?.speechCoordinator.speakText(line) },
             openApp: { name in AppOpener.open(named: name) }),

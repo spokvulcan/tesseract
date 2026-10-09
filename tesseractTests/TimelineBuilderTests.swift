@@ -305,6 +305,20 @@ struct CardParserTests {
         #expect(card.focus == nil)
     }
 
+    @Test func aBrokenEntryIsDroppedNotTheWholePlan() {
+        let reply =
+            #"{"line": "Ok", "must_do": "rent", "plan": [{"id": "rent", "at": null}, {"id": "rent", "at": "08:15"}], "suggestions": ["a", 3], "leave": {}}"#
+        guard case .card(.morningPlan(let card)) = CardParser.morningPlan(reply, facts: Self.facts)
+        else {
+            Issue.record("a stray entry must not cost the card")
+            return
+        }
+        #expect(card.mustDoID == "rent")
+        #expect(card.placements.map(\.reminderID) == ["rent"])
+        #expect(card.suggestions == ["a"])
+        #expect(card.departures.isEmpty)
+    }
+
     @Test func aCardSavedBeforeDeparturesStillLoads() throws {
         let json = #"{"line": "Hi", "placements": [], "suggestions": []}"#
         let card = try JSONDecoder().decode(MorningPlanCard.self, from: Data(json.utf8))

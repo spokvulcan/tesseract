@@ -67,7 +67,8 @@ nonisolated enum NudgePlanner {
             else { return nil }
             var body = "It starts at \(AgendaTime.clock(event.start, calendar: calendar))"
             if let place = event.place { body += " · \(place)" }
-            let digest = stableHash("\(event.title)|\(departure.at.timeIntervalSince1970)")
+            let digest = stableHash(
+                "\(event.title)|\(event.location ?? "")|\(departure.at.timeIntervalSince1970)")
             return Nudge(
                 id: "\(leavePrefix)\(event.id).\(digest)", eventID: event.id,
                 fireAt: departure.at, title: "Time to leave for \(event.title)", body: body)

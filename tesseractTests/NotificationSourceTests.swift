@@ -93,6 +93,10 @@ struct NotificationSourceTests {
                 "Slack", title: "GitHub", subtitle: "Anna", body: "Can you review my PR?"),
             app: slack, source: .person),
         Row(
+            name: "a colleague called Polly is a person",
+            notification: banner("Slack", title: "Acme", subtitle: "Polly", body: "Lunch?"),
+            app: slack, source: .person),
+        Row(
             name: "a page can't wait",
             notification: banner(
                 "Slack", title: "Acme", subtitle: "PagerDuty", body: "Triggered: API is down"),

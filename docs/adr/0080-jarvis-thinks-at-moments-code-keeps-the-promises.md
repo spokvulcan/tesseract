@@ -278,8 +278,11 @@ the owner must remember to read does not. What changed:
   Wrap-up lists what got done and each leftover with Tomorrow, Later and Let
   go (Jarvis's pick in the accent) or Do What Jarvis Suggests. Looks Good and
   Good Night take the card in (`card.reaction` "kept"): it leaves the panel
-  and stays in Today, unlike the close button. A cue a card takes the panel
-  from comes back when the card goes, while its step is still timely. The panel
+  and stays in Today, unlike the close button; a kept card never takes the
+  panel again (Jarvis's version of a kept plan updates in Today) and its
+  items no longer light the glyph. A cue a card takes the panel from is held
+  by the engine, which knows the cue on the panel, and comes back by the
+  cue's own rules once the panel is free, while its slot still runs. The panel
   shows the card as the day has it now, so an item handled there leaves it
   (it used to stay), and it is as tall as what it says (it was always 560 pt).
 - **The plan meets the first sit-down on the panel, quiet hours or not.**
@@ -350,8 +353,10 @@ the owner must remember to read does not. What changed:
   departure only for a listed event, before it starts, at most three hours
   ahead and still to come. Each becomes a Nudge the OS keeps ("Time to leave
   for Class", `nudge.leave.*`), the Now Card says "Leave at 12:30" as the
-  event comes up — free time ends at the departure, not the event — and the
-  Day Line shows it under the event.
+  event comes up and "Time to leave" when it is time, over any task still
+  running; the way there is busy time, so free time and "Do it at" offers end
+  at the departure; and the Day Line shows it under the event. Jarvis's own
+  re-plan sets the day's departures, none included.
 - **The time left of a started step is in the menu bar.** The Now Card's
   draining bar helps only while Today is open, and during a step the owner
   is in another app. While a step the owner started runs (its task still

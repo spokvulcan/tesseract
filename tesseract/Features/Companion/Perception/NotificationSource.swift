@@ -117,7 +117,7 @@ nonisolated enum NotificationSources {
         "jira", "jira cloud", "confluence", "github", "gitlab", "bitbucket", "jenkins",
         "circleci", "google calendar", "google drive", "slackbot", "workflow builder", "asana",
         "trello", "linear", "notion", "figma", "loom", "sentry", "datadog", "dependabot",
-        "vercel", "netlify", "zapier", "calendly", "polly", "giphy",
+        "vercel", "netlify", "zapier", "calendly", "giphy",
     ]
 
     /// The system's own banners, which are never about the owner's day.

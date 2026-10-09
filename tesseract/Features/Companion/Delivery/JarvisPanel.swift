@@ -37,9 +37,6 @@ final class JarvisPanelController {
 
     private let model = JarvisPanelModel()
     private var panel: GlassPanel?
-    /// A cue a card took the panel from: it comes back when the card goes,
-    /// while its step is still timely.
-    private var shelvedCue: StepCue?
     private let thread: DayThread
     private let voice: AgentVoiceInputController
     private let agenda: Agenda
@@ -76,7 +73,6 @@ final class JarvisPanelController {
 
     /// Show (or update in place) a card.
     func show(_ card: DayCard) {
-        if isShowing, let cue = model.cue { shelvedCue = cue }
         model.cue = nil
         model.card = card
         model.showQuiet = false
@@ -127,26 +123,20 @@ final class JarvisPanelController {
         voice.cancel()
         model.listening = false
         panel?.orderOut(nil)
-        // The card that took a cue's place is gone: the cue comes back, if
-        // its step is still timely.
-        if let cue = shelvedCue {
-            shelvedCue = nil
-            let late = Date().timeIntervalSince(cue.phase == .start ? cue.start : cue.end)
-            if cue.end > Date() || (cue.phase == .end && late < DayEngine.stepCueWindow) {
-                Task { @MainActor [weak self] in self?.show(cue) }
-            }
-        }
     }
 
-    /// Close, and let nothing come back (the Companion was switched off).
-    func closeAll() {
-        shelvedCue = nil
-        close()
+    /// A cue the owner leaves without choosing (Escape, Open Today) is
+    /// answered as closed, so the engine knows it is off the panel.
+    private func leaveCue() {
+        if let cue = model.cue { onAction(.step(reminderID: cue.reminderID, .dismiss)) }
     }
 
     private func makePanel() -> GlassPanel {
         let panel = GlassPanel(size: Self.size, cornerRadius: 28, becomesKeyOnlyIfNeeded: true)
-        panel.onCancel = { [weak self] in self?.close() }
+        panel.onCancel = { [weak self] in
+            self?.leaveCue()
+            self?.close()
+        }
         voice.onVoiceTranscription = { [weak self] text in
             guard let self else { return }
             self.model.listening = false
@@ -167,6 +157,7 @@ final class JarvisPanelController {
                     self.close()
                 },
                 expand: { [weak self] in
+                    self?.leaveCue()
                     self?.close()
                     self?.onExpand()
                 },

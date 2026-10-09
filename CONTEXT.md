@@ -1917,7 +1917,8 @@ The floating card rung: a Siri-style Liquid Glass panel near the top-right,
 over any app — close top-left, expand to Today top-right, the card or a Step
 Cue, and an "Ask Jarvis" field between + (capture) and a mic. A card on it is
 whole: a Morning Plan lists its steps, an Evening Wrap-up its leftovers with
-their choices, and what the owner handles there leaves it. As tall as what it
+their choices, and what the owner handles there leaves it; Looks Good and Good
+Night keep the card in Today without bringing it back. As tall as what it
 says. It never steals typing: it turns key only when its field is clicked.
 Replies go to the Day Thread.
 

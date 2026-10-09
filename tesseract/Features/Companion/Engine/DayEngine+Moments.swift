@@ -277,7 +277,9 @@ nonisolated extension DayEngine {
             state.morningPlanAt = snapshot.now
             if let mustDo = card.mustDoID { state.mustDoID = mustDo }
             if !card.placements.isEmpty { state.plan = card.placements }
-            if !card.departures.isEmpty { state.departures = card.departures }
+            // Jarvis's own plan sets the day's departures, none included (a
+            // class that went online); the code card leaves them be.
+            if !fallback, !refining { state.departures = card.departures }
         case .eveningWrapUp(let card):
             state.eveningWrapUpAt = snapshot.now
             // The week's look-back names next week's focus: it rides each
@@ -306,10 +308,13 @@ nonisolated extension DayEngine {
             state.cards[index].body = body
             state.cards[index].isFallback = fallback
             let card = state.cards[index]
+            // Taken in already: it updates in Today, never on the panel again.
             let rungs =
-                wasQuiet
-                ? deliveryRungs(body, importance: importance, snapshot: snapshot)
-                : DeliveryLadder.rungs(for: importance, snapshot: snapshot)
+                card.kept
+                ? [.today]
+                : wasQuiet
+                    ? deliveryRungs(body, importance: importance, snapshot: snapshot)
+                    : DeliveryLadder.rungs(for: importance, snapshot: snapshot)
             return rungs.filter { $0 == .panel || $0 == .today }.map { .presentCard(card, $0) }
         }
         // A newer card of the same kind replaces the older one.
@@ -526,8 +531,9 @@ nonisolated extension DayEngine {
 
         case .keep(let cardID):
             // Taken in: off the panel (the panel closes itself), still in Today.
-            guard let card = state.cards.first(where: { $0.id == cardID }) else { return [] }
-            return [reaction("kept", card: card, snapshot: snapshot)]
+            guard let index = state.cards.firstIndex(where: { $0.id == cardID }) else { return [] }
+            state.cards[index].kept = true
+            return [reaction("kept", card: state.cards[index], snapshot: snapshot)]
         }
     }
 

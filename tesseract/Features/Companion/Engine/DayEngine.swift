@@ -35,6 +35,8 @@ nonisolated enum DayEngine {
         var state = state
         var effects: [DayEffect] = []
         let today = DayKey(for: snapshot.now, calendar: snapshot.calendar)
+        // Counted before the rollover, so cards a new day clears clear the glyph.
+        let waitingBefore = waitingCount(state, now: snapshot.now)
         if state.day != today { state = state.rolledOver(to: today) }
         // The must-do seen done, for the week's look-back.
         if let mustDo = state.mustDoID, state.mustDoDoneAt == nil,
@@ -42,7 +44,6 @@ nonisolated enum DayEngine {
         {
             state.mustDoDoneAt = snapshot.now
         }
-        let waitingBefore = waitingCount(state, now: snapshot.now)
 
         switch signal {
         case .tick:
@@ -127,6 +128,7 @@ nonisolated enum DayEngine {
             effects += nudgesDelivered(delivered, state: &state)
         }
 
+        holdCueUnderCard(effects, snapshot: snapshot, state: &state)
         let waitingAfter = waitingCount(state, now: snapshot.now)
         if waitingAfter != waitingBefore { effects.append(.setWaiting(waitingAfter)) }
         return Decision(state: state, effects: effects)
@@ -255,7 +257,8 @@ nonisolated enum DayEngine {
     /// What is waiting on the owner, for the glyph: waiting agents, and the
     /// open cards' items.
     static func waitingCount(_ state: DayState, now: Date) -> Int {
-        let cards = state.openCards.reduce(0) { count, card in
+        // A card the owner took in waits on them no more.
+        let cards = state.openCards.filter { !$0.kept }.reduce(0) { count, card in
             switch card.body {
             case .eveningWrapUp(let wrapUp): count + wrapUp.leftovers.count
             case .breakpoint(let breakpoint):

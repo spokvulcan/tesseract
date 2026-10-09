@@ -62,16 +62,16 @@ struct NowCardTests {
     }
 
     @Test func anEventInPersonSaysWhenToLeave() {
+        let leave = Departure(
+            eventID: "E2", title: "1:1", at: Self.local(30, 12, 45),
+            eventStart: Self.local(30, 13))
         let facts = { (now: Date) in
-            DayFacts(
+            var facts = DayFacts(
                 now: now, events: [TimelineBuilderTests.standup, TimelineBuilderTests.oneOnOne])
+            facts.departures = [leave]
+            return facts
         }
-        var context = Self.context()
-        context.departures = [
-            Departure(
-                eventID: "E2", title: "1:1", at: Self.local(30, 12, 45),
-                eventStart: Self.local(30, 13))
-        ]
+        let context = Self.context()
         // Free until it's time to leave, not until the 1:1.
         let free = Self.card(facts(Self.local(30, 11, 30)), context)
         #expect(free.headline == "Free until 12:45, when you leave for 1:1")
@@ -81,6 +81,17 @@ struct NowCardTests {
         #expect(soon.detail == "Leave at 12:45, in 10 min. It starts at 13:00.")
         let now = Self.card(facts(Self.local(30, 12, 46)), context)
         #expect(now.detail == "Time to leave. It starts at 13:00.")
+        // A task still running doesn't hide it.
+        var busy = facts(Self.local(30, 12, 50))
+        busy.undated = [
+            AgendaReminder(id: "gym", title: "Gym", listID: "health", listTitle: "Health")
+        ]
+        busy.plan = [Placement(reminderID: "gym", start: Self.local(30, 12, 15), minutes: 45)]
+        #expect(Self.card(busy, context).detail == "Time to leave. It starts at 13:00.")
+        // And the way there is no free time to offer.
+        #expect(
+            TimelineBuilder.firstFreeSlot(minutes: 30, facts: facts(Self.local(30, 12, 20)))
+                .map { $0 >= Self.local(30, 13, 45) } != false)
     }
 
     @Test func freeTimeHasNoSpan() {

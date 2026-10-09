@@ -62,10 +62,13 @@ nonisolated enum DeliveryLadder {
     /// The owner sat down to start the day and it is still the morning part
     /// of quiet hours: for them, quiet hours are over.
     static func dayStarted(_ satDownAt: Date?, snapshot: DaySnapshot) -> Bool {
+        let settings = snapshot.settings
+        // Only an overnight window has a morning end; a daytime one holds.
         guard let satDownAt, satDownAt <= snapshot.now,
-            snapshot.now.timeIntervalSince(satDownAt) < 12 * 3600
+            snapshot.now.timeIntervalSince(satDownAt) < 12 * 3600,
+            settings.quietStartMinutes > settings.quietEndMinutes
         else { return false }
-        return snapshot.minuteOfDay < snapshot.settings.quietEndMinutes
+        return snapshot.minuteOfDay < settings.quietEndMinutes
     }
 
     static func isQuietHours(_ snapshot: DaySnapshot) -> Bool {
