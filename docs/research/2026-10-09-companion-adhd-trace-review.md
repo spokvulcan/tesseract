@@ -99,6 +99,23 @@ The trace measures the new behaviour: `cue.presented` / `cue.reaction`,
 `card.reaction` with `kept` apart from `dismissed`, `night.wind-down`,
 `nudge.scheduled` for `nudge.leave.*`.
 
+### Older Companion code, found by a review
+
+A review of the Companion code this work had not touched found nine faults;
+each is fixed and tested:
+
+| Fault | Fix |
+|---|---|
+| On the night the clocks go forward, 04:00 mapped to the day before: "Tomorrow" re-dated a task to today, and the day began at 05:00 | The day turns at 04:00 on the wall clock |
+| Let go on a repeating reminder deleted its whole series (Undo brought back a copy that no longer repeats); Later failed | A repeating leftover skips to tomorrow instead |
+| A sender rule ("always tell me when Anna writes") never matched Slack, where the title is the workspace | The sender is found in the title, a chat app's sender line, or before a channel message's colon |
+| Jarvis's version of a welcome back dropped what could wait (an app's news, banners already judged) | The request carries them, and the refined card keeps them |
+| A declined or cancelled meeting still got a nudge, a "meeting ended" Breakpoint and busy time | Events leave both out as they are read |
+| Nudges were bare clock times: after a flight they fired on the old zone's clock time | Each nudge carries its time zone |
+| A banner still in Notification Center, read again as it was opened, came in as new after the ledger forgot it | The ledger remembers the ids it dropped |
+| A second raise hid the first (each Triage card replaced the last); a Breakpoint reply for a replaced card lost its banners | Triage cards gather; a reply for a replaced card marks nothing |
+| A moment that landed after 04:00 counted for the new day (a late reflection took tonight's, its reply went to the new thread) | A request carries its day; a late reflection opens the morning; the thread turns between moments |
+
 ## Trying it
 
 What a day on this branch should feel like, and where to look if it doesn't:
