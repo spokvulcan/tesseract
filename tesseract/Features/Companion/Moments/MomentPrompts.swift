@@ -169,7 +169,10 @@ nonisolated enum MomentPrompts {
         lines.append("")
         lines.append("Reply with only this JSON, nothing before or after it:")
         lines.append(
-            #"{"carry_over": "<2–4 warm sentences for tomorrow morning: where things stand, what matters first>", "tomorrow": ["<one short line each, at most 5>"], "proposals": [{"text": "<a lasting fact about the owner, third person>", "reason": "<what today showed>"}]}"#
+            #"{"carry_over": "<2–4 warm sentences for tomorrow morning: where things stand, what matters first>", "tomorrow": ["<one short line each, at most 5>"], "proposals": [{"text": "<a lasting fact about the owner, third person>", "reason": "<what today showed>"}], "tasks": [{"title": "<something today showed they must do, as a task>", "when": "tomorrow" | "later"}]}"#
+        )
+        lines.append(
+            "\"tasks\" are things today showed the owner promised or must do — someone waiting on them, something they said they'd do — that are not in their tasks already. At most three; most nights none."
         )
         lines.append(
             "Propose only lasting facts the owner showed today — a preference, a routine, a person who matters — never guesses, never anything sensitive they didn't volunteer. An empty list is fine."

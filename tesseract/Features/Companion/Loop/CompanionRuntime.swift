@@ -353,6 +353,8 @@ final class CompanionRuntime {
                 _ = try await agenda.updateReminder(id: id, completed: true, source: "card")
             case .followUp(let title, let at):
                 _ = try agenda.addReminder(title: title, due: at, dueHasTime: true, source: "card")
+            case .add(let title, let due):
+                _ = try agenda.addReminder(title: title, due: due, source: "proposal")
             }
         } catch {
             Log.companion.error("Agenda change failed: \(error.localizedDescription)")

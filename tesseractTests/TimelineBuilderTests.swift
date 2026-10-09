@@ -319,6 +319,28 @@ struct CardParserTests {
         #expect(card.departures.isEmpty)
     }
 
+    @Test func theNightProposesTasksTheDayShowedOnlyOnce() {
+        // "Pay rent" is already an open task: not proposed again.
+        let reply =
+            #"{"carry_over": "A good day.", "tasks": [{"title": "Send Anna the request", "when": "tomorrow"}, {"title": "pay rent"}, {"title": "Look into evening classes", "when": "later"}, {"title": "Send Anna the request"}, {"title": 7}]}"#
+        guard
+            case .card(.reflection(let card)) = CardParser.nightReflection(
+                reply, facts: Self.facts)
+        else {
+            Issue.record("expected a Night Reflection card")
+            return
+        }
+        #expect(card.tasks.map(\.title) == ["Send Anna the request", "Look into evening classes"])
+        #expect(card.tasks.first?.due == Self.facts.endOfToday)
+        #expect(card.tasks.last?.due == nil)
+    }
+
+    @Test func aReflectionSavedBeforeTasksStillLoads() throws {
+        let json = #"{"carryOver": "Night.", "tomorrow": [], "proposals": []}"#
+        let card = try JSONDecoder().decode(ReflectionCard.self, from: Data(json.utf8))
+        #expect(card.tasks.isEmpty)
+    }
+
     @Test func aCardSavedBeforeDeparturesStillLoads() throws {
         let json = #"{"line": "Hi", "placements": [], "suggestions": []}"#
         let card = try JSONDecoder().decode(MorningPlanCard.self, from: Data(json.utf8))

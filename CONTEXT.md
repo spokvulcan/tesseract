@@ -2006,6 +2006,14 @@ approval), `forget` removes one. Facts ride only the Day Opening; ordinary chats
 get none.
 _Avoid_: memory (unqualified), beliefs, episodes (all retired).
 
+**Task Proposal**:
+Something the day showed the owner must do that isn't in Reminders yet ("send
+the request she asked for"), from the Night Reflection — at most three, most
+nights none, never one already among the open tasks. It waits under "Jarvis
+noticed" that night and the next day: Add makes it a reminder (due the
+reflection's tomorrow, or in the Inbox), No lets it go.
+_Avoid_: suggestion (the Morning Plan's tips).
+
 **Fact Proposal**:
 A "Should I remember this?" from the Night Reflection, waiting in Today and on
 the Profile page until the owner chooses Remember, Edit or Not true.

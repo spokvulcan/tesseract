@@ -364,6 +364,15 @@ the owner must remember to read does not. What changed:
   "1h 5m"), refreshed on its own clock, with the step in the tooltip; it
   goes back to the glyph alone when the step ends or is done
   (`DayEngine.focus`, pushed through `CompanionPresence`).
+- **A promise in a message becomes a task with one click.** On 7 October a
+  Breakpoint noted a colleague "still waiting on that request from you" and
+  the Night Reflection's draft said to send it early, but nothing made it a
+  reminder. The Night Reflection may now answer `tasks` (at most three, most
+  nights none): code drops any already among the open tasks, fixes the due
+  day (the reflection's tomorrow, or the Inbox), and keeps them under "Jarvis
+  noticed" that night and the next day (`DayState.taskProposals`). Add makes
+  the reminder through the Agenda (with its undo); No lets it go
+  (`task.proposed`, `task.decided`).
 - **A week's focus.** Goals span weeks; the Companion saw one day at a
   time. On the week's last day the Evening Wrap-up also looks back on the
   week (the Agenda's snapshot now holds the week's completed reminders, read

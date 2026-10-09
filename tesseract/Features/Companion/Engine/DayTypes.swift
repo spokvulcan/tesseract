@@ -80,6 +80,8 @@ nonisolated enum CardAction: Sendable, Equatable {
     /// The owner took a card in on the panel (Looks Good, Good Night): it
     /// leaves the panel and stays in Today.
     case keep(cardID: String)
+    /// The owner added a proposed task to Reminders, or let it go.
+    case taskProposal(id: String, add: Bool)
 }
 
 /// The step the owner started and is in now, for the menu bar's timer.
@@ -195,6 +197,9 @@ nonisolated enum AgendaMutation: Sendable, Equatable {
     case dueAt(reminderID: String, at: Date)
     /// A new reminder: a follow-up for something that can't be handled now.
     case followUp(title: String, at: Date)
+    /// A new reminder the owner accepted from a proposal: due that day, or
+    /// in the Inbox.
+    case add(title: String, due: Date?)
 }
 
 // MARK: - Snapshot
@@ -359,6 +364,9 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     var heldSteps: Set<String> = []
     /// The cue on the panel now, by its key, until the owner answers it.
     var cueOnPanel: String?
+    /// Tasks the Night Reflection proposed, until the owner decides (kept
+    /// that night and the next day).
+    var taskProposals: [TaskProposal] = []
     /// When the owner sat down to start this day (the first sit-down after
     /// the night): for them, the morning's end of quiet hours is over.
     var satDownAt: Date?
@@ -389,7 +397,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         case agentSpokenAt, lastTickAt, lastTriageAt, whereYouWere, deferred, firedNudgeIDs
         case cuedSteps, startedSteps, interrupted, morningPlanResumed, windDownAt
         case draft, draftForNextDay, departures, heldSteps, satDownAt, weekFocus
-        case weekFocusSetAt, mustDoDoneAt, mustDoDays, cueOnPanel
+        case weekFocusSetAt, mustDoDoneAt, mustDoDays, cueOnPanel, taskProposals
     }
 
     /// Every field but the day is optional on disk, so a state saved by an
@@ -432,6 +440,8 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         mustDoDoneAt = try? c.decodeIfPresent(Date.self, forKey: .mustDoDoneAt)
         mustDoDays = (try? c.decodeIfPresent([String: Bool].self, forKey: .mustDoDays)) ?? [:]
         cueOnPanel = try? c.decodeIfPresent(String.self, forKey: .cueOnPanel)
+        taskProposals =
+            (try? c.decodeIfPresent([TaskProposal].self, forKey: .taskProposals)) ?? []
     }
 
     /// The day as a relaunch finds it: the moment in flight never finished,
@@ -451,8 +461,13 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         var next = DayState(day: day, syncedNudgeIDs: syncedNudgeIDs)
         next.lastPresentAt = lastPresentAt
         next.carryOver = carryOverForNextDay
-        // "Last night's draft" only for the morning after it.
-        if self.day.next() == day { next.draft = draftForNextDay }
+        // "Last night's draft" only for the morning after it, and tonight's
+        // proposed tasks through tomorrow.
+        if self.day.next() == day {
+            next.draft = draftForNextDay
+            // Only this night's: last night's lapse unless tonight made new ones.
+            if nightReflectionAt != nil { next.taskProposals = taskProposals }
+        }
         // Quiet hours that begin just before 04:00 are still the same night.
         next.windDownAt = windDownAt
         // Whether this day's must-do got done, kept a week for the look-back.

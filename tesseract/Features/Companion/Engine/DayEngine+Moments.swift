@@ -216,7 +216,9 @@ nonisolated extension DayEngine {
         case .triage:
             return triageReplied(request, reply: reply, snapshot: snapshot, state: &state)
         case .nightReflection:
-            guard case .card(let body) = CardParser.nightReflection(reply) else { return nil }
+            guard case .card(let body) = CardParser.nightReflection(reply, facts: facts) else {
+                return nil
+            }
             return accept(
                 body, kind: .nightReflection, fallback: false, snapshot: snapshot, state: &state)
         }
@@ -291,6 +293,7 @@ nonisolated extension DayEngine {
         case .reflection(let card):
             state.nightReflectionAt = snapshot.now
             state.carryOverForNextDay = card.carryOver
+            state.taskProposals = card.tasks
             state.draftForNextDay = card.tomorrow
         case .breakpoint, .triage:
             break
@@ -348,6 +351,9 @@ nonisolated extension DayEngine {
                 ]))
         if case .reflection(let reflection) = body, !reflection.proposals.isEmpty {
             effects.append(.proposeFacts(reflection.proposals))
+        }
+        if case .reflection(let reflection) = body, !reflection.tasks.isEmpty {
+            effects.append(.trace(.taskProposed, ["count": .int(reflection.tasks.count)]))
         }
         return effects
     }
@@ -528,6 +534,17 @@ nonisolated extension DayEngine {
 
         case .step(let reminderID, let choice):
             return stepChosen(reminderID, choice, snapshot: snapshot, state: &state)
+
+        case .taskProposal(let id, let add):
+            guard let proposal = state.taskProposals.first(where: { $0.id == id }) else {
+                return []
+            }
+            state.taskProposals.removeAll { $0.id == id }
+            let decided = DayEffect.trace(
+                .taskDecided, ["added": .bool(add), "dated": .bool(proposal.due != nil)])
+            return add
+                ? [.mutateAgenda(.add(title: proposal.title, due: proposal.due)), decided]
+                : [decided]
 
         case .keep(let cardID):
             // Taken in: off the panel (the panel closes itself), still in Today.

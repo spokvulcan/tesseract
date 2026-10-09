@@ -265,6 +265,43 @@ nonisolated struct ReflectionCard: Sendable, Equatable, Codable {
     var tomorrow: [String]
     /// Zero to three "Should I remember this?" proposals.
     var proposals: [ProposalDraft]
+    /// Zero to three things the day showed the owner must do that aren't in
+    /// Reminders yet.
+    var tasks: [TaskProposal] = []
+
+    private enum CodingKeys: String, CodingKey {
+        case carryOver, tomorrow, proposals, tasks
+    }
+
+    init(
+        carryOver: String, tomorrow: [String], proposals: [ProposalDraft],
+        tasks: [TaskProposal] = []
+    ) {
+        self.carryOver = carryOver
+        self.tomorrow = tomorrow
+        self.proposals = proposals
+        self.tasks = tasks
+    }
+
+    /// A card saved before task proposals still loads.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        carryOver = try c.decode(String.self, forKey: .carryOver)
+        tomorrow = try c.decode([String].self, forKey: .tomorrow)
+        proposals = try c.decode([ProposalDraft].self, forKey: .proposals)
+        tasks = (try? c.decodeIfPresent([TaskProposal].self, forKey: .tasks)) ?? []
+    }
+}
+
+/// Something the day showed the owner must do that isn't in Reminders yet
+/// ("send the request she asked for"), from the Night Reflection: the owner
+/// adds it with one click, or lets it go. A promise made in a message
+/// shouldn't depend on remembering it.
+nonisolated struct TaskProposal: Sendable, Equatable, Hashable, Codable, Identifiable {
+    let id: String
+    var title: String
+    /// The day it would be due (the reflection's tomorrow), or nil: the Inbox.
+    var due: Date?
 }
 
 nonisolated struct ProposalDraft: Sendable, Equatable, Hashable, Codable {

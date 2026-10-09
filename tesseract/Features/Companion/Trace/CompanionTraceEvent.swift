@@ -78,6 +78,13 @@ nonisolated enum CompanionTraceEvent: String, Sendable, Equatable, CaseIterable 
     /// A Profile fact was added, edited or deleted.
     case profileChanged = "profile.changed"
 
+    // MARK: - task.*: tasks the day showed, proposed for Reminders
+
+    /// The Night Reflection proposed a task the day showed. Carries the count.
+    case taskProposed = "task.proposed"
+    /// The owner added a proposed task or let it go.
+    case taskDecided = "task.decided"
+
     // MARK: - thread.*: the Day Thread
 
     /// A new Day Thread opened with its Day Opening.

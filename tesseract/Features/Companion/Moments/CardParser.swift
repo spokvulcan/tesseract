@@ -196,17 +196,24 @@ nonisolated enum CardParser {
             let text: String?
             let reason: String?
         }
+        struct Task: Decodable {
+            let title: String
+            let when: String?
+        }
         let carryOver: String?
         let tomorrow: [String]?
         let proposals: [Proposal]?
+        let tasks: Lossy<Task>?
 
         enum CodingKeys: String, CodingKey {
-            case tomorrow, proposals
+            case tomorrow, proposals, tasks
             case carryOver = "carry_over"
         }
     }
 
-    static func nightReflection(_ reply: String) -> CardParse {
+    /// - Parameter facts: the night's facts: a proposed task is due on its
+    ///   tomorrow, and one already among the open tasks is dropped.
+    static func nightReflection(_ reply: String, facts: DayFacts? = nil) -> CardParse {
         guard let data = jsonObject(in: reply) else { return .invalid("no JSON object") }
         guard let decoded = try? JSONDecoder().decode(ReflectionReply.self, from: data),
             let note = decoded.carryOver?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -216,12 +223,24 @@ nonisolated enum CardParser {
             guard let text = cleanLine(proposal.text) else { return nil }
             return ProposalDraft(text: text, reason: cleanLine(proposal.reason) ?? "")
         }
+        let open = Set((facts?.openTasks ?? []).map { $0.title.lowercased() })
+        var seen = Set<String>()
+        let tasks = (decoded.tasks?.values ?? []).compactMap { task -> TaskProposal? in
+            guard var title = cleanLine(task.title) else { return nil }
+            if title.count > 120 { title = String(title.prefix(117)) + "…" }
+            let key = title.lowercased()
+            guard !open.contains(key), seen.insert(key).inserted else { return nil }
+            let later = task.when?.lowercased() == "later"
+            return TaskProposal(
+                id: "task-" + NudgePlanner.stableHash(key), title: title,
+                due: later ? nil : facts?.endOfToday)
+        }
         return .card(
             .reflection(
                 ReflectionCard(
                     carryOver: String(note.prefix(1200)),
                     tomorrow: (decoded.tomorrow ?? []).compactMap(cleanLine).prefix(5).map { $0 },
-                    proposals: Array(proposals.prefix(3)))))
+                    proposals: Array(proposals.prefix(3)), tasks: Array(tasks.prefix(3)))))
     }
 
     // MARK: Shared

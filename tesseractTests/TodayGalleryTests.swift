@@ -315,6 +315,11 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
             state.eveningWrapUpAt = Self.at(21)
             state.weekFocus = "Ship the Companion"
             state.weekFocusSetAt = Self.at(21)
+            state.taskProposals = [
+                TaskProposal(
+                    id: "task-1", title: "Send the case worker the bus receipts",
+                    due: Self.at(0, day: 5))
+            ]
             state.nightReflectionAt = Self.at(21, 50)
             state.cards = [
                 DayCard(

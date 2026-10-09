@@ -125,6 +125,12 @@ struct MomentPromptsTests {
                 "This week's focus: the job search. When a task serves it, let it be the must-do."))
     }
 
+    @Test func theNightReflectionAsksForTasksTheDayShowed() {
+        let text = MomentPrompts.nightReflection(facts: Self.facts, profile: [])
+        #expect(text.contains(#""tasks": [{"title":"#))
+        #expect(text.contains("At most three; most nights none."))
+    }
+
     @Test func theMorningPlanAsksForTheCardWithIDs() {
         let text = MomentPrompts.morningPlan(facts: Self.facts)
         #expect(text.hasPrefix("[Morning Plan]"))

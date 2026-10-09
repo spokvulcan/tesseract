@@ -241,6 +241,42 @@ struct NightReflectionTests {
             })
     }
 
+    @Test func aTaskTheNightProposedIsAddedWithOneClickOrLetGo() throws {
+        var state = Self.afterWrapUp()
+        state.running = .nightReflection
+        let reply =
+            #"{"carry_over": "Good.", "tasks": [{"title": "Send the request", "when": "tomorrow"}, {"title": "Book the bike service", "when": "later"}]}"#
+        let measure = MomentMeasure(
+            promptTokens: 3000, outputTokens: 400, prefillSeconds: 0.5, generateSeconds: 12,
+            latencySeconds: 13, hitCap: false, modelID: "m")
+        let night = DayEngine.decide(
+            .momentOutcome(
+                MomentRequest(kind: .nightReflection, trigger: .night, text: "x"),
+                .reply(reply, measure)),
+            snapshot: Self.snapshot(at: Self.local(30, 22)), state: state)
+        #expect(night.state.taskProposals.count == 2)
+        #expect(night.effects.contains(.trace(.taskProposed, ["count": .int(2)])))
+        // The next morning: still there, due on what is now today.
+        let morning = DayEngine.decide(
+            .tick, snapshot: Self.snapshot(at: Self.local(31, 7)), state: night.state)
+        let first = try #require(morning.state.taskProposals.first)
+        let added = DayEngine.decide(
+            .cardAction(.taskProposal(id: first.id, add: true)),
+            snapshot: Self.snapshot(at: Self.local(31, 7, 5)), state: morning.state)
+        #expect(
+            added.effects.contains(.mutateAgenda(.add(title: "Send the request", due: first.due))))
+        #expect(added.state.taskProposals.count == 1)
+        let last = try #require(added.state.taskProposals.first)
+        let declined = DayEngine.decide(
+            .cardAction(.taskProposal(id: last.id, add: false)),
+            snapshot: Self.snapshot(at: Self.local(31, 7, 6)), state: added.state)
+        #expect(!declined.effects.contains { if case .mutateAgenda = $0 { true } else { false } })
+        #expect(declined.state.taskProposals.isEmpty)
+        // Left undecided, they don't outlive the next day.
+        let dayAfter = morning.state.rolledOver(to: DayKey(rawValue: "2026-10-02"))
+        #expect(dayAfter.taskProposals.isEmpty)
+    }
+
     @Test func itsNoteOpensTomorrowAndItsProposalsGoToTheProfile() throws {
         var state = Self.afterWrapUp()
         state.running = .nightReflection
