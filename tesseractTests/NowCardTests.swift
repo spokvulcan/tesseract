@@ -135,6 +135,15 @@ struct NowCardTests {
         #expect(card.actions.map(\.title) == ["Start now", "Done"])
     }
 
+    @Test func onceTheMustDoIsDoneTheRestIsABonus() {
+        // Answering mail was the must-do, and it is done.
+        let free = Self.card(Self.day(now: Self.local(30, 10, 30), mustDo: "mail"))
+        #expect(free.headline == "Pay rent")
+        #expect(free.detail == "The must-do is done; this one's a bonus. You're free until 11:00.")
+        let evening = Self.card(Self.day(now: Self.local(30, 21, 30), mustDo: "mail"))
+        #expect(evening.headline == "1 of 3 done today, the must-do among them.")
+    }
+
     @Test func freeTimeOffersTodaysOpenTaskBeforeACarriedOne() {
         let card = Self.card(Self.day(now: Self.local(30, 10, 30)))
         #expect(card.headline == "Pay rent")

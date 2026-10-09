@@ -1832,7 +1832,9 @@ modifier-only combo.
 
 **Must-do**:
 The day's one optional thing that matters most. It can sit anywhere in the day,
-even late; the owner moves or clears it with one click.
+even late; the owner moves or clears it with one click. Once it is done, the
+Now Card says so: what else fits is "a bonus", and the evening counts it
+("the must-do among them").
 _Avoid_: focus (the day has several goals, not one focus), priority.
 
 **Nudge**:

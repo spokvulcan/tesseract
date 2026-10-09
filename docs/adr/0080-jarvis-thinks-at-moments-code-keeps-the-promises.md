@@ -352,6 +352,11 @@ the owner must remember to read does not. What changed:
   for Class", `nudge.leave.*`), the Now Card says "Leave at 12:30" as the
   event comes up — free time ends at the departure, not the event — and the
   Day Line shows it under the event.
+- **Once the must-do is done, the rest is a bonus.** Finishing the day's one
+  thing that mattered most changed nothing on Today: the next free-time card
+  offered the next task at the same weight. Now it says "The must-do is done;
+  this one's a bonus", and the evening counts it ("2 of 4 done today, the
+  must-do among them") — the pressure comes off once the main thing is in.
 - **The trace measures it**: `cue.presented` (start or end, how late, the
   slot's length, the must-do) and `cue.reaction` (the choice, the time to
   react).

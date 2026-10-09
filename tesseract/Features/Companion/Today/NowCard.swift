@@ -136,6 +136,9 @@ nonisolated enum NowCardBuilder {
         }
 
         let openAnytime = timeline.anytime.filter { !$0.isDone }
+        // The day's one thing that mattered most is done: the rest is a
+        // bonus, and the card says so.
+        let mustDoDone = timeline.mustDo?.isDone == true
 
         // When to leave for an event in person, if the plan set a time.
         func departure(for row: TimelineRow) -> Departure? {
@@ -196,9 +199,10 @@ nonisolated enum NowCardBuilder {
                     context.wrappedUp
                     ? lookAhead(timeline.tomorrow, clock: clock)
                     : done > 0 ? "Still open: \(names)\(more)." : "\(names)\(more)."
+                let count = "\(done) of \(timeline.totalCount) done today"
                 return NowCard(
                     headline: done > 0
-                        ? "\(done) of \(timeline.totalCount) done today."
+                        ? (mustDoDone ? "\(count), the must-do among them." : "\(count).")
                         : "\(open.count) left for today",
                     detail: detail, actions: [])
             }
@@ -239,9 +243,15 @@ nonisolated enum NowCardBuilder {
                     } ?? "free until \(clock(row.start))"
                 } ?? "free for the rest of the day"
             if let task = candidate {
+                let detail =
+                    task.isMustDo
+                    ? "Your must-do. You're \(free)."
+                    : mustDoDone
+                        ? "The must-do is done; this one's a bonus. You're \(free)."
+                        : "You're \(free)."
                 return NowCard(
                     headline: task.reminder.title,
-                    detail: task.isMustDo ? "Your must-do. You're \(free)." : "You're \(free).",
+                    detail: detail,
                     actions: [
                         NowAction(
                             kind: .place(
