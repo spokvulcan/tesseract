@@ -79,6 +79,11 @@ the ideas the changes lean on; it makes no claims beyond them.
 | 8 | The night's draft of tomorrow opens the next day's thread |
 | 10 | The plan sets a time to leave for an event in person; the OS nudges then, the Now Card and the Day Line say it |
 | — | Once the must-do is done, the Now Card says the rest is a bonus |
+| — | A week's focus: the week's last evening looks back (done by Area, must-dos kept) and names next week's one thing, shown beside Today's date |
+| — | An online meeting reads as its service ("Zoom"), never its link and password |
+| — | The plan's candidates come the likeliest first; collection lists are summed |
+| — | An empty Inbox teaches the capture hotkey; a Step Cue chimes softly |
+| — | Two code reviews of these changes, with every finding fixed and tested |
 
 The trace measures the new behaviour: `cue.presented` / `cue.reaction`,
 `card.reaction` with `kept` apart from `dismissed`, `night.wind-down`,
@@ -106,7 +111,10 @@ The trace measures the new behaviour: `cue.presented` / `cue.reaction`,
    ten days; adding tasks happened through Today's composer and the agent's
    tools.
 6. **Re-read the trace after a week** with the new events, and keep what moves
-   the owner to act.
+   the owner to act: `scripts/companion-trace-report.py [days]` prints, per
+   day, moments and cold prefills, cards by rung, reactions (kept apart from
+   dismissed), Step Cues and the owner's choices, the wind-down, event and
+   leave nudges, notifications by source, and Triage.
 
 ## Appendix: the queries
 
