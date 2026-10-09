@@ -156,6 +156,39 @@ struct DayEngineBreakpointTests {
         #expect(refined.state.ledger.unresolved(now: Self.local(13, 1)).isEmpty)
     }
 
+    @Test func theModelsCardKeepsWhatTheCodeCardShowedBesides() throws {
+        // Besides Anna and CI (for the model to judge), an app's news waited.
+        var state = Self.awayWithNotifications()
+        state =
+            DayEngine.decide(
+                .notificationArrived(
+                    Self.notification(
+                        "image", app: "ChatGPT", title: "Your image is ready", body: "",
+                        at: Self.local(12, 30)
+                    ).classified(.app)),
+                snapshot: Self.snapshot(at: Self.local(12, 30), present: false), state: state
+            ).state
+        let first = DayEngine.decide(
+            .presenceReturned(awayFrom: Self.local(12)),
+            snapshot: Self.snapshot(at: Self.local(13)), state: state)
+        let request = try #require(Self.moments(first.effects).first)
+        #expect(request.context.shownIDs == ["image"])
+        let reply = #"{"line": "Anna needs a look at her PR.", "needs_you": ["n1"]}"#
+        let measure = MomentMeasure(
+            promptTokens: 900, outputTokens: 60, prefillSeconds: 0.2, generateSeconds: 2,
+            latencySeconds: 3, hitCap: false, modelID: "m")
+        let refined = DayEngine.decide(
+            .momentOutcome(request, .reply(reply, measure)),
+            snapshot: Self.snapshot(at: Self.local(13)), state: first.state)
+        let card = try #require(refined.state.cards.last)
+        guard case .breakpoint(let breakpoint) = card.body else {
+            Issue.record("expected a Breakpoint card")
+            return
+        }
+        #expect(breakpoint.needsYou.map(\.id) == ["n-anna"])
+        #expect(Set(breakpoint.canWait.map(\.app)) == ["GitHub", "ChatGPT"])
+    }
+
     @Test func aMeetingThatEndsIsABreakpoint() {
         var state = Self.awayWithNotifications()
         state.lastTickAt = Self.local(15, 44)

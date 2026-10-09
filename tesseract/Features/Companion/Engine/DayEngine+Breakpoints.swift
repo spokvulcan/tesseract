@@ -38,10 +38,10 @@ nonisolated extension DayEngine {
         )
         let cardID = state.cards.last?.id
         let offered = inputs.toJudge.map(\.id)
+        let shown = (inputs.alreadyWaiting + inputs.raisedByRule).map(\.id)
         // Everything the card shows is now in front of the owner, except what
         // the model is about to judge.
-        state.ledger.markPresented(
-            (inputs.alreadyWaiting + inputs.raisedByRule).map(\.id), at: snapshot.now)
+        state.ledger.markPresented(shown, at: snapshot.now)
         guard !inputs.toJudge.isEmpty else {
             return effects
         }
@@ -50,7 +50,7 @@ nonisolated extension DayEngine {
             text: BreakpointMoment.request(inputs, calendar: snapshot.calendar),
             context: MomentContext(
                 awayFrom: awayFrom, awayUntil: snapshot.now, notificationIDs: offered,
-                cardID: cardID))
+                cardID: cardID, shownIDs: shown))
         if state.running != .breakpoint {
             // It couldn't run (the owner is chatting): the code-built card stands.
             state.ledger.markPresented(offered, at: snapshot.now)
@@ -112,6 +112,14 @@ nonisolated extension DayEngine {
         inputs.now = request.context.awayUntil ?? snapshot.now
         let stillOpen = Set(offered.filter { $0.seenAt == nil }.map(\.id))
         inputs.toJudge = offered.filter { stillOpen.contains($0.id) }
+        // What the code card showed besides them still waits: marked
+        // presented, it is no longer unresolved, so the rebuild alone would
+        // drop it.
+        let shown = request.context.shownIDs.compactMap { state.ledger.entry($0) }
+            .filter { $0.seenAt == nil }
+        let fresh = Set((inputs.raisedByRule + inputs.alreadyWaiting).map(\.id))
+        inputs.raisedByRule += shown.filter { $0.rule == .raise && !fresh.contains($0.id) }
+        inputs.alreadyWaiting += shown.filter { $0.rule != .raise && !fresh.contains($0.id) }
         let card = BreakpointMoment.card(
             inputs, line: choice.line,
             important: choice.entries.filter { stillOpen.contains($0.id) })

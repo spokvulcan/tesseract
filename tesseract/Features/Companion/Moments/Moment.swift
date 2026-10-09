@@ -96,6 +96,9 @@ nonisolated struct MomentContext: Sendable, Equatable, Codable {
     /// The events a Morning Plan listed for leaving, in the order their
     /// short ids ("e1"…) number them.
     var eventIDs: [String] = []
+    /// The banners a Breakpoint's code card showed besides those the model
+    /// judges (held, already judged, raised by a rule): its version keeps them.
+    var shownIDs: [String] = []
 }
 
 /// What a moment's model call produced, fed back to the engine as a signal.
