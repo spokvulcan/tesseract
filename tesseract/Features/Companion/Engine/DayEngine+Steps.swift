@@ -161,6 +161,23 @@ nonisolated extension DayEngine {
         return nil
     }
 
+    // MARK: - Focus
+
+    /// The step the owner started that is running now, its task still open:
+    /// the menu bar shows its time left, so the time can be seen from any app.
+    static func focus(snapshot: DaySnapshot, state: DayState) -> StepFocus? {
+        let now = snapshot.now
+        let facts = snapshot.facts(state: state)
+        for slot in state.plan.sorted(by: { $0.start < $1.start })
+        where state.startedSteps.contains(StepCue.key(slot)) && slot.start <= now
+            && now < end(of: slot)
+        {
+            guard let task = facts.task(slot.reminderID) else { continue }
+            return StepFocus(reminderID: task.id, title: task.title, end: end(of: slot))
+        }
+        return nil
+    }
+
     // MARK: - Started
 
     /// A slot given to a task from now ("Start now" on Today) is started:

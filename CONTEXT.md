@@ -1854,7 +1854,8 @@ the day's state, so without it nothing marks their start. A step the owner
 started (Start on a cue, or Start now on Today) checks in when its time is up:
 Done, 15 more min (from now, if answered late), Tomorrow; while it runs, no
 other start interrupts it — one that comes meanwhile is held, named by the
-check-in, and cued once the owner is free. Built by code, no model; each start and
+check-in, and cued once the owner is free — and the menu bar shows its time
+left beside the glyph ("25m"), so the time can be seen from any app. Built by code, no model; each start and
 end once, within ten minutes; never while away, in quiet hours (but not the
 morning's end of them once the owner sat down to start the day), a call, a
 game or a meeting, nor over a panel that is up; a slot whose reminder rings

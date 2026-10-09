@@ -299,6 +299,32 @@ struct DayEngineStepCueTests {
         #expect(Self.cues(after.effects).isEmpty)
     }
 
+    @Test func theStepTheOwnerStartedIsTheMenuBarsFocusWhileItRuns() throws {
+        let started = Self.started()
+        let focus = try #require(
+            DayEngine.focus(snapshot: Self.snapshot(at: Self.local(11, 20)), state: started))
+        #expect(focus.reminderID == "letter")
+        #expect(focus.end == Self.local(11, 32))
+        #expect(
+            DayEngine.focus(snapshot: Self.snapshot(at: Self.local(11, 32)), state: started) == nil)
+        let doneEarly = Self.snapshot(
+            at: Self.local(11, 20), open: [Self.deck, Self.dentist], done: [Self.letter])
+        #expect(DayEngine.focus(snapshot: doneEarly, state: started) == nil)
+        // A slot that was only cued, never started, is no focus.
+        #expect(
+            DayEngine.focus(snapshot: Self.snapshot(at: Self.local(11, 15)), state: Self.cued())
+                == nil)
+    }
+
+    @Test func theMenuBarSaysTheTimeLeftShort() {
+        let now = Self.local(11, 0)
+        #expect(MenuBarFocusText.timeLeft(until: Self.local(11, 25), now: now) == "25m")
+        #expect(MenuBarFocusText.timeLeft(until: Self.local(12, 5), now: now) == "1h 5m")
+        #expect(MenuBarFocusText.timeLeft(until: Self.local(12, 0), now: now) == "1h")
+        #expect(MenuBarFocusText.timeLeft(until: now.addingTimeInterval(30), now: now) == "1m")
+        #expect(MenuBarFocusText.spoken(until: Self.local(11, 25), now: now) == "25 min left")
+    }
+
     @Test func startNowOnTodayIsStartedAndNeedsNoCue() throws {
         let placed = DayEngine.decide(
             .cardAction(.place(reminderID: "deck", start: Self.local(11, 15), minutes: 25)),

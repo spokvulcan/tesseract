@@ -352,6 +352,13 @@ the owner must remember to read does not. What changed:
   for Class", `nudge.leave.*`), the Now Card says "Leave at 12:30" as the
   event comes up — free time ends at the departure, not the event — and the
   Day Line shows it under the event.
+- **The time left of a started step is in the menu bar.** The Now Card's
+  draining bar helps only while Today is open, and during a step the owner
+  is in another app. While a step the owner started runs (its task still
+  open), the status item shows its time left beside the glyph ("25m",
+  "1h 5m"), refreshed on its own clock, with the step in the tooltip; it
+  goes back to the glyph alone when the step ends or is done
+  (`DayEngine.focus`, pushed through `CompanionPresence`).
 - **Once the must-do is done, the rest is a bonus.** Finishing the day's one
   thing that mattered most changed nothing on Today: the next free-time card
   offered the next task at the same weight. Now it says "The must-do is done;

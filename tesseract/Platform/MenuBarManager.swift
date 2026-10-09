@@ -73,6 +73,10 @@ final class MenuBarManager: NSObject {
 
     private var statusItem: NSStatusItem?
     private var iconView: NSImageView?
+    /// The time left of a step the owner started, beside the glyph.
+    private var focusLabel: NSTextField?
+    private var focus: StepFocus?
+    private var focusRefresh: Timer?
     private var settingsObservationTask: Task<Void, Never>?
     /// The Models section's live state, and the clock that refreshes it while
     /// the menu is open.
@@ -129,6 +133,43 @@ final class MenuBarManager: NSObject {
         applyActivityToIcon()
     }
 
+    /// A step the owner started is running (or nil: none is): its time left
+    /// shows beside the glyph, refreshed on its own clock, so the time can be
+    /// seen from any app.
+    func updateFocus(_ focus: StepFocus?) {
+        self.focus = focus
+        focusRefresh?.invalidate()
+        focusRefresh = nil
+        if focus != nil {
+            let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.applyFocus() }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            focusRefresh = timer
+        }
+        applyFocus()
+    }
+
+    private func applyFocus() {
+        guard let item = statusItem, let label = focusLabel else { return }
+        let now = Date()
+        if let focus, focus.end > now {
+            label.stringValue = MenuBarFocusText.timeLeft(until: focus.end, now: now)
+            label.isHidden = false
+            item.length = 22 + 3 + label.intrinsicContentSize.width + 6
+            item.button?.toolTip =
+                "\(focus.title) — \(MenuBarFocusText.spoken(until: focus.end, now: now))"
+        } else {
+            label.isHidden = true
+            item.length = NSStatusItem.squareLength
+            item.button?.toolTip = nil
+            if focus != nil {
+                focusRefresh?.invalidate()
+                focusRefresh = nil
+            }
+        }
+    }
+
     // MARK: - Status item
 
     private func setMenuBarVisible(_ isVisible: Bool) {
@@ -146,6 +187,7 @@ final class MenuBarManager: NSObject {
         }
         statusItem = nil
         iconView = nil
+        focusLabel = nil
     }
 
     private func createStatusItem() {
@@ -157,14 +199,23 @@ final class MenuBarManager: NSObject {
             // `addSymbolEffect` is public on `NSImageView` only. The view is
             // click-through so the button keeps owning the menu.
             let icon = ClickThroughImageView()
-            icon.translatesAutoresizingMaskIntoConstraints = false
             icon.imageScaling = .scaleNone
-            button.addSubview(icon)
+            // The time left of a started step, hidden until there is one; a
+            // hidden view leaves the stack, so the glyph alone stays centred.
+            let label = ClickThroughLabel(labelWithString: "")
+            label.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+            label.isHidden = true
+            let stack = NSStackView(views: [icon, label])
+            stack.orientation = .horizontal
+            stack.spacing = 3
+            stack.translatesAutoresizingMaskIntoConstraints = false
+            button.addSubview(stack)
             NSLayoutConstraint.activate([
-                icon.centerXAnchor.constraint(equalTo: button.centerXAnchor),
-                icon.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+                stack.centerXAnchor.constraint(equalTo: button.centerXAnchor),
+                stack.centerYAnchor.constraint(equalTo: button.centerYAnchor),
             ])
             iconView = icon
+            focusLabel = label
         }
 
         let menu = NSMenu()
@@ -174,6 +225,7 @@ final class MenuBarManager: NSObject {
 
         appliedActivity = .idle
         setIcon(for: .idle)
+        applyFocus()
     }
 
     // MARK: - Icon
@@ -619,6 +671,25 @@ extension MenuBarManager: NSMenuDelegate {
 /// clicks — the button keeps owning menu presentation.
 private final class ClickThroughImageView: NSImageView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+private final class ClickThroughLabel: NSTextField {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+/// How the menu bar says the time left of a started step: short beside the
+/// glyph ("25m", "1h 5m"), whole in its tooltip.
+nonisolated enum MenuBarFocusText {
+    static func timeLeft(until end: Date, now: Date) -> String {
+        let minutes = max(1, Int((end.timeIntervalSince(now) / 60).rounded(.up)))
+        if minutes < 60 { return "\(minutes)m" }
+        return minutes % 60 == 0 ? "\(minutes / 60)h" : "\(minutes / 60)h \(minutes % 60)m"
+    }
+
+    static func spoken(until end: Date, now: Date) -> String {
+        let minutes = max(1, Int((end.timeIntervalSince(now) / 60).rounded(.up)))
+        return "\(MomentPrompts.minutesText(minutes)) left"
+    }
 }
 
 // MARK: - Pinned-language derivation

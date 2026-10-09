@@ -82,6 +82,13 @@ nonisolated enum CardAction: Sendable, Equatable {
     case keep(cardID: String)
 }
 
+/// The step the owner started and is in now, for the menu bar's timer.
+nonisolated struct StepFocus: Sendable, Equatable {
+    var reminderID: String
+    var title: String
+    var end: Date
+}
+
 /// What the owner chose on a Step Cue.
 nonisolated enum StepChoice: String, Sendable, Equatable {
     /// Doing it now: the slot starts this minute.

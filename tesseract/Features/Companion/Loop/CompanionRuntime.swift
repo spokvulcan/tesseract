@@ -182,6 +182,7 @@ final class CompanionRuntime {
         }
         send(.companionDisabled)
         isActive = false
+        presence.setFocus(nil)
         delivery.closePanel()
         Log.companion.info("Companion off")
     }
@@ -203,12 +204,14 @@ final class CompanionRuntime {
     }
 
     private func process(_ signal: DaySignal) async {
-        let decision = DayEngine.decide(signal, snapshot: snapshot(), state: state)
+        let snapshot = snapshot()
+        let decision = DayEngine.decide(signal, snapshot: snapshot, state: state)
         if decision.state.day != state.day { thread.show(day: decision.state.day) }
         if decision.state != state {
             state = decision.state
             stateStore.save(state)
         }
+        presence.setFocus(isActive ? DayEngine.focus(snapshot: snapshot, state: state) : nil)
         for effect in decision.effects { await perform(effect) }
     }
 
