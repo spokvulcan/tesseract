@@ -37,17 +37,32 @@ nonisolated extension DayEngine {
 
     /// Back from `awayFrom`: five minutes or more is a break — the time at
     /// the Mac starts again, and a Break Cue still on the panel comes down.
-    static func backFromAway(awayFrom: Date, snapshot: DaySnapshot, state: inout DayState)
-        -> [DayEffect]
-    {
-        guard snapshot.now.timeIntervalSince(awayFrom) >= TimeInterval(breakAwayMinutes * 60)
-        else { return [] }
+    /// A real one (`measured`: not the app starting, whose gap is the time
+    /// it was closed) is traced, with the sitting before it.
+    static func backFromAway(
+        awayFrom: Date, snapshot: DaySnapshot, state: inout DayState, measured: Bool = true
+    ) -> [DayEffect] {
+        let away = snapshot.now.timeIntervalSince(awayFrom)
+        guard away >= TimeInterval(breakAwayMinutes * 60) else { return [] }
+        var effects: [DayEffect] = []
+        // The night is night.ended's.
+        if measured, away < DaySettings.overnightGap, let since = state.sittingSince,
+            awayFrom > since
+        {
+            effects.append(
+                .trace(
+                    .breakTaken,
+                    [
+                        "minutesAtMac": .int(Int(awayFrom.timeIntervalSince(since) / 60)),
+                        "minutesAway": .int(Int(away / 60)),
+                    ]))
+        }
         state.sittingSince = snapshot.now
         state.breakNotBefore = nil
-        guard let cuedAt = state.breakCuedAt else { return [] }
+        guard let cuedAt = state.breakCuedAt else { return effects }
         state.breakCuedAt = nil
         // Up from the Mac with the cue on the panel: it was taken.
-        return [
+        return effects + [
             .retractBreak,
             .trace(
                 .cueReaction,

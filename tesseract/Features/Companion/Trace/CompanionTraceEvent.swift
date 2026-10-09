@@ -98,6 +98,14 @@ nonisolated enum CompanionTraceEvent: String, Sendable, Equatable, CaseIterable 
     /// A Day Thread passed its ceiling and was compacted.
     case threadCompacted = "thread.compacted"
 
+    // MARK: - presence.*
+
+    /// The owner came back from five minutes away or more — not the night,
+    /// nor the app starting: how long they had sat at the Mac before it
+    /// (minutes; from a Taking 5 if that came later) and how long they were
+    /// away. What the Break Cue's two hours are tuned by.
+    case breakTaken = "presence.break"
+
     // MARK: - night.*
 
     /// Quiet hours began with the owner at the Mac: the night's one banner

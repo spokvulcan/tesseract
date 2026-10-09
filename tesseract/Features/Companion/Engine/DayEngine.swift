@@ -86,7 +86,8 @@ nonisolated enum DayEngine {
                 // Starting up counts as sitting down: measure the gap from
                 // the last time the owner was seen.
                 let awayFrom = state.lastPresentAt ?? .distantPast
-                effects += backFromAway(awayFrom: awayFrom, snapshot: snapshot, state: &state)
+                effects += backFromAway(
+                    awayFrom: awayFrom, snapshot: snapshot, state: &state, measured: false)
                 effects += ownerReturned(awayFrom: awayFrom, snapshot: snapshot, state: &state)
                 state.lastPresentAt = snapshot.now
             }

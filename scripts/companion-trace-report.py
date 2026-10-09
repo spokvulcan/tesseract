@@ -8,7 +8,8 @@ Reads ~/Library/Application Support/CompanionTrace/trace-*.jsonl (one file per
 day, ADR-0080) and prints, per day: moments (and how many ran with a cold
 prefix cache), cards by delivery rung, card reactions by action ("kept" apart
 from "dismissed"), Step and Break Cues by phase and the owner's choices (a
-Break Cue's prefixed "break"), steps moved off a meeting, the wind-down,
+Break Cue's prefixed "break"), steps moved off a meeting, breaks from the Mac
+(how many, and the median and longest sitting before one), the wind-down,
 nudges (event and leave), notifications by source, Triage, and the tasks the
 Night Reflection proposed and what the owner decided. A Step Cue shown ten
 minutes or more after its moment counts as late. The night before is how long
@@ -48,6 +49,7 @@ def summarise(path):
     sources = collections.Counter()
     triage = [0, 0]
     wind_down = 0
+    sittings = []
     tasks = collections.Counter()
     night = None
     for record in records(path):
@@ -88,6 +90,8 @@ def summarise(path):
             triage[1] += fields.get("raised", 0)
         elif event == "night.wind-down":
             wind_down += 1
+        elif event == "presence.break":
+            sittings.append(fields.get("minutesAtMac", 0))
         elif event == "night.ended":
             minutes = fields.get("minutesAway", 0)
             night = "%d h %02d min away%s" % (
@@ -112,6 +116,10 @@ def summarise(path):
         "nudges": dict(nudges),
         "notifications": dict(sources),
         "triage runs / raised": "%d / %d" % tuple(triage),
+        "breaks (sat before, min)": (
+            "%d · median %d · longest %d" % (
+                len(sittings), sorted(sittings)[len(sittings) // 2], max(sittings))
+            if sittings else None),
         "night before": night,
         "wind-down": wind_down,
         "task proposals": dict(tasks),

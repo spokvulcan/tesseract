@@ -439,7 +439,12 @@ the owner must remember to read does not. What changed:
   four hours at the Mac, so a longer step gets it midway, with the step to
   come back to and until when. A setting turns it off; `cue.presented` and `cue.reaction` carry it with
   the phase "break" (a reaction "away": up from the Mac with the cue on the
-  panel).
+  panel). The two hours were chosen without a measure of how long the owner
+  sits: the trace had none. `presence.break` now records each real break —
+  five minutes away or more, not the night nor the app starting — with how
+  long the owner sat before it and how long they were away, and the trace
+  report gives the day's count, median and longest sitting, so the
+  threshold can follow the owner's days.
 - **After a night past midnight, the plan keeps the day light.** The
   wind-down speaks as quiet hours begin; the morning after a late night still
   got a full plan, with commitments from 07:15. When the owner was last at

@@ -266,6 +266,26 @@ struct DayEngineBreakCueTests {
         #expect(Self.breaks(Self.tick(back.state, at: Self.local(12, 56)).effects).count == 1)
     }
 
+    @Test func aBreakIsTracedWithTheSittingBeforeIt() throws {
+        let back = DayEngine.decide(
+            .presenceReturned(awayFrom: Self.local(10, 50)),
+            snapshot: Self.snapshot(at: Self.local(10, 56)), state: Self.state())
+        let fields = try #require(Self.traced(.breakTaken, in: back.effects))
+        #expect(fields["minutesAtMac"] == .int(110))
+        #expect(fields["minutesAway"] == .int(6))
+        // The night is night.ended's; the app starting measures nothing.
+        let night = DayEngine.decide(
+            .presenceReturned(awayFrom: Self.local(2)),
+            snapshot: Self.snapshot(at: Self.local(10, 56)), state: Self.state())
+        #expect(Self.traced(.breakTaken, in: night.effects) == nil)
+        var closed = Self.state()
+        closed.lastPresentAt = Self.local(10, 30)
+        let launch = DayEngine.decide(
+            .companionEnabled, snapshot: Self.snapshot(at: Self.local(10, 56)), state: closed)
+        #expect(Self.traced(.breakTaken, in: launch.effects) == nil)
+        #expect(launch.state.sittingSince == Self.local(10, 56))
+    }
+
     @Test func aShorterAbsenceIsNoBreak() {
         let back = DayEngine.decide(
             .presenceReturned(awayFrom: Self.local(10, 52)),
