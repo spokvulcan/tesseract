@@ -228,6 +228,12 @@ struct JarvisPanelGalleryTests {
                 "Answer mail", "Review PR #612", "Standup", "Lunch with Sam", "Write the cache ADR",
             ])
         #expect(steps.last?.kind == .task(isMustDo: true))
+        // At 08:20, mail at 08:30 is due: the plan offers to start it.
+        #expect(
+            PlanStep.startable(steps, now: TodayFixture.morning.now)?.reminderID == "mail")
+        #expect(
+            PlanStep.startable(steps, now: TodayFixture.morning.now.addingTimeInterval(-15 * 60))
+                == nil)
     }
 
     /// Lay the panel out once to learn its height, as the panel does, then

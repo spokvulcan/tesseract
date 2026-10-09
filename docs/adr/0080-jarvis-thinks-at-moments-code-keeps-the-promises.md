@@ -295,7 +295,10 @@ the owner must remember to read does not. What changed:
   all". The Morning Plan now lists the steps ahead (its tasks among the day's
   events, the must-do starred) and its tips, with Looks Good; the Evening
   Wrap-up lists what got done and each leftover with Tomorrow, Later and Let
-  go (Jarvis's pick in the accent) or Do What Jarvis Suggests. Looks Good and
+  go (Jarvis's pick in the accent) or Do What Jarvis Suggests. When the
+  plan's first step is a task due within ten minutes, its main button is
+  Start Now: the step starts and the card is taken in — one click from the
+  plan to doing, not Looks Good and then a cue. Looks Good and
   Good Night take the card in (`card.reaction` "kept"): it leaves the panel
   and stays in Today, unlike the close button; a kept card never takes the
   panel again (Jarvis's version of a kept plan updates in Today) and its

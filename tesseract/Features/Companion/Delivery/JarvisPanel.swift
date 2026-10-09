@@ -561,7 +561,8 @@ private struct CardContent: View {
                 }
             case .morningPlan(let plan):
                 MorningPlanContent(
-                    card: card, plan: plan, agenda: agenda, now: now, keep: keep, expand: expand)
+                    card: card, plan: plan, agenda: agenda, now: now, act: act, keep: keep,
+                    expand: expand)
             case .eveningWrapUp(let wrapUp):
                 WrapUpContent(card: card, wrapUp: wrapUp, act: act, keep: keep, expand: expand)
             case .reflection:
@@ -590,11 +591,13 @@ private struct MorningPlanContent: View {
     let plan: MorningPlanCard
     let agenda: Agenda
     let now: Date
+    let act: (CardAction) -> Void
     let keep: () -> Void
     let expand: () -> Void
 
     var body: some View {
         let steps = PlanStep.ahead(plan: plan, agenda: agenda, now: now)
+        let first = PlanStep.startable(steps, now: now)
         VStack(alignment: .leading, spacing: 12) {
             Text(card.kind.title).fontWeight(.semibold)
             Text(card.line).fixedSize(horizontal: false, vertical: true)
@@ -619,8 +622,18 @@ private struct MorningPlanContent: View {
                 }
             }
             HStack(spacing: 8) {
-                Button("Looks Good", action: keep)
+                // The first step is due: one click from the plan to doing it.
+                if let first, let reminderID = first.reminderID {
+                    Button("Start Now") {
+                        act(.step(reminderID: reminderID, .start))
+                        keep()
+                    }
                     .buttonStyle(PanelButtonStyle(prominent: true))
+                    .focusable(false)
+                    .help("Start \(first.title) now; the plan stays in Today")
+                }
+                Button("Looks Good", action: keep)
+                    .buttonStyle(PanelButtonStyle(prominent: first == nil))
                     .focusable(false)
                 Button("Open Today", action: expand)
                     .buttonStyle(PanelButtonStyle())
@@ -642,9 +655,20 @@ struct PlanStep: Identifiable, Equatable {
     var title: String
     var minutes: Int
     var kind: Kind
+    /// A task's reminder (nil for an event).
+    var reminderID: String? = nil
 
     /// The most the panel lists; Today has the rest.
     static let shown = 5
+
+    /// The plan's first step when it is a task due within ten minutes: the
+    /// panel offers to start it.
+    static func startable(_ steps: [PlanStep], now: Date) -> PlanStep? {
+        guard let first = steps.first, first.reminderID != nil,
+            first.start <= now.addingTimeInterval(10 * 60)
+        else { return nil }
+        return first
+    }
 
     /// The day's events and the plan's tasks still ahead, in time order —
     /// read through the same Timeline as Today.
@@ -663,7 +687,8 @@ struct PlanStep: Identifiable, Equatable {
             case .task(let task) where !task.isDone:
                 return PlanStep(
                     id: row.id, start: row.start, title: task.reminder.title,
-                    minutes: task.minutes, kind: .task(isMustDo: task.isMustDo))
+                    minutes: task.minutes, kind: .task(isMustDo: task.isMustDo),
+                    reminderID: task.id)
             default:
                 return nil
             }
