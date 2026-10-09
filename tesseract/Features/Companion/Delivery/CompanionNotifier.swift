@@ -77,7 +77,8 @@ final class CompanionNotifier {
     /// The ids of the nudges scheduled with the OS right now.
     func scheduledNudgeIDs() async -> Set<String> {
         let pending = await UNUserNotificationCenter.current().pendingNotificationRequests()
-        return Set(pending.map(\.identifier).filter { $0.hasPrefix(NudgePlanner.idPrefix) })
+        return Set(
+            pending.map(\.identifier).filter { $0.hasPrefix(NudgePlanner.familyPrefix) })
     }
 
     /// The nudges macOS has delivered and still keeps in Notification Center,
@@ -86,7 +87,7 @@ final class CompanionNotifier {
         let delivered = await UNUserNotificationCenter.current().deliveredNotifications()
         return delivered.compactMap { notification in
             let request = notification.request
-            guard request.identifier.hasPrefix(NudgePlanner.idPrefix) else { return nil }
+            guard request.identifier.hasPrefix(NudgePlanner.familyPrefix) else { return nil }
             return DeliveredNudge(
                 id: request.identifier, title: request.content.title, at: notification.date)
         }

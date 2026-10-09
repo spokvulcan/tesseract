@@ -41,18 +41,30 @@ nonisolated enum CardParser {
             let at: String
             let minutes: Int?
         }
+        struct Leave: Decodable {
+            let event: String
+            let at: String
+        }
         let line: String?
         let mustDo: String?
         let plan: [Entry]?
         let suggestions: [String]?
+        let leave: [Leave]?
 
         enum CodingKeys: String, CodingKey {
-            case line, plan, suggestions
+            case line, plan, suggestions, leave
             case mustDo = "must_do"
         }
     }
 
-    static func morningPlan(_ reply: String, facts: DayFacts) -> CardParse {
+    /// The longest a departure may come before its event.
+    static let longestTravel: TimeInterval = 3 * 3600
+
+    /// - Parameter eventIDs: the events the request listed for leaving, in
+    ///   the order their short ids ("e1"…) number them.
+    static func morningPlan(_ reply: String, facts: DayFacts, eventIDs: [String] = [])
+        -> CardParse
+    {
         guard let data = jsonObject(in: reply) else { return .invalid("no JSON object") }
         guard let decoded = try? JSONDecoder().decode(MorningPlanReply.self, from: data) else {
             return .invalid("the JSON is not a Morning Plan")
@@ -79,12 +91,29 @@ nonisolated enum CardParser {
             return Placement(reminderID: entry.id, start: start.date, minutes: minutes)
         }
         let suggestions = (decoded.suggestions ?? []).compactMap(cleanLine).prefix(3)
+        // A time to leave: for an event the request listed, before it starts
+        // and not hours ahead, and still to come.
+        var leaving = Set<String>()
+        let departures: [Departure] = (decoded.leave ?? []).compactMap { entry in
+            guard entry.event.hasPrefix("e"), let number = Int(entry.event.dropFirst()),
+                number >= 1, number <= eventIDs.count,
+                let event = facts.events.first(where: { $0.id == eventIDs[number - 1] }),
+                !leaving.contains(event.id),
+                let at = AgendaTime.parse(entry.at, now: facts.now, calendar: facts.calendar),
+                at.hasTime, at.date < event.start, at.date > facts.now,
+                event.start.timeIntervalSince(at.date) <= longestTravel
+            else { return nil }
+            leaving.insert(event.id)
+            return Departure(
+                eventID: event.id, title: event.title, at: at.date, eventStart: event.start,
+                location: event.location)
+        }
         return .card(
             .morningPlan(
                 MorningPlanCard(
                     line: line, mustDoID: mustDo,
                     placements: placements.sorted { $0.start < $1.start },
-                    suggestions: Array(suggestions))))
+                    suggestions: Array(suggestions), departures: departures)))
     }
 
     // MARK: Evening Wrap-up

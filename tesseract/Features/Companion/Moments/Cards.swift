@@ -83,6 +83,44 @@ nonisolated struct MorningPlanCard: Sendable, Equatable, Codable {
     var placements: [Placement]
     /// At most three small suggestions ("start with the two quick replies").
     var suggestions: [String]
+    /// When to leave for the day's events in person.
+    var departures: [Departure] = []
+
+    private enum CodingKeys: String, CodingKey {
+        case line, mustDoID, placements, suggestions, departures
+    }
+
+    init(
+        line: String, mustDoID: String?, placements: [Placement], suggestions: [String],
+        departures: [Departure] = []
+    ) {
+        self.line = line
+        self.mustDoID = mustDoID
+        self.placements = placements
+        self.suggestions = suggestions
+        self.departures = departures
+    }
+
+    /// A card saved before departures existed still loads.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        line = try c.decode(String.self, forKey: .line)
+        mustDoID = try c.decodeIfPresent(String.self, forKey: .mustDoID)
+        placements = try c.decode([Placement].self, forKey: .placements)
+        suggestions = try c.decode([String].self, forKey: .suggestions)
+        departures = (try? c.decodeIfPresent([Departure].self, forKey: .departures)) ?? []
+    }
+}
+
+/// When the owner has to leave for an event in person, from the Morning Plan
+/// (Jarvis knows the bus takes half an hour; the calendar doesn't). The OS
+/// nudges at that time, and the Now Card says it as the event comes up.
+nonisolated struct Departure: Sendable, Equatable, Hashable, Codable {
+    var eventID: String
+    var title: String
+    var at: Date
+    var eventStart: Date
+    var location: String?
 }
 
 /// A reminder given a slot in today's plan. Tesseract-side only: the

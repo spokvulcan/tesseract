@@ -37,6 +37,15 @@ struct MomentPromptsTests {
                 """))
     }
 
+    @Test func theMorningPlanListsTheEventsToLeaveFor() {
+        let text = MomentPrompts.morningPlan(facts: Self.facts)
+        #expect(text.contains("Events still ahead (id · when — title · place):"))
+        #expect(text.contains("- e1 · 09:30 — Standup"))
+        #expect(text.contains("- e2 · 13:00 — 1:1"))
+        #expect(text.contains(#""leave": [{"event": "<event id>", "at": "HH:MM"}]"#))
+        #expect(MomentPrompts.leavingEvents(Self.facts).map(\.id) == ["E1", "E2"])
+    }
+
     @Test func theMorningPlanAsksForTheCardWithIDs() {
         let text = MomentPrompts.morningPlan(facts: Self.facts)
         #expect(text.hasPrefix("[Morning Plan]"))

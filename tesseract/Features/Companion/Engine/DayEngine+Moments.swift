@@ -30,9 +30,11 @@ nonisolated extension DayEngine {
         }
         state.deferred.remove(kind)
         let facts = snapshot.facts(state: state)
+        var context = context
         let body: String
         switch kind {
         case .morningPlan:
+            if text == nil { context.eventIDs = MomentPrompts.leavingEvents(facts).map(\.id) }
             body = text ?? MomentPrompts.morningPlan(facts: facts)
         case .eveningWrapUp:
             body = text ?? MomentPrompts.eveningWrapUp(facts: facts, leftovers: leftovers(facts))
@@ -196,9 +198,10 @@ nonisolated extension DayEngine {
         let facts = snapshot.facts(state: state)
         switch request.kind {
         case .morningPlan:
-            guard case .card(let body) = CardParser.morningPlan(reply, facts: facts) else {
-                return nil
-            }
+            guard
+                case .card(let body) = CardParser.morningPlan(
+                    reply, facts: facts, eventIDs: request.context.eventIDs)
+            else { return nil }
             return accept(
                 body, kind: .morningPlan, fallback: false, snapshot: snapshot, state: &state,
                 cardID: request.context.cardID)
@@ -275,6 +278,7 @@ nonisolated extension DayEngine {
             state.morningPlanAt = snapshot.now
             if let mustDo = card.mustDoID { state.mustDoID = mustDo }
             if !card.placements.isEmpty { state.plan = card.placements }
+            if !card.departures.isEmpty { state.departures = card.departures }
         case .eveningWrapUp:
             state.eveningWrapUpAt = snapshot.now
         case .reflection(let card):

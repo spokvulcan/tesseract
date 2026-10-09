@@ -61,15 +61,33 @@ nonisolated enum MomentPrompts {
                 "Free before the first meeting: \(clock(free.start, facts))–\(clock(free.end, facts)) (\(minutesText(Int(free.duration / 60))))."
             )
         }
+        let leaving = leavingEvents(facts)
+        if !leaving.isEmpty {
+            lines.append("Events still ahead (id · when — title · place):")
+            for (index, event) in leaving.enumerated() {
+                var line = "- e\(index + 1) · \(clock(event.start, facts)) — \(event.title)"
+                if let place = event.location, !place.isEmpty { line += " · \(place)" }
+                lines.append(line)
+            }
+        }
         lines.append("")
         lines.append("Reply with only this JSON, nothing before or after it:")
         lines.append(
-            #"{"line": "<one warm sentence about the shape of the day>", "must_do": "<task id or null>", "plan": [{"id": "<task id>", "at": "HH:MM", "minutes": <number>}], "suggestions": ["<short tip>"]}"#
+            #"{"line": "<one warm sentence about the shape of the day>", "must_do": "<task id or null>", "plan": [{"id": "<task id>", "at": "HH:MM", "minutes": <number>}], "suggestions": ["<short tip>"], "leave": [{"event": "<event id>", "at": "HH:MM"}]}"#
         )
         lines.append(
             "Use only task ids listed above. Times are today, local, 24-hour, from now on, never over an event. Leave breathing room. At most 3 suggestions; none is fine."
         )
+        lines.append(
+            "\"leave\" is when to set off for an event in person that takes travel — by what the owner told you or its place. Never for calls or meetings at the desk; most days it is empty."
+        )
         return lines.joined(separator: "\n")
+    }
+
+    /// The events still ahead today a Morning Plan may set a time to leave
+    /// for, in the order its request numbers them.
+    static func leavingEvents(_ facts: DayFacts) -> [AgendaEvent] {
+        facts.remainingEventsToday.filter { $0.start > facts.now }
     }
 
     // MARK: Evening Wrap-up

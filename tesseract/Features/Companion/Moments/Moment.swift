@@ -93,6 +93,9 @@ nonisolated struct MomentContext: Sendable, Equatable, Codable {
     /// The card this moment refines (a Breakpoint shows a code-built card at
     /// once; the model's version replaces it in place).
     var cardID: String?
+    /// The events a Morning Plan listed for leaving, in the order their
+    /// short ids ("e1"…) number them.
+    var eventIDs: [String] = []
 }
 
 /// What a moment's model call produced, fed back to the engine as a signal.

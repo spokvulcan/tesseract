@@ -54,6 +54,8 @@ nonisolated enum NowCardBuilder {
         var wrappedUp: Bool
         var eveningMinutes: Int
         var inboxCount: Int = 0
+        /// When to leave for the day's events in person, from the plan.
+        var departures: [Departure] = []
     }
 
     static let maxActions = 3
@@ -135,9 +137,33 @@ nonisolated enum NowCardBuilder {
 
         let openAnytime = timeline.anytime.filter { !$0.isDone }
 
-        // The next step. A task can start early.
+        // When to leave for an event in person, if the plan set a time.
+        func departure(for row: TimelineRow) -> Departure? {
+            guard case .event(let event) = row.kind else { return nil }
+            return context.departures.first {
+                $0.eventID == event.id && $0.eventStart == event.start
+            }
+        }
+
+        // Time to leave for an event in person: that is the step now.
+        if let next = ahead.first, let leave = departure(for: next), leave.at <= now {
+            return NowCard(
+                headline: title(of: next),
+                detail: "Time to leave. It starts at \(clock(next.start)).", actions: [])
+        }
+
+        // The next step. A task can start early; an event in person says
+        // when to leave for it.
         func nextStep(_ next: TimelineRow) -> NowCard {
             let minutes = max(1, Int(next.start.timeIntervalSince(now) / 60))
+            if let leave = departure(for: next) {
+                let untilLeave = max(1, Int(leave.at.timeIntervalSince(now) / 60))
+                return NowCard(
+                    headline: title(of: next),
+                    detail:
+                        "Leave at \(clock(leave.at)), in \(MomentPrompts.minutesText(untilLeave)). It starts at \(clock(next.start)).",
+                    actions: [])
+            }
             var actions: [NowAction] = []
             if case .task(let task) = next.kind {
                 actions = [
@@ -206,8 +232,12 @@ nonisolated enum NowCardBuilder {
             ?? openAnytime.first
         if freeNow, candidate != nil || !ahead.isEmpty {
             let free =
-                ahead.first.map { "free until \(clock($0.start))" }
-                ?? "free for the rest of the day"
+                ahead.first.map { row in
+                    // Free until it's time to leave, not until the event.
+                    departure(for: row).map {
+                        "free until \(clock($0.at)), when you leave for \(title(of: row))"
+                    } ?? "free until \(clock(row.start))"
+                } ?? "free for the rest of the day"
             if let task = candidate {
                 return NowCard(
                     headline: task.reminder.title,

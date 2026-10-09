@@ -255,4 +255,27 @@ struct CardParserTests {
         let line = String(repeating: "a", count: 500)
         #expect(CardParser.cleanLine(line)?.count == 318)
     }
+
+    @Test func aTimeToLeaveIsKeptOnlyJustBeforeAnEventTheRequestListed() {
+        // As the request listed them: e1 the standup at 09:30, e2 the 1:1 at 13:00.
+        let reply =
+            #"{"line": "Ok", "leave": [{"event": "e2", "at": "08:00"}, {"event": "e1", "at": "09:45"}, {"event": "e9", "at": "10:00"}, {"event": "e2", "at": "12:30"}, {"event": "e2", "at": "12:40"}]}"#
+        guard
+            case .card(.morningPlan(let card)) = CardParser.morningPlan(
+                reply, facts: Self.facts, eventIDs: ["E1", "E2"])
+        else {
+            Issue.record("expected a Morning Plan card")
+            return
+        }
+        // Hours ahead, after the start, unknown, and a second time: dropped.
+        #expect(card.departures.map(\.eventID) == ["E2"])
+        #expect(card.departures.first?.at == TimelineBuilderTests.local(30, 12, 30))
+        #expect(card.departures.first?.eventStart == TimelineBuilderTests.local(30, 13))
+    }
+
+    @Test func aCardSavedBeforeDeparturesStillLoads() throws {
+        let json = #"{"line": "Hi", "placements": [], "suggestions": []}"#
+        let card = try JSONDecoder().decode(MorningPlanCard.self, from: Data(json.utf8))
+        #expect(card.departures.isEmpty)
+    }
 }

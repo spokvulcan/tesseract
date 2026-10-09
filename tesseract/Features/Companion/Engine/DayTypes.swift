@@ -298,6 +298,8 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     var cards: [DayCard] = []
     var mustDoID: String?
     var plan: [Placement] = []
+    /// When to leave for the day's events in person, from the plan.
+    var departures: [Departure] = []
     /// Last night's carry-over note, for this day's opening.
     var carryOver: String?
     /// Tonight's note, handed to the next day.
@@ -347,7 +349,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         case running, cards, mustDoID, plan, carryOver, carryOverForNextDay, ledger, agents
         case agentSpokenAt, lastTickAt, lastTriageAt, whereYouWere, deferred, firedNudgeIDs
         case cuedSteps, startedSteps, interrupted, morningPlanResumed, windDownAt
-        case draft, draftForNextDay
+        case draft, draftForNextDay, departures
     }
 
     /// Every field but the day is optional on disk, so a state saved by an
@@ -382,6 +384,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         windDownAt = try? c.decodeIfPresent(Date.self, forKey: .windDownAt)
         draft = (try? c.decodeIfPresent([String].self, forKey: .draft)) ?? []
         draftForNextDay = (try? c.decodeIfPresent([String].self, forKey: .draftForNextDay)) ?? []
+        departures = (try? c.decodeIfPresent([Departure].self, forKey: .departures)) ?? []
     }
 
     /// The day as a relaunch finds it: the moment in flight never finished,

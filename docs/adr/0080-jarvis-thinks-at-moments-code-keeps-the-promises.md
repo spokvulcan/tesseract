@@ -334,6 +334,15 @@ the owner must remember to read does not. What changed:
   the next day; the draft lived on a card no one saw by morning. The draft
   now rides into the next Day Opening as "Last night's first draft of
   today", where the Morning Plan reads it.
+- **A time to leave.** The owner's Profile says an in-person class means
+  leaving 30 minutes early, and Jarvis wrote "Leave by 12:30" as a plan tip,
+  but the only alarm was the event nudge ten minutes before the start. The
+  Morning Plan now sees the events still ahead with short ids and places,
+  and may answer `leave: [{event, at}]` for one in person; code keeps a
+  departure only for a listed event, before it starts, at most three hours
+  ahead and still to come. Each becomes a Nudge the OS keeps ("Time to leave
+  for Class", `nudge.leave.*`), and the Now Card says "Leave at 12:30" as the
+  event comes up — free time ends at the departure, not the event.
 - **The trace measures it**: `cue.presented` (start or end, how late, the
   slot's length, the must-do) and `cue.reaction` (the choice, the time to
   react).

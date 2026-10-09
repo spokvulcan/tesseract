@@ -3,8 +3,9 @@
 //  tesseract
 //
 //  Nudges are notifications scheduled with the OS a few minutes before each
-//  calendar event, so they fire even when Tesseract is closed, busy or its
-//  model is failing. The planner is pure: the agenda in, the nudges that
+//  calendar event — and at the time the Morning Plan set to leave for one in
+//  person — so they fire even when Tesseract is closed, busy or its model is
+//  failing. The planner is pure: the agenda in, the nudges that
 //  should be scheduled out. Reminders with a due time need no nudge from
 //  Tesseract: they carry their own alarm, which Reminders delivers on every
 //  device.
@@ -25,6 +26,10 @@ nonisolated struct Nudge: Sendable, Equatable, Hashable, Codable, Identifiable {
 nonisolated enum NudgePlanner {
 
     static let idPrefix = "nudge.event."
+    /// A departure's: `nudge.leave.<event id>.<content hash>`.
+    static let leavePrefix = "nudge.leave."
+    /// Every nudge Tesseract schedules, whichever kind.
+    static let familyPrefix = "nudge."
 
     /// The nudges that should be scheduled at `now`: one per timed event that
     /// starts within the horizon and whose nudge time is still ahead.
@@ -46,6 +51,26 @@ nonisolated enum NudgePlanner {
             return Nudge(
                 id: "\(idPrefix)\(event.id).\(digest)", eventID: event.id, fireAt: fireAt,
                 title: event.title, body: body)
+        }
+        .sorted { $0.fireAt < $1.fireAt }
+    }
+
+    /// The departures still ahead, for events still on the calendar: "Time
+    /// to leave for Class" at the time the plan set.
+    static func plan(
+        departures: [Departure], events: [AgendaEvent], now: Date, calendar: Calendar = .current
+    ) -> [Nudge] {
+        departures.compactMap { departure in
+            guard departure.at > now,
+                let event = events.first(where: { $0.id == departure.eventID }),
+                event.start == departure.eventStart
+            else { return nil }
+            var body = "It starts at \(AgendaTime.clock(event.start, calendar: calendar))"
+            if let location = event.location, !location.isEmpty { body += " · \(location)" }
+            let digest = stableHash("\(event.title)|\(departure.at.timeIntervalSince1970)")
+            return Nudge(
+                id: "\(leavePrefix)\(event.id).\(digest)", eventID: event.id,
+                fireAt: departure.at, title: "Time to leave for \(event.title)", body: body)
         }
         .sorted { $0.fireAt < $1.fireAt }
     }

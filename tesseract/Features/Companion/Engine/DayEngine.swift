@@ -280,9 +280,13 @@ nonisolated enum DayEngine {
         -> [DayEffect]
     {
         guard snapshot.agenda.access.canUseCalendar else { return [] }
-        let desired = NudgePlanner.plan(
-            events: snapshot.agenda.events, now: snapshot.now,
-            leadMinutes: snapshot.settings.nudgeLeadMinutes, calendar: snapshot.calendar)
+        let desired =
+            NudgePlanner.plan(
+                events: snapshot.agenda.events, now: snapshot.now,
+                leadMinutes: snapshot.settings.nudgeLeadMinutes, calendar: snapshot.calendar)
+            + NudgePlanner.plan(
+                departures: state.departures, events: snapshot.agenda.events,
+                now: snapshot.now, calendar: snapshot.calendar)
         let ids = Set(desired.map(\.id))
         guard ids != state.syncedNudgeIDs else { return [] }
         state.syncedNudgeIDs = ids

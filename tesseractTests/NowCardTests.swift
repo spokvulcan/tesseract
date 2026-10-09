@@ -61,6 +61,28 @@ struct NowCardTests {
         #expect(card.detail?.hasPrefix("1 min left, until 10:00") == true)
     }
 
+    @Test func anEventInPersonSaysWhenToLeave() {
+        let facts = { (now: Date) in
+            DayFacts(
+                now: now, events: [TimelineBuilderTests.standup, TimelineBuilderTests.oneOnOne])
+        }
+        var context = Self.context()
+        context.departures = [
+            Departure(
+                eventID: "E2", title: "1:1", at: Self.local(30, 12, 45),
+                eventStart: Self.local(30, 13))
+        ]
+        // Free until it's time to leave, not until the 1:1.
+        let free = Self.card(facts(Self.local(30, 11, 30)), context)
+        #expect(free.headline == "Free until 12:45, when you leave for 1:1")
+        // Too close to fit anything: the next step is leaving.
+        let soon = Self.card(facts(Self.local(30, 12, 35)), context)
+        #expect(soon.headline == "1:1")
+        #expect(soon.detail == "Leave at 12:45, in 10 min. It starts at 13:00.")
+        let now = Self.card(facts(Self.local(30, 12, 46)), context)
+        #expect(now.detail == "Time to leave. It starts at 13:00.")
+    }
+
     @Test func freeTimeHasNoSpan() {
         #expect(Self.card(Self.day(now: Self.local(30, 12))).span == nil)
     }

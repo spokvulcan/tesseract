@@ -143,6 +143,29 @@ struct DayEngineMorningPlanTests {
         #expect(panelCards(back.effects).isEmpty)
     }
 
+    @Test func aTimeToLeaveBecomesANudgeTheOSKeeps() throws {
+        let sitDown = DayEngine.decide(
+            .presenceReturned(awayFrom: Day.local(29, 23)),
+            snapshot: Day.snapshot(at: Day.local(30, 7, 40)), state: Day.state())
+        let request = try #require(Day.moments(sitDown.effects).first)
+        #expect(request.context.eventIDs == ["E1"])
+        let reply =
+            #"{"line": "Standup at half past nine.", "leave": [{"event": "e1", "at": "09:00"}]}"#
+        let planned = DayEngine.decide(
+            .momentOutcome(request, .reply(reply, measure)),
+            snapshot: Day.snapshot(at: Day.local(30, 7, 42)), state: sitDown.state)
+        #expect(planned.state.departures.map(\.eventID) == ["E1"])
+        let tick = DayEngine.decide(
+            .tick, snapshot: Day.snapshot(at: Day.local(30, 7, 43)), state: planned.state)
+        let synced = tick.effects.compactMap { effect -> [Nudge]? in
+            if case .syncNudges(let nudges) = effect { nudges } else { nil }
+        }
+        let leave = try #require(
+            synced.first?.first { $0.id.hasPrefix(NudgePlanner.leavePrefix) })
+        #expect(leave.fireAt == Day.local(30, 9))
+        #expect(leave.title == "Time to leave for Standup")
+    }
+
     // MARK: A plan cut short by a quit
 
     /// The plan was prepared at 05:00 and the app quit while Jarvis thought.

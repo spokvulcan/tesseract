@@ -43,6 +43,30 @@ struct NudgePlannerTests {
         #expect(nudges.first?.body == "In 10 min · 10:00–10:30 · Room 2")
     }
 
+    @Test func aDepartureIsNudgedAtItsTime() {
+        let course = AgendaEvent(
+            id: "course", title: "Course", start: Self.local(30, 13), end: Self.local(30, 14),
+            calendarID: "c", calendarTitle: "Home", location: "Main St 4")
+        let leave = Departure(
+            eventID: "course", title: "Course", at: Self.local(30, 12, 30),
+            eventStart: Self.local(30, 13))
+        let nudges = NudgePlanner.plan(departures: [leave], events: [course], now: Self.now)
+        #expect(nudges.count == 1)
+        #expect(nudges.first?.id.hasPrefix(NudgePlanner.leavePrefix) == true)
+        #expect(nudges.first?.id.hasPrefix(NudgePlanner.familyPrefix) == true)
+        #expect(nudges.first?.fireAt == Self.local(30, 12, 30))
+        #expect(nudges.first?.title == "Time to leave for Course")
+        #expect(nudges.first?.body == "It starts at 13:00 · Main St 4")
+        // Gone from the calendar, moved, or already past: nothing.
+        #expect(NudgePlanner.plan(departures: [leave], events: [], now: Self.now).isEmpty)
+        var moved = course
+        moved.start = Self.local(30, 15)
+        #expect(NudgePlanner.plan(departures: [leave], events: [moved], now: Self.now).isEmpty)
+        #expect(
+            NudgePlanner.plan(departures: [leave], events: [course], now: Self.local(30, 12, 31))
+                .isEmpty)
+    }
+
     @Test func aChangedTitleOrLeadGetsANewID() {
         let event = Self.event("x", Self.local(30, 12))
         var renamed = event
