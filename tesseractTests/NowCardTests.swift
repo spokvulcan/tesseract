@@ -87,6 +87,23 @@ struct NowCardTests {
         #expect(!other.isMustDo)
     }
 
+    @Test func aCallUnderWayOrAboutToStartIsOneClickToJoin() throws {
+        let link = try #require(URL(string: "https://meet.google.com/abc-defg-hij"))
+        let call = AgendaEvent(
+            id: "sync", title: "Sync", start: Self.local(30, 15), end: Self.local(30, 15, 30),
+            calendarID: "c", calendarTitle: "Work",
+            notes: "Join with Google Meet: https://meet.google.com/abc-defg-hij",
+            hasOtherAttendees: true)
+        func card(_ hour: Int, _ minute: Int) -> NowCard {
+            Self.card(DayFacts(now: Self.local(30, hour, minute), events: [call]))
+        }
+        #expect(card(15, 10).actions.map(\.kind) == [.join(link)])
+        #expect(card(14, 50).headline == "Sync")
+        #expect(card(14, 50).actions.map(\.kind) == [.join(link)])
+        // Hours ahead, nothing to join yet.
+        #expect(!card(12, 0).actions.contains { $0.kind == .join(link) })
+    }
+
     @Test func theTimeLeftRoundsUpToTheMinute() {
         // 09:59:30: half a minute of the standup is left, said as a minute.
         let now = Self.local(30, 9, 59).addingTimeInterval(30)

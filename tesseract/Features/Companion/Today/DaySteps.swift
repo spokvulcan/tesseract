@@ -591,6 +591,7 @@ struct TodayActions {
         case .tomorrow(let id): moveToTomorrow(id)
         case .planDay: runtime.act(.planNow)
         case .wrapUp: runtime.act(.wrapUpNow)
+        case .join(let url): NSWorkspace.shared.open(url)
         }
     }
 

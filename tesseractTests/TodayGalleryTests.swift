@@ -85,6 +85,7 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
     case morning
     case focus
     case unstarted
+    case inCall
     case midday
     case wrapUpClosed
     case evening
@@ -101,6 +102,7 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
         switch self {
         case .morning: Self.at(8, 20)
         case .focus, .unstarted: Self.at(14, 20)
+        case .inCall: Self.at(15, 10)
         case .midday: Self.at(14, 10)
         case .wrapUpClosed: Self.at(21, 10)
         case .evening: Self.at(22, 1)
@@ -151,7 +153,7 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
     var reminders: [AgendaReminder] {
         let today = Self.at(0)
         switch self {
-        case .morning, .focus, .unstarted:
+        case .morning, .focus, .unstarted, .inCall:
             let focus = self != .morning
             return [
                 Self.reminder(
@@ -224,15 +226,17 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
                 calendarTitle: "Personal", colorHex: "#30D158"),
         ]
         switch self {
-        case .morning, .focus, .unstarted:
+        case .morning, .focus, .unstarted, .inCall:
+            var review = Self.event(
+                "d", "Design review", Self.at(15), Self.at(16), location: "Room 4",
+                meeting: true)
+            review.notes = "Join with Google Meet: https://meet.google.com/abc-defg-hij"
             return [
                 Self.event("s", "Standup", Self.at(9, 30), Self.at(10), meeting: true),
                 Self.event(
                     "l", "Lunch with Sam", Self.at(12, 30), Self.at(13, 30), calendar: "personal",
                     location: "Café Nord"),
-                Self.event(
-                    "d", "Design review", Self.at(15), Self.at(16), location: "Room 4",
-                    meeting: true),
+                review,
             ] + tomorrow
         case .midday:
             return [
@@ -252,7 +256,7 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
     var state: DayState {
         var state = DayState(day: DayKey(for: now))
         switch self {
-        case .morning, .focus, .unstarted:
+        case .morning, .focus, .unstarted, .inCall:
             state.morningPlanAt = Self.at(8, 18)
             state.mustDoID = "adr"
             state.plan = [
@@ -261,7 +265,9 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
                 Placement(reminderID: "adr", start: Self.at(13, 45), minutes: 75),
             ]
             // At 14:20 the must-do is under way; unstarted, its cue was closed.
-            if self == .focus { state.startedSteps = [StepCue.key(state.plan[2])] }
+            if self == .focus || self == .inCall {
+                state.startedSteps = [StepCue.key(state.plan[2])]
+            }
             state.cards = [
                 DayCard(
                     id: "morningPlan-0", kind: .morningPlan, createdAt: Self.at(8, 18),

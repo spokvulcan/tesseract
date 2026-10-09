@@ -1790,8 +1790,9 @@ in it, the next step, what's left, or a done day and how tomorrow starts —
 within half a day, how far off that is; in
 the evening it closes the day — what is still ahead tonight, else what got
 done and what is still open, never a slid task at the top) with one-click
-offers that move it on (Done, Start now, "Do it at 16:30", Tomorrow, Plan my
-day, Wrap up the day; several tasks that slid are fitted into the day's next
+offers that move it on (Done, Start now, "Do it at 16:30", Tomorrow, Join for
+a call under way or starting within a quarter hour, Plan my day, Wrap up the
+day; several tasks that slid are fitted into the day's next
 free slots, in order, with one "Fit all 3 in"). Code builds it from the Timeline, so it never waits on
 the model; the must-do wears the Day Line's star on it, and one that slid
 says so ("Your must-do slid past 10:15."); Jarvis's latest card line rides along while fresh (a plan for four

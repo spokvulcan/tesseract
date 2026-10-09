@@ -39,6 +39,8 @@ nonisolated struct NowAction: Sendable, Equatable, Identifiable {
         case placeAll([Placement])
         /// Due tomorrow; tomorrow's plan finds it a time.
         case tomorrow(reminderID: String)
+        /// Open a call's link.
+        case join(URL)
         case planDay
         case wrapUp
     }
@@ -67,6 +69,8 @@ nonisolated enum NowCardBuilder {
     }
 
     static let maxActions = 3
+    /// A call this close is offered to join from the card.
+    static let joinLead = 15
 
     static func build(timeline: TodayTimeline, facts: DayFacts, context: Context) -> NowCard {
         let evening = isEvening(
@@ -123,6 +127,12 @@ nonisolated enum NowCardBuilder {
             }
         }
 
+        // A call under way, or about to start, is one click to join.
+        func join(_ event: AgendaEvent) -> [NowAction] {
+            guard let link = event.meetingLink else { return [] }
+            return [NowAction(kind: .join(link), title: "Join", help: "Open the call")]
+        }
+
         // In a meeting or a block.
         for row in timeline.rows {
             guard case .event(let event) = row.kind, event.start <= now, event.end > now else {
@@ -130,7 +140,8 @@ nonisolated enum NowCardBuilder {
             }
             return NowCard(
                 headline: event.title,
-                detail: joined(left(until: event.end), then(after: event.end)), actions: [],
+                detail: joined(left(until: event.end), then(after: event.end)),
+                actions: join(event),
                 span: DateInterval(start: event.start, end: event.end))
         }
 
@@ -198,6 +209,9 @@ nonisolated enum NowCardBuilder {
             }
             var actions: [NowAction] = []
             var isMustDo = false
+            if case .event(let event) = next.kind, minutes <= Self.joinLead {
+                actions = join(event)
+            }
             if case .task(let task) = next.kind {
                 isMustDo = task.isMustDo
                 actions = [
@@ -436,7 +450,7 @@ nonisolated extension NowCard {
             case .place(let id, let start, let minutes):
                 [Placement(reminderID: id, start: start, minutes: minutes)]
             case .placeAll(let placements): placements
-            case .complete, .tomorrow, .planDay, .wrapUp: []
+            case .complete, .tomorrow, .planDay, .wrapUp, .join: []
             }
         }
     }
