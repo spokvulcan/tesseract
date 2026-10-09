@@ -35,8 +35,15 @@ nonisolated struct SeenLedger: Sendable, Equatable, Codable {
     static let expiry: TimeInterval = 24 * 3600
     /// Keep the ledger bounded.
     static let capacity = 300
+    /// How many dropped ids it remembers.
+    static let forgottenCapacity = 600
 
     private(set) var entries: [Entry] = []
+    /// Ids of entries dropped (pruned, or past capacity), newest last. The
+    /// banners are read off Notification Center, which has no delivery time:
+    /// one still listed there is read again as it is opened, and without this
+    /// it came in as a fresh arrival, off to Triage.
+    private(set) var forgotten: [String] = []
 
     /// Admit a banner. Returns false for a banner already in the ledger. The
     /// owner's rules come first; without one, its source decides (noise is
@@ -45,12 +52,17 @@ nonisolated struct SeenLedger: Sendable, Equatable, Codable {
     mutating func arrived(_ notification: ObservedNotification, present: Bool, rules: [TriageRule])
         -> Bool
     {
-        guard !entries.contains(where: { $0.id == notification.id }) else { return false }
+        guard !entries.contains(where: { $0.id == notification.id }),
+            !forgotten.contains(notification.id)
+        else { return false }
         let rule =
             TriageRules.verdict(for: notification, rules: rules)
             ?? NotificationSources.defaultAction(for: notification.source)
         entries.append(Entry(notification: notification, arrivedPresent: present, rule: rule))
-        if entries.count > Self.capacity { entries.removeFirst(entries.count - Self.capacity) }
+        if entries.count > Self.capacity {
+            forget(entries.prefix(entries.count - Self.capacity).map(\.id))
+            entries.removeFirst(entries.count - Self.capacity)
+        }
         return true
     }
 
@@ -111,7 +123,36 @@ nonisolated struct SeenLedger: Sendable, Equatable, Codable {
 
     /// Drop what expired a while ago, so the ledger stays small.
     mutating func prune(now: Date) {
+        let old = entries.filter {
+            now.timeIntervalSince($0.notification.arrivedAt) > 2 * Self.expiry
+        }
+        guard !old.isEmpty else { return }
+        forget(old.map(\.id))
         entries.removeAll { now.timeIntervalSince($0.notification.arrivedAt) > 2 * Self.expiry }
+    }
+
+    private mutating func forget(_ ids: [String]) {
+        forgotten += ids
+        if forgotten.count > Self.forgottenCapacity {
+            forgotten.removeFirst(forgotten.count - Self.forgottenCapacity)
+        }
+    }
+}
+
+nonisolated extension SeenLedger {
+    private enum CodingKeys: String, CodingKey { case entries, forgotten }
+
+    /// A ledger saved before it remembered dropped ids still loads.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        entries = try c.decodeIfPresent([Entry].self, forKey: .entries) ?? []
+        forgotten = (try? c.decodeIfPresent([String].self, forKey: .forgotten)) ?? []
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(entries, forKey: .entries)
+        try c.encode(forgotten, forKey: .forgotten)
     }
 }
 

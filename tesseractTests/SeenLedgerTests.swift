@@ -117,6 +117,25 @@ struct SeenLedgerTests {
                     body: "Lunch?", arrivedAt: Self.base)))
     }
 
+    @Test func aBannerReadAgainAfterItWasDroppedIsNotNew() throws {
+        var ledger = SeenLedger()
+        ledger.arrived(Self.notification("old"), present: true, rules: [])
+        ledger.prune(now: Self.base.addingTimeInterval(49 * 3600))
+        #expect(ledger.entry("old") == nil)
+        // Notification Center still lists it, and opening it reads it again.
+        let readAgain = ledger.arrived(Self.notification("old"), present: true, rules: [])
+        #expect(!readAgain)
+        #expect(ledger.untriaged(now: Self.base.addingTimeInterval(49 * 3600)).isEmpty)
+        // Saved and loaded, it still remembers; a ledger saved before
+        // remembering anything still loads.
+        let saved = try JSONEncoder().encode(ledger)
+        var loaded = try JSONDecoder().decode(SeenLedger.self, from: saved)
+        let afterLoad = loaded.arrived(Self.notification("old"), present: true, rules: [])
+        #expect(!afterLoad)
+        let older = try JSONDecoder().decode(SeenLedger.self, from: Data(#"{"entries": []}"#.utf8))
+        #expect(older.entries.isEmpty)
+    }
+
     @Test func aRuleMustNarrowSomething() {
         let everything = TriageRule(action: .ignore, phrase: "")
         #expect(!everything.isSpecific)
