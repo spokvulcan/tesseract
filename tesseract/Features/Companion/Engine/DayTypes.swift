@@ -297,6 +297,13 @@ nonisolated struct DaySnapshot: Sendable, Equatable {
             weekFocus: state.weekFocus)
         facts.mustDoDays = state.mustDoDays
         facts.departures = state.departures
+        // At the Mac past midnight, the night before this day's start.
+        if let last = state.lastPresentAt, DayKey(for: last, calendar: calendar) < state.day,
+            calendar.component(.hour, from: last) < DayKey.rolloverHour,
+            now.timeIntervalSince(last) < 12 * 3600
+        {
+            facts.upLateUntil = last
+        }
         if state.mustDoID != nil {
             facts.mustDoDays[state.day.rawValue] = state.mustDoDoneAt != nil
         }

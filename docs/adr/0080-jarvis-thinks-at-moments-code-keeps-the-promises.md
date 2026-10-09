@@ -353,6 +353,14 @@ the owner must remember to read does not. What changed:
   hours that start at night, within their first hour and while they hold,
   once a night (across the 04:00 rollover too); never in a game or a call; a
   setting beside quiet hours turns it off (`night.wind-down` in the trace).
+- **After a night past midnight, the plan keeps the day light.** The
+  wind-down speaks as quiet hours begin; the morning after a late night still
+  got a full plan, with commitments from 07:15. When the owner was last at
+  the Mac past midnight (before 04:00, the night before the day's start), the
+  Morning Plan's request says until when, and asks for the must-do and what
+  can't wait, with room to rest, said kindly. Code knows it from the last
+  presence (`DayFacts.upLateUntil`), so a plan made ahead before the owner
+  sits down gets it too.
 - **A bot in a chat app is an app's news.** Slack counts as people, so
   every Jira comment relayed through it went to Triage: 7 of the 18 Slack
   banners in the ledger were the Jira bot, and on 7 October three Triage

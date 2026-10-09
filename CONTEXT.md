@@ -1907,6 +1907,7 @@ bus takes half an hour; the calendar doesn't): a Nudge fires then, the Now
 Card says "Leave at 12:30" as the event comes up, and the Day Line shows it
 under the event. A plan the app quit in the middle of runs again once when the
 Companion next comes on (not once the owner closed it, nor in the evening).
+After a night at the Mac past midnight it is asked to keep the day light.
 Skipping it costs nothing and nothing nags.
 
 **Breakpoint**:

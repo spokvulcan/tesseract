@@ -62,6 +62,11 @@ nonisolated enum MomentPrompts {
             lines.append(
                 "This week's focus: \(focus). When a task serves it, let it be the must-do.")
         }
+        if let late = facts.upLateUntil {
+            lines.append(
+                "Last night they were at the Mac until \(clock(late, facts)), past midnight. Keep today light: the must-do and what can't wait, with room to rest — and say it kindly, never as a reproach."
+            )
+        }
         lines.append("")
         lines += agendaLines(facts)
         if let free = facts.freeBeforeFirstEvent {

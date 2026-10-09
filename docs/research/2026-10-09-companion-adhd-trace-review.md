@@ -79,6 +79,7 @@ the ideas the changes lean on; it makes no claims beyond them.
 | 3 | Several tasks that slid are fitted back into the day's free slots in one click ("Fit all 3 in") |
 | 5 | A Morning Plan cut short by a quit runs again, once |
 | 9 | The wind-down: one banner as quiet hours begin, saying when tomorrow starts |
+| 9 | After a night at the Mac past midnight, the Morning Plan is asked to keep the day light |
 | 6 | A bot posting through a chat app is an app's news, not a person |
 | 8 | The night's draft of tomorrow opens the next day's thread |
 | 10 | The plan sets a time to leave for an event in person; the OS nudges then, the Now Card and the Day Line say it |

@@ -36,6 +36,9 @@ nonisolated struct DayFacts: Sendable, Equatable {
     var weekFocus: String?
     /// The last days' must-dos, today's included: done or not, by day.
     var mustDoDays: [String: Bool] = [:]
+    /// Last night the owner was at the Mac past midnight, until then: the
+    /// day's plan is asked to stay light.
+    var upLateUntil: Date?
     /// When to leave for the day's events in person: the way there is busy.
     var departures: [Departure] = []
 

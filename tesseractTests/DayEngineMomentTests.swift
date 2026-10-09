@@ -138,6 +138,27 @@ struct DayEngineMomentTests {
         #expect(Self.moments(back.effects).isEmpty)
     }
 
+    @Test func afterANightPastMidnightThePlanIsAskedToKeepTheDayLight() throws {
+        // At the Mac until 01:20; the plan is made ahead at 05:30.
+        var late = Self.state()
+        late.lastPresentAt = Self.local(30, 1, 20)
+        let prepared = DayEngine.decide(
+            .tick, snapshot: Self.snapshot(at: Self.local(30, 5, 30), present: false),
+            state: late)
+        let request = try #require(Self.moments(prepared.effects).first)
+        #expect(request.kind == .morningPlan)
+        #expect(
+            request.text.contains("Last night they were at the Mac until 01:20, past midnight."))
+        #expect(request.text.contains("Keep today light"))
+        // Off to bed at 23:30: an ordinary plan.
+        var early = Self.state()
+        early.lastPresentAt = Self.local(29, 23, 30)
+        let ordinary = DayEngine.decide(
+            .tick, snapshot: Self.snapshot(at: Self.local(30, 5, 30), present: false),
+            state: early)
+        #expect(Self.moments(ordinary.effects).first?.text.contains("Last night") == false)
+    }
+
     @Test func morningPlanRunsOncePerDay() {
         var state = Self.state()
         state.morningPlanAt = Self.local(30, 7)
