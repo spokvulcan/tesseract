@@ -105,11 +105,10 @@ final class IdleMonitor {
             workspace.addObserver(
                 forName: NSWorkspace.willSleepNotification, object: nil, queue: .main
             ) { [weak self] _ in
-                // The machine is going to sleep. Whatever we were doing, stop —
-                // the GPU is about to go away underneath us.
+                // The machine is going to sleep: the owner is away from here on.
                 Task { @MainActor [weak self] in
                     guard let self, self.pollTask != nil else { return }
-                    self.ownerReturned()
+                    self.machineSleeps()
                 }
             })
         observers.append(
@@ -165,6 +164,19 @@ final class IdleMonitor {
             // here first would make its own guard swallow the notification.
             ownerReturned()
         }
+    }
+
+    /// The Mac is going to sleep: from here the owner is away, if they weren't
+    /// already (a lid closed mid-work), since their last input. Never a
+    /// return: sleep read as one — a leftover of the retired memory
+    /// consolidation, which stopped its GPU work that way — made a Breakpoint
+    /// for nobody, stamped presence at the sleep, and cut the night short.
+    func machineSleeps() {
+        guard !isIdle else { return }
+        isIdle = true
+        awaySince = Date().addingTimeInterval(-secondsSinceLastEvent())
+        Log.companion.info("Owner away (sleep)")
+        onIdle?()
     }
 
     private func screenLocked() {
