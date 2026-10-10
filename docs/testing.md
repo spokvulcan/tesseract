@@ -477,6 +477,9 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # day walked through the engine signal by signal where those rules meet (the
 # plan, a cue started, an absence and the late check-in, the must-do put off
 # and started small, the clock, the evening),
+# a repeating task ticked off (the day follows its done occurrence: the
+# must-do done, the step in its slot, its pace; the in-memory store keeps the
+# copy and moves the series on, as Reminders does),
 # cards and prompts, the Day Thread's store, Shown Pictures (ADR-0090:
 # DayThreadPicturesTests — the model sees a picture in the turn it's shown and
 # a line in its place after, a tool's images too, an earlier turn reading the
@@ -499,6 +502,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/JarvisPanelGalleryTests \
   -only-testing:tesseractTests/MenuBarClockGalleryTests \
   -only-testing:tesseractTests/DayWalkTests \
+  -only-testing:tesseractTests/DayEngineRepeatingTaskTests \
   -only-testing:tesseractTests/NotificationSourceTests \
   -only-testing:tesseractTests/ModifierKeyDetectorTests \
   -only-testing:tesseractTests/CardItemActionTests \

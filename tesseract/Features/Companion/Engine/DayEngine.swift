@@ -41,6 +41,7 @@ nonisolated enum DayEngine {
         if state.day != today {
             // Done on the phone while the Mac slept through 04:00: it counts
             // for the day it was the must-do of — if done within that day.
+            followDoneOccurrences(snapshot: snapshot, state: &state)
             noteMustDoDone(
                 snapshot: snapshot, state: &state,
                 before: state.day.end(calendar: snapshot.calendar))
@@ -146,14 +147,55 @@ nonisolated enum DayEngine {
             effects += nudgesDelivered(delivered, state: &state)
         }
 
-        // After the signal: a must-do set by it may be done already, and a
+        // After the signal: a repeating task ticked off is followed to the
+        // occurrence done, a must-do set by it may be done already, and a
         // step started may be seen done.
+        followDoneOccurrences(snapshot: snapshot, state: &state)
         noteMustDoDone(snapshot: snapshot, state: &state)
         effects += noteStepRuns(snapshot: snapshot, state: &state)
         holdCueUnderCard(effects, snapshot: snapshot, state: &state)
         let waitingAfter = waitingCount(state, now: snapshot.now)
         if waitingAfter != waitingBefore { effects.append(.setWaiting(waitingAfter)) }
         return Decision(state: state, effects: effects)
+    }
+
+    /// A repeating task ticked off: Reminders keeps the done occurrence as a
+    /// copy with an id of its own and moves the series, under the old id, on
+    /// to its next date. What the day holds of the task follows the
+    /// occurrence done that day, once the series has moved past it: same
+    /// list and title, the same time of day when it has one, ticked off
+    /// within the day. So the must-do counts as done, the step stays done
+    /// where it was planned, and the series' next date stays its own day's.
+    /// A task moved on undone, or one that doesn't repeat, stays as it is.
+    private static func followDoneOccurrences(snapshot: DaySnapshot, state: inout DayState) {
+        let calendar = snapshot.calendar
+        guard let midnight = state.day.date(calendar: calendar),
+            let nextDate = calendar.date(byAdding: .day, value: 1, to: midnight),
+            let end = state.day.end(calendar: calendar)
+        else { return }
+        var held = Set(state.plan.map(\.reminderID))
+        if let mustDo = state.mustDoID { held.insert(mustDo) }
+        let done = snapshot.agenda.doneToday + snapshot.agenda.doneThisWeek
+        func timeOfDay(_ reminder: AgendaReminder) -> DateComponents? {
+            guard reminder.dueHasTime, let due = reminder.due else { return nil }
+            return calendar.dateComponents([.hour, .minute], from: due)
+        }
+        for id in held.sorted() {
+            guard let series = snapshot.agenda.open.first(where: { $0.id == id }), series.repeats,
+                let due = series.due, due >= nextDate
+            else { continue }
+            let occurrence = done.filter { reminder in
+                guard let completed = reminder.completedAt, completed >= midnight,
+                    completed < end, !held.contains(reminder.id)
+                else { return false }
+                return reminder.listID == series.listID && reminder.title == series.title
+                    && timeOfDay(reminder) == timeOfDay(series)
+            }
+            .max { ($0.completedAt ?? .distantPast) < ($1.completedAt ?? .distantPast) }
+            guard let occurrence else { continue }
+            state.follow(series: id, to: occurrence.id)
+            held.insert(occurrence.id)
+        }
     }
 
     /// The must-do seen done, for the week's look-back; with `before`, only

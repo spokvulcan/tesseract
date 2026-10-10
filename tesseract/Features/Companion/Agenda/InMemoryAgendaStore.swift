@@ -5,7 +5,8 @@
 //  A hermetic Agenda: dictionaries, not a mock, and a peer implementation of
 //  the EventKit store. The test host's container uses it (ADR-0073), so a
 //  test run never asks for or touches the owner's Reminders or Calendar; the
-//  tests seed it with fixture days.
+//  tests seed it with fixture days. A repeating reminder ticked off works as
+//  in Reminders: a done copy with an id of its own, the series moved on.
 //
 
 import Foundation
@@ -123,8 +124,23 @@ final class InMemoryAgendaStore: AgendaStore {
             break
         }
         if let completed = change.completed {
-            reminder.isCompleted = completed
-            reminder.completedAt = completed ? now() : nil
+            if completed, !reminder.isCompleted, reminder.repeats, let due = reminder.due {
+                // Ticked off, a repeating reminder works as in Reminders: the
+                // done occurrence stays as a copy with an id of its own, and
+                // the series moves on, open, to its next date (the next day:
+                // the one rule this store knows).
+                let done = AgendaReminder(
+                    id: "R\(reminders.count + 1)-\(UUID().uuidString.prefix(4))",
+                    title: reminder.title, notes: reminder.notes, listID: reminder.listID,
+                    listTitle: reminder.listTitle, colorHex: reminder.colorHex, due: due,
+                    dueHasTime: reminder.dueHasTime, isCompleted: true, completedAt: now(),
+                    createdAt: reminder.createdAt)
+                reminders[done.id] = done
+                reminder.due = Calendar.current.date(byAdding: .day, value: 1, to: due)
+            } else {
+                reminder.isCompleted = completed
+                reminder.completedAt = completed ? now() : nil
+            }
         }
         reminders[id] = reminder
         record("updateReminder \(reminder.title)")
