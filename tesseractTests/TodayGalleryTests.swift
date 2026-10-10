@@ -166,11 +166,12 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
         AgendaList(id: "duolingo", title: "Duolingo", colorHex: "#34C759", isDefault: false),
         AgendaList(id: "buy", title: "Buy", colorHex: "#0A84FF", isDefault: false),
     ]
+    // A Google account's own calendar is named by its address.
     static let calendars = [
         AgendaCalendar(
             id: "work", title: "Work", colorHex: "#0A84FF", isWritable: true, isDefault: true),
         AgendaCalendar(
-            id: "personal", title: "Personal", colorHex: "#30D158", isWritable: true,
+            id: "personal", title: "sam.owner@gmail.com", colorHex: "#30D158", isWritable: true,
             isDefault: false),
     ]
 
@@ -229,6 +230,9 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
                 Self.reminder("passport", "Renew passport", list: "life", due: Self.at(0, day: 2)),
                 Self.reminder("izaro", "Izaro voice lines (PoE)", list: "inbox"),
                 Self.reminder("chain", "Order a new bike chain", list: "inbox"),
+                Self.reminder(
+                    "aurora", "https://en.vedur.is/weather/forecasts/aurora/ tonight?",
+                    list: "inbox"),
             ]
         case .evening, .night, .wrapUpClosed:
             let leftovers =
@@ -253,6 +257,9 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
                     "bins", "Put the bins out", list: "life", due: Self.at(7, 30, day: 5),
                     timed: true),
                 Self.reminder("invoice", "Send the invoice", list: "work", due: Self.at(0, day: 5)),
+                Self.reminder(
+                    "lithos", "Research https://github.com/lithos-ai/lithos-metal and test",
+                    list: "work", due: Self.at(0, day: 5)),
             ]
         }
     }
@@ -269,7 +276,7 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
             AgendaEvent(
                 id: "birthday", title: "Mom's birthday", start: Self.at(0, day: 5),
                 end: Self.at(0, day: 6), isAllDay: true, calendarID: "personal",
-                calendarTitle: "Personal", colorHex: "#30D158"),
+                calendarTitle: "sam.owner@gmail.com", colorHex: "#30D158"),
         ]
         switch self {
         case .morning, .focus, .unstarted, .inCall:

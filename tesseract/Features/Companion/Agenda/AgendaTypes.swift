@@ -85,6 +85,18 @@ nonisolated struct AgendaEvent: Sendable, Equatable, Hashable, Identifiable, Cod
     /// The call to join: the first meeting-service link in its place, its own
     /// link or its notes (where an invite writes "Join with Google Meet").
     var meetingLink: URL? { AgendaPlace.meetingLink(in: [location, url?.absoluteString, notes]) }
+
+    /// Its calendar as Today names it beside the event. A calendar named by
+    /// its account's address, as a Google account's own calendar is, reads
+    /// as the account's domain ("acme.io", "gmail.com"): the owner's
+    /// address is on all of them, the domain tells the accounts apart.
+    var calendarLabel: String {
+        let title = calendarTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let match = title.wholeMatch(of: /[^@\s]+@([^@\s]+\.[^@\s.]+)/) else {
+            return calendarTitle
+        }
+        return match.output.1.lowercased()
+    }
 }
 
 /// A calendar location as people read it.

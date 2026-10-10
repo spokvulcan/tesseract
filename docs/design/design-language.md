@@ -93,7 +93,11 @@ native macOS metrics untouched.
 - **Readable column on prose-like content.** Cap the content column; never
   let prose stretch the window (chat: `ChatLayout.columnMaxWidth`).
 - **Icon-light rows; actions in context menus.** Rows carry no visible
-  button chrome; row actions live in the context menu (PR #184).
+  button chrome; row actions live in the context menu (PR #184). One
+  exception: a row that exists to be decided, such as an Inbox item on Today
+  with its offered slot, shows its one offer as a small bordered button, like
+  the Evening Wrap-up's choices. Plain accent text there read as a label
+  ("Tomorrow" looked like a due date), not as something to click.
 - **Quiet loading.** Small inline `ProgressView` plus plain status text
   (`AgentComposerView` model-loading states). No skeletons, no shimmers.
 

@@ -3,8 +3,9 @@
 //  tesseract
 //
 //  Today's side column: the Inbox, each item with the slot Jarvis offers
-//  for it (a free half hour today, clear of his other offers, or tomorrow),
-//  and "Jarvis noticed". On a narrower page it stacks below the day.
+//  for it (a free half hour today, clear of his other offers, or tomorrow)
+//  and a ring to tick it off, and "Jarvis noticed". On a narrower page it
+//  stacks below the day.
 //
 
 import SwiftUI
@@ -63,17 +64,8 @@ private struct InboxSection: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             ForEach(shown) { reminder in
-                let slot = slots[reminder.id] ?? .tomorrow
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(reminder.title).lineLimit(2)
-                    Spacer(minLength: 8)
-                    Button(title(of: slot)) { actions.take(slot, for: reminder.id) }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(Color.accentColor)
-                        .focusable(false)
-                        .help(help(for: slot))
-                }
-                .padding(.vertical, 2)
+                InboxRow(
+                    reminder: reminder, slot: slots[reminder.id] ?? .tomorrow, actions: actions)
             }
             if items.count > Self.shown {
                 Text("…and \(items.count - Self.shown) more in Reminders.")
@@ -88,6 +80,57 @@ private struct InboxSection: View {
         return key.isSingleModifier
             ? "Tap \(key.displayString) in any app to write a thought down, or hold it to say one."
             : "Press \(key.displayString) in any app to write a thought down."
+    }
+}
+
+/// One capture waiting for a home: a ring to tick it off, as on the Day
+/// Line, and Jarvis's offer, one click from taking. The context menu holds
+/// the other way it can go.
+private struct InboxRow: View {
+    let reminder: AgendaReminder
+    let slot: InboxSlot
+    let actions: TodayActions
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Button {
+                actions.setDone(reminder.id, true)
+            } label: {
+                Image(systemName: "circle").foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .help("Mark as done")
+            Text(linkedTitle: reminder.title)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button(title(of: slot)) { actions.take(slot, for: reminder.id) }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .fixedSize()
+                .focusable(false)
+                .help(help(for: slot))
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 6)
+        .background(
+            .quaternary.opacity(hovering ? 0.5 : 0),
+            in: RoundedRectangle(cornerRadius: Theme.Radius.small)
+        )
+        .padding(.horizontal, -6)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .contextMenu {
+            if case .today(let start) = slot {
+                Button("Do It at \(AgendaTime.clock(start))") {
+                    actions.take(slot, for: reminder.id)
+                }
+            }
+            Button("Move to Tomorrow") { actions.take(.tomorrow, for: reminder.id) }
+            Divider()
+            Button("Mark as Done") { actions.setDone(reminder.id, true) }
+        }
     }
 
     private func title(of slot: InboxSlot) -> String {
@@ -146,7 +189,8 @@ private struct TaskProposalRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(proposal.title).fixedSize(horizontal: false, vertical: true)
+            Text(linkedTitle: proposal.title)
+                .fixedSize(horizontal: false, vertical: true)
             Text(when).foregroundStyle(.secondary)
             HStack(spacing: 12) {
                 Button("Add") { runtime.act(.taskProposal(id: proposal.id, add: true)) }

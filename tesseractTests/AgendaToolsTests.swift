@@ -257,6 +257,31 @@ struct AgendaToolsTests {
     }
 }
 
+/// A calendar's name as Today shows it beside an event: one named by its
+/// account's address (a Google calendar's own) reads as the account's
+/// domain, the part that tells the owner's accounts apart.
+struct AgendaCalendarLabelTests {
+
+    @Test(
+        arguments: [
+            ("sam@acme.io", "acme.io"),
+            ("Sam.Owner@Gmail.com", "gmail.com"),
+            ("  me@icloud.com ", "icloud.com"),
+            ("Work", "Work"),
+            ("Holidays in Iceland", "Holidays in Iceland"),
+            // Not an address: kept as written.
+            ("Team @ HQ", "Team @ HQ"),
+            ("@handle", "@handle"),
+            ("me@localhost", "me@localhost"),
+        ])
+    func aCalendarReadsByItsName(_ title: String, _ label: String) {
+        let event = AgendaEvent(
+            id: "e", title: "Standup", start: .distantPast, end: .distantPast,
+            calendarID: "c", calendarTitle: title)
+        #expect(event.calendarLabel == label)
+    }
+}
+
 /// A calendar location as people read it: a meeting link is its service, a
 /// password never shows, and a place stays as written.
 struct AgendaPlaceTests {

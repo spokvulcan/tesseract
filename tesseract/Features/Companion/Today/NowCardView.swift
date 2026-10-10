@@ -27,7 +27,7 @@ struct NowCardView: View {
             header(jarvis)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(card.headline)
+                    Text(linkedTitle: card.headline)
                         .fontWeight(.semibold)
                         .fixedSize(horizontal: false, vertical: true)
                     // The must-do wears its star here as on the Day Line.
@@ -105,7 +105,11 @@ struct NowCardView: View {
                     }
                 }
                 .disabled(needsJarvis && thinking)
-                .help(action.help ?? "")
+                // A held button says why, and when it frees up.
+                .help(
+                    needsJarvis && thinking
+                        ? "Jarvis is thinking; ready when he's done" : action.help ?? ""
+                )
                 .focusable(false)
             }
         }
@@ -398,8 +402,9 @@ private struct LeftoverRow: View {
 
     /// The task, and how long it has waited when that is since an earlier day.
     private var title: Text {
-        guard let waiting = leftover.waiting else { return Text(leftover.title) }
-        return Text(leftover.title) + Text("  \(waiting)").foregroundStyle(.secondary)
+        let task = Text(linkedTitle: leftover.title)
+        guard let waiting = leftover.waiting else { return task }
+        return task + Text("  \(waiting)").foregroundStyle(.secondary)
     }
 
     @ViewBuilder private var choices: some View {
