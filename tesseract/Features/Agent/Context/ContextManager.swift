@@ -203,9 +203,10 @@ actor ContextManager {
         _ messages: [any AgentMessageProtocol]
     ) -> String {
         var lines: [String] = []
+        // The chat's own user turns arrive as `CoreMessage.user`: the unwrapping
+        // accessors read them as they read a bare message.
         for message in messages {
-            switch message {
-            case let msg as UserMessage:
+            if let msg = message.asUser {
                 // The summarizer reads text only: say an image was there, so
                 // the summary keeps that it was shown.
                 let images =
@@ -213,22 +214,20 @@ actor ContextManager {
                     ? ""
                     : "[\(msg.images.count) image\(msg.images.count == 1 ? "" : "s") attached] "
                 lines.append("User: \(images)\(msg.content)")
-            case let msg as AssistantMessage:
-                if msg.content.isEmpty {
+            } else if let msg = message.asAssistant {
+                if msg.text.isEmpty {
                     if !msg.toolCalls.isEmpty {
                         let names = msg.toolCalls.map(\.name).joined(separator: ", ")
                         lines.append("Assistant: [called tools: \(names)]")
                     }
                 } else {
-                    lines.append("Assistant: \(msg.content)")
+                    lines.append("Assistant: \(msg.text)")
                 }
-            case let msg as ToolResultMessage:
+            } else if let msg = message.asToolResult {
                 let prefix = msg.isError ? "Tool Error" : "Tool Result"
                 lines.append("\(prefix) (\(msg.toolName)): \(msg.content.textContent)")
-            case let msg as CompactionSummaryMessage:
+            } else if let msg = message as? CompactionSummaryMessage {
                 lines.append("Previous Summary: \(msg.summary)")
-            default:
-                break
             }
         }
         return lines.joined(separator: "\n")
@@ -285,10 +284,11 @@ nonisolated func makeCompactionTransform(
 
 /// Coarse token estimation for compaction decisions.
 ///
-/// Heuristic: ~4 characters per token (ceil division). Image blocks are
-/// estimated at 4,800 characters (~1,200 tokens). This is intentionally
-/// conservative — actual token counts from the LLM's `usage.totalTokens`
-/// can refine the estimate during integration.
+/// Heuristic: ~4 characters per token (ceil division). Images — a user's
+/// attachments and a tool's image blocks alike — are estimated at 4,800
+/// characters (~1,200 tokens). This is intentionally conservative — actual
+/// token counts from the LLM's `usage.totalTokens` can refine the estimate
+/// during integration.
 nonisolated enum TokenEstimator: Sendable {
 
     /// Characters per estimated image token payload (~1,200 tokens × 4 chars).
@@ -316,13 +316,15 @@ nonisolated enum TokenEstimator: Sendable {
 
     // MARK: - Private
 
-    /// Sum all text content characters in a message.
+    /// Sum all text content characters in a message, and its images'
+    /// estimate. The chat sends its user turns as `CoreMessage.user` and the
+    /// agent loop keeps the wrapper, so the unwrapping accessors read it.
     private static func charCount(_ message: any AgentMessageProtocol) -> Int {
-        switch message {
-        case let msg as UserMessage:
-            return msg.content.utf8.count
+        if let msg = message.asUser {
+            return msg.content.utf8.count + msg.images.count * imageCharEstimate
+        }
 
-        case let msg as AssistantMessage:
+        if let msg = message.asAssistant {
             var count = msg.text.utf8.count
             if let thinking = msg.thinking {
                 count += thinking.utf8.count
@@ -332,8 +334,9 @@ nonisolated enum TokenEstimator: Sendable {
                 count += call.argumentsJSON.utf8.count
             }
             return count
+        }
 
-        case let msg as ToolResultMessage:
+        if let msg = message.asToolResult {
             var count = 0
             for block in msg.content {
                 switch block {
@@ -344,12 +347,11 @@ nonisolated enum TokenEstimator: Sendable {
                 }
             }
             return count
-
-        case let msg as CompactionSummaryMessage:
-            return msg.summary.utf8.count
-
-        default:
-            return 0
         }
+
+        if let msg = message as? CompactionSummaryMessage {
+            return msg.summary.utf8.count
+        }
+        return 0
     }
 }
