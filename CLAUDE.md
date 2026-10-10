@@ -31,7 +31,9 @@ Many cheap, trustworthy measurements per hour beat one slow end-to-end run.
   [suite…]`. It runs the built `.xctestrun`, skipping the 7–10 s project
   load of every `-scheme` call (a suite takes ~3 s), and prints failures
   with their `#expect` details. Iterate with `--no-build`; run the whole
-  target once, before committing. The vendor fork's tests:
+  target once, before committing, then `scripts/check.sh`: the commit
+  hook's gate (swift-format in place, SwiftLint, the test-only and docs
+  scans) over what changed. The vendor fork's tests:
   `scripts/vendor-test.sh [--no-build] [suite…]`. Read a script's source
   before passing it flags: `scripts/bench.sh` builds and runs on any
   argument.
