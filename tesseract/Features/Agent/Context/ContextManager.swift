@@ -141,9 +141,9 @@ actor ContextManager {
         return 0
     }
 
-    /// Check if a message is a ToolResultMessage.
+    /// Check if a message is a tool result, bare or wrapped.
     private func isToolResult(_ message: any AgentMessageProtocol) -> Bool {
-        message is ToolResultMessage
+        message.asToolResult != nil
     }
 
     // MARK: - Summarization Prompts

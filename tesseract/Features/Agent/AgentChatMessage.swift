@@ -78,48 +78,31 @@ struct AgentChatMessage: AgentMessageProtocol, Sendable, Codable, Identifiable {
 
     // MARK: - Convert from Protocol Messages
 
-    /// Creates an `AgentChatMessage` from any `AgentMessageProtocol`.
+    /// Creates an `AgentChatMessage` from any `AgentMessageProtocol`, bare or
+    /// wrapped in a `CoreMessage`.
     init(from message: any AgentMessageProtocol) {
-        let now = Date()
-        switch message {
-        case let core as CoreMessage:
-            switch core {
-            case .user(let user):
-                self.init(
-                    id: user.id, timestamp: user.timestamp, role: .user, content: user.content,
-                    thinking: nil)
-            case .assistant(let asst):
-                self.init(
-                    id: asst.id, timestamp: asst.timestamp, role: .assistant, content: asst.text,
-                    thinking: asst.thinking, toolCalls: Self.convertToolCalls(asst.toolCalls))
-            case .toolResult(let tr):
-                self.init(
-                    id: tr.id, timestamp: tr.timestamp, role: .tool,
-                    content: tr.content.textContent, thinking: nil, toolCallId: tr.toolCallId,
-                    isError: tr.isError)
-            }
-        case let user as UserMessage:
+        if let user = message.asUser {
             self.init(
                 id: user.id, timestamp: user.timestamp, role: .user, content: user.content,
                 thinking: nil)
-        case let asst as AssistantMessage:
+        } else if let asst = message.asAssistant {
             self.init(
                 id: asst.id, timestamp: asst.timestamp, role: .assistant, content: asst.text,
                 thinking: asst.thinking, toolCalls: Self.convertToolCalls(asst.toolCalls))
-        case let tr as ToolResultMessage:
+        } else if let tr = message.asToolResult {
             self.init(
                 id: tr.id, timestamp: tr.timestamp, role: .tool, content: tr.content.textContent,
                 thinking: nil, toolCallId: tr.toolCallId, isError: tr.isError)
-        case let compaction as CompactionSummaryMessage:
+        } else if let compaction = message as? CompactionSummaryMessage {
             self.init(
                 id: UUID(), timestamp: compaction.timestamp, role: .system,
                 content: compaction.displayText, thinking: nil)
-        case let chat as AgentChatMessage:
+        } else if let chat = message as? AgentChatMessage {
             self = chat
-        default:
+        } else {
             // Unknown message type — render as system note
             self.init(
-                id: UUID(), timestamp: now, role: .system, content: "[Unknown message]",
+                id: UUID(), timestamp: Date(), role: .system, content: "[Unknown message]",
                 thinking: nil)
         }
     }

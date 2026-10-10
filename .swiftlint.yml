@@ -113,3 +113,13 @@ custom_rules:
     excluded_match_kinds: [comment, doccomment, string]
     message: "A count of yields can run out before the thread pool runs the work: use observe(until:) or waitUntil (tesseractTests/Waiting.swift)"
     severity: error
+  agent_message_cast:
+    name: "Agent message cast"
+    # App code only; the accessors' home and the codec, which unwraps
+    # CoreMessage itself, cast on purpose.
+    included: "tesseract/(App|Core|Features|Models|Platform)/.*\\.swift$"
+    excluded: "Features/Agent/Core/(AgentMessage|MessagePersistence)\\.swift$"
+    regex: '\b(as[?!]?|is)\s+(UserMessage|AssistantMessage|ToolResultMessage)\b'
+    excluded_match_kinds: [comment, doccomment, string]
+    message: "Read an agent message through asUser, asAssistant or asToolResult: the chat keeps its user turns wrapped as CoreMessage.user, which a cast to the bare type misses"
+    severity: error

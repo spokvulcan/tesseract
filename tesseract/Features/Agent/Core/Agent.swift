@@ -166,7 +166,7 @@ final class Agent {
     func `continue`() {
         guard !state.isBusy else { return }
         // Precondition: last message must not be an unfinished assistant turn.
-        if context.messages.last is AssistantMessage { return }
+        if context.messages.last?.asAssistant != nil { return }
         beginRun { [gen = generate, cfg = makeLoopConfig(), emit = makeEmitter()] ctx, token in
             await agentLoopContinue(
                 context: &ctx,
