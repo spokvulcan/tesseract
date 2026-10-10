@@ -161,9 +161,9 @@ jobs:
           restore-keys: spm-${{ runner.os }}-
 
       # Tests must run in Debug: Release lacks ENABLE_TESTABILITY for
-      # @testable imports. -parallel-testing-enabled NO because state-mutating
-      # suites are not safe under the scheme's parallel twin processes
-      # (docs/testing.md).
+      # @testable imports. They run in parallel, as the scheme and every local
+      # run do, so a race that shows only in parallel fails here too
+      # (docs/testing.md → Parallel runs share one test host).
       - name: Test (Debug)
         run: |
           set -o pipefail
@@ -175,7 +175,6 @@ jobs:
             -destination 'platform=macOS' \
             -derivedDataPath DerivedData \
             -resultBundlePath TestResults.xcresult \
-            -parallel-testing-enabled NO \
             -skipPackagePluginValidation \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY=- \

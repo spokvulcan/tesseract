@@ -1,0 +1,33 @@
+# App code that only tests use, on purpose. scripts/check-test-only-code.py
+# fails on any other, and on an entry here that the app has started to use.
+# One name per line, then the reason it stays.
+
+# Test seams: the way tests observe or steer the real code.
+currentBudgetBytes        # SnapshotLedger: the budget in force, for the budget suites
+partitionMeta             # SnapshotLedger: a partition's stored metadata, for the ledger suites
+pendingWriteCount         # SSDSnapshotStore: the writer's queue depth, for the writer suites
+removeTestSink            # PrefixCacheDiagnostics: detaches a test's event sink
+ssdResidency              # TieredSnapshotStore: the typed observation that replaced the ForTesting reads (a067cbba)
+pointedAt                 # SearchEngine: points the real engine at a local fixture page
+beginLeafLease            # TokenRadixTree: acquireLeafLease, which production calls, without the refusal reason
+telemetryFiles            # BrowserMCPTelemetryLog: reads the log back, so its tests check what the writer wrote
+readEvents                # BrowserMCPTelemetryLog: same reader
+sendRaw                   # SSEWriter: sends a hand-written chunk, for the SSE framing tests
+promptTokenCounts         # PrefillStepBenchmarkRunner fixture: measures both prompts for its test
+convertMessages           # MessageConverter: wrapper over the live normalizeRequest that the converter tests drive
+normalizeConversation     # MessageConverter: same
+encodePlaceholderContainer # PlaceholderContainer: contiguous form for fixtures; the writer streams withChunks
+
+# Test doubles that live in the app target.
+NoOpBrowserPresenter      # headless presenter for the browser core
+InMemoryMemoryHeadroomSource # in-memory headroom source for the budget suites
+InMemoryMemoryPressureSource # in-memory pressure source for the budget suites
+resetWriteRecording       # InMemorySettingsStore, the settings test double
+
+# Planned or in progress.
+deserialize               # HybridCacheSnapshot: the safetensors reader the SSD writer is to switch to (SSDSnapshotStore header)
+applyAgain                # LearnedWordStore: Catch slice 1 (#615), not yet called by the app
+takeWaits                 # CheckBeforePasting: Catch slice 2 (#616), not yet called by the app
+
+# Called by a framework, not by name.
+menuNeedsUpdate           # NSMenuDelegate: AppKit calls it

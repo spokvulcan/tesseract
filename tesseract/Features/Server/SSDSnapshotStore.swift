@@ -32,9 +32,9 @@
 //
 //  **Placeholder on-disk format.** The writer serializes a simple
 //  length-prefixed binary container (8-byte LE header length + JSON
-//  header + concatenated tensor blobs) via the neutral
-//  `encodePlaceholderContainer` (in `PlaceholderContainer.swift`,
-//  shared with the ledger's rebuild). The real safetensors format
+//  header + concatenated tensor blobs), streamed in bounded chunks
+//  through `PlaceholderContainerEncoding.withChunks` (in
+//  `PlaceholderContainer.swift`). The real safetensors format
 //  comes in a downstream task that ships `HybridCacheSnapshot`
 //  `serialize(to:metadata:)` / `deserialize(from:)` wrappers; at
 //  that point this writer switches over. The header JSON carries a

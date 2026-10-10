@@ -8,17 +8,19 @@
 //
 
 import Foundation
+import Observation
 import Testing
 
 @testable import Tesseract_Agent
 
 @MainActor
+@Suite(.timeLimit(.minutes(1)))
 struct AgentSystemPromptInspectorTests {
 
     /// A formatter whose calls suspend on a continuation, so a test can hold a
     /// fetch in-flight and resolve specific calls in any order.
-    @MainActor
-    private final class ControllableFormatter {
+    @MainActor @Observable
+    fileprivate final class ControllableFormatter {
         private(set) var calls: [String] = []
         private var continuations: [CheckedContinuation<(text: String, tokenCount: Int), Error>] =
             []
@@ -61,10 +63,10 @@ struct AgentSystemPromptInspectorTests {
         )
 
         inspector.fetchRawSystemPrompt()
-        for _ in 0..<500 where formatter.pendingCount == 0 { await Task.yield() }
+        await observe(until: { formatter.pendingCount > 0 })
 
         formatter.resolve(call: 0, text: "RAW", tokenCount: 42)
-        for _ in 0..<500 where inspector.rawChatMLPrompt == nil { await Task.yield() }
+        await observe(until: { inspector.rawChatMLPrompt != nil })
 
         #expect(inspector.rawChatMLPrompt == "RAW")
         #expect(inspector.systemPromptTokenCount == 42)
@@ -82,15 +84,15 @@ struct AgentSystemPromptInspectorTests {
         )
 
         inspector.fetchRawSystemPrompt()
-        for _ in 0..<500 where formatter.pendingCount < 1 { await Task.yield() }
+        await observe(until: { formatter.pendingCount >= 1 })
 
         // Supersede while the first fetch is still in-flight.
         inspector.fetchRawSystemPrompt()
-        for _ in 0..<500 where formatter.pendingCount < 2 { await Task.yield() }
+        await observe(until: { formatter.pendingCount >= 2 })
 
         // Resolve the SECOND fetch first — it wins.
         formatter.resolve(call: 1, text: "SECOND", tokenCount: 2)
-        for _ in 0..<500 where inspector.rawChatMLPrompt == nil { await Task.yield() }
+        await observe(until: { inspector.rawChatMLPrompt != nil })
         #expect(inspector.rawChatMLPrompt == "SECOND")
         #expect(inspector.systemPromptTokenCount == 2)
 
@@ -111,9 +113,9 @@ struct AgentSystemPromptInspectorTests {
         )
 
         inspector.fetchRawSystemPrompt()
-        for _ in 0..<500 where formatter.pendingCount == 0 { await Task.yield() }
+        await observe(until: { formatter.pendingCount > 0 })
         formatter.resolve(call: 0, text: "RAW", tokenCount: 9)
-        for _ in 0..<500 where inspector.rawChatMLPrompt == nil { await Task.yield() }
+        await observe(until: { inspector.rawChatMLPrompt != nil })
 
         inspector.reset()
         #expect(inspector.rawChatMLPrompt == nil)

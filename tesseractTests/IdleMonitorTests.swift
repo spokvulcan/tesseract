@@ -9,7 +9,7 @@ import Testing
 
 @testable import Tesseract_Agent
 
-@Suite("Idle monitor")
+@Suite("Idle monitor", .timeLimit(.minutes(1)))
 @MainActor
 struct IdleMonitorTests {
 
@@ -39,9 +39,7 @@ struct IdleMonitorTests {
             workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
             isPostingWake = false
 
-            for _ in 0..<10 where monitor.isIdle {
-                await Task.yield()
-            }
+            await observe(until: { !monitor.isIdle })
         }
 
         #expect(!returnedWhilePostingWake)
@@ -80,7 +78,7 @@ struct IdleMonitorTests {
         busy.onReturn = { returns += 1 }
         busy.start()
         workspace.post(name: NSWorkspace.willSleepNotification, object: nil)
-        for _ in 0..<10 where !busy.isIdle { await Task.yield() }
+        await observe(until: { busy.isIdle })
         #expect(left == 1)
         #expect(busy.isIdle)
         #expect(returns == 0)
@@ -93,7 +91,7 @@ struct IdleMonitorTests {
         await confirmation("back on wake") { back in
             busy.onReturn = { back() }
             workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
-            for _ in 0..<10 where busy.isIdle { await Task.yield() }
+            await observe(until: { !busy.isIdle })
         }
         busy.stop()
     }

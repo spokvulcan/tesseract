@@ -156,7 +156,7 @@ final class BenchmarkRunner {
         // 4. Create Agent with benchmarking generate function
         let loopConfig = AgentLoopConfig(
             model: AgentModelRef(id: config.resolvedModelID),
-            convertToLlm: { msgs in msgs.compactMap { $0.toLLMMessage() } },
+            convertToLlm: defaultConvertToLlm,
             contextTransform: nil,
             getSteeringMessages: nil,
             getFollowUpMessages: nil

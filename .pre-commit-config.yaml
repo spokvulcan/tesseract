@@ -1,5 +1,6 @@
-# Local-only pre-commit gate for Tesseract Agent.
-# Runs on staged Swift files before every commit. No CI enforcement yet.
+# Pre-commit gate for Tesseract Agent.
+# Runs on staged Swift files before every commit. CI's lint job runs the same
+# SwiftLint config on every PR; swift-format runs only here.
 #
 #   Install once per clone:   pre-commit install
 #   Run against everything:   pre-commit run --all-files
@@ -34,3 +35,11 @@ repos:
         types: [swift]
         exclude: '^(Vendor/|benchmarks/gather-sweep/|.*/\.build/)'
         require_serial: true
+
+      # Whole-tree scan, about a second: app code that only tests use.
+      - id: test-only-code
+        name: App code only tests use
+        entry: python3 -I scripts/check-test-only-code.py
+        language: system
+        types: [swift]
+        pass_filenames: false

@@ -95,7 +95,7 @@ enum AgentFactory {
         // 8. Create agent config
         var config = AgentLoopConfig(
             model: AgentModelRef(id: settingsManager.selectedAgentModelID),
-            convertToLlm: { msgs in msgs.compactMap { $0.toLLMMessage() } },
+            convertToLlm: defaultConvertToLlm,
             contextTransform: compactionTransform,
             getSteeringMessages: nil,
             getFollowUpMessages: nil

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Usage: scripts/test.sh [--no-build] [suite...]
+# Usage: scripts/test.sh [--no-build | --build-only] [--slowest N] [suite...]
 #
 # Runs the app's unit tests (tesseractTests) the fast way: build-for-testing,
 # then test-without-building against the built .xctestrun. Going through the
@@ -11,12 +11,10 @@ set -euo pipefail
 # where xcodebuild's own output leaves them out), then the totals. The logs and
 # the result bundle stay under DerivedData/<project>/test-runs/.
 #
-# A whole-target run keeps every core busy for half a minute. Two at once share
-# the machine; with more, macOS starves the lower-priority work some tests wait
-# on (a hidden page's WebKit process, a utility-priority save). So at most
+# A whole-target run keeps every core busy for half a minute, so at most
 # TESSERACT_TEST_SLOTS (default 2) whole-target runs proceed at once, across
-# every checkout on the machine, and the rest wait for a slot. Suite runs never
-# wait.
+# every checkout on the machine, and the rest wait for a slot. More at once all
+# pass (scripts/test-stress.sh), but each takes longer. Suite runs never wait.
 #
 #   suite       A Swift Testing suite, by its struct name (ChatSessionTests),
 #               or one test as Suite/testName() with the parentheses. No suite
@@ -24,6 +22,9 @@ set -euo pipefail
 #               parentheses matches nothing, so a run that executes no tests
 #               fails (exit 3) instead of passing.
 #   --no-build  Reuse the last build-for-testing (iterate on one suite).
+#   --build-only  Build for testing and stop.
+#   --slowest N   Also list the N slowest tests. In a parallel run a test's
+#                 time includes its waits for a thread.
 #
 # Example: scripts/test.sh ChatSessionTests AgentRunControllerTests
 
@@ -31,17 +32,29 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT="$PROJECT_DIR/tesseract.xcodeproj"
 
 SKIP_BUILD=0
+BUILD_ONLY=0
+SLOWEST=0
 WHOLE_TARGET=0
 ONLY_TESTING=()
-for arg in "$@"; do
-    case "$arg" in
+while [ $# -gt 0 ]; do
+    case "$1" in
         --no-build) SKIP_BUILD=1 ;;
-        -*) echo "Unknown option: $arg" >&2; exit 2 ;;
-        tesseractTests) WHOLE_TARGET=1; ONLY_TESTING+=("-only-testing:$arg") ;;
-        tesseractTests/*) ONLY_TESTING+=("-only-testing:$arg") ;;
-        *) ONLY_TESTING+=("-only-testing:tesseractTests/$arg") ;;
+        --build-only) BUILD_ONLY=1 ;;
+        --slowest)
+            SLOWEST="${2:-}"
+            case "$SLOWEST" in ''|*[!0-9]*) echo "--slowest takes a count" >&2; exit 2 ;; esac
+            shift ;;
+        -*) echo "Unknown option: $1" >&2; exit 2 ;;
+        tesseractTests) WHOLE_TARGET=1; ONLY_TESTING+=("-only-testing:$1") ;;
+        tesseractTests/*) ONLY_TESTING+=("-only-testing:$1") ;;
+        *) ONLY_TESTING+=("-only-testing:tesseractTests/$1") ;;
     esac
+    shift
 done
+if [ "$SKIP_BUILD" = 1 ] && [ "$BUILD_ONLY" = 1 ]; then
+    echo "--no-build and --build-only leave nothing to do" >&2
+    exit 2
+fi
 if [ ${#ONLY_TESTING[@]} -eq 0 ]; then
     WHOLE_TARGET=1
     ONLY_TESTING=(-only-testing:tesseractTests)
@@ -102,6 +115,7 @@ if [ "$SKIP_BUILD" = 0 ]; then
         exit 1
     fi
 fi
+[ "$BUILD_ONLY" = 0 ] || exit 0
 
 DERIVED_DATA="$(derived_data)" || {
     echo "No DerivedData for $PROJECT: run without --no-build first." >&2
@@ -142,14 +156,14 @@ if [ -d "$RUN_DIR/Results.xcresult" ]; then
 fi
 
 # Failures with their messages, then the totals. Exits 3 when nothing ran.
-python3 -I - "$RUN_DIR/tests.json" "$ELAPSED" <<'EOF' || STATUS=$?
+python3 -I - "$RUN_DIR/tests.json" "$ELAPSED" "$SLOWEST" <<'EOF' || STATUS=$?
 import json, sys
-path, elapsed = sys.argv[1], sys.argv[2]
+path, elapsed, slowest = sys.argv[1], sys.argv[2], int(sys.argv[3])
 try:
     nodes = json.load(open(path)).get("testNodes", [])
 except (OSError, ValueError):
     nodes = []
-counts, failures = {}, []
+counts, failures, durations = {}, [], []
 
 def walk(node, suite):
     kind = node.get("nodeType")
@@ -158,6 +172,7 @@ def walk(node, suite):
     if kind == "Test Case":
         result = node.get("result", "?")
         counts[result] = counts.get(result, 0) + 1
+        durations.append((node.get("durationInSeconds") or 0, f"{suite}/{node.get('name')}"))
         if result == "Failed":
             messages = [c.get("name", "") for c in node.get("children", [])
                         if c.get("nodeType") == "Failure Message"]
@@ -172,6 +187,8 @@ for name, messages in failures:
     for message in messages:
         print("    " + message.replace("\n", "\n    ")[:2000])
 total = sum(counts.values())
+for seconds, name in sorted(durations, reverse=True)[:slowest]:
+    print(f"{seconds:7.2f} s  {name}")
 print(f"{total} tests: {counts.get('Passed', 0)} passed, {counts.get('Failed', 0)} failed, "
       f"{counts.get('Skipped', 0)} skipped, in {elapsed} s")
 if total == 0:

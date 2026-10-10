@@ -110,7 +110,7 @@ loaded-model acceptance gaps below remain open.
 
 ## Reproduction
 
-Follow `docs/testing.md` for quitting/relaunching the app and Xcode flags.
+Follow `docs/prefix-cache-testing.md` for quitting/relaunching the app and Xcode flags.
 Run `LeafCheckoutMemoryEvidenceTests` alone for memory evidence. On the reviewed
 implementation, enable allocator thresholds with
 `TEST_RUNNER_TESSERACT_ISOLATED_LEAF_CHECKOUT_EVIDENCE=1`; leave that flag unset

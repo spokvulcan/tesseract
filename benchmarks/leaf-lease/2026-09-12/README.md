@@ -49,4 +49,4 @@ In this final run, process footprint rose from 1,131,300,736 to 1,225,639,832 by
 
 The [September 8 capture-only baseline](../../capture-handoff/2026-09-08/README.md) remains the production comparison: capture removed its full copy, but checkout still copied about 3.19 GB at the recorded 46k warm boundary. This ticket adds protection without another tensor allocation. #480 must integrate object checkout and recurrent-state rewind, reject pending full payloads at checkout, audit checkpoint lifetimes, and perform the approved long-context footprint/correctness gate. No ~45k/~75k/~93k replay or repeated model reload was performed here. The owner's explicit large-model resource-plan approval requirement still applies.
 
-Reproduce the bounded experiment via [docs/testing.md](../../../docs/testing.md#tree-side-leaf-lease-evidence-479). Quit the running app before Xcode tests and relaunch it after validation.
+Reproduce the bounded experiment via [docs/testing.md](../../../docs/prefix-cache-testing.md#tree-side-leaf-lease-evidence-479). Quit the running app before Xcode tests and relaunch it after validation.
