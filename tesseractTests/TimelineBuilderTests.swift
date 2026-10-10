@@ -198,6 +198,24 @@ struct TimelineBuilderTests {
         #expect(timeline.doneCount == 1)
     }
 
+    /// The must-do is today's. Ticked off, a repeating one moves on to its
+    /// next date (Reminders keeps the done one as a copy), and that next one,
+    /// due tomorrow, doesn't wear today's star.
+    @Test func tomorrowsTasksDontWearTodaysMustDoStar() {
+        var facts = Self.twoDays(now: Self.local(30, 20))
+        facts.mustDoID = Self.invoice.id
+        let timeline = TimelineBuilder.build(facts: facts)
+        #expect(timeline.tomorrow.anytime.map(\.id) == ["invoice"])
+        #expect(timeline.tomorrow.anytime.contains(where: \.isMustDo) == false)
+        // Timed ones too.
+        facts.mustDoID = Self.bins.id
+        let rows = TimelineBuilder.build(facts: facts).tomorrow.rows
+        #expect(
+            rows.contains { row in
+                if case .task(let task) = row.kind { task.isMustDo } else { false }
+            } == false)
+    }
+
     @Test func untilFourTheSmallHoursStillBelongToTheDayThatIsEnding() {
         let facts = Self.twoDays(now: Self.local(31, 0, 40))
         #expect(facts.startOfToday == Self.local(30, 0))

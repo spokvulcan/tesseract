@@ -454,9 +454,11 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # (still the day that is ending until 04:00), the completion the EventKit
 # store hands its Reminders fetch (nonisolated, delivered off the main thread;
 # no store is touched), capture and the one-key hotkey,
-# the Timeline (tomorrow after today, and the small hours past midnight), the
-# Now Card (its decision table, the Inbox's slot offers, how
-# long a card's line stays fresh, the time left of the step under way), Today
+# the Timeline (tomorrow after today, without today's must-do star, and the
+# small hours past midnight), the Now Card (its decision table, the Inbox's
+# slot offers, how long a card's line stays fresh, the time left of the step
+# under way), a title's links read short (LinkedTitleTests), a calendar named
+# by its address reads as its domain (AgendaCalendarLabelTests), Today
 # rendered with the app's wiring over fixture days (one deep in a slot, its
 # time left draining) at a wide, a regular and a phone width
 # (TEST_RUNNER_TODAY_GALLERY_DIR=<dir> also writes each render there as a PNG,
@@ -504,12 +506,14 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/DayStateStoreTests \
   -only-testing:tesseractTests/AgendaToolsTests \
   -only-testing:tesseractTests/AgendaPlaceTests \
+  -only-testing:tesseractTests/AgendaCalendarLabelTests \
   -only-testing:tesseractTests/EventKitAgendaStoreTests \
   -only-testing:tesseractTests/AgendaTimeTests \
   -only-testing:tesseractTests/CaptureParserTests \
   -only-testing:tesseractTests/NudgePlannerTests \
   -only-testing:tesseractTests/TimelineBuilderTests \
   -only-testing:tesseractTests/NowCardTests \
+  -only-testing:tesseractTests/LinkedTitleTests \
   -only-testing:tesseractTests/TodayGalleryTests \
   -only-testing:tesseractTests/CardParserTests \
   -only-testing:tesseractTests/MomentPromptsTests \

@@ -5,10 +5,12 @@
 //  The day as steps. A wide page shows a table (time, task, area, length);
 //  a narrow one shows a list shaped for a phone. One Day Line runs down the
 //  schedule, walked up to the Now line and ahead after it, with each step's
-//  marker on it: a check for a task, the calendar's color for an event, the
-//  accent ring for now. The day's Anytime tasks close it; then the line runs
-//  on past the day break into tomorrow, so what comes next is always in
-//  sight. Row actions live in context menus (design-language §2).
+//  marker on it: a ring to tick for a task, a dot in the calendar's color
+//  for an event, the accent dot for now; the step under way wears the accent
+//  too. The day's Anytime tasks close it; then the line runs on past the day
+//  break into tomorrow, so what comes next is always in sight. A link in a
+//  title reads short and opens with a click. Row actions live in context
+//  menus (design-language §2).
 //
 
 import SwiftUI
@@ -42,9 +44,12 @@ struct DaySteps: View {
                     EventStep(event: event, isPast: false, isAllDay: true, style: style, line: line)
                 case .event(let event, let isPast):
                     EventStep(
-                        event: event, isPast: isPast, isAllDay: false, style: style, line: line)
+                        event: event, isPast: isPast, isAllDay: false,
+                        isUnderWay: step.isUnderWay, style: style, line: line)
                 case .task(let task, let isTomorrow):
-                    TaskStep(task: task, isTomorrow: isTomorrow, style: style, line: line)
+                    TaskStep(
+                        task: task, isTomorrow: isTomorrow, isUnderWay: step.isUnderWay,
+                        style: style, line: line)
                 case .free(let start, let minutes):
                     // Free time from now on needs no time: the Now line has it.
                     FreeStep(
@@ -73,11 +78,12 @@ struct DaySteps: View {
     /// timeline and its Anytime tasks, the day break, then tomorrow the
     /// same way.
     static func steps(_ timeline: TodayTimeline) -> [Step] {
+        let now = timeline.rows.first { $0.kind == .now }?.start
         var steps = timeline.allDayEvents.map {
             Step(id: "allday-\($0.id)", kind: .allDay($0, isTomorrow: false))
         }
         for row in timeline.rows {
-            steps.append(Step(row: row, isTomorrow: false))
+            steps.append(Step(row: row, isTomorrow: false, now: now))
         }
         if !timeline.anytime.isEmpty {
             steps.append(Step(id: "anytime-today", kind: .heading("Anytime today")))
@@ -91,7 +97,7 @@ struct DaySteps: View {
             Step(id: "tomorrow-allday-\($0.id)", kind: .allDay($0, isTomorrow: true))
         }
         for row in tomorrow.rows {
-            steps.append(Step(row: row, isTomorrow: true))
+            steps.append(Step(row: row, isTomorrow: true, now: now))
         }
         if !tomorrow.anytime.isEmpty {
             steps.append(Step(id: "anytime-tomorrow", kind: .heading("Anytime tomorrow")))
@@ -122,6 +128,8 @@ struct DaySteps: View {
 
         let id: String
         let kind: Kind
+        /// The meeting the owner is in, or the task whose slot is now.
+        var isUnderWay = false
 
         /// Today's all-day events sit above the line, which starts at the
         /// day's first timed step; the note under an empty tomorrow sits
@@ -137,7 +145,7 @@ struct DaySteps: View {
 }
 
 extension DaySteps.Step {
-    init(row: TimelineRow, isTomorrow: Bool) {
+    init(row: TimelineRow, isTomorrow: Bool, now: Date?) {
         let kind: Kind =
             switch row.kind {
             case .event(let event): .event(event, isPast: row.isPast)
@@ -145,7 +153,19 @@ extension DaySteps.Step {
             case .free(let minutes): .free(start: row.start, minutes: minutes)
             case .now: .now
             }
-        self.init(id: (isTomorrow ? "tomorrow-" : "") + row.id, kind: kind)
+        // Under way from its start until its end; a done task is not.
+        let underWay: Bool =
+            switch row.kind {
+            case .event, .task:
+                if let now, let end = row.end {
+                    !row.isPast && row.start <= now && end > now
+                } else {
+                    false
+                }
+            case .free, .now: false
+            }
+        self.init(
+            id: (isTomorrow ? "tomorrow-" : "") + row.id, kind: kind, isUnderWay: underWay)
     }
 }
 
@@ -191,7 +211,7 @@ private struct DayLineSegments: View {
 }
 
 /// One step: its marker on the Day Line, then its cells; highlighted under
-/// the pointer, like a table row.
+/// the pointer, like a table row, and tinted while it is under way.
 private struct StepRow<Marker: View, Cells: View>: View {
     let line: DayLine?
     var straight = false
@@ -199,6 +219,8 @@ private struct StepRow<Marker: View, Cells: View>: View {
     /// the day break opens a group.
     var topSpace: CGFloat = 0
     var highlights = true
+    /// The step the day is on: where "now" falls inside the day.
+    var isUnderWay = false
     @ViewBuilder let marker: Marker
     @ViewBuilder let cells: Cells
     @State private var hovering = false
@@ -219,11 +241,35 @@ private struct StepRow<Marker: View, Cells: View>: View {
             }
         }
         .background(
+            Color.accentColor.opacity(isUnderWay ? 0.1 : 0),
+            in: RoundedRectangle(cornerRadius: Theme.Radius.small)
+        )
+        .background(
             .quaternary.opacity(highlights && hovering ? 0.5 : 0),
             in: RoundedRectangle(cornerRadius: Theme.Radius.small)
         )
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
+    }
+}
+
+/// An event's stop on the Day Line: a dot in its calendar's color, faint
+/// once it is over, and inside the accent's halo while it is under way.
+private struct EventMarker: View {
+    let colorHex: String?
+    let isPast: Bool
+    var isUnderWay = false
+
+    var body: some View {
+        ZStack {
+            if isUnderWay {
+                Circle().fill(Color.accentColor.opacity(0.3)).frame(width: 16, height: 16)
+            }
+            Circle()
+                .fill(Color(hexString: colorHex))
+                .frame(width: 10, height: 10)
+                .opacity(isPast ? 0.4 : 1)
+        }
     }
 }
 
@@ -299,6 +345,8 @@ private struct StepCells<Title: View>: View {
 private struct AreaTag: View {
     let name: String
     let colorHex: String?
+    /// The full name, when the tag shortens it.
+    var fullName: String? = nil
 
     var body: some View {
         let dot = Text(Image(systemName: "circle.fill"))
@@ -308,16 +356,19 @@ private struct AreaTag: View {
         Text("\(dot)  \(name)")
             .foregroundStyle(.secondary)
             .lineLimit(1)
+            .help(fullName ?? name)
     }
 }
 
 // MARK: - Steps
 
 private struct EventStep: View {
+    @Environment(Agenda.self) private var agenda
     @Environment(CompanionRuntime.self) private var runtime
     let event: AgendaEvent
     let isPast: Bool
     let isAllDay: Bool
+    var isUnderWay = false
     let style: TodayLayout.StepStyle
     let line: DayLine?
 
@@ -330,20 +381,21 @@ private struct EventStep: View {
     }
 
     var body: some View {
-        StepRow(line: line) {
-            RoundedRectangle(cornerRadius: 2)
-                .fill(Color(hexString: event.colorHex))
-                .frame(width: 5, height: 15)
-                .opacity(isPast ? 0.4 : 1)
+        StepRow(line: line, isUnderWay: isUnderWay) {
+            EventMarker(colorHex: event.colorHex, isPast: isPast, isUnderWay: isUnderWay)
         } cells: {
             StepCells(
-                style: style, time: Text(time).foregroundStyle(.secondary),
-                area: AreaTag(name: event.calendarTitle, colorHex: event.colorHex),
+                style: style,
+                time: Text(time).foregroundStyle(
+                    isUnderWay ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary)),
+                area: AreaTag(
+                    name: event.calendarLabel, colorHex: event.colorHex,
+                    fullName: event.calendarTitle),
                 length: isAllDay ? nil : MomentPrompts.minutesText(Int(event.duration / 60)),
                 details: details
             ) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(event.title)
+                    Text(linkedTitle: event.title, linkColor: isPast ? .secondary : .accentColor)
                         .fontWeight(.medium)
                         .foregroundStyle(isPast ? .secondary : .primary)
                     if style == .table, let leave {
@@ -356,6 +408,15 @@ private struct EventStep: View {
                 }
             }
         }
+        .contextMenu {
+            // A call can be joined from its row at any time, not only from
+            // the Now Card as it starts.
+            if let link = event.meetingLink, !isPast {
+                Button("Join Call") {
+                    TodayActions(agenda: agenda, runtime: runtime).perform(.join(link))
+                }
+            }
+        }
     }
 
     private var time: String {
@@ -365,7 +426,7 @@ private struct EventStep: View {
     }
 
     private var details: String {
-        var parts = [event.calendarTitle]
+        var parts = [event.calendarLabel]
         // Leaving matters more than the end, on a line that may be cut short.
         if let leave { parts.append("leave at \(AgendaTime.clock(leave.at))") }
         if !isAllDay { parts.append("until \(AgendaTime.clock(event.end))") }
@@ -380,17 +441,21 @@ private struct TaskStep: View {
     let task: TimelineTask
     /// Due tomorrow: today's must-do and plan are not its own.
     var isTomorrow = false
+    /// Its slot is now.
+    var isUnderWay = false
     let style: TodayLayout.StepStyle
     let line: DayLine?
 
     var body: some View {
         let actions = TodayActions(agenda: agenda, runtime: runtime)
-        StepRow(line: line) {
+        StepRow(line: line, isUnderWay: isUnderWay) {
             Button {
                 actions.setDone(task.id, !task.isDone)
             } label: {
                 Image(systemName: symbol)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(
+                        isUnderWay ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary)
+                    )
                     .contentTransition(.symbolEffect(.replace))
             }
             .buttonStyle(.plain)
@@ -402,14 +467,19 @@ private struct TaskStep: View {
                 time: (style == .list && task.start == nil)
                     ? nil
                     : Text(task.start.map { AgendaTime.clock($0) } ?? "")
-                        .foregroundStyle(.secondary),
+                        .foregroundStyle(
+                            isUnderWay
+                                ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary)),
                 area: AreaTag(name: task.areaName, colorHex: task.areaColorHex),
                 length: length, details: details
             ) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(task.reminder.title)
-                        .foregroundStyle(task.isDone ? .secondary : .primary)
-                        .lineLimit(2)
+                    Text(
+                        linkedTitle: task.reminder.title,
+                        linkColor: task.isDone ? .secondary : .accentColor
+                    )
+                    .foregroundStyle(task.isDone ? .secondary : .primary)
+                    .lineLimit(2)
                     if task.isMustDo {
                         Image(systemName: "star.fill")
                             .foregroundStyle(Color.accentColor)

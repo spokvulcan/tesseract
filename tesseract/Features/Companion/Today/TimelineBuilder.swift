@@ -193,6 +193,11 @@ nonisolated enum TimelineBuilder {
 
     /// Tomorrow's events and the tasks due then, open or already done.
     static func tomorrow(facts: DayFacts) -> TomorrowTimeline {
+        // The must-do is today's: tomorrow's plan picks its own. A repeating
+        // one ticked off today moves on to tomorrow under the same id, and
+        // that next one doesn't wear today's star.
+        var facts = facts
+        facts.mustDoID = nil
         let (start, end) = (facts.endOfToday, facts.endOfTomorrow)
         var rows: [TimelineRow] = facts.tomorrowEvents.map {
             TimelineRow(
