@@ -602,3 +602,38 @@ the owner must remember to read does not. What changed:
   how long it took ("Done in 26 min") when answered at its end — time made
   visible, never weighed against the plan — and `cue.timed` traces each run
   for the report's pace by day.
+
+## Amendments (2026-10-10, a repeating task ticked off)
+
+On 9 October the must-do was a daily reminder. The owner ticked it off from
+its Step Cue (`agenda.changed`, `reminder.completed`), and the day never saw
+it done: `mustDoDoneAt` stayed empty, Today showed it done without its star
+under Anytime, away from its slot, and tomorrow's occurrence wore the star.
+Reminders completes a repeating reminder by keeping the done occurrence as a
+copy with an id of its own and moving the series, under the old id, on to its
+next date. Everything the day holds by reminder id (the must-do, the plan's
+slots, the steps cued, started, put off, made small or cut short, the minutes
+a step was started with) kept pointing at the series, now open and due
+tomorrow. What changed:
+
+- **The day follows the done occurrence.** After every signal, and before a
+  day rolls over, the Day Engine moves what it holds of a repeating task to
+  the occurrence done that day (`followDoneOccurrences`, `DayState.follow`),
+  once the series has moved past the day: same list and title, the same time
+  of day when the task has one, ticked off within the day. The must-do counts
+  as done (Today's star, "the must-do among them", the week's look-back), the
+  step stays done where it was planned, and the minutes it took join the
+  plan's pace. A task moved on without being done, one that doesn't repeat,
+  and an occurrence done another day are left as they are.
+- **Matched by what it is, not by id.** EventKit doesn't link the copy to its
+  series, and the owner ticks tasks off on the phone as often as on the Mac,
+  so the engine reads the copy from the snapshot rather than catching it
+  where a click completed it. Two repeating reminders with the same title in
+  one list and no time of day could be taken for each other; the time of day
+  separates the ones that have it.
+- **The in-memory store does what Reminders does**, a daily series being the
+  one rule it knows, so the tests meet the shapes the Mac sees
+  (`DayEngineRepeatingTaskTests`).
+
+Not changed: the Undo after ticking off a repeating reminder reopens the
+series, which is open already, so the occurrence stays done.

@@ -668,6 +668,34 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         return next
     }
 
+    /// What the day holds of a repeating task, moved from its series to the
+    /// occurrence ticked off today (`DayEngine.followDoneOccurrences`): the
+    /// must-do, the plan's slots, and the steps cued, started, put off, made
+    /// small or cut short, by task or by `StepCue.key`.
+    mutating func follow(series: String, to occurrence: String) {
+        if mustDoID == series { mustDoID = occurrence }
+        for index in plan.indices where plan[index].reminderID == series {
+            plan[index].reminderID = occurrence
+        }
+        let prefix = "\(series)@"
+        func moved(_ key: String) -> String {
+            key.hasPrefix(prefix) ? "\(occurrence)@\(key.dropFirst(prefix.count))" : key
+        }
+        cuedSteps = Dictionary(
+            cuedSteps.map { (moved($0.key), $0.value) }, uniquingKeysWith: { max($0, $1) })
+        startedSteps = Set(startedSteps.map(moved))
+        smallStarts = Set(smallStarts.map(moved))
+        startedMinutes = Dictionary(
+            startedMinutes.map { (moved($0.key), $0.value) }, uniquingKeysWith: { max($0, $1) })
+        cueOnPanel = cueOnPanel.map(moved)
+        if let count = putOff.removeValue(forKey: series) {
+            putOff[occurrence, default: 0] += count
+        }
+        if let minutes = cutShort.removeValue(forKey: series) {
+            cutShort[occurrence, default: 0] += minutes
+        }
+    }
+
     /// The day key a week before `day`: older must-dos leave the record.
     static func weekBefore(_ day: DayKey) -> String {
         guard let date = day.date(),

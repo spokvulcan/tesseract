@@ -1850,7 +1850,10 @@ modifier-only combo.
 The day's one optional thing that matters most. It can sit anywhere in the day,
 even late; the owner moves or clears it with one click. Once it is done, the
 Now Card says so: what else fits is "a bonus", and the evening counts it
-("the must-do among them").
+("the must-do among them"). A repeating one is done when that day's
+occurrence is: Reminders keeps the occurrence ticked off as a copy with an
+id of its own and moves the series on, and the day follows the copy, its
+slot and steps with it.
 _Avoid_: focus (the day has several goals, not one focus), priority.
 
 **Nudge**:
