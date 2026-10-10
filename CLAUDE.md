@@ -35,6 +35,9 @@ Many cheap, trustworthy measurements per hour beat one slow end-to-end run.
   `scripts/vendor-test.sh [--no-build] [suite…]`. Read a script's source
   before passing it flags: `scripts/bench.sh` builds and runs on any
   argument.
+- **Try UI on scratch data.** `scripts/dev.sh dev --scratch` runs the whole
+  app on scratch storage, default settings and an in-memory Agenda, with no
+  OS notifications. A plain launch reads and writes the owner's real day.
 - **A/B in one build.** Put both variants behind a temporary env switch,
   alternate them (ABAB, at least four runs), compare medians, and keep a
   reference arm (bf16 SDPA) in every run to catch GPU clock drift. Runs from

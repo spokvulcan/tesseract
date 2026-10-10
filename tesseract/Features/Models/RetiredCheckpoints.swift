@@ -28,13 +28,13 @@ nonisolated enum RetiredCheckpoints {
     /// `SandboxMigration.completionDefaultsKey`.
     static let completionDefaultsKey = "retiredCheckpointsRemoved"
 
-    /// Launch entry: skipped under tests and headless harness launches (which
-    /// must not mutate user data), otherwise removes in the background. Call
-    /// after `SandboxMigration`, so a checkpoint still in the old container has
-    /// already moved to the store.
+    /// Launch entry: skipped under tests, in a scratch launch and in headless
+    /// harness launches (which must not mutate user data), otherwise removes
+    /// in the background. Call after `SandboxMigration`, so a checkpoint still
+    /// in the old container has already moved to the store.
     @MainActor
     static func scheduleRemoval() {
-        guard !ProcessEnvironment.isRunningTests, !TesseractApp.isHarnessLaunch else { return }
+        guard !ProcessEnvironment.usesScratchData, !TesseractApp.isHarnessLaunch else { return }
         let storageRoot = ModelDownloadManager.modelStorageURL
         let listedRepos = Set(ModelDefinition.all.compactMap(\.repoID))
         Task.detached(priority: .utility) {

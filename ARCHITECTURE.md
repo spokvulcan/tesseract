@@ -81,7 +81,7 @@ tesseract/
 │   ├── Permissions/
 │   │   └── PermissionsManager.swift   # Mic & Accessibility checks
 │   ├── SettledWidth.swift       # Settled Width policy + modifier (pure value, unit-tested)
-│   ├── StorageEnvironment.swift # Storage roots: the owner's, or per-process scratch under tests (ADR-0073)
+│   ├── StorageEnvironment.swift # Storage roots: the owner's, or per-process scratch under tests and in a scratch launch (ADR-0073)
 │   ├── ViewModifiers.swift      # Scoped dependency injection
 │   └── Logging.swift            # Unified logging (Log enum)
 │

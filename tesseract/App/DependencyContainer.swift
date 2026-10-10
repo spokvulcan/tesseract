@@ -13,11 +13,18 @@ import os
 @MainActor
 final class DependencyContainer: ObservableObject {
     // Core Services
-    /// Under a test runner the settings live in memory, so a test run never
-    /// reads or changes the owner's (ADR-0073).
-    let settingsManager = SettingsManager(
-        store: ProcessEnvironment.isRunningTests
-            ? InMemorySettingsStore() : UserDefaultsSettingsStore())
+    /// Under a test runner, or in a scratch launch, the settings live in
+    /// memory, so neither reads or changes the owner's (ADR-0073).
+    let settingsManager: SettingsManager = {
+        guard ProcessEnvironment.usesScratchData else {
+            return SettingsManager(store: UserDefaultsSettingsStore())
+        }
+        let settings = SettingsManager(store: InMemorySettingsStore())
+        // A scratch launch opens the main window, not the first-launch tour,
+        // which would start model downloads.
+        if ProcessEnvironment.isScratchLaunch { settings.hasCompletedOnboarding = true }
+        return settings
+    }()
     lazy var permissionsManager = PermissionsManager()
     lazy var audioDeviceManager = AudioDeviceManager()
 
@@ -144,10 +151,11 @@ final class DependencyContainer: ObservableObject {
     // MARK: - The Companion's day
 
     /// Apple Reminders and Calendar, the single source of truth for the
-    /// owner's tasks and plans. The test host gets the in-memory store, so a
-    /// test run never asks for or touches the owner's real data (ADR-0073).
+    /// owner's tasks and plans. The test host and a scratch launch get the
+    /// in-memory store, so neither asks for or touches the owner's real data
+    /// (ADR-0073).
     lazy var agendaStore: any AgendaStore =
-        ProcessEnvironment.isRunningTests ? InMemoryAgendaStore() : EventKitAgendaStore()
+        ProcessEnvironment.usesScratchData ? InMemoryAgendaStore() : EventKitAgendaStore()
     lazy var agenda = Agenda(
         store: agendaStore,
         areaMapJSON: { [settingsManager] in settingsManager.companionAreasJSON },
@@ -166,7 +174,7 @@ final class DependencyContainer: ObservableObject {
     lazy var capturePanel = CapturePanelController(
         capture: captureService, voice: captureVoiceInput)
     lazy var companionNotifier: CompanionNotifier = {
-        let notifier = CompanionNotifier()
+        let notifier = CompanionNotifier(usesOS: !ProcessEnvironment.usesScratchData)
         notifier.onOpen = { (NSApp.delegate as? AppDelegate)?.navigateToToday() }
         return notifier
     }()
@@ -219,7 +227,7 @@ final class DependencyContainer: ObservableObject {
     lazy var triageRuleStore = TriageRuleStore(settings: settingsManager)
     /// The owner's Profile: facts they approved, and Jarvis's proposals.
     lazy var profileStore = ProfileStore(
-        url: ProcessEnvironment.isRunningTests ? nil : ProfileStore.productionURL,
+        url: ProcessEnvironment.usesScratchData ? nil : ProfileStore.productionURL,
         trace: companionTrace)
     /// Full-text search over saved conversations, for `recall`.
     lazy var recallIndex = RecallIndex(
@@ -285,7 +293,7 @@ final class DependencyContainer: ObservableObject {
         settings: settingsManager, agenda: agenda, notifier: companionNotifier,
         trace: companionTrace, idleMonitor: idleMonitor, presence: companionPresence,
         thread: dayThread,
-        stateStore: ProcessEnvironment.isRunningTests ? DayStateStore(url: nil) : .production,
+        stateStore: ProcessEnvironment.usesScratchData ? DayStateStore(url: nil) : .production,
         frontmost: frontmostApp, power: powerMonitor,
         delivery: CompanionDelivery(
             showPanel: { [weak self] card in self?.jarvisPanel.show(card) },

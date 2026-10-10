@@ -4,6 +4,8 @@
 - Date: 2026-09-27
 - Extends: #159 (telemetry written to a scratch folder under a test runner)
 - Relates to: ADR-0035 (the memory evals read a copy of the owner's store)
+- Amended: 2026-10-10 (a scratch launch keeps the running app off the owner's
+  data the same way)
 
 ## Context
 
@@ -91,3 +93,24 @@ the running app does.
   of running the tests reaches the owner's data again.
 - Rendering pages through the test host's own main window. The owner's data
   stays in play, and it only works once onboarding is done.
+
+## Amendment (2026-10-10): the scratch launch
+
+A change to a window or a panel could be tried only in a dev launch, which
+reads and writes the owner's real data: the Companion's pictures shipped with
+⌘V into the Jarvis Panel and drops onto it untried, because trying them meant
+writing into the owner's Day Thread. A test host keeps off that data but opens
+no window.
+
+A scratch launch (`scripts/dev.sh dev --scratch`, the environment variable
+`TESSERACT_SCRATCH_DATA=1`) runs the whole app, with its windows, models and
+services, on the test host's data choices: `ProcessEnvironment.usesScratchData`
+holds for both, and storage, the settings, the Agenda, the Profile and day
+state, the browser profile and the sandbox and checkpoint clean-ups follow it.
+The settings start at catalogue defaults with onboarding done, so the main
+window opens. The dev build shares the installed app's notification center
+(one bundle id), and the runtime cancels every scheduled nudge its Agenda
+doesn't list, so a scratch launch's notifier keeps its nudges in memory and
+posts nothing. The model folder stays the owner's, as for tests. Each launch
+starts empty, and a later test run or scratch launch removes its folder once
+it has exited.
