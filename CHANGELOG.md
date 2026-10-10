@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.19.0](https://github.com/spokvulcan/tesseract/compare/v1.18.0...v1.19.0) (2026-10-10)
+
+
+### Features
+
+* **companion:** Today marks the step under way, shortens links, and lets Inbox items be ticked off ([#632](https://github.com/spokvulcan/tesseract/issues/632)) ([0e838bf](https://github.com/spokvulcan/tesseract/commit/0e838bf688faa88bee9396bf70ebb647da94d4b1))
+
+
+### Bug Fixes
+
+* **companion:** a repeating must-do ticked off counts as done, in its slot ([#634](https://github.com/spokvulcan/tesseract/issues/634)) ([011778a](https://github.com/spokvulcan/tesseract/commit/011778ace38813f81c9b5332d7f0c0184caed68f))
+
 ## [1.18.0](https://github.com/spokvulcan/tesseract/compare/v1.17.0...v1.18.0) (2026-10-10)
 
 
