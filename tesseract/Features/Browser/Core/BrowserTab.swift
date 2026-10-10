@@ -141,6 +141,7 @@ final class BrowserTab {
     /// ``BrowserTabError/timeout`` if it does not complete in time. On timeout
     /// the operation task is cancelled; a truly wedged operation is abandoned
     /// (its result discarded) rather than allowed to block the caller forever.
+    /// A cancelled caller is released the same way, with `CancellationError`.
     ///
     /// This is the one place a browser await is made interruptible — every path
     /// that can hang on WebKit (navigation *and* `callJavaScript`) is fenced
@@ -149,25 +150,36 @@ final class BrowserTab {
         _ timeout: Duration,
         operation: @escaping @MainActor () async throws -> T
     ) async throws -> T {
-        // The operation runs as its own MainActor task so the group children
-        // only ever capture the `Sendable` task handle — racing `.value`
-        // against the timer, rather than a `@MainActor` closure the
-        // region-isolation checker can't reason about inside `addTask`.
+        // The operation runs as its own unstructured task so the race can
+        // abandon it. A task group racing `operationTask.value` against the
+        // timer could not return before both children had, and awaiting a
+        // task's value ignores cancellation: an operation stuck in a wait that
+        // never checks for it (a WebKit callback that never comes) held the
+        // caller forever. Now the first of {completion, the timer, the
+        // caller's cancellation} resumes the caller; the operation is
+        // cancelled best-effort and whatever it produces later is dropped.
         let operationTask = Task { @MainActor in try await operation() }
-        return try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask { try await operationTask.value }
-            group.addTask {
-                try await Task.sleep(for: timeout)
-                throw BrowserTabError.timeout
+        let race = TimeoutRace<T>()
+        var timer: Task<Void, Never>?
+        defer { timer?.cancel() }
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                // This closure runs synchronously in the current main-actor
+                // job, so `begin` always lands before any resumer below (each
+                // is a fresh main-actor job) can finish the race.
+                race.begin(continuation)
+                Task { race.finish(await operationTask.result) }
+                timer = Task {
+                    guard (try? await Task.sleep(for: timeout)) != nil else { return }
+                    operationTask.cancel()
+                    race.finish(.failure(BrowserTabError.timeout))
+                }
             }
-            defer {
-                group.cancelAll()
-                operationTask.cancel()
+        } onCancel: {
+            operationTask.cancel()
+            Task { @MainActor in
+                race.finish(.failure(CancellationError()))
             }
-            guard let result = try await group.next() else {
-                throw BrowserTabError.timeout
-            }
-            return result
         }
     }
 
@@ -435,5 +447,25 @@ final class BrowserTab {
             }
             return String(describing: value ?? "undefined")
         }
+    }
+}
+
+// MARK: - TimeoutRace
+
+/// One-shot resumption cell for ``BrowserTab/withTimeout(_:operation:)``:
+/// whichever of {the operation's completion, the timer, the caller's
+/// cancellation} lands first resumes the caller; later arrivals are dropped.
+/// MainActor-confined, so arrivals are serialized without a lock.
+@MainActor
+private final class TimeoutRace<T: Sendable> {
+    private var continuation: CheckedContinuation<T, any Error>?
+
+    func begin(_ continuation: CheckedContinuation<T, any Error>) {
+        self.continuation = continuation
+    }
+
+    func finish(_ result: Result<T, any Error>) {
+        continuation?.resume(with: result)
+        continuation = nil
     }
 }
