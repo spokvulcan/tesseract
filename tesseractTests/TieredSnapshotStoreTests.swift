@@ -131,22 +131,6 @@ struct TieredSnapshotStoreTests {
         return node
     }
 
-    /// Poll `condition` on MainActor every 10 ms until it returns
-    /// true or `timeout` elapses. Needed because the writer's
-    /// commit / drop callbacks fire from a background task and hop
-    /// back to MainActor asynchronously.
-    private func waitUntil(
-        timeout: Duration = .seconds(5),
-        _ condition: @MainActor () -> Bool
-    ) async -> Bool {
-        let start = ContinuousClock.now
-        while ContinuousClock.now - start < timeout {
-            if condition() { return true }
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        return condition()
-    }
-
     // Test-local tuple; named struct not worth it (evolving MVP, see CLAUDE.md).
     // swiftlint:disable:next large_tuple
     private typealias Fixture = (

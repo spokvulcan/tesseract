@@ -711,7 +711,7 @@ struct WarmStartTests {
     }
 
     private func waitUntil(
-        timeout: Duration = .seconds(2),
+        timeout: Duration = waitBackstop,
         _ condition: @Sendable () async -> Bool
     ) async -> Bool {
         let start = ContinuousClock.now

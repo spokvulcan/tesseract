@@ -27,9 +27,11 @@ Many cheap, trustworthy measurements per hour beat one slow end-to-end run.
   `HybridCacheSnapshot`. `--dflash2-bench` re-prefills every arm and
   `--bench-check` adds a whole AR arm: run only the arms the question
   needs, on the shortest prompt that shows the effect.
-- **Build once, run many.** `build-for-testing`, then
-  `test-without-building -only-testing:<suite>` while iterating; full
-  suites once, before committing. The vendor fork's tests:
+- **Build once, run many.** App tests: `scripts/test.sh [--no-build]
+  [suite…]`. It runs the built `.xctestrun`, skipping the 7–10 s project
+  load of every `-scheme` call (a suite takes ~3 s), and prints failures
+  with their `#expect` details. Iterate with `--no-build`; run the whole
+  target once, before committing. The vendor fork's tests:
   `scripts/vendor-test.sh [--no-build] [suite…]`. Read a script's source
   before passing it flags: `scripts/bench.sh` builds and runs on any
   argument.

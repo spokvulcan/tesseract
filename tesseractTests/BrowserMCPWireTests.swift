@@ -109,6 +109,7 @@ private enum Fixture {
 /// Browser loading local fixture pages over loopback (no live internet) and a
 /// no-op window presenter (no windows appear).
 @MainActor
+@Suite(.timeLimit(.minutes(1)))
 struct BrowserMCPWireTests {
 
     /// A running MCP endpoint plus the fixture "web" it browses.

@@ -10,5 +10,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true # the docs name files in Vendor/mlx-swift-lm (REVIEW.md: its CLAUDE.md)
       - name: Verify docs match the code
         run: scripts/check-docs.sh
+      - name: App code that only tests use
+        run: python3 -I scripts/check-test-only-code.py

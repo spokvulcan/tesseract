@@ -25,7 +25,7 @@ Every successful handoff reports zero request-owned cache layers. Ownership/addr
 
 ## Reproduction and limits
 
-The workload uses Qwen3.8-27B 4-bit weights, unquantized KV, DFlash2, temperature zero, medium reasoning, preserved thinking and a 128-token output ceiling on an M3 Max with 48 GiB RAM. It is one bounded-output trial per case, not the full historical session. See [the replay workflow](../../../docs/testing.md#controlled-capture-comparison-478) and [collector](../../../scripts/capture_memory_replay.py).
+The workload uses Qwen3.8-27B 4-bit weights, unquantized KV, DFlash2, temperature zero, medium reasoning, preserved thinking and a 128-token output ceiling on an M3 Max with 48 GiB RAM. It is one bounded-output trial per case, not the full historical session. See [the replay workflow](../../../docs/prefix-cache-testing.md#controlled-capture-comparison-478) and [collector](../../../scripts/capture_memory_replay.py).
 
 Matching pairs share normalized request hashes, restore offsets, shared-prefix lengths, checkpoint plans and SSD hydration status. The matched 93k pair uses separate clones of the same SSD seed. Original unequal-plan 93k trials and an unpaired warm turn remain in the archive and are excluded from paired claims. The short control overlapped compilation; initial idle gaps and allocator/OS/writer states also differ.
 

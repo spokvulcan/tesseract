@@ -12,15 +12,17 @@
 //
 
 import Foundation
+import Observation
 import Testing
 
 @testable import Tesseract_Agent
 
 @MainActor
+@Suite(.timeLimit(.minutes(1)))
 struct AgentVoiceInputControllerTests {
 
-    @MainActor
-    private final class CallbackRecorder {
+    @MainActor @Observable
+    fileprivate final class CallbackRecorder {
         private(set) var values: [String] = []
         func record(_ value: String) { values.append(value) }
     }
@@ -60,7 +62,7 @@ struct AgentVoiceInputControllerTests {
         while !engine.isAwaiting { await Task.yield() }
 
         engine.completeWithSuccess()
-        for _ in 0..<500 where recorder.values.isEmpty { await Task.yield() }
+        await observe(until: { !recorder.values.isEmpty })
 
         // Emits the post-processed transcription exactly once — the controller's
         // job is to emit, not to re-implement the post-processor's transform.
@@ -100,10 +102,7 @@ struct AgentVoiceInputControllerTests {
         controller.finishCapture()
         while !engine.isAwaiting { await Task.yield() }
         engine.completeWithSuccess()
-        // Milliseconds alone; the full suite's parallel model tests can hold
-        // the main actor for seconds.
-        let deadline = Date().addingTimeInterval(30)
-        while rejected.values.isEmpty, Date() < deadline { await Task.yield() }
+        await observe(until: { !rejected.values.isEmpty })
 
         #expect(rejected.values == [TranscriptionPostProcessor().process("hello world")])
         #expect(emitted.values.isEmpty)

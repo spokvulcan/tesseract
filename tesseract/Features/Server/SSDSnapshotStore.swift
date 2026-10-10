@@ -32,9 +32,9 @@
 //
 //  **Placeholder on-disk format.** The writer serializes a simple
 //  length-prefixed binary container (8-byte LE header length + JSON
-//  header + concatenated tensor blobs) via the neutral
-//  `encodePlaceholderContainer` (in `PlaceholderContainer.swift`,
-//  shared with the ledger's rebuild). The real safetensors format
+//  header + concatenated tensor blobs), streamed in bounded chunks
+//  through `PlaceholderContainerEncoding.withChunks` (in
+//  `PlaceholderContainer.swift`). The real safetensors format
 //  comes in a downstream task that ships `HybridCacheSnapshot`
 //  `serialize(to:metadata:)` / `deserialize(from:)` wrappers; at
 //  that point this writer switches over. The header JSON carries a
@@ -237,8 +237,9 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
     private let wakeupStream: AsyncStream<Void>
     private let wakeupContinuation: AsyncStream<Void>.Continuation
     /// Upper bound for a single FileHandle.write — write(2) returns EINVAL
-    /// past INT_MAX. The regression test exercises the chunk loop with a
-    /// real >2 GiB payload (SSDSnapshotStoreTests.writerCommitsPayloadPastIntMaxBytes).
+    /// past INT_MAX. SSDSnapshotStoreTests pins it below that, and with
+    /// `TESSERACT_LARGE_WRITE_TEST=1` writes a real >2 GiB payload through it
+    /// (`writerCommitsPayloadPastIntMaxBytes`).
     static let maxWriteChunkBytes = 1 << 30
 
     private var writerTask: Task<Void, Never>?

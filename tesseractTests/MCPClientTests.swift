@@ -9,6 +9,7 @@ import MLXLMCommon
 /// calls, streamed progress, RPC errors, and cancellation an arbitrary
 /// user-configured server would exercise.
 @MainActor
+@Suite(.timeLimit(.minutes(1)))
 struct MCPClientTests {
 
     private func makeClient(for fixture: ScriptedMCPServer) -> MCPClient {

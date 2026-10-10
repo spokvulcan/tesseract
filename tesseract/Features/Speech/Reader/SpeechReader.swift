@@ -58,6 +58,9 @@ final class SpeechReader {
     @ObservationIgnored private let store: ReaderDocumentStore
     @ObservationIgnored private var session: ReadingSession?
     @ObservationIgnored private var saveTask: Task<Void, Never>?
+    /// The latest write to the store. Each waits for the one before it, so the
+    /// writes land in the order they were made.
+    @ObservationIgnored private var lastWrite: Task<Void, Never>?
     @ObservationIgnored private var observations: [Task<Void, Never>] = []
     @ObservationIgnored private var lastSavedBookmark: Int
 
@@ -304,7 +307,23 @@ final class SpeechReader {
         lastSavedBookmark = bookmark
         let store = store
         let (offset, length) = (bookmark, length)
-        Task.detached(priority: .utility) { store.save(bookmark: offset, length: length) }
+        write { store.save(bookmark: offset, length: length) }
+    }
+
+    /// Writes to the store off the main actor, after every earlier write.
+    private func write(_ work: @escaping @Sendable () -> Void) {
+        let previous = lastWrite
+        lastWrite = Task.detached(priority: .utility) {
+            await previous?.value
+            work()
+        }
+    }
+
+    /// Returns once every write made so far has reached the store. Awaiting
+    /// raises their priority to the caller's, so a busy machine can't starve
+    /// them the way it can starve utility work nobody waits for.
+    func flushed() async {
+        await lastWrite?.value
     }
 
     private func scheduleSave() {
@@ -323,7 +342,7 @@ final class SpeechReader {
         text = snapshot
         let store = store
         let (offset, length) = (bookmark, (snapshot as NSString).length)
-        Task.detached(priority: .utility) {
+        write {
             store.save(text: snapshot)
             store.save(bookmark: offset, length: length)
         }

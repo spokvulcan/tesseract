@@ -35,6 +35,14 @@ struct TodayGalleryTests {
         ("wide", 1280, 1100), ("regular", 860, 1240), ("phone", 390, 1700),
     ]
 
+    /// Lets the hosted view's deferred updates run before the next layout. A
+    /// gallery written out for judging by eye waits `duration`, for the page to
+    /// settle; the test itself needs only the run loop to come round, and the
+    /// longer waits were most of the suite's time.
+    static func settle(_ duration: Duration) async throws {
+        try await Task.sleep(for: directory == nil ? .milliseconds(20) : duration)
+    }
+
     @Test(arguments: TodayFixture.allCases)
     func todayRendersAtEveryWidth(_ fixture: TodayFixture) async throws {
         for size in Self.widths {
@@ -70,7 +78,7 @@ struct TodayGalleryTests {
                 .background(Color(nsColor: .windowBackgroundColor)))
         window.contentView = host
         window.layoutIfNeeded()
-        try await Task.sleep(for: .milliseconds(300))
+        try await Self.settle(.milliseconds(300))
         window.layoutIfNeeded()
         let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
         host.cacheDisplay(in: host.bounds, to: rep)

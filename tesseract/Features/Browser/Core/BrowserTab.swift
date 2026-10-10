@@ -35,6 +35,9 @@ nonisolated enum BrowserTabError: LocalizedError, Sendable {
 
 private nonisolated struct ClickResult: Codable {
     let ok: Bool; let tag: String?; let error: String?
+    /// The click followed a link to another page in this tab: no handler
+    /// prevented it, so a navigation is certain.
+    let followsLink: Bool?
 }
 private nonisolated struct TypeResult: Codable { let ok: Bool; let error: String? }
 private nonisolated struct FindResult: Codable { let count: Int; let hits: [String] }
@@ -228,16 +231,29 @@ final class BrowserTab {
         let script = #"""
             const el = document.querySelector('[data-tesseract-ref="' + ref + '"]');
             if (!el) { return JSON.stringify({ ok: false, error: 'not-found' }); }
+            const link = el.closest('a[href]');
+            const href = link ? (link.getAttribute('href') || '') : '';
+            const elsewhere = !!link && link.target !== '_blank'
+              && !href.startsWith('#') && !/^javascript:/i.test(href)
+              && link.href.split('#')[0] !== location.href.split('#')[0];
+            // Seen last, after the page's own handlers: whether one prevented it.
+            let prevented = null;
+            const watch = (event) => { prevented = event.defaultPrevented; };
+            window.addEventListener('click', watch);
             el.scrollIntoView({ block: 'center' });
             el.focus({ preventScroll: true });
             el.click();
-            return JSON.stringify({ ok: true, tag: el.tagName.toLowerCase() });
+            window.removeEventListener('click', watch);
+            const followsLink = elsewhere && prevented === false;
+            return JSON.stringify({ ok: true, tag: el.tagName.toLowerCase(), followsLink });
             """#
+        let origin = page.url
         let result = try await callDecoding(
             ClickResult.self, script, arguments: ["ref": ref])
         guard result.ok else { throw BrowserTabError.elementNotFound(ref) }
         readCache = nil
-        await settleAfterInteraction()
+        await settleAfterInteraction(
+            result.followsLink == true ? .followedLink(from: origin) : .other)
         return status
     }
 
@@ -349,10 +365,32 @@ final class BrowserTab {
 
     // MARK: - Private
 
-    /// Wait briefly for an interaction-triggered navigation to begin and
-    /// settle, so the returned status reflects where the click landed.
-    private func settleAfterInteraction() async {
-        try? await Task.sleep(for: .milliseconds(400))
+    /// What an interaction may have started.
+    private enum Interaction {
+        /// A click that followed a link to another page in this tab, made on
+        /// the page at `from`: a navigation is certain.
+        case followedLink(from: URL?)
+        /// Anything else: a navigation may or may not follow.
+        case other
+    }
+
+    /// Wait for an interaction-triggered navigation to begin and settle, so
+    /// the returned status reflects where the click landed. A followed link
+    /// is certain to navigate, so wait for the page to leave the one it was
+    /// clicked on: on a busy machine that begins seconds after the click, and
+    /// the status would still name the old page. The wait stays well inside
+    /// the executor's per-tool budget, so a navigation that never begins still
+    /// ends in a status. Anything else gets a grace period to start one.
+    private func settleAfterInteraction(_ interaction: Interaction = .other) async {
+        if case .followedLink(let origin) = interaction {
+            var waited: Duration = .zero
+            while page.url == origin && !page.isLoading && waited < .seconds(10) {
+                try? await Task.sleep(for: .milliseconds(50))
+                waited += .milliseconds(50)
+            }
+        } else {
+            try? await Task.sleep(for: .milliseconds(400))
+        }
         // If a navigation is in flight, let it finish (bounded).
         var waited: Duration = .zero
         let cap: Duration = .seconds(8)

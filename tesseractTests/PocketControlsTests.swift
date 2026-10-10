@@ -19,7 +19,7 @@ struct PocketControlsTests {
         "The river watched the harbor. A small boat returned home. The keeper climbed the steps."
 
     private func waitUntil(
-        timeout: Duration = .seconds(60), _ condition: @MainActor () async -> Bool
+        timeout: Duration = waitBackstop, _ condition: @MainActor () async -> Bool
     ) async -> Bool {
         let deadline = ContinuousClock.now + timeout
         while ContinuousClock.now < deadline {

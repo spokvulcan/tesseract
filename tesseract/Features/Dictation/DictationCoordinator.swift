@@ -595,12 +595,16 @@ final class DictationCoordinator {
 
     /// Preloaded once: `NSSound(named:)` loads from disk on first use, and the
     /// start-recording play sits on the same main-actor job that precedes the
-    /// Lens's state emission — a per-press load would delay the Lens.
-    private let sounds: [SystemSound: NSSound] = [
-        SystemSound.startRecording: NSSound(named: "Tink"),
-        SystemSound.success: NSSound(named: "Purr"),
-        SystemSound.error: NSSound(named: "Funk"),
-    ].compactMapValues { $0 }
+    /// Lens's state emission — a per-press load would delay the Lens. None
+    /// under a test runner: the tests drive hundreds of takes and nobody listens.
+    private let sounds: [SystemSound: NSSound] =
+        ProcessEnvironment.isRunningTests
+        ? [:]
+        : [
+            SystemSound.startRecording: NSSound(named: "Tink"),
+            SystemSound.success: NSSound(named: "Purr"),
+            SystemSound.error: NSSound(named: "Funk"),
+        ].compactMapValues { $0 }
 
     private func playSound(_ sound: SystemSound) {
         guard let nsSound = sounds[sound] else { return }

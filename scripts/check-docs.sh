@@ -16,7 +16,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-DOCS="README.md CLAUDE.md ARCHITECTURE.md DISTRIBUTION.md REVIEW.md docs/testing.md docs/agents/domain.md docs/agents/issue-tracker.md docs/agents/triage-labels.md"
+DOCS="README.md CLAUDE.md ARCHITECTURE.md DISTRIBUTION.md REVIEW.md docs/testing.md docs/prefix-cache-testing.md docs/agents/domain.md docs/agents/issue-tracker.md docs/agents/triage-labels.md"
 
 # Top-level dirs whose paths the docs are expected to reference accurately.
 KNOWN_DIRS="tesseract tesseract-ios tesseract-share tesseractTests tesseractUITests scripts docs assets benchmarks AgentPackages Vendor .claude .agents .github"
@@ -92,13 +92,15 @@ for doc in $DOCS; do
     done < <(grep -ohE 'scripts/dev\.sh [a-z][a-z0-9-]*' "$doc" | awk '{print $2}' | sort -u)
 done
 
-# --- 4. Test suites named in docs/testing.md -----------------------------------
-while IFS= read -r suite; do
-    if ! grep -rqE "(struct|class|enum) $suite\b" tesseractTests/; then
-        fail "docs/testing.md" "test suite '$suite' not found in tesseractTests/"
-    fi
-done < <(grep -ohE -- '-only-testing:tesseractTests/[A-Za-z0-9_]+' docs/testing.md \
-    | sed 's|.*/||' | sort -u)
+# --- 4. Test suites named in the testing docs -----------------------------------
+for doc in docs/testing.md docs/prefix-cache-testing.md; do
+    while IFS= read -r suite; do
+        if ! grep -rqE "(struct|class|enum) $suite\b" tesseractTests/; then
+            fail "$doc" "test suite '$suite' not found in tesseractTests/"
+        fi
+    done < <(grep -ohE -- '-only-testing:tesseractTests/[A-Za-z0-9_]+' "$doc" \
+        | sed 's|.*/||' | sort -u)
+done
 
 # --- 5. Swift files named in ARCHITECTURE.md ------------------------------------
 while IFS= read -r f; do

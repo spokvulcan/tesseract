@@ -117,7 +117,8 @@ struct TrimmingModelFetchingTests {
     }
 
     static func waitUntilSettled(_ manager: ModelDownloadManager, _ id: String) async throws {
-        for _ in 0..<200 {
+        let deadline = ContinuousClock.now + waitBackstop
+        while ContinuousClock.now < deadline {
             switch manager.status(for: id) {
             case .downloading, .verifying: try await Task.sleep(for: .milliseconds(10))
             default: return

@@ -16,6 +16,7 @@ import Testing
 @testable import Tesseract_Agent
 
 @MainActor
+@Suite(.timeLimit(.minutes(1)))
 struct AgentGenerationErrorSurfacingTests {
 
     /// An `Agent` whose generate stream throws immediately with the given engine
@@ -42,14 +43,7 @@ struct AgentGenerationErrorSurfacingTests {
     }
 
     private func settle(_ session: ChatSession) async {
-        let deadline = ContinuousClock.now + .seconds(3)
-        while session.isGenerating {
-            try? await Task.sleep(for: .milliseconds(10))
-            if ContinuousClock.now >= deadline {
-                Issue.record("Session did not settle within timeout")
-                break
-            }
-        }
+        await observe(until: { !session.isGenerating })
     }
 
     @Test func generationFailureSurfacesItsMessageInTheErrorBanner() async {

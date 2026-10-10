@@ -309,7 +309,7 @@ private final class TourWorld {
 
     @discardableResult
     func waitUntil(
-        timeout: Duration = .seconds(10), _ condition: () -> Bool
+        timeout: Duration = waitBackstop, _ condition: () -> Bool
     ) async throws -> Bool {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: timeout)

@@ -513,7 +513,7 @@ final class LifecycleHarness {
     /// return the current status so the caller's `#expect` shows the actual.
     func waitFor(
         id: String,
-        timeout: Duration = .seconds(10),
+        timeout: Duration = waitBackstop,
         _ predicate: (ModelStatus) -> Bool
     ) async throws -> ModelStatus {
         let clock = ContinuousClock()
@@ -528,7 +528,7 @@ final class LifecycleHarness {
 
     /// Wait until an arbitrary condition holds (e.g. the peer saw a call).
     func waitUntil(
-        timeout: Duration = .seconds(10), _ condition: () -> Bool
+        timeout: Duration = waitBackstop, _ condition: () -> Bool
     ) async throws {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: timeout)
@@ -541,7 +541,7 @@ final class LifecycleHarness {
 
     /// Wait until the model leaves its in-progress states.
     func waitForSettled(
-        id: String, timeout: Duration = .seconds(10)
+        id: String, timeout: Duration = waitBackstop
     ) async throws -> ModelStatus {
         try await waitFor(id: id, timeout: timeout) { status in
             switch status {

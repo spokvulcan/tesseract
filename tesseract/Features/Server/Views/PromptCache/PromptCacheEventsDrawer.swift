@@ -333,10 +333,6 @@ enum PromptCacheEventDisplay {
         }
         return "-"
     }
-
-    static func requestSummary(_ event: PromptCacheTelemetryEvent) -> String {
-        event.requestID.map { String($0.uuidString.prefix(8)) } ?? "system"
-    }
 }
 
 // MARK: - Field lines

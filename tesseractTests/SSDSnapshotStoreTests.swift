@@ -166,7 +166,7 @@ struct SSDSnapshotStoreTests {
     /// Used to observe asynchronous writer completion — the alternative
     /// is hard-coded sleeps, which race under CI load.
     private func waitUntil(
-        timeout: Duration = .seconds(5),
+        timeout: Duration = waitBackstop,
         _ condition: @escaping @Sendable () -> Bool
     ) async -> Bool {
         let start = ContinuousClock.now
@@ -668,7 +668,7 @@ struct SSDSnapshotStoreTests {
         // on its own after an eviction-only path, without needing
         // a later unrelated mutation to reschedule it.
         let manifestURL = root.appendingPathComponent("manifest.json")
-        let persisted = await waitUntil(timeout: .seconds(5)) {
+        let persisted = await waitUntil {
             guard FileManager.default.fileExists(atPath: manifestURL.path) else {
                 return false
             }
@@ -1637,10 +1637,20 @@ struct SSDSnapshotStoreTests {
         #expect(deleteLines.first?.contains("reason=hydrationFailure") == true)
     }
 
+    /// write(2) rejects a single call past INT_MAX with EINVAL (issue #441),
+    /// so every chunk the writer hands it must stay below that.
+    @Test
+    func writeChunksStayBelowTheWrite2Limit() {
+        #expect(SSDSnapshotStore.maxWriteChunkBytes <= Int(Int32.max))
+    }
+
     /// Regression (issue #441 smoke): a leaf payload past 2 GiB must commit,
     /// not die on write(2)'s INT_MAX EINVAL. Drives the real store end-to-end
-    /// — one 2.1 GB temp file on disk for a few seconds.
-    @Test
+    /// with a 2.1 GB payload, in memory and on disk, so it runs only with
+    /// `TESSERACT_LARGE_WRITE_TEST=1` (`TEST_RUNNER_` through xcodebuild):
+    /// every run writing it slowed parallel runs and wore the disk. The chunk
+    /// loop is covered by `PlaceholderContainerEncodingTests`, the bound above.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["TESSERACT_LARGE_WRITE_TEST"] == "1"))
     func writerCommitsPayloadPastIntMaxBytes() async throws {
         let twoGiBPlus = (2 << 30) + (8 << 20)
         let (config, root) = makeConfig(

@@ -79,7 +79,7 @@ three-arm Warm Body campaign or separately time dequantization. This PR adds
 no executable runner and no 4-bit product setting. Before execution the owner
 must provide/review the experiment instrumentation at the existing Model
 Session and snapshot seams, freeze its revision, and verify the actual arm
-selection and timing boundaries. Existing commands in `docs/testing.md` are
+selection and timing boundaries. Existing commands in `docs/prefix-cache-testing.md` are
 not a ready-to-run #528 gate. Do not claim that toy tests or the existing
 bitwise uncompressed-cache gate fill this gap. A new test seam would require
 returning to the owner before implementation.

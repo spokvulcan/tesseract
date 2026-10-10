@@ -15,6 +15,12 @@ Reserve **Important** for:
   Isolation).
 - Prefix-cache / snapshot correctness — anything that could serve stale or
   mismatched KV state
+- Tests that fail in a parallel run (`docs/testing.md` → Parallel runs share
+  one test host): a sleep or a count of `Task.yield()`s standing in for "the
+  work finished" before a positive check, when the work leaves the main actor
+  (an actor hop, a `Task.sleep`, a detached task); a suite that computes for
+  seconds without `@Suite(.cpuBound)`. SwiftLint already rejects wall-clock
+  budgets and `for … where … { await Task.yield() }` waits.
 - Security and sandbox escapes (PathSandbox, entitlements)
 
 Everything else — naming, style, structure preferences — is a nit.
@@ -43,8 +49,8 @@ no CI of their own: this review and the `vendor-test` CI job are its gate.
 
 Flag it if the PR renames, moves, or deletes a module that `ARCHITECTURE.md`
 names; introduces domain vocabulary that `CONTEXT.md` lacks; changes a test
-workflow documented in `docs/testing.md`; or moves the vendor pin without an
-entry in `docs/mlx-swift-lm-fork.md`.
+workflow documented in `docs/testing.md` or `docs/prefix-cache-testing.md`; or
+moves the vendor pin without an entry in `docs/mlx-swift-lm-fork.md`.
 
 ## Decided trade-offs
 

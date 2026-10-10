@@ -1,6 +1,7 @@
 # SwiftLint — Tesseract Agent
 #
-# Local-only quality gate, run via pre-commit on staged files (no CI yet).
+# Runs on staged files in the pre-commit hook, and on every PR in CI (the lint
+# job in .github/workflows/ci.yml).
 # Division of labour: swift-format owns whitespace / width / indentation /
 # import order; SwiftLint owns idiom & correctness smells. Rules that overlap
 # with the formatter are disabled here so the two tools never fight.
@@ -92,3 +93,23 @@ type_name:
   max_length:
     warning: 50
     error: 60
+
+# Test waits (docs/testing.md → Parallel runs share one test host). A parallel
+# run shares one test host, so a wait bounded by a short budget or a count of
+# yields fails tests whose code is fine. A negative check ("nothing more
+# happens") keeps its plain fixed window: `for _ in 0..<N { await Task.yield() }`.
+custom_rules:
+  test_wait_budget:
+    name: "Test wait budget"
+    included: "tesseractTests/.*\\.swift$"
+    regex: 'ContinuousClock\.now \+ \.(seconds|milliseconds)\(|\.now\.advanced\(by: \.(seconds|milliseconds)\(|timeout: Duration = \.(seconds|milliseconds)\('
+    excluded_match_kinds: [comment, doccomment, string]
+    message: "A wait's budget is waitBackstop; for @Observable state use observe(until:) (tesseractTests/Waiting.swift)"
+    severity: error
+  test_counted_wait:
+    name: "Counted test wait"
+    included: "tesseractTests/.*\\.swift$"
+    regex: 'for _ in 0\.\.<[0-9_]+ where [^{]*\{\s*await Task\.yield\(\)'
+    excluded_match_kinds: [comment, doccomment, string]
+    message: "A count of yields can run out before the thread pool runs the work: use observe(until:) or waitUntil (tesseractTests/Waiting.swift)"
+    severity: error

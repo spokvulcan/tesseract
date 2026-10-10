@@ -11,6 +11,7 @@ import WebKit
 /// materialize as agent tools, calls round-trip, dead servers degrade cleanly,
 /// namespacing prevents collisions, and enable/disable takes effect live.
 @MainActor
+@Suite(.timeLimit(.minutes(1)))
 struct MCPClientManagerTests {
 
     // MARK: - Helpers
@@ -35,15 +36,8 @@ struct MCPClientManagerTests {
             refreshRegistry: onRefresh)
     }
 
-    private func waitUntil(
-        timeout: Duration = .seconds(3), _ predicate: @MainActor () -> Bool
-    ) async {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: timeout)
-        while clock.now < deadline {
-            if predicate() { return }
-            try? await Task.sleep(for: .milliseconds(20))
-        }
+    private func waitUntil(_ predicate: @escaping @MainActor @Sendable () -> Bool) async {
+        await observe(until: predicate)
     }
 
     // MARK: - Materialization
@@ -114,7 +108,15 @@ struct MCPClientManagerTests {
         manager.sync(configs: [deadConfig, healthyConfig])
 
         // The healthy server's tool shows up; the dead one contributes none.
-        await waitUntil { manager.aggregatedToolDefinitions.contains { $0.name == "healthy.ok" } }
+        // Both handshakes run concurrently, so wait for the dead one to end too.
+        await waitUntil {
+            switch manager.connection(id: deadConfig.id)?.state {
+            case .connected, .failed:
+                manager.aggregatedToolDefinitions.contains { $0.name == "healthy.ok" }
+            default:
+                false
+            }
+        }
 
         #expect(manager.aggregatedToolDefinitions.map(\.name) == ["healthy.ok"])
         let deadState = manager.connection(id: deadConfig.id)?.state

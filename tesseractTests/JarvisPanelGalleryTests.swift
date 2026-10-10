@@ -34,6 +34,14 @@ struct JarvisPanelGalleryTests {
         URL(fileURLWithPath: $0, isDirectory: true)
     }
 
+    /// Lets the hosted view's deferred updates run before the next layout. A
+    /// gallery written out for judging by eye waits `duration`, for the panel to
+    /// settle; the test itself needs only the run loop to come round, and the
+    /// longer waits were most of the suite's time.
+    static func settle(_ duration: Duration) async throws {
+        try await Task.sleep(for: directory == nil ? .milliseconds(20) : duration)
+    }
+
     enum Shown: String, CaseIterable, CustomTestStringConvertible {
         case stepCue
         case stepCueMustDo
@@ -347,13 +355,13 @@ struct JarvisPanelGalleryTests {
         }
         window.contentView = host(height: JarvisPanelController.size.height)
         window.layoutIfNeeded()
-        try await Task.sleep(for: .milliseconds(200))
+        try await Self.settle(.milliseconds(200))
         let height = JarvisPanelController.height(forContent: content)
         window.setContentSize(NSSize(width: JarvisPanelController.size.width, height: height))
         let fitted = host(height: height)
         window.contentView = fitted
         window.layoutIfNeeded()
-        try await Task.sleep(for: .milliseconds(200))
+        try await Self.settle(.milliseconds(200))
         window.layoutIfNeeded()
         let rep = try #require(fitted.bitmapImageRepForCachingDisplay(in: fitted.bounds))
         fitted.cacheDisplay(in: fitted.bounds, to: rep)

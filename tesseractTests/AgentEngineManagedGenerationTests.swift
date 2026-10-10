@@ -134,7 +134,7 @@ private actor AsyncFlag {
 }
 
 private func waitUntil(
-    timeout: Duration = .seconds(1),
+    timeout: Duration = waitBackstop,
     condition: @escaping @Sendable () async -> Bool
 ) async -> Bool {
     let clock = ContinuousClock()

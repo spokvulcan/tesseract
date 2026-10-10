@@ -1,3 +1,4 @@
+import Observation
 import Testing
 
 @testable import Tesseract_Agent
@@ -13,6 +14,7 @@ import Testing
 /// `withExclusive` (ordering, throwing, exclusion, `isHeld`), never the private
 /// waiter array.
 @MainActor
+@Suite(.timeLimit(.minutes(1)))
 struct LLMGateTests {
 
     /// A continuation-backed latch: bodies park on `wait()` until the test calls
@@ -36,9 +38,11 @@ struct LLMGateTests {
     }
 
     /// Records body entry/exit marks so ordering and overlap are assertable
-    /// without sharing a mutable local across tasks.
+    /// without sharing a mutable local across tasks. Observable, so a test can
+    /// wait for an entry rather than guess how long it takes.
     @MainActor
-    private final class EventLog {
+    @Observable
+    fileprivate final class EventLog {
         private(set) var events: [String] = []
         func add(_ event: String) { events.append(event) }
     }
@@ -252,9 +256,11 @@ struct LLMGateTests {
             #expect(throws: CancellationError.self) { try outcome.get() }
 
             // Hang-proof wedge probe: if the gate was orphaned, the bystander
-            // never runs; assert via the log after settling, then cancel as
-            // cleanup so a regression fails fast instead of deadlocking the suite.
-            await settle()
+            // never runs, so the wait ends at the suite's time limit and the
+            // cancel below frees the suite instead of deadlocking it. The
+            // handoff reaches the bystander through more than one hop, so
+            // wait for its entry rather than a fixed number of yields.
+            await observe(until: { log.events == ["B"] })
             #expect(log.events == ["B"], "iteration \(iteration)")
             #expect(!queue.isHeld, "iteration \(iteration)")
             bystander.cancel()

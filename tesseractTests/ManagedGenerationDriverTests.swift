@@ -99,7 +99,7 @@ struct ManagedGenerationDriverTests {
         // Wait for the first chunk to prove the loop is consuming, then
         // cancel the live handle through the bridge — the driver must
         // report a cancelled outcome with no `.info` re-yield.
-        let deadline = ContinuousClock.now + .seconds(3)
+        let deadline = ContinuousClock.now + waitBackstop
         while recorder.withLock({ $0.isEmpty }), ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(5))
         }
@@ -165,7 +165,7 @@ struct ManagedGenerationDriverTests {
             for try await _ in stream {}
         } catch {}
 
-        let deadline = ContinuousClock.now + .seconds(3)
+        let deadline = ContinuousClock.now + waitBackstop
         while bridgeFired.withLock({ $0 }) == 0, ContinuousClock.now < deadline {
             try? await Task.sleep(for: .milliseconds(5))
         }

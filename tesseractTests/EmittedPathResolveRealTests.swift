@@ -15,6 +15,7 @@ import Tokenizers
 ///
 /// Skipped unless the PARO model directory is on disk (override with
 /// `TESSERACT_TOKENIZE_CACHE_MODEL`, as `RenderTokenCacheRealTests` does).
+@Suite(.cpuBound)
 struct EmittedPathResolveRealTests {
 
     private nonisolated static func directory(_ path: String) -> URL {
@@ -48,7 +49,7 @@ struct EmittedPathResolveRealTests {
     private static let fingerprint = "real-emitted-path"
 
     private static func loadTokenizer() async throws -> any MLXLMCommon.Tokenizer {
-        try await #huggingFaceTokenizerLoader().load(from: modelDirectory)
+        try await RealTokenizers.huggingFace(from: modelDirectory)
     }
 
     private static func makeRender(

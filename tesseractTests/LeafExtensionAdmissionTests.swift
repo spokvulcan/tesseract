@@ -1079,18 +1079,6 @@ struct LeafExtensionSupersessionPolicyTests {
         return (root, manager, store, key)
     }
 
-    private func waitUntil(
-        timeout: Duration = .seconds(5),
-        _ condition: @MainActor () -> Bool
-    ) async -> Bool {
-        let start = ContinuousClock.now
-        while ContinuousClock.now - start < timeout {
-            if condition() { return true }
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        return condition()
-    }
-
     /// Admit an SSD-backed ancestor leaf at `tokens` and wait for its
     /// ref to commit. Returns the committed snapshot ID.
     private func admitCommittedAncestor(

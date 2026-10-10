@@ -13,10 +13,11 @@ import Testing
 /// Opt-in (the corpus contains user project content and lives outside the
 /// repo). Invocation — see `docs/testing.md`:
 ///
-///     TESSERACT_FIDELITY_CORPUS=~/projects/tesseract-traces/2026-06-12-interrupt-rewind \
-///     TESSERACT_FIDELITY_MODEL="~/Library/…/models/z-lab_Qwen3.5-4B-PARO" \
-///     scripts/dev.sh test --filter CanonicalEchoFidelityCorpusTests
+///     TEST_RUNNER_TESSERACT_FIDELITY_CORPUS=~/projects/tesseract-traces/2026-06-12-interrupt-rewind \
+///     TEST_RUNNER_TESSERACT_FIDELITY_MODEL="~/Library/…/models/z-lab_Qwen3.5-4B-PARO" \
+///     scripts/test.sh CanonicalEchoFidelityCorpusTests
 @MainActor
+@Suite(.cpuBound)
 struct CanonicalEchoFidelityCorpusTests {
 
     private nonisolated static var corpusRoot: String? {

@@ -35,6 +35,7 @@ import Testing
 ///     TEST_RUNNER_TESSERACT_FIDELITY_MODEL="~/Library/…/models/mlx-community_Qwen3.8-27B-4bit" \
 ///     xcodebuild test … -only-testing:tesseractTests/EmittedPathReplayCorpusTests
 @MainActor
+@Suite(.cpuBound)
 struct EmittedPathReplayCorpusTests {
 
     private nonisolated static var corpusRoot: String? {

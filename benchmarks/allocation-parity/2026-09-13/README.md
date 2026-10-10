@@ -51,5 +51,5 @@ the earlier HTTP evidence covers that separate path. It does not run the full
 16K correctness matrix or the 45k/75k/93k acceptance campaign.
 
 The lifetime fixture must run alone with the opt-in environment flag described
-in [testing documentation](../../../docs/testing.md). Its global allocator
+in [testing documentation](../../../docs/prefix-cache-testing.md#bounded-production-parity-and-projection-lifetime). Its global allocator
 counter must not be compared while other model or test work runs concurrently.
