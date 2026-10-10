@@ -460,7 +460,9 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # rendered with the app's wiring over fixture days (one deep in a slot, its
 # time left draining) at a wide, a regular and a phone width
 # (TEST_RUNNER_TODAY_GALLERY_DIR=<dir> also writes each render there as a PNG,
-# dark and light), the Step Cue (a planned slot put on the panel at its start,
+# dark and light; glass doesn't survive the offscreen render, so secondary-styled
+# content on .glassEffect comes out black or vanishes: judge layout in the PNGs
+# and colors in the app), the Step Cue (a planned slot put on the panel at its start,
 # once, and never while away, quiet, in a call, a game or a meeting, or over a
 # panel that is up — what came due meanwhile is cued late once the owner can
 # see it; a started step's check-in at its end, which no other start
