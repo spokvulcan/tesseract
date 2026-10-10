@@ -45,6 +45,13 @@ enum PasteboardImageReader {
     static let supportedPasteboardTypes: [NSPasteboard.PasteboardType] =
         ImageIngest.supportedUTTypes.map { NSPasteboard.PasteboardType($0.identifier) }
 
+    /// What an image drag can arrive as: the supported image types and file
+    /// promises (the screenshot thumbnail, Photos). A file URL is left to the
+    /// receiver, which may take it already (a text view does).
+    static let dragTypes: [NSPasteboard.PasteboardType] =
+        supportedPasteboardTypes
+        + NSFilePromiseReceiver.readableDraggedTypes.map { NSPasteboard.PasteboardType($0) }
+
     /// The gesture test: does this pasteboard carry image content in any form
     /// we can read? Deliberately cheap — type/conformance checks only, no byte
     /// reads or decodes — so it can run inside menu validation and drag

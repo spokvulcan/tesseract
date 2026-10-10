@@ -100,6 +100,9 @@ nonisolated enum CompanionTraceEvent: String, Sendable, Equatable, CaseIterable 
     case threadOpened = "thread.opened"
     /// A Day Thread passed its ceiling and was compacted.
     case threadCompacted = "thread.compacted"
+    /// The owner showed Jarvis pictures with a message: how many, from where
+    /// (Today or the panel), and whether words came with them (ADR-0090).
+    case picturesShown = "thread.picture"
 
     // MARK: - presence.*
 

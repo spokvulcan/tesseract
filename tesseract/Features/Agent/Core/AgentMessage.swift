@@ -123,6 +123,15 @@ nonisolated struct UserMessage: AgentMessageProtocol, Codable, Equatable, Identi
     func toLLMMessage() -> LLMMessage? {
         .user(content: "\(nowTag)\n\(content)", images: images)
     }
+
+    /// The message with its pictures out of the model's sight: `note` stands
+    /// where they were, between the Now Tag and the words (the Day Thread,
+    /// ADR-0090).
+    func toLLMMessage(replacingImagesWith note: String) -> LLMMessage {
+        .user(
+            content: [nowTag, note, content].filter { !$0.isEmpty }.joined(separator: "\n"),
+            images: [])
+    }
 }
 
 // MARK: - AssistantMessage
@@ -383,5 +392,14 @@ extension AgentMessageProtocol {
         if let t = self as? ToolResultMessage { return t }
         if let core = self as? CoreMessage, case .toolResult(let t) = core { return t }
         return nil
+    }
+
+    /// The images the transcript shows for this message — a user's
+    /// attachments, or the images a tool returned — in the identities Quick
+    /// Look pages through.
+    nonisolated var transcriptImages: [ImageAttachment] {
+        if let user = asUser { return user.images }
+        if let tool = asToolResult { return tool.content.imageAttachments(namespace: tool.id) }
+        return []
     }
 }

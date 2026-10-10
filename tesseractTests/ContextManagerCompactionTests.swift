@@ -255,4 +255,51 @@ struct ContextManagerCompactionTests {
         #expect(prompts.isEmpty)
         #expect(!result.didMutate)
     }
+
+    // MARK: - What a user turn counts for
+
+    private static let image = ImageAttachment(
+        data: ImageTestFixtures.tinyPNGData, mimeType: "image/png")
+
+    /// A user turn's images count as a tool result's do (~1,200 tokens each),
+    /// and the chat's own user turn counts at all: `ChatSession` sends it as
+    /// `CoreMessage.user`, and the agent loop keeps the wrapper in context.
+    @Test func userImagesCountAndTheChatsWrappedTurnCounts() {
+        let words = String(repeating: "W", count: 400)
+        #expect(TokenEstimator.estimate(UserMessage(content: words)) == 100)
+        let shown = UserMessage(content: words, images: [Self.image, Self.image])
+        #expect(TokenEstimator.estimate(shown) == 100 + 2 * 1_200)
+        #expect(TokenEstimator.estimate(CoreMessage.user(shown)) == 100 + 2 * 1_200)
+        #expect(
+            TokenEstimator.estimateTotal([CoreMessage.user(shown), Self.recentAssistant])
+                == 2_500 + 1_000)
+    }
+
+    /// The summarizer reads the chat's wrapped user turns too, each image
+    /// marked where it was, and each assistant turn as its text.
+    @Test func summaryPromptCarriesTheChatsWrappedUserTurns() async throws {
+        let manager = ContextManager(settings: .small)
+        let recorder = SummarizeRecorder()
+        let summarize: @Sendable (String) async throws -> String = { prompt in
+            await recorder.record(prompt)
+            return "## Goal\ncompacted"
+        }
+        let asked = UserMessage(content: Self.oldUser.content, images: [Self.image])
+
+        _ = try await manager.compact(
+            messages: [
+                CoreMessage.user(asked), Self.oldAssistant, Self.recentUser,
+                Self.recentAssistant,
+            ],
+            contextWindow: Self.contextWindow,
+            summarize: summarize
+        )
+
+        let prompt = try #require(await recorder.prompts.first)
+        #expect(prompt.contains("User: [1 image attached] \(asked.content)"))
+        // An assistant turn is its text, not its parts' debug description.
+        #expect(prompt.hasSuffix("Assistant: \(Self.oldAssistant.text)"))
+        #expect(!prompt.contains("ContentPart"))
+        #expect(!prompt.contains(Self.recentUser.content))
+    }
 }

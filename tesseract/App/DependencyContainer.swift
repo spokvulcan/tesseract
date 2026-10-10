@@ -172,6 +172,8 @@ final class DependencyContainer: ObservableObject {
     }()
     /// The Day Thread's own agent: the same system prompt and tools as every
     /// chat (one cached prefix), compacting only past the thread's ceiling.
+    /// It sees a picture in the turn it's shown, a line in its place after
+    /// (ADR-0090).
     lazy var dayAgent: Agent = AgentFactory.makeAgent(
         inferenceService: serverInferenceService,
         packageRegistry: packageRegistry,
@@ -182,7 +184,8 @@ final class DependencyContainer: ObservableObject {
         gating: ToolGating(webAccessEnabled: settingsManager.webAccessEnabled),
         mcpToolsExtension: mcpClientManager.toolsExtension,
         compactionWindow: DayThread.compactionWindow(
-            ceiling: settingsManager.companionThreadCeilingTokens)
+            ceiling: settingsManager.companionThreadCeilingTokens),
+        convertToLlm: DayThreadPictures.llmMessages
     )
     lazy var dayThread = DayThread(
         agent: dayAgent,
@@ -194,7 +197,25 @@ final class DependencyContainer: ObservableObject {
         speechCoordinator: speechCoordinator,
         contextManager: contextManager,
         summarize: internalCompletion,
-        trace: companionTrace)
+        trace: companionTrace,
+        restoreDraft: { [todayDraft] text, images in
+            todayDraft.restore(text: text, images: images)
+        })
+    /// Today's composer draft, its own: the words and pictures not yet sent,
+    /// and Quick Look over the Day Thread's pictures.
+    lazy var todayDraft = ComposerDraftController(conversationImages: { [dayAgent] in
+        dayAgent.state.messages.flatMap { $0.transcriptImages }
+    })
+    /// Whether Jarvis can see pictures: the selected model and the vision
+    /// setting, as for the agent chat. The Jarvis panel asks it too.
+    lazy var todayVisionAvailability = VisionAvailabilityController(
+        settings: settingsManager,
+        draft: todayDraft,
+        isVisionCapable: { [modelDownloadManager] in modelDownloadManager.isVisionCapable($0) },
+        downloadedAgentModels: { [modelDownloadManager] in
+            modelDownloadManager.downloadedModels(in: .agent)
+        }
+    )
     lazy var triageRuleStore = TriageRuleStore(settings: settingsManager)
     /// The owner's Profile: facts they approved, and Jarvis's proposals.
     lazy var profileStore = ProfileStore(
@@ -252,7 +273,14 @@ final class DependencyContainer: ObservableObject {
         liveCard: { [weak self] id in self?.companionRuntime.state.cards.first { $0.id == id } },
         onAction: { [weak self] action in self?.companionRuntime.act(action) },
         onExpand: { (NSApp.delegate as? AppDelegate)?.navigateToToday() },
-        capture: captureService)
+        capture: captureService,
+        // The panel asks Today's verdict, fresh: it can come up before Today
+        // was ever opened.
+        pictureRemedy: { [todayVisionAvailability] in
+            todayVisionAvailability.refresh()
+            return todayVisionAvailability.imageInputAvailable
+                ? nil : todayVisionAvailability.remedy.message
+        })
     lazy var companionRuntime: CompanionRuntime = CompanionRuntime(
         settings: settingsManager, agenda: agenda, notifier: companionNotifier,
         trace: companionTrace, idleMonitor: idleMonitor, presence: companionPresence,
@@ -388,13 +416,7 @@ final class DependencyContainer: ObservableObject {
         learnedWords: learnedWordStore
     )
     lazy var composerDraft = ComposerDraftController(conversationImages: { [agent] in
-        agent.state.messages.flatMap { message -> [ImageAttachment] in
-            if let user = message.asUser { return user.images }
-            if let tool = message.asToolResult {
-                return tool.content.imageAttachments(namespace: tool.id)
-            }
-            return []
-        }
+        agent.state.messages.flatMap { $0.transcriptImages }
     })
     lazy var visionAvailability = VisionAvailabilityController(
         settings: settingsManager,

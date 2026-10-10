@@ -13,6 +13,8 @@ struct AgentScrollableTextField: NSViewRepresentable {
     /// full-window drop overlay shows over the text view too.
     var onImageDragTargeted: ((Bool) -> Void)?
     var isEnabled: Bool = true
+    /// The type size: the chat's by default; Today's composer uses the page's.
+    var fontSize: CGFloat = chatBodyFontSize
     /// Return true if the arrow key was consumed (e.g. by popup navigation).
     var onArrowUp: (() -> Bool)?
     var onArrowDown: (() -> Bool)?
@@ -37,7 +39,7 @@ struct AgentScrollableTextField: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.isRichText = false
         textView.drawsBackground = false
-        textView.font = .systemFont(ofSize: chatBodyFontSize)
+        textView.font = .systemFont(ofSize: fontSize)
         textView.textColor = .labelColor
         textView.isSelectable = true
         textView.isEditable = isEnabled
@@ -215,12 +217,8 @@ final class ImagePasteTextView: NSTextView {
 
     /// The image and file-promise types the stock plain-text view wouldn't
     /// accept; text and non-image file drags keep the default behavior.
-    private static let imageDragTypes: [NSPasteboard.PasteboardType] =
-        PasteboardImageReader.supportedPasteboardTypes
-        + NSFilePromiseReceiver.readableDraggedTypes.map { NSPasteboard.PasteboardType($0) }
-
     override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
-        super.acceptableDragTypes + Self.imageDragTypes
+        super.acceptableDragTypes + PasteboardImageReader.dragTypes
     }
 
     /// The gesture test for the drag hovering the view, computed once on entry

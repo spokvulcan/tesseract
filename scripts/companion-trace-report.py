@@ -11,8 +11,9 @@ from "dismissed"), Step and Break Cues by phase and the owner's choices (a
 Break Cue's prefixed "break"), steps moved off a meeting, breaks from the Mac
 (how many, and the median and longest sitting before one), how long timed
 steps took against their plan, the wind-down,
-nudges (event and leave), notifications by source, Triage, and the tasks the
-Night Reflection proposed and what the owner decided. A Step Cue shown ten
+nudges (event and leave), notifications by source, Triage, the tasks the
+Night Reflection proposed and what the owner decided, and the pictures the
+owner showed Jarvis (from Today or the panel, and how many came without words). A Step Cue shown ten
 minutes or more after its moment counts as late. The night before is how long
 the Mac was left before the day's first sit-down. Counts only — no titles,
 messages or names.
@@ -53,6 +54,7 @@ def summarise(path):
     sittings = []
     timed = [0, 0]
     tasks = collections.Counter()
+    pictures = collections.Counter()
     night = None
     for record in records(path):
         event = record["event"]
@@ -102,6 +104,10 @@ def summarise(path):
             minutes = fields.get("minutesAway", 0)
             night = "%d h %02d min away%s" % (
                 minutes // 60, minutes % 60, ", up past midnight" if fields.get("upLate") else "")
+        elif event == "thread.picture":
+            pictures[fields.get("surface", "?")] += fields.get("count", 0)
+            if not fields.get("words"):
+                pictures["without words"] += fields.get("count", 0)
         elif event == "task.proposed":
             tasks["proposed"] += fields.get("count", 0)
         elif event == "task.decided":
@@ -131,6 +137,7 @@ def summarise(path):
         "night before": night,
         "wind-down": wind_down,
         "task proposals": dict(tasks),
+        "pictures shown": dict(pictures),
     }
 
 

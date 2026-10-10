@@ -11,7 +11,6 @@
 //
 
 import SwiftUI
-import UniformTypeIdentifiers
 
 /// Shared metrics for the composer action-row icons: one glyph size, one hit
 /// frame, one spacing, so the six controls read as a single family. Two
@@ -248,17 +247,8 @@ struct AgentComposerView: View {
         }
         // The Vision Availability leaf owns the verdict and its effects on the
         // draft; the view keeps only the refresh triggers for its inputs.
-        .onChange(of: settings.selectedAgentModelID) { _, _ in
-            visionAvailability.refresh()
-        }
-        .onChange(of: downloadManager.status(for: settings.selectedAgentModelID)) { _, _ in
-            visionAvailability.refresh()
-        }
-        .onChange(of: settings.useVisionWhenAvailable) { _, _ in
-            visionAvailability.refresh()
-        }
+        .refreshesVisionAvailability(visionAvailability)
         .onAppear {
-            visionAvailability.refresh()
             voiceInput.onVoiceTranscription = { [weak composerDraft = composerDraft] text in
                 guard let composerDraft else { return }
                 if composerDraft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -615,20 +605,7 @@ struct AgentComposerView: View {
     }
 
     private func openImagePicker() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = ImageIngest.supportedUTTypes
-        panel.allowsMultipleSelection = true
-        panel.canChooseDirectories = false
-        panel.message = "Select images to attach"
-        panel.begin { [weak composerDraft] response in
-            guard response == .OK else { return }
-            // Same funnel as paste/drop, so cap trims and unreadable files get
-            // the same composer notice (issue #167).
-            let payload = PasteboardImageReader.ingest(fileURLs: panel.urls)
-            DispatchQueue.main.async {
-                composerDraft?.handleGesture(payload)
-            }
-        }
+        ImagePicker.pick(into: composerDraft, message: "Select images to attach")
     }
 }
 
@@ -707,47 +684,5 @@ private struct ModelButtonView: View {
         return agentEngine.isModelLoaded
             ? "\(selectedDisplayName) is loaded — click to switch models"
             : "\(selectedDisplayName) loads on the first message — click to switch models"
-    }
-}
-
-// MARK: - Image Thumbnail
-
-private struct ImageThumbnailView: View {
-    let attachment: ImageAttachment
-    let onRemove: () -> Void
-    /// Click the thumbnail (not the ✕) to open it full size in Quick Look (#116).
-    var onTap: (() -> Void)?
-
-    var body: some View {
-        ZStack(alignment: .topTrailing) {
-            Group {
-                if let nsImage = NSImage(data: attachment.data) {
-                    Image(nsImage: nsImage)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: 56, height: 56)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                } else {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(.quaternary)
-                        .frame(width: 56, height: 56)
-                        .overlay {
-                            Image(systemName: "photo")
-                                .foregroundStyle(.secondary)
-                        }
-                }
-            }
-            .contentShape(RoundedRectangle(cornerRadius: 8))
-            .onTapGesture { onTap?() }
-            .help("Click to view full size")
-
-            Button(action: onRemove) {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 16))
-                    .foregroundStyle(.white, .black.opacity(0.6))
-            }
-            .buttonStyle(.plain)
-            .offset(x: 6, y: -6)
-        }
     }
 }

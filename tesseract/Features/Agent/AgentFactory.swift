@@ -17,6 +17,9 @@ enum AgentFactory {
     /// assembled from that *resolved* set's facts — never from the raw
     /// registry — so the prompt cannot orient the model toward tools the
     /// consumer will not carry.
+    ///
+    /// `convertToLlm` is how the conversation reads to the model; the Day
+    /// Thread's keeps only the latest turn's pictures (ADR-0090).
     @MainActor
     static func makeAgent(
         inferenceService: ServerInferenceService,
@@ -27,7 +30,9 @@ enum AgentFactory {
         settingsManager: SettingsManager,
         gating: ToolGating,
         mcpToolsExtension: MCPToolsExtension? = nil,
-        compactionWindow: Int = 262_144
+        compactionWindow: Int = 262_144,
+        convertToLlm: @escaping @Sendable ([any AgentMessageProtocol]) -> [LLMMessage] =
+            defaultConvertToLlm
     ) -> Agent {
         let agentRoot = PathSandbox.defaultRoot
 
@@ -95,7 +100,7 @@ enum AgentFactory {
         // 8. Create agent config
         var config = AgentLoopConfig(
             model: AgentModelRef(id: settingsManager.selectedAgentModelID),
-            convertToLlm: defaultConvertToLlm,
+            convertToLlm: convertToLlm,
             contextTransform: compactionTransform,
             getSteeringMessages: nil,
             getFollowUpMessages: nil

@@ -10,7 +10,8 @@
 //  was closed on the panel (its leftovers wait in Today), an evening
 //  with the day done, and the same night past midnight, still that day until
 //  04:00. Each renders at a wide, a regular and a phone width, so every
-//  layout's body runs. With TODAY_GALLERY_DIR set (TEST_RUNNER_TODAY_GALLERY_DIR
+//  layout's body runs; the morning also renders with two pictures waiting in
+//  the composer, for Jarvis. With TODAY_GALLERY_DIR set (TEST_RUNNER_TODAY_GALLERY_DIR
 //  through xcodebuild), each render is also written there as a PNG, in dark
 //  and light, for judging the page by eye.
 //
@@ -61,10 +62,46 @@ struct TodayGalleryTests {
         }
     }
 
-    private func render(_ fixture: TodayFixture, width: CGFloat, height: CGFloat, dark: Bool)
-        async throws -> NSBitmapImageRep
-    {
+    /// The morning with two pictures waiting in the composer, for Jarvis:
+    /// their strip, the picture button, and the question they ask as the
+    /// field's placeholder.
+    @Test func todayComposerShowsWaitingPictures() async throws {
+        for size in Self.widths where size.name != "regular" {
+            for dark in Self.directory == nil ? [true] : [true, false] {
+                let image = try await render(
+                    .morning, width: size.width, height: size.height, dark: dark,
+                    prepare: { container in
+                        container.todayVisionAvailability.refresh()
+                        container.todayDraft.attachImages([
+                            ImageAttachment(
+                                data: ImageTestFixtures.flyerPNG(
+                                    title: "Parents' evening", line: "Wed 14 Oct · 17:00",
+                                    hue: 0.58),
+                                mimeType: "image/png"),
+                            ImageAttachment(
+                                data: ImageTestFixtures.flyerPNG(
+                                    title: "Market day", line: "Sat 17 Oct · 09:00", hue: 0.08),
+                                mimeType: "image/png"),
+                        ])
+                    })
+                #expect(image.pixelsWide > 0)
+                if let directory = Self.directory {
+                    try FileManager.default.createDirectory(
+                        at: directory, withIntermediateDirectories: true)
+                    let name = "morning-pictures-\(size.name)-\(dark ? "dark" : "light").png"
+                    try #require(image.representation(using: .png, properties: [:]))
+                        .write(to: directory.appendingPathComponent(name))
+                }
+            }
+        }
+    }
+
+    private func render(
+        _ fixture: TodayFixture, width: CGFloat, height: CGFloat, dark: Bool,
+        prepare: (DependencyContainer) -> Void = { _ in }
+    ) async throws -> NSBitmapImageRep {
         let container = try await fixture.container()
+        prepare(container)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: width, height: height),
             styleMask: [.borderless], backing: .buffered, defer: false)

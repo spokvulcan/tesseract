@@ -8,8 +8,9 @@
 //  a phone on a narrow one, with the Inbox and "Jarvis noticed" beside it
 //  (below it when narrow). Until 04:00 the page keeps the day that is
 //  ending (DayKey). One field at the bottom, the Today composer, asks Jarvis or
-//  adds a task, and confirms every change made from here, with an undo. The
-//  Chat mode shows the Day Thread.
+//  adds a task, and confirms every change made from here, with an undo. A
+//  picture dropped anywhere on the page goes into it, for Jarvis. The Chat
+//  mode shows the Day Thread, its pictures one click from Quick Look.
 //
 //  Content layer only (design-language §1): no custom glass. One type size;
 //  hierarchy from weight and color. Row actions live in context menus.
@@ -21,6 +22,7 @@ struct TodayView: View {
     @Environment(Agenda.self) private var agenda
     @Environment(CompanionRuntime.self) private var runtime
     @Environment(DayThread.self) private var thread
+    @Environment(ComposerDraftController.self) private var draft
 
     enum Mode: String, CaseIterable, Identifiable {
         case day = "Day"
@@ -54,6 +56,11 @@ struct TodayView: View {
             TodayComposer(onAsk: { mode = .chat })
                 .padding(Theme.Spacing.md)
         }
+        .background(
+            QuickLookContainer(
+                request: draft.quickLookRequest, onClose: { draft.dismissQuickLook() })
+        )
+        .imageDropTarget(draft, title: "Drop a picture for Jarvis")
         .navigationTitle("Today")
         .toolbar {
             ToolbarItem(placement: .principal) {

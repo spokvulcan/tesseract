@@ -12,7 +12,6 @@
 //
 
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct AgentContentView: View {
     @Environment(ChatSession.self) private var session
@@ -148,32 +147,8 @@ struct AgentContentView: View {
             )
         )
         // Full-window image drop (slice #117): dropping an image anywhere lands
-        // it in the composer's pending strip. `isTargeted` only flips for drags
-        // whose items conform to `.image`, so non-image drags never dim the
-        // window.
-        .onDrop(of: [.image], isTargeted: $composerDraft.isDropTargeted) { providers in
-            composerDraft.handleWindowImageDrop(providers)
-        }
-        .overlay {
-            if composerDraft.isDropTargeted {
-                ZStack {
-                    Color.black.opacity(0.4)
-                    VStack(spacing: 12) {
-                        Image(systemName: "photo.badge.plus")
-                            .font(.system(size: 44, weight: .light))
-                        Text("Drop image to attach")
-                            .font(.title2.weight(.medium))
-                    }
-                    .foregroundStyle(.white)
-                    .padding(32)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
-                }
-                .ignoresSafeArea()
-                .allowsHitTesting(false)
-                .transition(.opacity)
-            }
-        }
-        .animation(.easeInOut(duration: 0.15), value: composerDraft.isDropTargeted)
+        // it in the composer's pending strip.
+        .imageDropTarget(composerDraft, title: "Drop image to attach")
         .onChange(of: speechCoordinator.state) { _, newState in
             if case .idle = newState { speakingMessageID = nil }
         }
