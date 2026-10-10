@@ -1775,8 +1775,9 @@ then), so what comes next is always in sight. Today is the owner's day: until
 steps as a table (time, task, Area, length) with the Inbox and "Jarvis
 noticed" (Fact Proposals) beside them; a narrower one puts those below, and a
 phone-width one draws the steps as a list. The **Today composer** at the bottom (the agent composer
-simplified) asks Jarvis, adds a task through Capture or takes a held-to-talk
-question, and its notice slot shows the latest agenda change with an undo.
+simplified) asks Jarvis (with any **Shown Pictures** pasted, dropped on Today or
+picked), adds a task through Capture or takes a held-to-talk question, and its
+notice slot shows the latest agenda change with an undo.
 Its Chat mode shows the Day Thread.
 _Avoid_: dashboard, Mission Control (retired), home screen (unqualified).
 
@@ -1978,7 +1979,8 @@ away"; Jarvis's line does the greeting.
 **Jarvis Panel**:
 The floating card rung: a Siri-style Liquid Glass panel near the top-right,
 over any app — close top-left, expand to Today top-right, the card or a Step
-Cue, and an "Ask Jarvis" field between + (capture) and a mic. A card on it is
+Cue, and an "Ask Jarvis" field between + (capture) and a mic, which takes a
+**Shown Picture** pasted into it or dropped on the panel. A card on it is
 whole: a Morning Plan lists its steps, an Evening Wrap-up its leftovers with
 their choices, and what the owner handles there leaves it; Looks Good, Good
 Night and closing it keep the card in Today, with what it holds still to
@@ -2026,9 +2028,22 @@ One append-only conversation per day, on its own agent with the same system
 prompt and tools as every chat. It opens with the **Day Opening** (the Profile,
 the Areas, today's agenda, last night's carry-over note and first draft of the
 day); moments append a
-request and a card; the owner's Today chat appends too. A new day (at 04:00)
+request and a card; the owner's Today chat appends too, with any **Shown
+Pictures**. A new day (at 04:00)
 starts a new thread; within a day compaction runs only past its ceiling.
 _Avoid_: Mission Control, standing conversation (both retired).
+
+**Shown Picture**:
+A picture the owner shows Jarvis with a message — pasted, dropped or picked in
+the Today composer, or pasted or dropped on the Jarvis Panel — that joins the
+Day Thread, where Jarvis reads it and acts on it with his tools (the evening
+on a school letter, the date in a chat). He sees it in the turn it's shown:
+from the next message on, the thread carries a line in its place, while
+Today's Chat keeps showing it (ADR-0090). Shown without words, it asks what
+it means for the day. Never Capture's: a reminder is made from words, without
+a model.
+_Avoid_: attachment (the agent chat's word for the same bytes), image (the
+model's and the cache's word), photo, screenshot (kinds of picture).
 
 **Now Tag**:
 The one line of time every user message carries into the model — local date,

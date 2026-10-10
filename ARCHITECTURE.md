@@ -147,7 +147,7 @@ tesseract/
 │   │   ├── Capture/                   # Capture parser, capture door, hotkey panel
 │   │   ├── Engine/                    # Day Engine (pure decider), Delivery Ladder, governor, nudges
 │   │   ├── Moments/                   # Moments, cards, prompts, card parsing, fallbacks
-│   │   ├── Thread/                    # Day Thread: one conversation per day on its own agent
+│   │   ├── Thread/                    # Day Thread: one conversation per day on its own agent; pictures seen in their turn
 │   │   ├── Loop/                      # Companion runtime: gather → decide → perform, day state
 │   │   ├── Today/                     # The Today page: the Now Card, today's and tomorrow's steps
 │   │   ├── Delivery/                  # Jarvis panel, banners and nudges, glyph state
@@ -552,8 +552,10 @@ setting is on. File picker, paste, and window-level drag/drop all flow through
 `ImageIngest`: supported raster types only, 10 MB per image, typed rejections,
 and an eight-image pending queue. Committed and pending images materialize into a
 conversation-wide Quick Look preview set, while the server-side cache keys images
-by **Image Digest** rather than UI attachment identity. Vocabulary: `CONTEXT.md`
-→ Vision capability and mode, Image-aware prefix caching.
+by **Image Digest** rather than UI attachment identity. Today's composer takes
+pictures through the same pieces (`Features/Agent/Views/ComposerImageSupport.swift`,
+its own Composer Draft), and the Jarvis Panel through the same readers (§7). Vocabulary:
+`CONTEXT.md` → Vision capability and mode, Image-aware prefix caching.
 
 ### 5. The LLM Gate
 
@@ -663,6 +665,19 @@ every user message carries a stored **Now Tag**. Other apps' banners are sorted
 by code on arrival (`NotificationSources`: a person, an app's news, or noise —
 the system's banners and games, recognised by `AppIdentityResolver`), so only
 people reach a model; moments take their turn at the LLM Gate like any chat.
+
+The owner can show Jarvis pictures (**Shown Picture**, ADR-0090). The Today
+composer takes them through the agent composer's image-aware text view, a
+picture button and a drop anywhere on Today, into Today's own Composer Draft
+(`todayDraft`: Quick Look over the Day Thread's pictures, where Edit & Resend
+lands); the Jarvis Panel takes a pasted one through
+`GlassPanel.interceptKeyEquivalent` and a dropped one through `GlassPanel.Drop`.
+Whether they can be seen is the agent chat's verdict and remedy
+(`todayVisionAvailability`). The Day Thread renders through
+`DayThreadPictures`, for its own turns (the day agent's `convertToLlm`) and the
+moments alike: the model sees a picture only in the turn it's shown, and a line
+in its place after, so neither a moment nor a cold re-prefill feeds the day's
+pictures to the vision tower again.
 
 Tests never touch EventKit or a model: the engine is covered by decision
 tables, the tools run against the in-memory Agenda, and cards parse canned

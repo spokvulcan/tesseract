@@ -13,6 +13,8 @@
 //  hosted content keeps every button `.focusable(false)` and creates its text
 //  field in the first layout, never later. The Lens (PRD #612) shares it too,
 //  anchored at the bottom of the screen and seeing its key presses first.
+//  The Jarvis panel also takes drops and sees key equivalents first: a picture
+//  dropped on it, or pasted into its field (ADR-0090).
 //
 
 import AppKit
@@ -35,6 +37,22 @@ final class GlassPanel: NSPanel {
     /// Told of every key press (not its repeats) and click the panel
     /// receives, before anything handles it.
     var onInput: (() -> Void)?
+
+    /// Sees each key equivalent (⌘V) before the field and the menu do;
+    /// returning true swallows it. The Jarvis panel takes a pasted picture
+    /// here, which the text field would drop.
+    var interceptKeyEquivalent: ((NSEvent) -> Bool)?
+
+    /// What the panel takes when something is dropped anywhere on it.
+    struct Drop {
+        /// The pasteboard types to register for.
+        let types: [NSPasteboard.PasteboardType]
+        /// Whether this drag carries what the panel takes; checked once as it
+        /// enters, so it must be cheap.
+        let accepts: (NSPasteboard) -> Bool
+        /// The drop landed: read what it carries.
+        let perform: (NSPasteboard) -> Void
+    }
 
     private let glass: NSGlassEffectView
 
@@ -65,12 +83,21 @@ final class GlassPanel: NSPanel {
         contentView = glass
     }
 
-    /// Install (or replace) the SwiftUI content.
-    func host<Content: View>(_ content: Content) {
+    /// Install (or replace) the SwiftUI content; with `drop`, under a view
+    /// that takes such drops anywhere on the panel.
+    func host<Content: View>(_ content: Content, drop: Drop? = nil) {
         let hosting = NSHostingView(rootView: content)
         hosting.frame = glass.bounds
         hosting.autoresizingMask = [.width, .height]
-        glass.contentView = hosting
+        guard let drop else {
+            glass.contentView = hosting
+            return
+        }
+        let target = DropTargetView(drop: drop)
+        target.frame = glass.bounds
+        target.autoresizingMask = [.width, .height]
+        target.addSubview(hosting)
+        glass.contentView = target
     }
 
     /// Resize, keeping the top edge where it is.
@@ -129,5 +156,52 @@ final class GlassPanel: NSPanel {
             return
         }
         super.sendEvent(event)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if let interceptKeyEquivalent, interceptKeyEquivalent(event) { return true }
+        return super.performKeyEquivalent(with: event)
+    }
+}
+
+/// Behind the panel's content: takes a drop the panel accepts wherever it
+/// lands, unless a view under it takes the drag first (a field being edited
+/// takes text).
+private final class DropTargetView: NSView {
+    private let drop: GlassPanel.Drop
+    /// The drag hovering the panel carries what it takes: decided once, as
+    /// it enters (the dragging pasteboard is fixed for the session).
+    private var accepting = false
+
+    init(drop: GlassPanel.Drop) {
+        self.drop = drop
+        super.init(frame: .zero)
+        registerForDraggedTypes(drop.types)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        accepting = drop.accepts(sender.draggingPasteboard)
+        return accepting ? .copy : []
+    }
+
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        accepting ? .copy : []
+    }
+
+    override func draggingEnded(_ sender: any NSDraggingInfo) {
+        accepting = false
+    }
+
+    override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        accepting
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        guard accepting else { return false }
+        drop.perform(sender.draggingPasteboard)
+        return true
     }
 }

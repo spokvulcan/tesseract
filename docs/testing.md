@@ -473,7 +473,13 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # day walked through the engine signal by signal where those rules meet (the
 # plan, a cue started, an absence and the late check-in, the must-do put off
 # and started small, the clock, the evening),
-# cards and prompts, the Day Thread's store, the seen ledger, the
+# cards and prompts, the Day Thread's store, Shown Pictures (ADR-0090:
+# DayThreadPicturesTests — the model sees a picture in the turn it's shown and
+# a line in its place after, a tool's images too, an earlier turn reading the
+# same as the thread grows; a real Day Thread over the in-memory arbiter whose
+# owner turn hands the model the picture and whose next turn and moment read
+# the line; the panel's picture rules; the Today and panel galleries render
+# pictures waiting and asked), the seen ledger, the
 # Delivery Ladder and governor, the Claude Code merge, the Profile and recall
 # (fixture conversation files), the trace, the voice overlay's placements, and
 # the prefix-cache contract (a byte-identical system prompt; the Now Tag on
@@ -506,6 +512,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/CardParserTests \
   -only-testing:tesseractTests/MomentPromptsTests \
   -only-testing:tesseractTests/DayThreadTests \
+  -only-testing:tesseractTests/DayThreadPicturesTests \
   -only-testing:tesseractTests/SeenLedgerTests \
   -only-testing:tesseractTests/DeliveryLadderTests \
   -only-testing:tesseractTests/ClaudeCodeHooksTests \

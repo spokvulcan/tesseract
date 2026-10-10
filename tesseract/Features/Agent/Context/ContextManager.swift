@@ -206,7 +206,13 @@ actor ContextManager {
         for message in messages {
             switch message {
             case let msg as UserMessage:
-                lines.append("User: \(msg.content)")
+                // The summarizer reads text only: say an image was there, so
+                // the summary keeps that it was shown.
+                let images =
+                    msg.images.isEmpty
+                    ? ""
+                    : "[\(msg.images.count) image\(msg.images.count == 1 ? "" : "s") attached] "
+                lines.append("User: \(images)\(msg.content)")
             case let msg as AssistantMessage:
                 if msg.content.isEmpty {
                     if !msg.toolCalls.isEmpty {

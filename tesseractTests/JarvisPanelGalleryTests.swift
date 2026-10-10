@@ -12,7 +12,8 @@
 //  Today gallery's morning, the Evening Wrap-up with its leftovers (and on
 //  the week's last day, with one that has waited since last week), and a
 //  Breakpoint card (also with the line the + button leaves: the reminder it
-//  added, with its undo) — each at the height the panel fits to it. With
+//  added, with its undo; with two pictures waiting above the field; and with
+//  a picture asked about) — each at the height the panel fits to it. With
 //  PANEL_GALLERY_DIR set (TEST_RUNNER_PANEL_GALLERY_DIR through xcodebuild),
 //  each render is also written there as a PNG, in dark and light, for judging
 //  the panel by eye. The glass itself is the window's; a plain background
@@ -60,12 +61,28 @@ struct JarvisPanelGalleryTests {
         case eveningWrapUpWeek
         case breakpoint
         case breakpointCaptured
+        case breakpointPictures
+        case breakpointAskedPicture
 
         var testDescription: String { rawValue }
 
         static func at(_ hour: Int, _ minute: Int = 0) -> Date {
             Calendar.current.date(
                 from: DateComponents(year: 2026, month: 10, day: 9, hour: hour, minute: minute))!
+        }
+
+        /// Two pictures for Jarvis: a letter's evening and a market day.
+        @MainActor static var pictures: [ImageAttachment] {
+            [
+                ImageAttachment(
+                    data: ImageTestFixtures.flyerPNG(
+                        title: "Parents' evening", line: "Wed 14 Oct · 17:00", hue: 0.58),
+                    mimeType: "image/png"),
+                ImageAttachment(
+                    data: ImageTestFixtures.flyerPNG(
+                        title: "Market day", line: "Sat 17 Oct · 09:00", hue: 0.08),
+                    mimeType: "image/png"),
+            ]
         }
 
         /// The morning plan reads its steps from the Today gallery's morning.
@@ -181,7 +198,14 @@ struct JarvisPanelGalleryTests {
                             tomorrowFirst: "07:30 Put the bins out",
                             week: "Twelve things done, most of them for work.",
                             focus: "The job search")))
-            case .breakpoint, .breakpointCaptured:
+            case .breakpoint, .breakpointCaptured, .breakpointPictures, .breakpointAskedPicture:
+                // Pictures pasted or dropped wait above the field; once asked,
+                // they ride with the question.
+                if self == .breakpointPictures { model.pictures = Self.pictures }
+                if self == .breakpointAskedPicture {
+                    model.asked = DayThread.question("", pictures: 1)
+                    model.askedPictures = Array(Self.pictures.prefix(1))
+                }
                 if self == .breakpointCaptured {
                     model.notice = .added(
                         AgendaChange(
@@ -356,7 +380,8 @@ struct JarvisPanelGalleryTests {
         window.contentView = host(height: JarvisPanelController.size.height)
         window.layoutIfNeeded()
         try await Self.settle(.milliseconds(200))
-        let height = JarvisPanelController.height(forContent: content)
+        let height = JarvisPanelController.height(
+            forContent: content, pictures: !model.pictures.isEmpty)
         window.setContentSize(NSSize(width: JarvisPanelController.size.width, height: height))
         let fitted = host(height: height)
         window.contentView = fitted

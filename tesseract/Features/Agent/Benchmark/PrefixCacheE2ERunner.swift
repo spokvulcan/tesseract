@@ -115,6 +115,25 @@ final class PrefixCacheE2ERunner {
             log("KV Scheme: \(scheme.rawValue)")
         }
 
+        // `TESSERACT_E2E_ONLY=day-thread-pictures` runs Step P alone, for
+        // iterating on the Day Thread's picture rule (ADR-0090).
+        if ProcessInfo.processInfo.environment["TESSERACT_E2E_ONLY"] == "day-thread-pictures" {
+            try await runDayThreadPictureScenario(
+                originalEngine: engine, modelDir: modelDir, modelID: modelID,
+                systemPrompt: systemPrompt, params: params, checks: &checks)
+            log("\n── Summary ──")
+            for check in checks {
+                log("  \(check.passed ? "✅" : "❌") \(check.name): \(check.detail)")
+            }
+            let failed = checks.filter { !$0.passed }.map(\.name)
+            log("\nOverall: \(failed.isEmpty ? "PASS" : "FAIL")")
+            logFileHandle?.closeFile()
+            if !failed.isEmpty {
+                throw PrefixCacheE2EError.verificationFailed(failedChecks: failed)
+            }
+            return
+        }
+
         log("\n── Step 1: Managed path equivalence (direct vs service route=.standard) ──")
         let managedEquivalence = try await runManagedPathEquivalenceCheck(
             engine: engine,
@@ -318,10 +337,20 @@ final class PrefixCacheE2ERunner {
             checks: &checks
         )
 
-        // Step Z runs last: it reloads the (post-Step-X unloaded) engine
-        // with vision weights and never needs the text-only state back.
+        // Step Z runs next to last: it reloads the (post-Step-X unloaded)
+        // engine with vision weights and never needs the text-only state back.
         try await runImageScenario(
             engine: engine,
+            modelDir: modelDir,
+            modelID: modelID,
+            systemPrompt: systemPrompt,
+            params: params,
+            checks: &checks
+        )
+
+        // Step P runs last: it unloads that engine for its own SSD-backed one.
+        try await runDayThreadPictureScenario(
+            originalEngine: engine,
             modelDir: modelDir,
             modelID: modelID,
             systemPrompt: systemPrompt,
@@ -1814,6 +1843,162 @@ final class PrefixCacheE2ERunner {
         }
     }
     // swiftlint:enable function_body_length
+
+    // MARK: - Step P: A Day Thread picture is seen in its turn (ADR-0090)
+
+    /// The Day Thread renders a picture as pixels only in the turn it's shown
+    /// and a line in its place after (`DayThreadPictures`). On the loaded
+    /// model, with the SSD tier on as the app runs it: the picture turn
+    /// restores the warm thread and continues through the image; the request
+    /// after it reads the line, so it restores the thread up to the picture's
+    /// message — the boundary the picture turn's leaf extended, kept by
+    /// Chain-Prefix Restore — and re-reads only the picture's turn; and the
+    /// request after that restores all of it, as text.
+    private func runDayThreadPictureScenario(
+        originalEngine: AgentEngine,
+        modelDir: URL,
+        modelID: String,
+        systemPrompt: String,
+        params: AgentGenerateParameters,
+        checks: inout [CheckResult]
+    ) async throws {
+        log("\n── Step P: A Day Thread picture is seen in its turn (ADR-0090) ──")
+        guard ModelIdentity(directory: modelDir).imageKeying != nil else {
+            log("  model defines no image keying (not a recognized VLM) — skipping")
+            checks.append(
+                CheckResult(
+                    name: "day_thread_picture_scenario", passed: true,
+                    detail: "skipped — model defines no image keying"))
+            return
+        }
+        originalEngine.unloadModel()
+        await originalEngine.awaitPendingUnload()
+
+        let ssdRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tesseract-e2e-day-thread-pictures")
+            .appendingPathComponent(String(getpid()))
+        try? FileManager.default.removeItem(at: ssdRoot)
+        try FileManager.default.createDirectory(at: ssdRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: ssdRoot) }
+        let engine = AgentEngine(
+            ssdConfig: SSDPrefixCacheConfig(
+                enabled: true, rootURL: ssdRoot, budgetBytes: 4 * 1024 * 1024 * 1024,
+                maxPendingBytes: 1 * 1024 * 1024 * 1024),
+            speculation: Self.speculation)
+        func tearDown() async {
+            engine.unloadModel()
+            await engine.awaitPendingUnload()
+        }
+
+        do {
+            try await engine.loadModel(from: modelDir, visionMode: true)
+            guard await engine.llmActor.loadedInstanceProcessesImages() else {
+                log("  \(modelID) loaded as a text-only instance — skipping")
+                checks.append(
+                    CheckResult(
+                        name: "day_thread_picture_scenario", passed: true,
+                        detail: "skipped — \(modelID) loads as a text-only instance"))
+                await tearDown()
+                return
+            }
+            guard let png = BenchmarkHarness.deterministicPNG(width: 256, height: 256, seed: 23)
+            else { throw PrefixCacheE2EError.imageEncodingFailed }
+
+            // The thread as the Day Thread stores it; every request renders
+            // it through the Day Thread's own rule.
+            let at = Date(timeIntervalSince1970: 1_791_000_000)
+            var thread: [any AgentMessageProtocol] = [
+                UserMessage(
+                    content: "[Day Opening]\nToday: Standup at 09:30, Design review at 15:00.",
+                    timestamp: at, turnOrigin: .moment)
+            ]
+            func request(_ label: String) async throws -> RequestResult {
+                let messages = DayThreadPictures.llmMessages(thread).map(Self.benchmarkMessage)
+                log("\n── Step \(label) ──")
+                let result = try await runRequest(
+                    engine: engine, modelID: modelID, systemPrompt: systemPrompt,
+                    messages: messages, toolSpecs: [], parameters: params)
+                log(
+                    "  promptTokens=\(result.promptTokens) cachedTokens=\(result.cachedTokens) "
+                        + "images=\(messages.filter(\.carriesImages).count)")
+                thread.append(
+                    AssistantMessage.create(
+                        content: result.assistantText, thinking: result.assistantReasoning))
+                // Each turn's leaf is on SSD before the next one, so the
+                // next turn's admission extends it.
+                await engine.llmActor.prefixCacheAdmin.flushSSDWrites()
+                try? await Task.sleep(for: .milliseconds(200))
+                return result
+            }
+
+            let opening = try await request("P1: the thread so far (text)")
+            thread.append(
+                UserMessage(
+                    content: "What does this picture show? One sentence.",
+                    images: [ImageAttachment(data: png, mimeType: "image/png")], timestamp: at))
+            let pictureTurn = try await request("P2: the picture's turn (pixels)")
+            // A turn restores its predecessor's whole request: its prompt and,
+            // where the leaf was captured live, its reply. A leaf stored by
+            // re-render stops short of the generation prompt the request
+            // ended in: measured here (0 when the reply came too), the same
+            // for every turn.
+            let generationPrompt = max(0, opening.promptTokens - pictureTurn.cachedTokens)
+            checks.append(
+                CheckResult(
+                    name: "requestP2_picture_turn_continues_the_thread",
+                    passed: pictureTurn.cachedTokens > 0,
+                    detail: "cachedTokens=\(pictureTurn.cachedTokens) expected > 0 (the thread "
+                        + "before the picture — its \(opening.promptTokens)-token request and "
+                        + "reply — restores, and the turn continues through the image)"))
+
+            let before = engine.llmActor.prefixCacheAdmin.makeTelemetrySnapshot()?.counters
+            thread.append(UserMessage(content: "Thanks.", timestamp: at))
+            let flipped = try await request("P3: the next request (a line for the picture)")
+            let after = engine.llmActor.prefixCacheAdmin.makeTelemetrySnapshot()?.counters
+            let hydrations = (after?.hydrations ?? 0) - (before?.hydrations ?? 0)
+            checks.append(
+                CheckResult(
+                    name: "requestP3_line_restores_the_thread_up_to_the_picture",
+                    passed: flipped.cachedTokens >= pictureTurn.cachedTokens
+                        && flipped.cachedTokens < pictureTurn.promptTokens,
+                    detail: "cachedTokens=\(flipped.cachedTokens) expected ≥ "
+                        + "\(pictureTurn.cachedTokens) (as far as the picture's turn restored) "
+                        + "and < \(pictureTurn.promptTokens) (nothing past the picture); re-read "
+                        + "\(flipped.promptTokens - flipped.cachedTokens) tokens, "
+                        + "hydrationsΔ=\(hydrations)"))
+
+            thread.append(UserMessage(content: "Anything else before the review?", timestamp: at))
+            let next = try await request("P4: the request after (all text)")
+            checks.append(
+                CheckResult(
+                    name: "requestP4_thread_after_the_line_caches_whole",
+                    passed: next.cachedTokens >= flipped.promptTokens - generationPrompt,
+                    detail: "cachedTokens=\(next.cachedTokens) expected ≥ "
+                        + "\(flipped.promptTokens - generationPrompt) (the whole of the request "
+                        + "before, less its \(generationPrompt)-token generation prompt: the line "
+                        + "reads the same every request)"))
+            await tearDown()
+        } catch {
+            log("  Step P failed; tearing down its engine…")
+            await tearDown()
+            throw error
+        }
+    }
+
+    /// A Day Thread message as the runner sends it.
+    private static func benchmarkMessage(_ message: LLMMessage) -> BenchmarkMessage {
+        switch message {
+        case .user(let content, let images):
+            .user(content, images: images.map(\.data))
+        case .assistant(let content, let reasoning, let toolCalls):
+            .assistant(content: content, reasoning: reasoning, toolCalls: toolCalls ?? [])
+        case .toolResult(let toolCallId, let content, _):
+            .toolResult(toolCallId: toolCallId, content: content)
+        case .system(let content):
+            // The system prompt rides apart; a thread holds none.
+            .user(content)
+        }
+    }
 
     // MARK: - Fixtures
 

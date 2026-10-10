@@ -710,3 +710,18 @@ Loaded-model checks: `scripts/dflash2-bench.sh --bench-kv-scheme turbo8v4`
 runs both arms in the scheme (prompts from `--bench-prompt-file`), and
 `TESSERACT_E2E_KV_SCHEME=turbo8v4 scripts/dev.sh prefix-cache-e2e
 --bench-model-id qwen3.8-27b` runs the e2e's requests in it.
+
+## A Day Thread picture seen in its turn (ADR-0090)
+
+The e2e's Step P loads the model for vision on an SSD-backed engine and sends a
+Day Thread rendered through `DayThreadPictures`: a text turn, the picture's
+turn, the request after it (the picture now a line) and the one after that.
+The picture's turn must restore the thread before it; the request after must
+restore as far (the boundary the picture turn's leaf extended, from SSD by
+Chain-Prefix Restore) and nothing past the picture; the one after must restore
+the whole request before it. It runs last in a full e2e, or alone:
+
+```bash
+TESSERACT_E2E_ONLY=day-thread-pictures scripts/dev.sh prefix-cache-e2e --bench-model-id qwen3.5-4b-paro
+```
+

@@ -132,7 +132,8 @@ extension View {
     }
 
     /// The Companion's day: the Today page and its Day Thread chat (whose
-    /// transcript rows need the agent engine, settings and the composer draft).
+    /// transcript rows need the agent engine, settings and a composer draft:
+    /// Today's own, with the pictures shown to Jarvis).
     @MainActor
     func injectCompanionDependencies(from container: DependencyContainer) -> some View {
         self
@@ -143,7 +144,8 @@ extension View {
             .environment(container.profileStore)
             .environment(container.settingsManager)
             .environment(container.agentEngine)
-            .environment(container.composerDraft)
+            .environment(container.todayDraft)
+            .environment(container.todayVisionAvailability)
             // Today's composer: its own push-to-talk, and what tells it a
             // speech model is there to use.
             .environment(container.todayVoiceInput)

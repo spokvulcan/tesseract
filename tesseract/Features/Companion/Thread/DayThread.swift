@@ -13,6 +13,10 @@
 //  chat, so every moment and every Today turn reuses one cached prefix, and
 //  the thread's own history is prefilled only as far as it grew.
 //
+//  The owner can show Jarvis pictures with a message, from Today or the
+//  Jarvis panel. He sees one in the turn it's shown; after that the thread
+//  carries a line in its place (`DayThreadPictures`, ADR-0090).
+//
 
 import Foundation
 import Observation
@@ -108,13 +112,17 @@ final class DayThread {
 
     var day: DayKey { store.day }
 
+    /// - Parameter restoreDraft: where the owner's words and pictures go back
+    ///   when their turn ends before it reached the thread (stopped while it
+    ///   waited for the model, or the model failed to load): Today's composer.
     init(
         agent: Agent, store: DayThreadStore, arbiter: any InferenceArbitrating,
         inferenceService: ServerInferenceService, toolRegistry: ToolRegistry,
         settings: SettingsManager, speechCoordinator: SpeechCoordinator?,
         contextManager: ContextManager,
         summarize: @escaping @Sendable (String) async throws -> String,
-        trace: CompanionTrace, now: @escaping @MainActor () -> Date = Date.init
+        trace: CompanionTrace, now: @escaping @MainActor () -> Date = Date.init,
+        restoreDraft: @escaping @MainActor (String, [ImageAttachment]) -> Void = { _, _ in }
     ) {
         self.agent = agent
         self.store = store
@@ -132,6 +140,7 @@ final class DayThread {
             contextManager: contextManager,
             contextWindow: Self.compactionWindow(ceiling: settings.companionThreadCeilingTokens),
             summarize: summarize,
+            restoreComposerDraft: restoreDraft,
             momentSummary: { request, reply in
                 MomentTranscript.summary(request: request, reply: reply)
             })
@@ -155,11 +164,39 @@ final class DayThread {
     /// generating, so every turn lands in the thread in order.
     var canSend: Bool { !chat.isGenerating && momentRunning == nil }
 
-    /// The owner's own message in Today.
-    func send(_ text: String) {
+    /// Where the owner wrote to Jarvis, for the trace.
+    enum Surface: String {
+        case today
+        case panel
+    }
+
+    /// The owner's own message, from Today or the Jarvis panel, with the
+    /// pictures they showed him. Pictures with no words ask what they mean
+    /// for the day.
+    func send(_ text: String, images: [ImageAttachment] = [], from surface: Surface = .today) {
         guard canSend else { return }
+        let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !words.isEmpty || !images.isEmpty else { return }
         openIfNeeded()
-        chat.sendMessage(text)
+        chat.sendMessage(Self.question(words, pictures: images.count), images: images)
+        guard !images.isEmpty else { return }
+        trace.record(
+            .picturesShown, conversationID: store.currentConversation?.id,
+            fields: [
+                "count": .int(images.count),
+                "surface": .string(surface.rawValue),
+                "words": .bool(!words.isEmpty),
+            ])
+    }
+
+    /// What a message asks: the owner's words, or for pictures shown without
+    /// any, what they hold for the day. The composers show it as the field's
+    /// placeholder, so the question is seen before it is sent.
+    static func question(_ words: String, pictures: Int) -> String {
+        guard words.isEmpty, pictures > 0 else { return words }
+        return pictures == 1
+            ? "What in this picture matters for my day?"
+            : "What in these pictures matters for my day?"
     }
 
     /// Start the thread with its Day Opening, once.
@@ -207,9 +244,9 @@ final class DayThread {
                 await compactIfPastCeiling()
                 let systemPrompt = agent.state.systemPrompt
                 let tools = agent.state.tools
-                let llmMessages = (agent.state.messages + [message]).compactMap {
-                    $0.toLLMMessage()
-                }
+                // The moment's request is the latest user message: the
+                // pictures shown before it are lines in their place.
+                let llmMessages = DayThreadPictures.llmMessages(agent.state.messages + [message])
                 var accumulator = GenerationAccumulator()
                 var builder = AssistantPartsBuilder()
                 builder.model = modelID

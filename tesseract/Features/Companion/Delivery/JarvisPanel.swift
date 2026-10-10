@@ -9,7 +9,8 @@
 //  planned step starting now) and a Break Cue (two hours at the Mac) take a
 //  shorter panel. It never steals typing
 //  from the app in front: it becomes key only when the field is clicked.
-//  Replies go to the Day Thread.
+//  Replies go to the Day Thread, with any picture pasted into the field or
+//  dropped on the panel (ADR-0090).
 //
 //  Built with the prototype lab's constraints (tools/jarvis-panel-lab): a
 //  borderless non-activating panel over an `NSGlassEffectView`; every button
@@ -36,6 +37,11 @@ final class JarvisPanelModel {
     var listening = false
     /// The last exchange typed here, so the answer shows in the panel.
     var asked: String?
+    /// The pictures that went with it.
+    var askedPictures: [ImageAttachment] = []
+    /// Pictures going with the next question: pasted into the field or
+    /// dropped on the panel.
+    var pictures: [ImageAttachment] = []
     /// What just happened to the field's words: a reminder added (with its
     /// undo), or why they didn't go — a take that wasn't heard, a capture
     /// that didn't save.
@@ -54,17 +60,25 @@ final class JarvisPanelController {
     private let onAction: (CardAction) -> Void
     private let onExpand: () -> Void
     private let captureService: CaptureService
+    /// Why Jarvis can't see pictures now (vision off, or a model that
+    /// can't), or nil when he can.
+    private let pictureRemedy: () -> String?
     /// A capture or its undo is under way: + or Undo again does it once.
     private var isCapturing = false
     private var noticeTask: Task<Void, Never>?
     /// The "Done" on the panel closes it when this ends.
     private var doneTask: Task<Void, Never>?
+    /// What the panel says was last laid out at, to refit when pictures come
+    /// and go above the field.
+    private var contentHeight: CGFloat = 0
 
     /// The panel's width, and the tallest it grows.
     static let size = NSSize(width: 400, height: 560)
     /// The header and the field around what the panel says.
     static let chromeHeight: CGFloat = 124
     static let minimumHeight: CGFloat = 220
+    /// The row of pictures waiting above the field.
+    static let pictureRowHeight: CGFloat = 58
 
     /// - Parameter liveCard: the card as the day has it now, so items the
     ///   owner handles leave the panel and a refined card updates in it.
@@ -72,7 +86,7 @@ final class JarvisPanelController {
         thread: DayThread, voice: AgentVoiceInputController, agenda: Agenda,
         liveCard: @escaping (String) -> DayCard?,
         onAction: @escaping (CardAction) -> Void, onExpand: @escaping () -> Void,
-        capture: CaptureService
+        capture: CaptureService, pictureRemedy: @escaping () -> String? = { nil }
     ) {
         self.thread = thread
         self.voice = voice
@@ -81,6 +95,7 @@ final class JarvisPanelController {
         self.onAction = onAction
         self.onExpand = onExpand
         self.captureService = capture
+        self.pictureRemedy = pictureRemedy
     }
 
     var isShowing: Bool { panel?.isVisible == true }
@@ -155,9 +170,11 @@ final class JarvisPanelController {
         model.cue = cue
     }
 
-    /// As tall as what the panel says, between its least and full height.
-    static func height(forContent content: CGFloat) -> CGFloat {
-        min(max(content + chromeHeight, minimumHeight), size.height)
+    /// As tall as what the panel says, between its least and full height,
+    /// with room for the pictures waiting above the field.
+    static func height(forContent content: CGFloat, pictures: Bool = false) -> CGFloat {
+        let chrome = chromeHeight + (pictures ? pictureRowHeight : 0)
+        return min(max(content + chrome, minimumHeight), size.height)
     }
 
     private func present() {
@@ -165,6 +182,7 @@ final class JarvisPanelController {
         self.panel = panel
         guard !panel.isVisible else { return }
         model.asked = nil
+        model.askedPictures = []
         model.notice = nil
         panel.placeTopRight()
         panel.alphaValue = 0
@@ -178,8 +196,9 @@ final class JarvisPanelController {
     /// The content was laid out: the panel follows its height, keeping its
     /// top edge where it is.
     private func fit(content: CGFloat) {
+        contentHeight = content
         guard let panel else { return }
-        let height = Self.height(forContent: content)
+        let height = Self.height(forContent: content, pictures: !model.pictures.isEmpty)
         if abs(panel.frame.height - height) > 0.5 { panel.setHeight(height) }
     }
 
@@ -207,6 +226,14 @@ final class JarvisPanelController {
         panel.onCancel = { [weak self] in
             self?.leaveCue()
             self?.close()
+        }
+        // ⌘V with a picture on the clipboard: the picture, never its name.
+        panel.interceptKeyEquivalent = { [weak self] event in
+            guard let self, Self.isPaste(event),
+                PasteboardImageReader.containsImageContent(.general)
+            else { return false }
+            self.receivePictures(from: .general)
+            return true
         }
         voice.onVoiceTranscription = { [weak self] text in
             guard let self else { return }
@@ -282,26 +309,91 @@ final class JarvisPanelController {
                 capture: { [weak self] in self?.capture() },
                 undo: { [weak self] in self?.undoCapture() },
                 mic: { [weak self] in self?.toggleMic() },
+                removePicture: { [weak self] id in self?.removePicture(id) },
                 onContentHeight: { [weak self] height in
                     // On the next turn: never resize the window inside its own
                     // layout pass.
                     Task { @MainActor [weak self] in self?.fit(content: height) }
-                }))
+                }),
+            drop: GlassPanel.Drop(
+                types: PasteboardImageReader.dragTypes + [.fileURL],
+                accepts: PasteboardImageReader.containsImageContent,
+                perform: { [weak self] pasteboard in self?.receivePictures(from: pasteboard) }))
         return panel
+    }
+
+    // MARK: Pictures
+
+    static func isPaste(_ event: NSEvent) -> Bool {
+        event.type == .keyDown
+            && event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command
+            && event.charactersIgnoringModifiers == "v"
+    }
+
+    /// Read a pasted or dropped picture off its pasteboard (a promised file
+    /// arrives later), then take it.
+    private func receivePictures(from pasteboard: NSPasteboard) {
+        Task { @MainActor [weak self] in
+            let payload = await PasteboardImageReader.read(pasteboard)
+            guard let self, !payload.isEmpty else { return }
+            let taken = Self.take(payload, into: self.model.pictures, remedy: self.pictureRemedy())
+            self.model.pictures = taken.pictures
+            self.refit()
+            if let notice = taken.notice { self.showNotice(.failed(notice)) }
+        }
+    }
+
+    /// What a paste or drop does to the pictures waiting for the next
+    /// question, by the composer's rules: nothing while Jarvis can't see
+    /// them (`remedy` says why), up to eight, and a line for what didn't
+    /// come in.
+    static func take(
+        _ payload: ImageGesturePayload, into pictures: [ImageAttachment], remedy: String?
+    ) -> (pictures: [ImageAttachment], notice: String?) {
+        if let remedy { return (pictures, remedy) }
+        let added = ImageIngest.capBatch(
+            payload.attachments, alreadyQueued: pictures.count,
+            limit: ComposerDraftController.maxPendingImages)
+        let notice = ComposerDraftController.gestureNotice(
+            requested: payload.attachments.count, attached: added.count,
+            rejections: payload.rejections)
+        return (pictures + added, notice)
+    }
+
+    private func removePicture(_ id: UUID) {
+        model.pictures.removeAll { $0.id == id }
+        refit()
+    }
+
+    private func refit() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.fit(content: self.contentHeight)
+        }
     }
 
     private func send() {
         let text = model.draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, thread.canSend else { return }
-        thread.send(text)
-        model.asked = text
+        let pictures = model.pictures
+        guard !text.isEmpty || !pictures.isEmpty, thread.canSend else { return }
+        thread.send(text, images: pictures, from: .panel)
+        model.asked = DayThread.question(text, pictures: pictures.count)
+        model.askedPictures = pictures
+        model.pictures = []
         model.draft = ""
+        if !pictures.isEmpty { refit() }
     }
 
     /// The + button: the field's words become a reminder, no model. The
     /// panel says what happened; the words leave the field only once saved.
     private func capture() {
         let text = model.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A reminder is made from words, with no model; a picture needs
+        // Jarvis to read it.
+        guard model.pictures.isEmpty else {
+            showNotice(.failed("A picture goes to Jarvis: press Return to ask him."))
+            return
+        }
         guard !text.isEmpty, !isCapturing else { return }
         isCapturing = true
         Task { @MainActor [weak self] in
@@ -379,6 +471,8 @@ struct JarvisPanelView: View {
     /// Undo the reminder the + button just added.
     var undo: () -> Void = {}
     let mic: () -> Void
+    /// Take a waiting picture back out.
+    var removePicture: (UUID) -> Void = { _ in }
     /// What the panel says was laid out at this height.
     var onContentHeight: (CGFloat) -> Void = { _ in }
     /// The clock the plan's steps are read against (fixed in the gallery).
@@ -413,7 +507,7 @@ struct JarvisPanelView: View {
                             showQuiet: $model.showQuiet, act: act, keep: keep, expand: expand)
                     }
                     if let asked = model.asked {
-                        Exchange(asked: asked, thread: thread)
+                        Exchange(asked: asked, pictures: model.askedPictures, thread: thread)
                     }
                     if let notice = model.notice {
                         NoticeLine(notice: notice, undo: undo)
@@ -429,13 +523,24 @@ struct JarvisPanelView: View {
                 }
             }
 
+            if !model.pictures.isEmpty {
+                PictureRow(pictures: model.pictures, remove: removePicture)
+                    .padding(.horizontal, 18)
+                    .padding(.top, 6)
+            }
+
             HStack(spacing: 10) {
                 CircleButton(symbol: "plus", help: "Add as a reminder", action: capture)
                 // Present from the first layout: a field that appears later
-                // freezes the main thread on macOS 27.0.
-                TextField("Ask Jarvis", text: $model.draft)
-                    .textFieldStyle(.plain)
-                    .onSubmit(send)
+                // freezes the main thread on macOS 27.0. With pictures and no
+                // words, its placeholder is the question they ask.
+                TextField(
+                    model.pictures.isEmpty
+                        ? "Ask Jarvis" : DayThread.question("", pictures: model.pictures.count),
+                    text: $model.draft
+                )
+                .textFieldStyle(.plain)
+                .onSubmit(send)
                 CircleButton(
                     symbol: model.listening ? "waveform" : "mic", help: "Speak", action: mic)
             }
@@ -1142,12 +1247,37 @@ private struct NoticeLine: View {
     }
 }
 
+/// The pictures waiting to go with the next question, each with its ✕.
+private struct PictureRow: View {
+    let pictures: [ImageAttachment]
+    let remove: (UUID) -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(pictures) { picture in
+                ImageThumbnailView(
+                    attachment: picture, side: 44, onRemove: { remove(picture.id) })
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(height: 52)
+    }
+}
+
 private struct Exchange: View {
     let asked: String
+    /// The pictures that went with the question.
+    var pictures: [ImageAttachment] = []
     let thread: DayThread
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            if !pictures.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(pictures) { ImageThumbnailView(attachment: $0, side: 48) }
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
+            }
             Text(asked)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)

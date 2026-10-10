@@ -9,6 +9,8 @@
 - Relates to: ADR-0060 (reasoning effort as a template kwarg), ADR-0073 (test
   runs never reach the owner's data), ADR-0047 (the non-sandboxed agent),
   ADR-0031 (the trace vocabulary pattern)
+- Amended by: ADR-0090 (2026-10-10: the owner shows Jarvis pictures; the Day
+  Thread sees each in the turn it's shown)
 
 ## Context
 
