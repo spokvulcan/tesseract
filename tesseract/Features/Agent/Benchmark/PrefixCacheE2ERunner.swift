@@ -53,11 +53,30 @@ final class PrefixCacheE2ERunner {
             .flatMap(SpeculationMode.init(rawValue:))
     }
 
+    /// The steps `TESSERACT_E2E_ONLY` can run alone, in the order they run:
+    /// each builds the state it needs, so none waits on the steps before it.
+    private static let standaloneSteps = ["thinking-off", "image", "day-thread-pictures"]
+
+    /// `TESSERACT_E2E_ONLY=image,day-thread-pictures`: only these steps; nil
+    /// runs them all.
+    private static func onlySteps() throws -> Set<String>? {
+        guard let raw = ProcessInfo.processInfo.environment["TESSERACT_E2E_ONLY"], !raw.isEmpty
+        else { return nil }
+        let names = Set(raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
+        let unknown = names.subtracting(standaloneSteps).sorted()
+        guard unknown.isEmpty else {
+            throw PrefixCacheE2EError.unknownSteps(unknown, known: standaloneSteps)
+        }
+        return names
+    }
+
     // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
     // swiftlint:disable:next function_body_length
     func run() async throws {
         setupLogging()
         log("PrefixCacheE2E starting — model=\(runner.resolvedModelName)")
+        // A misspelled step fails here, before the model loads.
+        let onlySteps = try Self.onlySteps()
 
         let engine = AgentEngine(speculation: Self.speculation)
         let modelDir = try runner.resolveModelDirectory()
@@ -115,12 +134,24 @@ final class PrefixCacheE2ERunner {
             log("KV Scheme: \(scheme.rawValue)")
         }
 
-        // `TESSERACT_E2E_ONLY=day-thread-pictures` runs Step P alone, for
-        // iterating on the Day Thread's picture rule (ADR-0090).
-        if ProcessInfo.processInfo.environment["TESSERACT_E2E_ONLY"] == "day-thread-pictures" {
-            try await runDayThreadPictureScenario(
-                originalEngine: engine, modelDir: modelDir, modelID: modelID,
-                systemPrompt: systemPrompt, params: params, checks: &checks)
+        // `TESSERACT_E2E_ONLY=<step>[,<step>…]` runs only standalone steps,
+        // for iterating on one of them.
+        if let only = onlySteps {
+            if only.contains("thinking-off") {
+                try await runThinkingOffScenario(
+                    engine: engine, modelID: modelID, systemPrompt: systemPrompt,
+                    params: params, checks: &checks)
+            }
+            if only.contains("image") {
+                try await runImageScenario(
+                    engine: engine, modelDir: modelDir, modelID: modelID,
+                    systemPrompt: systemPrompt, params: params, checks: &checks)
+            }
+            if only.contains("day-thread-pictures") {
+                try await runDayThreadPictureScenario(
+                    originalEngine: engine, modelDir: modelDir, modelID: modelID,
+                    systemPrompt: systemPrompt, params: params, checks: &checks)
+            }
             log("\n── Summary ──")
             for check in checks {
                 log("  \(check.passed ? "✅" : "❌") \(check.name): \(check.detail)")
@@ -2230,6 +2261,7 @@ final class PrefixCacheE2ERunner {
 enum PrefixCacheE2EError: LocalizedError {
     case verificationFailed(failedChecks: [String])
     case imageEncodingFailed
+    case unknownSteps([String], known: [String])
 
     var errorDescription: String? {
         switch self {
@@ -2237,6 +2269,9 @@ enum PrefixCacheE2EError: LocalizedError {
             "PrefixCacheE2E failed checks: \(names.joined(separator: ", "))"
         case .imageEncodingFailed:
             "PrefixCacheE2E could not encode the deterministic scenario image as PNG"
+        case .unknownSteps(let names, let known):
+            "TESSERACT_E2E_ONLY names no standalone step: \(names.joined(separator: ", ")) "
+                + "(standalone: \(known.joined(separator: ", ")))"
         }
     }
 }
