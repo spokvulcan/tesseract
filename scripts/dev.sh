@@ -4,9 +4,14 @@
 #
 # Commands:
 #   build [debug|release]  Build the project (default: debug; errors/warnings only)
-#   run [debug|release]    Kill running app + launch the built app (default: debug)
-#   dev         Build + kill + run using Debug (fast iteration)
-#   dev-release Build + kill + run using Release (perf testing)
+#   run [debug|release] [--scratch]  Kill running app + launch the built app (default: debug)
+#   dev [--scratch]          Build + kill + run using Debug (fast iteration)
+#   dev-release [--scratch]  Build + kill + run using Release (perf testing)
+#
+# --scratch: a scratch launch (ADR-0073). The whole app, with its windows,
+# models and services, on scratch storage under $TMPDIR, settings and the
+# Companion's Agenda in memory and no OS notifications, so trying a change
+# never reads or writes the owner's data. Each launch starts empty.
 #   dev-profile Build + kill + run with profiling env vars enabled
 #   archive     Create release archive for App Store submission
 #   clean       Clean build artifacts and derived data
@@ -184,31 +189,58 @@ cmd_build() {
 }
 
 cmd_run() {
-    local configuration
-    configuration=$(normalize_config "${1:-Debug}") || return 1
+    local configuration="Debug"
+    local scratch=0
+    local arg
+    for arg in "$@"; do
+        case "$arg" in
+            --scratch) scratch=1 ;;
+            *) configuration=$(normalize_config "$arg") || return 1 ;;
+        esac
+    done
     local app_path
     app_path=$(find_app "$configuration") || return 1
 
     kill_app
-    echo "Launching $app_path ..."
-    open "$app_path"
+    if [ "$scratch" = 1 ]; then
+        echo "Launching $app_path on scratch data ..."
+        open --env TESSERACT_SCRATCH_DATA=1 "$app_path"
+        print_scratch_path
+    else
+        echo "Launching $app_path ..."
+        open "$app_path"
+    fi
     echo "App launched."
+}
+
+# Where a scratch launch keeps what it stores: StorageEnvironment's
+# per-process scratch root. A later test run or scratch launch removes it
+# once the process has exited.
+print_scratch_path() {
+    local pid=""
+    local _
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        pid=$(pgrep -n -x "Tesseract Agent" || true)
+        [ -n "$pid" ] && break
+        sleep 0.5
+    done
+    echo "Scratch data: $(getconf DARWIN_USER_TEMP_DIR)TesseractTestStorage-${pid:-<pid>}"
 }
 
 cmd_dev() {
     local configuration="Debug"
     cmd_build "$configuration"
     echo ""
-    cmd_run "$configuration"
-    print_data_paths
+    cmd_run "$configuration" "$@"
+    [[ " $* " == *" --scratch "* ]] || print_data_paths
 }
 
 cmd_dev_release() {
     local configuration="Release"
     cmd_build "$configuration"
     echo ""
-    cmd_run "$configuration"
-    print_data_paths
+    cmd_run "$configuration" "$@"
+    [[ " $* " == *" --scratch "* ]] || print_data_paths
 }
 
 cmd_dev_profile() {
@@ -395,9 +427,10 @@ usage() {
     echo ""
     echo "Commands:"
     echo "  build [debug|release]  Build the project (default: debug)"
-    echo "  run [debug|release]    Kill running app + launch the built app (default: debug)"
-    echo "  dev         Build + kill + run using Debug (fast iteration)"
-    echo "  dev-release Build + kill + run using Release (perf testing)"
+    echo "  run [debug|release] [--scratch]  Kill running app + launch the built app (default: debug)"
+    echo "  dev [--scratch]          Build + kill + run using Debug (fast iteration)"
+    echo "  dev-release [--scratch]  Build + kill + run using Release (perf testing)"
+    echo "              --scratch: on scratch data, never the owner's (ADR-0073)"
     echo "  dev-profile Build + kill + run with profiling (QWEN3TTS_PROFILE=1)"
     echo "  prefix-cache-e2e         Build + run Task 1.8 HybridPrefixCacheE2E (loaded-model cache verification)"
     echo "  hybrid-cache-correctness Build + run Task 2.2 logit-equivalence harness (mid-prefill restore bitwise check)"
@@ -417,8 +450,8 @@ usage() {
 case "${1:-}" in
     build)       shift; cmd_build "$@" ;;
     run)         shift; cmd_run "$@" ;;
-    dev)         cmd_dev ;;
-    dev-release) cmd_dev_release ;;
+    dev)         shift; cmd_dev "$@" ;;
+    dev-release) shift; cmd_dev_release "$@" ;;
     dev-profile) cmd_dev_profile ;;
     prefix-cache-e2e)         shift; _run_loaded_model_check --prefix-cache-e2e prefix-cache-e2e "$@" ;;
     hybrid-cache-correctness) shift; _run_loaded_model_check --hybrid-cache-correctness hybrid-cache-correctness "$@" ;;

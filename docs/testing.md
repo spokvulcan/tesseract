@@ -460,7 +460,9 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # rendered with the app's wiring over fixture days (one deep in a slot, its
 # time left draining) at a wide, a regular and a phone width
 # (TEST_RUNNER_TODAY_GALLERY_DIR=<dir> also writes each render there as a PNG,
-# dark and light), the Step Cue (a planned slot put on the panel at its start,
+# dark and light; glass doesn't survive the offscreen render, so secondary-styled
+# content on .glassEffect comes out black or vanishes: judge layout in the PNGs
+# and colors in the app), the Step Cue (a planned slot put on the panel at its start,
 # once, and never while away, quiet, in a call, a game or a meeting, or over a
 # panel that is up — what came due meanwhile is cued late once the owner can
 # see it; a started step's check-in at its end, which no other start
@@ -559,6 +561,13 @@ models still find them. A suite that goes through an app default such as
 Companion's Agenda is the in-memory store under a test runner, so no test asks
 for or touches the owner's Reminders or Calendar, not even a scratch list. `StorageEnvironmentTests` fails when app code finds Application Support
 or Caches without going through `StorageEnvironment`.
+
+A scratch launch (`scripts/dev.sh dev --scratch`) gives the running app the
+same data choices, with its windows open, so a change to a page or a panel can
+be tried by hand, or driven by an agent, without the owner's data: scratch
+storage, settings at their defaults with onboarding done, the in-memory
+Agenda, and no OS notifications (`CompanionNotifierTests`). Each launch starts
+empty.
 
 For a validation run that must not load models, prefix the command with
 `TEST_RUNNER_XCTestSessionIdentifier=prefix-cache-unit-tests`. The existing

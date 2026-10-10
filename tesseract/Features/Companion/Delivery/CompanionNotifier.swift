@@ -6,7 +6,9 @@
 //  Ladder: Jarvis's own banners when the owner is away or the screen is
 //  locked, and the event nudges scheduled with the OS. It owns the
 //  notification-center delegate, so clicks and deliveries route back to the
-//  Companion.
+//  Companion. A scratch launch shares the installed app's notification center
+//  (one bundle id), so there it keeps its nudges in memory and posts nothing:
+//  reconciling against its empty Agenda would cancel the owner's real nudges.
 //
 
 import AppKit
@@ -33,11 +35,20 @@ final class CompanionNotifier {
 
     private let delegate = CompanionNotificationDelegate()
     private var isArmed = false
+    /// False for a scratch launch: nothing reaches the OS notification center.
+    private let usesOS: Bool
+    /// The nudges a scratch launch scheduled, in memory only.
+    private var memoryNudges: Set<String> = []
+
+    init(usesOS: Bool = true) {
+        self.usesOS = usesOS
+    }
 
     /// Install the delegate and categories (once) and ask for permission.
     /// Returns whether banners are allowed.
     @discardableResult
     func activate() async -> Bool {
+        guard usesOS else { return false }
         let center = UNUserNotificationCenter.current()
         if !isArmed {
             delegate.onResponse = { [weak self] action, link in
@@ -78,6 +89,10 @@ final class CompanionNotifier {
 
     /// Post one banner now.
     func post(title: String, body: String, cardID: String? = nil) async {
+        guard usesOS else {
+            Log.companion.info("Scratch launch: banner not posted — \(title)")
+            return
+        }
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
@@ -95,6 +110,7 @@ final class CompanionNotifier {
 
     /// The ids of the nudges scheduled with the OS right now.
     func scheduledNudgeIDs() async -> Set<String> {
+        guard usesOS else { return memoryNudges }
         let pending = await UNUserNotificationCenter.current().pendingNotificationRequests()
         return Set(
             pending.map(\.identifier).filter { $0.hasPrefix(NudgePlanner.familyPrefix) })
@@ -103,6 +119,7 @@ final class CompanionNotifier {
     /// The nudges macOS has delivered and still keeps in Notification Center,
     /// whether or not Tesseract was in front when they fired.
     func deliveredNudges() async -> [DeliveredNudge] {
+        guard usesOS else { return [] }
         let delivered = await UNUserNotificationCenter.current().deliveredNotifications()
         return delivered.compactMap { notification in
             let request = notification.request
@@ -119,6 +136,10 @@ final class CompanionNotifier {
     }
 
     func schedule(_ nudge: Nudge) async {
+        guard usesOS else {
+            memoryNudges.insert(nudge.id)
+            return
+        }
         let content = UNMutableNotificationContent()
         content.title = nudge.title
         content.body = nudge.body
@@ -155,6 +176,10 @@ final class CompanionNotifier {
 
     func cancel(nudgeIDs: [String]) {
         guard !nudgeIDs.isEmpty else { return }
+        guard usesOS else {
+            memoryNudges.subtract(nudgeIDs)
+            return
+        }
         UNUserNotificationCenter.current().removePendingNotificationRequests(
             withIdentifiers: nudgeIDs)
     }

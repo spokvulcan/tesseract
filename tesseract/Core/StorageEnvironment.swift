@@ -3,10 +3,11 @@
 //  tesseract
 //
 //  Where the app keeps what it stores (ADR-0073). In production these are the
-//  owner's Application Support and Caches folders. Under a test runner they are
-//  folders inside one scratch directory per test process, so no test run reads
-//  or changes the owner's data. Per process, like the telemetry homes (#159):
-//  the scheme runs suites in parallel processes against the same app host.
+//  owner's Application Support and Caches folders. Under a test runner, or in a
+//  scratch launch, they are folders inside one scratch directory per process,
+//  so neither reads or changes the owner's data. Per process, like the telemetry
+//  homes (#159): the scheme runs suites in parallel processes against the same
+//  app host.
 //
 //  Every default storage location resolves through here, except the model
 //  folder (`ModelDownloadManager.modelStorageURL`): suites load installed
@@ -16,8 +17,8 @@
 import Foundation
 
 nonisolated enum StorageEnvironment {
-    /// The Application Support root: the owner's in production, this test
-    /// process's scratch copy under a test runner.
+    /// The Application Support root: the owner's in production, this
+    /// process's scratch copy under a test runner or in a scratch launch.
     static let applicationSupport: URL = root(
         .applicationSupportDirectory, scratchName: "Application Support")
 
@@ -26,20 +27,21 @@ nonisolated enum StorageEnvironment {
 
     /// The owner's home folder, for other apps' settings Tesseract edits on
     /// request (Claude Code's `~/.claude/settings.json`); a scratch folder
-    /// under a test runner.
+    /// under a test runner or in a scratch launch.
     static let home: URL =
-        ProcessEnvironment.isRunningTests
+        ProcessEnvironment.usesScratchData
         ? scratchRoot.appendingPathComponent("Home", isDirectory: true)
         : URL.homeDirectory
 
-    /// The scratch directory that holds a test process's storage roots. It
-    /// starts empty: a folder already at this path was left by an earlier
-    /// process with the same pid, and a test must never start on another run's
-    /// state. Folders of test processes that have exited go on the way.
+    /// The scratch directory that holds a test process's (or a scratch
+    /// launch's) storage roots. It starts empty: a folder already at this path
+    /// was left by an earlier process with the same pid, and no run may start
+    /// on another run's state. Folders of processes that have exited go on the
+    /// way.
     static let scratchRoot: URL = {
         let temporary = FileManager.default.temporaryDirectory
         let pid = ProcessInfo.processInfo.processIdentifier
-        if ProcessEnvironment.isRunningTests {
+        if ProcessEnvironment.usesScratchData {
             removeExitedScratchRoots(in: temporary, ownPID: pid, isAlive: isProcessAlive)
         }
         return temporary.appendingPathComponent("\(scratchPrefix)\(pid)", isDirectory: true)
@@ -71,7 +73,7 @@ nonisolated enum StorageEnvironment {
     private static func root(
         _ directory: FileManager.SearchPathDirectory, scratchName: String
     ) -> URL {
-        guard !ProcessEnvironment.isRunningTests else {
+        guard !ProcessEnvironment.usesScratchData else {
             return scratchRoot.appendingPathComponent(scratchName, isDirectory: true)
         }
         return FileManager.default.urls(for: directory, in: .userDomainMask).first

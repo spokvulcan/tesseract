@@ -60,11 +60,12 @@ enum SandboxMigration {
     ) {
         // Never move the owner's models during a test run — test hosts share
         // the real container (issue #360), and a non-sandboxed test host would
-        // otherwise relocate live data mid-suite. Headless harness launches
-        // (`--benchmark`, `--dflash2-bench`, …) skip it too: a bench must not
-        // mutate user data, and a wedged old-container directory otherwise
-        // hangs the harness on the main thread before it can start.
-        guard !ProcessEnvironment.isRunningTests else { return }
+        // otherwise relocate live data mid-suite — nor from a scratch launch.
+        // Headless harness launches (`--benchmark`, `--dflash2-bench`, …) skip
+        // it too: a bench must not mutate user data, and a wedged old-container
+        // directory otherwise hangs the harness on the main thread before it
+        // can start.
+        guard !ProcessEnvironment.usesScratchData else { return }
         guard !TesseractApp.isHarnessLaunch else { return }
 
         // Terminal on a previous launch: stay away from the container path —

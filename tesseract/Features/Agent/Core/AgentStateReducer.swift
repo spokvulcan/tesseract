@@ -39,7 +39,7 @@ enum AgentStateReducer {
             // Commit on message_end; drop empty assistant turns from cancel/error
             // paths (`AssistantMessage.hasContent` — the same rule `runLoop`
             // folds against on persist).
-            if let assistant = message as? AssistantMessage {
+            if let assistant = message.asAssistant {
                 guard assistant.hasContent else { break }
             }
             state.messages.append(message)

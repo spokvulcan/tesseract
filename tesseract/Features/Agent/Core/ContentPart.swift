@@ -50,6 +50,32 @@ nonisolated enum ContentPart: Sendable, Codable, Equatable {
     }
 }
 
+// MARK: - Not text
+
+/// A message's parts are not text. Interpolated, they write their debug
+/// description into whatever reads the string: a summary prompt once fed the
+/// summarizer `[Tesseract_Agent.ContentPart.text(…)]`. Read the message's
+/// `text`, `thinking` or `toolCalls` instead.
+///
+/// Each pair below exists to make such an interpolation ambiguous, which is a
+/// compile error ("ambiguous use of 'appendInterpolation'"). An unavailable
+/// overload would not do: the compiler passes over it for the standard
+/// library's generic one, and the debug description goes through.
+extension DefaultStringInterpolation {
+    nonisolated mutating func appendInterpolation(
+        _ parts: [ContentPart], readTheMessageTextNotItsParts: Void = ()
+    ) {}
+    nonisolated mutating func appendInterpolation(
+        _ parts: [ContentPart], partsAreNotText: Void = ()
+    ) {}
+    nonisolated mutating func appendInterpolation(
+        _ part: ContentPart, readThePartTextNotThePart: Void = ()
+    ) {}
+    nonisolated mutating func appendInterpolation(
+        _ part: ContentPart, aPartIsNotText: Void = ()
+    ) {}
+}
+
 /// Visible assistant text.
 nonisolated struct TextPart: Sendable, Codable, Equatable {
     var text: String

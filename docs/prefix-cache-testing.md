@@ -725,3 +725,14 @@ the whole request before it. It runs last in a full e2e, or alone:
 TESSERACT_E2E_ONLY=day-thread-pictures scripts/dev.sh prefix-cache-e2e --bench-model-id qwen3.5-4b-paro
 ```
 
+`TESSERACT_E2E_ONLY` takes any of the steps that build their own state,
+comma-separated, and runs only those: `thinking-off`, `image` (Step Z) and
+`day-thread-pictures` (Step P). A name outside that list fails before the
+model loads.
+
+When a check compares what a turn restores with the request before it:
+the turn restores that request's prompt and reply when its leaf was captured
+live, or its prompt less the generation prompt when the leaf was re-rendered.
+Step P measured both, on the 27B and the 4B, so measure which one the step
+sees rather than assuming it.
+

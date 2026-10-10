@@ -13,7 +13,8 @@
 //  layout's body runs; the morning also renders with two pictures waiting in
 //  the composer, for Jarvis. With TODAY_GALLERY_DIR set (TEST_RUNNER_TODAY_GALLERY_DIR
 //  through xcodebuild), each render is also written there as a PNG, in dark
-//  and light, for judging the page by eye.
+//  and light, for judging the page's layout by eye; glass colors don't survive
+//  the offscreen render (docs/testing.md).
 //
 
 import AppKit

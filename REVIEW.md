@@ -22,6 +22,10 @@ Reserve **Important** for:
   seconds without `@Suite(.cpuBound)`. SwiftLint already rejects wall-clock
   budgets and `for … where … { await Task.yield() }` waits.
 - Security and sandbox escapes (PathSandbox, entitlements)
+- Assertions that pass on wrong output: `contains(fixtureText)` over generated
+  text (a prompt, a summary, a render) holds with garbage around the fixture,
+  as a summary prompt's debug-described assistant turns once did. Pin the
+  whole line.
 
 Everything else — naming, style, structure preferences — is a nit.
 
