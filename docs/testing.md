@@ -354,7 +354,9 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # confirmation rule, decoding from the last confirmed segment over a scripted
 # recognizer, release cancelling the preview), ⇧ holding a take and the Check
 # Before Pasting setting, the Lens state (listening, landing, a held take pasted
-# or kept), putting a fix back in the app, the hotkeys, and paste. The repo has
+# or kept), putting a fix back in the app, the hotkeys (the Hotkey Table: every
+# row bound from its setting, a changed setting moving its key, the interrupt
+# keys in a voice session), and paste. The repo has
 # no snapshot suites: the Lens views are covered by LensViewRenderTests, which
 # hosts each state the way the panel does (as MainWindowPageTests hosts the
 # pages) and checks it fits the card, with no pixel comparison;
@@ -382,6 +384,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/LivePreviewAssemblerTests \
   -only-testing:tesseractTests/LensSettleTests \
   -only-testing:tesseractTests/HotkeyMatcherTests \
+  -only-testing:tesseractTests/HotkeyTableTests \
   -only-testing:tesseractTests/TextInjectorTests \
   -only-testing:tesseractTests/AgentVoiceInputControllerTests \
   -only-testing:tesseractTests/SoundAlikeTests \

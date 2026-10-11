@@ -83,100 +83,6 @@ struct AppBindingsTests {
             }))
     }
 
-    @Test
-    func dictationHotkeyReBindsOnlyWhenTheComboActuallyChanges() async {
-        let h = makeHarness()
-        defer { h.bindings.stop() }
-        // The wiring seeds the hotkey manager with the persisted combo before
-        // start(), so the initial emission matches the current binding.
-        h.driver.currentDictationHotkey = h.settings.hotkey
-
-        h.bindings.start()
-
-        let newCombo = KeyCombo(keyCode: 36, modifiers: [.command])
-        h.settings.hotkey = newCombo
-
-        // Exactly one re-bind: the changed combo. The initial (unchanged)
-        // emission must not have produced one.
-        #expect(
-            await observe(until: {
-                h.recorder.events(withPrefix: "updateDictationHotkey")
-                    == ["updateDictationHotkey(\(newCombo.displayString))"]
-            }))
-    }
-
-    @Test
-    func ttsAndAgentHotkeyChangesReBindTheirRegistrations() async {
-        let h = makeHarness()
-        defer { h.bindings.stop() }
-
-        h.bindings.start()
-
-        let ttsCombo = KeyCombo(keyCode: 17, modifiers: [.command, .shift])
-        let agentCombo = KeyCombo(keyCode: 0, modifiers: [.option])
-        h.settings.ttsHotkey = ttsCombo
-        h.settings.agentHotkey = agentCombo
-
-        #expect(
-            await observe(until: {
-                h.recorder.events(withPrefix: "updateTTSHotkey").last
-                    == "updateTTSHotkey(\(ttsCombo.displayString))"
-                    && h.recorder.events(withPrefix: "updateAgentHotkey").last
-                        == "updateAgentHotkey(\(agentCombo.displayString))"
-            }))
-    }
-
-    @Test
-    func appshotHotkeyChangeReBindsItsRegistration() async {
-        let h = makeHarness()
-        defer { h.bindings.stop() }
-
-        h.bindings.start()
-
-        let combo = KeyCombo(keyCode: 20, modifiers: [.command, .option])
-        h.settings.appshotHotkey = combo
-
-        #expect(
-            await observe(until: {
-                h.recorder.events(withPrefix: "updateAppshotHotkey").last
-                    == "updateAppshotHotkey(\(combo.displayString))"
-            }))
-    }
-
-    @Test
-    func captureHotkeyChangeReBindsItsRegistration() async {
-        let h = makeHarness()
-        defer { h.bindings.stop() }
-
-        h.bindings.start()
-
-        let combo = KeyCombo(keyCode: 40, modifiers: [.control, .option])
-        h.settings.captureHotkey = combo
-
-        #expect(
-            await observe(until: {
-                h.recorder.events(withPrefix: "updateCaptureHotkey").last
-                    == "updateCaptureHotkey(\(combo.displayString))"
-            }))
-    }
-
-    @Test
-    func fixHotkeyChangeReBindsItsRegistration() async {
-        let h = makeHarness()
-        defer { h.bindings.stop() }
-
-        h.bindings.start()
-
-        let combo = KeyCombo(keyCode: 3, modifiers: [.control, .option])
-        h.settings.fixHotkey = combo
-
-        #expect(
-            await observe(until: {
-                h.recorder.events(withPrefix: "updateFixHotkey").last
-                    == "updateFixHotkey(\(combo.displayString))"
-            }))
-    }
-
     /// The selected model is never silently switched: turning the Companion
     /// on leaves the owner's agent model alone.
     @Test
@@ -458,7 +364,6 @@ struct AppBindingsTests {
 
         h.settings.isServerEnabled = true
         h.driver.dictationState = .recording
-        h.settings.fixHotkey = KeyCombo(keyCode: 3, modifiers: [.control, .option])
         h.statuses.send([ModelDefinition.defaultSpeechToTextModelID: .downloaded(sizeOnDisk: 1)])
 
         for _ in 0..<200 { await Task.yield() }
@@ -486,7 +391,6 @@ private final class EffectRecorder {
 private final class InputDriver {
     var dictationState: DictationFeed.Phase = .idle
     var speechState: SpeechState = .idle
-    var currentDictationHotkey: KeyCombo = .optionSpace
     var isLLMSlotLoaded = false
     var whisperModelPath: URL?
     var isTranscriptionModelLoaded = false
@@ -534,7 +438,6 @@ private func makeHarness(
         inputs: .init(
             dictationState: { driver.dictationState },
             speechState: { driver.speechState },
-            currentDictationHotkey: { driver.currentDictationHotkey },
             isLLMSlotLoaded: { driver.isLLMSlotLoaded },
             whisperModelPath: { driver.whisperModelPath },
             isTranscriptionModelLoaded: { driver.isTranscriptionModelLoaded },
@@ -543,12 +446,6 @@ private func makeHarness(
         effects: .init(
             pushDictationStateToMenuBar: { recorder("pushDictationStateToMenuBar(\($0))") },
             pushSpeechStateToMenuBar: { recorder("pushSpeechStateToMenuBar(\($0))") },
-            updateDictationHotkey: { recorder("updateDictationHotkey(\($0.displayString))") },
-            updateTTSHotkey: { recorder("updateTTSHotkey(\($0.displayString))") },
-            updateAgentHotkey: { recorder("updateAgentHotkey(\($0.displayString))") },
-            updateAppshotHotkey: { recorder("updateAppshotHotkey(\($0.displayString))") },
-            updateCaptureHotkey: { recorder("updateCaptureHotkey(\($0.displayString))") },
-            updateFixHotkey: { recorder("updateFixHotkey(\($0.displayString))") },
             startHTTPServer: { recorder("startHTTPServer") },
             stopHTTPServer: { recorder("stopHTTPServer") },
             updateHTTPServerPort: { recorder("updateHTTPServerPort(\($0))") },

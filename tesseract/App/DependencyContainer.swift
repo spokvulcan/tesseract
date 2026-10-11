@@ -538,8 +538,12 @@ final class DependencyContainer: ObservableObject {
         chatSession.voiceReplyHandler = { [weak controller] text in
             controller?.replyCompleted(text) ?? false
         }
+        builtVoiceSession = controller
         return controller
     }()
+    /// The voice session once something built it: a hotkey asks whether a
+    /// session is active without building one (and the chat session with it).
+    private var builtVoiceSession: CompanionVoiceSessionController?
 
     // Speech (TTS) — engine v2 (ADR-0038/0039): the engine actor lives in the
     // TesseractSpeech package behind its ports; the presenter mirrors
@@ -677,6 +681,32 @@ final class DependencyContainer: ObservableObject {
     // App Bindings owns the launch sequence and every runtime subscription
     // with a rule; this container only wires its inputs and effects.
     lazy var appBindings = makeAppBindings()
+
+    /// The **Hotkey Table**: every global hotkey, registered at launch and
+    /// re-bound when its setting changes. The container supplies what each
+    /// action is; the table says which key does it.
+    lazy var hotkeyTable = HotkeyTable(
+        settings: settingsManager, registrar: hotkeyManager, actions: makeHotkeyActions())
+
+    private func makeHotkeyActions() -> HotkeyActions {
+        HotkeyActions(
+            startDictation: { [weak self] in self?.dictationCoordinator.onHotkeyDown() },
+            finishDictation: { [weak self] in self?.dictationCoordinator.onHotkeyUp() },
+            cancelDictation: { [weak self] in self?.dictationCoordinator.cancel() },
+            holdTake: { [weak self] in self?.dictationCoordinator.shiftTapped() },
+            fixLastTake: { [weak self] in self?.dictationLens.fixHotkeyPressed() },
+            speakSelectedText: { [weak self] in self?.speechCoordinator.onHotkeyPressed() },
+            startTalking: { [weak self] in self?.agentVoiceInput.start() },
+            finishTalking: { [weak self] in self?.agentVoiceInput.finishCapture() },
+            captureKeyDown: { [weak self] in self?.capturePanel.hotkeyDown() },
+            captureKeyUp: { [weak self] in self?.capturePanel.hotkeyUp() },
+            captureKeyCancelled: { [weak self] in self?.capturePanel.hotkeyCancelled() },
+            takeAppshot: { [weak self] in Task { await self?.appshotController.takeAppshot() } },
+            isVoiceSessionActive: { [weak self] in self?.builtVoiceSession?.isActive ?? false },
+            interruptVoiceSession: { [weak self] in
+                self?.builtVoiceSession?.bargeIn(source: "key")
+            })
+    }
 
     // Coordinator
     lazy var dictationCoordinator: DictationCoordinator = {
@@ -859,76 +889,12 @@ final class DependencyContainer: ObservableObject {
         switch step {
         case .registerHotkeys:
             return { [self] in
-                // Register dictation push-to-talk — through the same registration
-                // API as every other hotkey (audit #285 item 7).
-                hotkeyManager.registerHotkey(
-                    id: HotkeyManager.dictationHotkeyID,
-                    combo: settingsManager.hotkey,
-                    onDown: { [weak self] in self?.dictationCoordinator.onHotkeyDown() },
-                    onUp: { [weak self] in self?.dictationCoordinator.onHotkeyUp() },
-                    // A one-key dictation hotkey spoiled by another key: the
-                    // owner is typing with that modifier, not dictating.
-                    onCancel: { [weak self] in self?.dictationCoordinator.cancel() },
-                    // ⇧ while talking: the take waits in the Lens (PRD #612).
-                    onShiftTap: { [weak self] in self?.dictationCoordinator.shiftTapped() }
-                )
+                // Every global hotkey, bound now and re-bound when its
+                // setting changes.
+                hotkeyTable.start()
                 // The Lens is the dictation overlay: build its panel now so
                 // the first press shows it at once.
                 dictationLens.prepare()
-                // Register the fix hotkey (⌃⌥Space by default): reopens the
-                // last take in the Lens to fix a word by typing the one meant.
-                hotkeyManager.registerHotkey(
-                    id: HotkeyManager.fixLastTakeHotkeyID,
-                    combo: settingsManager.fixHotkey,
-                    onDown: { [weak self] in self?.dictationLens.fixHotkeyPressed() }
-                )
-                // Register TTS hotkey. In a voice session it and the Agent
-                // hotkey are the interrupt key: Jarvis stops and listens
-                // (ADR-0082).
-                hotkeyManager.registerHotkey(
-                    id: "tts",
-                    combo: settingsManager.ttsHotkey,
-                    onDown: { [weak self] in
-                        guard let self else { return }
-                        if companionVoiceSession.isActive {
-                            companionVoiceSession.bargeIn(source: "key")
-                        } else {
-                            speechCoordinator.onHotkeyPressed()
-                        }
-                    }
-                )
-                // Register Agent hotkey
-                hotkeyManager.registerHotkey(
-                    id: "agent",
-                    combo: settingsManager.agentHotkey,
-                    onDown: { [weak self] in
-                        guard let self else { return }
-                        if companionVoiceSession.isActive {
-                            companionVoiceSession.bargeIn(source: "key")
-                        } else {
-                            agentVoiceInput.start()
-                        }
-                    },
-                    onUp: { [weak self] in self?.agentVoiceInput.finishCapture() }
-                )
-                // Register the capture hotkey: tap to type, hold to speak.
-                // As one key (Right ⌥ by default), another key pressed with
-                // it cancels: the owner is typing.
-                hotkeyManager.registerHotkey(
-                    id: "capture",
-                    combo: settingsManager.captureHotkey,
-                    onDown: { [weak self] in self?.capturePanel.hotkeyDown() },
-                    onUp: { [weak self] in self?.capturePanel.hotkeyUp() },
-                    onCancel: { [weak self] in self?.capturePanel.hotkeyCancelled() }
-                )
-                // Register Appshot hotkey (one-shot tap, no held state)
-                hotkeyManager.registerHotkey(
-                    id: "appshot",
-                    combo: settingsManager.appshotHotkey,
-                    onDown: { [weak self] in
-                        Task { await self?.appshotController.takeAppshot() }
-                    }
-                )
             }
         case .attachDictationMeters:
             return { [self] in
@@ -982,9 +948,6 @@ final class DependencyContainer: ObservableObject {
                 speechState: { [speechCoordinator] in
                     speechCoordinator.state
                 },
-                currentDictationHotkey: { [hotkeyManager] in
-                    hotkeyManager.currentDictationHotkey
-                },
                 isLLMSlotLoaded: { [inferenceArbiter] in
                     inferenceArbiter.loadedSlots.contains(.llm)
                 },
@@ -1013,26 +976,6 @@ final class DependencyContainer: ObservableObject {
                 },
                 prewarmProofreader: { [proofreadPass] in
                     await proofreadPass.prewarm()
-                },
-                updateDictationHotkey: { [hotkeyManager] in
-                    hotkeyManager.updateRegisteredHotkey(
-                        id: HotkeyManager.dictationHotkeyID, combo: $0)
-                },
-                updateTTSHotkey: { [hotkeyManager] in
-                    hotkeyManager.updateRegisteredHotkey(id: "tts", combo: $0)
-                },
-                updateAgentHotkey: { [hotkeyManager] in
-                    hotkeyManager.updateRegisteredHotkey(id: "agent", combo: $0)
-                },
-                updateAppshotHotkey: { [hotkeyManager] in
-                    hotkeyManager.updateRegisteredHotkey(id: "appshot", combo: $0)
-                },
-                updateCaptureHotkey: { [hotkeyManager] in
-                    hotkeyManager.updateRegisteredHotkey(id: "capture", combo: $0)
-                },
-                updateFixHotkey: { [hotkeyManager] in
-                    hotkeyManager.updateRegisteredHotkey(
-                        id: HotkeyManager.fixLastTakeHotkeyID, combo: $0)
                 },
                 startHTTPServer: { [httpServer] in
                     await httpServer.start()

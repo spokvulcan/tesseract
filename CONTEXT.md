@@ -2323,6 +2323,19 @@ clipboard backup, paste injection (the Cmd+V is one step of the loan).
 
 ### Hotkey handling
 
+**Hotkey Table**:
+The app's global hotkeys, one row each: the setting that holds its combo, its
+default (the **Settings Catalogue**'s), its label in Settings, and what its key
+does — press, release, a spoiled one-key press, a ⇧ tap — by the name of an
+action the composition root supplies. It registers every row at launch and
+re-binds a row's key when its setting changes; the Hotkeys pane lists the same
+rows. Its rows mark the interrupt keys: while a **Voice Session** is active,
+Speak Selected Text and Talk to Tesseract interrupt it (**Barge-In**) instead
+of doing what they otherwise do. A registrar seam takes its bindings:
+`HotkeyManager` in the app, an in-memory peer in the tests.
+_Avoid_: hotkey registry, keymap, shortcut list, hotkey ids typed as strings
+(a row's id is its case).
+
 **Hotkey Matcher**:
 The pure fire-or-not decision for global hotkeys — normalized event + bindings +
 pressed-set in, fires plus suppression verdict out — implemented once and fed by
@@ -2855,9 +2868,10 @@ class; per-setting device checks (the tier answers them all, once).
 **App Bindings**:
 The module owning the app's launch sequence and every long-lived runtime subscription
 that carries a rule (model auto-load and hot-swap, lazy-reload guards, server
-reactions, hotkey rebinding, the single dictation-state fan-out) — the
-launch-time mirror of the teardown-owning termination coordinator. Distinct from the
-composition root, which stays pure wiring with no behaviour.
+reactions, the single dictation-state fan-out) — the launch-time mirror of the
+teardown-owning termination coordinator. Distinct from the composition root, which
+stays pure wiring with no behaviour, and from the **Hotkey Table**, which follows
+the hotkey settings itself.
 _Avoid_: app glue (pre-carve working name), setup() behaviour, launch coordinator,
 app services, a SwiftUI `Binding` (view data flow, unrelated).
 

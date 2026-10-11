@@ -69,6 +69,7 @@ tesseract/
 │   ├── TesseractApp.swift       # SwiftUI App entry (Window scene)
 │   ├── AppDelegate.swift        # macOS lifecycle, single instance, window management
 │   ├── AppBindings.swift        # App Bindings: launch sequence + subscription rules
+│   ├── HotkeyTable.swift        # Hotkey Table: every global hotkey, registered and re-bound from its setting
 │   ├── AppTerminationCoordinator.swift # Teardown ordering (closure-struct steps)
 │   ├── Harness.swift            # The harness table: every headless bench and parity run, by flag (ADR-0095)
 │   └── DependencyContainer.swift# Composition root, pure wiring
@@ -88,7 +89,7 @@ tesseract/
 │   └── Logging.swift            # Unified logging (Log enum)
 │
 ├── Platform/                    # AppKit bridge code
-│   ├── HotkeyManager.swift           # Global hotkey listener (CGEventTap)
+│   ├── HotkeyManager.swift           # Global hotkey listener (CGEventTap): the Hotkey Table's registrar
 │   ├── ObjCExceptions.swift           # NSException → thrown error seam (wraps AVFAudio graph steps)
 │   ├── ObjCExceptionCatcher.h/.m      # The one Objective-C file: the @try behind ObjCExceptions
 │   ├── TextInjector.swift             # Clipboard-based paste injection
@@ -316,15 +317,18 @@ Task { [weak self] in
 
 The app's long-lived runtime subscriptions *with a rule* (selected
 speech-to-text model auto-load and hot-swap, the lazy LLM reload guard, the
-server enable/port reactions, hotkey re-binding, the dictation-phase rule that
-mirrors the menu bar) live in **App Bindings** (`App/AppBindings.swift`), which
+server enable/port reactions, the dictation-phase rule that mirrors the menu
+bar) live in **App Bindings** (`App/AppBindings.swift`), which
 also owns the launch ordering: start the speech surfaces, install every
 subscription, then run the initial dictation-model load as an owned child
 task so the HTTP server never waits on a model load. Effects leave
 through a closure-struct the composition root wires —
 the launch mirror of `AppTerminationCoordinator`'s teardown steps — which makes
 every rule hermetically testable (`AppBindingsTests`). See `CONTEXT.md` → App
-composition.
+composition. The hotkeys follow their settings in the **Hotkey Table**
+(`App/HotkeyTable.swift`): one row per global hotkey, registered at launch
+through the registrar seam (`HotkeyManager`) and re-bound when its combo
+changes (`HotkeyTableTests` press keys on an in-memory registrar).
 
 ### Settings Persistence
 

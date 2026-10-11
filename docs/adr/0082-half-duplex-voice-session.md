@@ -178,3 +178,15 @@ text-to-speech plays.
   speech, takes in flight, the dead-capture recovery),
   `CaptureEngineLifecycleTests` (the live-input table),
   `SpeechCoordinatorTests` (replies follow the read-aloud speed).
+
+## Amendment (2026-10-11): the interrupt key is a row of the Hotkey Table
+
+The rule moved out of the composition root's hotkey closures. The **Hotkey
+Table** (`tesseract/App/HotkeyTable.swift`) marks the Speak Selected Text and
+Talk to Tesseract rows as interrupt keys, and one named action
+(`HotkeyActions.interruptingVoiceSession`) applies the rule to both:
+while a session is active the press calls `bargeIn(source: "key")`,
+otherwise the key does what it always does. `HotkeyTableTests` pins it. The
+press reads whether a session is active without building one: before, the
+first press of either key built the voice session, and the chat session with
+it.
