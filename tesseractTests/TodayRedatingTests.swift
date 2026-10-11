@@ -186,6 +186,15 @@ struct TodayRedatingTests {
         #expect(decision.effects.contains(.trace(.cardReaction, ["action": "today"])))
     }
 
+    /// Never given a new time either: Later on a repeating reminder is a
+    /// step in today's plan, and the Agenda refuses to re-time its series.
+    @Test func aRepeatingReminderIsNeverGivenANewTime() async throws {
+        let today = await Today([Self.plants], now: Self.at(10, day: 1))
+        try await today.agenda.apply(.dueAt(reminderID: "plants", at: Self.at(10, 30, day: 1)))
+        #expect(today.store.reminders["plants"] == Self.plants)
+        #expect(today.store.writeLog.isEmpty)
+    }
+
     /// A one-off task due tomorrow joins today's Anytime tasks: today, by
     /// the runtime's clock, at no set time.
     @Test func moveToTodayTakesAOneOffTaskIntoTodayWithoutATime() async throws {

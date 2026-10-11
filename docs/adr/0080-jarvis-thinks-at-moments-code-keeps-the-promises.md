@@ -698,9 +698,12 @@ changed:
   (`Agenda.apply`): the owner's today and tomorrow by the Day Key and the
   Agenda's clock, a time of day kept when a task moves to another day, a
   repeating reminder never losing its date (kept for later or let go, it
-  skips to tomorrow at its time) and never re-dated to today. The runtime
-  only performs. The trace says where each change came from, as before:
-  `today` for a tick on Today.
+  skips to tomorrow at its time), never re-dated to today and never given
+  a new time. Later on a repeating reminder is a step in today's plan,
+  which is the engine's to place: it asks the Agenda whether a reminder is
+  a series (`AgendaSnapshot.isSeries`) rather than reading the flag
+  itself. The runtime only performs. The trace says where each change
+  came from, as before: `today` for a tick on Today.
 - **Views read the time from the runtime's clock**: Today's minute, the
   leftovers' Another Day, the composer's confirmation, the Jarvis Panel's
   words.

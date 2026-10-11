@@ -604,7 +604,7 @@ nonisolated extension DayEngine {
                     .mutateAgenda(.followUp(title: "Follow up: \(item.title)", at: later)))
             case .reminder:
                 let reminderID = String(item.id.dropFirst("reminder:".count))
-                if repeats(reminderID, snapshot: snapshot) {
+                if snapshot.agenda.isSeries(reminderID) {
                     // Its time is its whole series': a step in today's plan
                     // instead, cued when it starts, off any meeting it falls in.
                     let start =
@@ -813,12 +813,6 @@ nonisolated extension DayEngine {
         case .later: .clearDue(reminderID: reminderID)
         case .drop: .delete(reminderID: reminderID)
         }
-    }
-
-    /// A repeating reminder is one item for its whole series: a new date or
-    /// time is every occurrence's.
-    private static func repeats(_ reminderID: String, snapshot: DaySnapshot) -> Bool {
-        snapshot.agenda.open.first { $0.id == reminderID }?.repeats == true
     }
 
     static func reaction(_ action: String, card: DayCard, snapshot: DaySnapshot) -> DayEffect {

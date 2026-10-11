@@ -11,12 +11,25 @@
 //  reminder is one item for its whole series, so a new date or time is every
 //  occurrence's: it never loses its date (kept for later, or let go, it
 //  skips to tomorrow at its time instead — EventKit refuses the one, and the
-//  other would delete every occurrence), and it is never re-dated to today
-//  (done early, it is ticked off where it is). The Day Engine says what the
-//  owner chose; the runtime hands it here.
+//  other would delete every occurrence), it is never re-dated to today
+//  (done early, it is ticked off where it is), and it is never given a new
+//  time (Later on one is a step in today's plan instead: the Day Engine asks
+//  `AgendaSnapshot.isSeries`). Moved to another day, it skips to that day
+//  at its time, as to tomorrow. The Day Engine says what the owner chose;
+//  the runtime hands it here.
 //
 
 import Foundation
+
+nonisolated extension AgendaSnapshot {
+
+    /// Reminder `id` repeats: one item for its whole series, so a new date
+    /// or time would be every occurrence's. The day gives one a step in
+    /// its plan where it would give a one-off a new time.
+    func isSeries(_ id: String) -> Bool {
+        open.first { $0.id == id }?.repeats == true
+    }
+}
 
 /// A change the day makes to the owner's Reminders.
 nonisolated enum AgendaMutation: Sendable, Equatable {
@@ -33,9 +46,11 @@ nonisolated enum AgendaMutation: Sendable, Equatable {
     /// Done, or not done after all: a card's item, a Step Cue's Did it or
     /// Done, its Undo — or, `onToday`, a tick on Today.
     case setDone(reminderID: String, done: Bool, onToday: Bool = false)
-    /// Due on this day, keeping a time of day if it had one.
+    /// Due on this day, keeping a time of day if it had one: a repeating
+    /// reminder skips to it, as to tomorrow.
     case dueOn(reminderID: String, day: Date)
-    /// Due at this moment.
+    /// Due at this moment. Never a repeating reminder's: its time is its
+    /// whole series'.
     case dueAt(reminderID: String, at: Date)
     /// A new reminder: a follow-up for something that can't be handled now.
     case followUp(title: String, at: Date)
@@ -77,6 +92,8 @@ extension Agenda {
         case .dueOn(let id, let day):
             try await move(id, to: calendar.startOfDay(for: day))
         case .dueAt(let id, let at):
+            // A repeating reminder's time is its whole series'.
+            guard await !repeats(id) else { return }
             try await updateReminder(id: id, due: .set(at, hasTime: true), source: "card")
         case .followUp(let title, let at):
             try addReminder(title: title, due: at, dueHasTime: true, source: "card")

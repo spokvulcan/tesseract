@@ -1846,9 +1846,9 @@ an EventKit store and an in-memory store (the test host's, ADR-0073), and a
 facade that keeps today's snapshot, turns every write into a one-line
 confirmation with an undo, and makes the day's changes by Reminders' rules for
 dates and series: the owner's today and tomorrow, a task's time of day kept
-when it moves, a repeating reminder never losing its date. It answers for a
-repeating task's Occurrence that day. The single source of truth for tasks and
-plans.
+when it moves, a repeating reminder never losing its date or given a new
+time. It answers for a repeating task's Occurrence that day. The single source
+of truth for tasks and plans.
 _Avoid_: tasks file (retired `tasks.md`), task store (Reminders is the store).
 
 **Occurrence**:
