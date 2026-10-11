@@ -3,7 +3,8 @@
 //  tesseractTests
 //
 //  The menu's Models section reads at a glance: what each model is doing,
-//  its size once loaded, and the app's memory with the system's swap.
+//  its size once loaded, and the app's memory with the system's swap. The
+//  Dictation row hears every push-to-talk the app makes.
 //
 
 import Foundation
@@ -48,5 +49,35 @@ struct MenuModelsSectionTests {
         #expect(activity.memoryLine == "Tesseract uses \(app) · swap \(swap)")
         activity.swapBytes = 0
         #expect(activity.memoryLine == "Tesseract uses \(app)")
+    }
+
+    /// The Dictation row reads every push-to-talk the container made, Today's
+    /// composer's included, so a take on any surface reads as Listening.
+    @MainActor @Test func theDictationRowHearsEveryPushToTalk() {
+        let container = DependencyContainer()
+        let surfaces = [
+            container.agentVoiceInput, container.captureVoiceInput,
+            container.panelVoiceInput, container.todayVoiceInput,
+        ]
+        for surface in surfaces {
+            #expect(container.voiceInputs.contains { $0 === surface })
+        }
+    }
+
+    /// The container builds a push-to-talk in one place, which registers it
+    /// for the Dictation row, so a new surface can't be left out of it.
+    @Test func theContainerBuildsEveryPushToTalkInOnePlace() throws {
+        let app = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // tesseractTests
+            .deletingLastPathComponent()  // project root
+            .appendingPathComponent("tesseract/App")
+        let container = try FileManager.default
+            .contentsOfDirectory(at: app, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("DependencyContainer") }
+            .map { try String(contentsOf: $0, encoding: .utf8) }
+            .joined(separator: "\n")
+        #expect(
+            container.components(separatedBy: "AgentVoiceInputController(").count - 1 == 1,
+            "Build a surface's push-to-talk with makeVoiceInput(), which registers it")
     }
 }

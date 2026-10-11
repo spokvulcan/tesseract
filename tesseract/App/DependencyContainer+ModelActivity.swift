@@ -55,7 +55,6 @@ extension DependencyContainer {
 
         // Dictation: listening while any microphone take records,
         // transcribing while Whisper decodes.
-        let voiceInputs = [agentVoiceInput, captureVoiceInput, panelVoiceInput]
         let listening =
             dictationFeed.phase == .recording
             || voiceInputs.contains { $0.voiceState == .recording }
