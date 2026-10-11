@@ -127,13 +127,12 @@ nonisolated final class CacheClaim: @unchecked Sendable {
             return arm == .mtp ? .mtpArm : nil
         }
 
-        /// The `copyReason` a leaf copied for this reason reports; an MTP
-        /// turn's copied leaf reports none.
-        var copyReason: LeafStorePhase.Report.CopyReason? {
+        /// The `copyReason` a leaf copied for this reason reports.
+        var copyReason: LeafStorePhase.Report.CopyReason {
             switch self {
             case .imageKeySpace: .imageKeySpace
             case .quantizedPartition: .quantized
-            case .mtpArm: nil
+            case .mtpArm: .mtp
             }
         }
     }

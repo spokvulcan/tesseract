@@ -91,6 +91,9 @@ nonisolated extension LeafStorePhase {
         enum CopyReason: String, Sendable {
             case quantized, imageKeySpace, checkpoint, immutableBody, pendingFullPayload,
                 untrimmable, rotating, warmBody
+            /// The MTP drafter decoded the turn, which the handoff scope
+            /// leaves out (ADR-0064 decision 7): its leaf is copied.
+            case mtp
             /// The parity gate's control arm (#528): the leaf check-out
             /// switched off through `PrefixCacheAdmin`, so an eligible fp16
             /// leaf restores by copy. Never reported in production.

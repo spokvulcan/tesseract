@@ -430,3 +430,17 @@ Admission asks it with the decoding arm, and the Leaf Store's copy reason is
 its `copyReason`. No line changes. `CacheClaimTests.theHandoffScopeIsOneRule`
 tables the rule; the claim's refusal ladder and the Leaf Admission's move
 cases keep their rows.
+
+### Declared: an MTP turn's copied leaf reports `copyReason=mtp`
+
+The handoff scope leaves the MTP path out, so an MTP-decoded turn's live leaf
+is copied, but the Leaf Store gave no reason for the copy. With the scope as
+one rule its copy reason is the rule's, and it now reads `mtp`. On a turn the
+MTP drafter decoded (a turn that restored nothing, text-only over unquantized
+KV), and on no other: the `leafStore` event gains `copyReason=mtp`, the
+`recordingRequest` phase's `leafCopyReason` reads `mtp` where it read `none`,
+and the trace record's emitted-path `copyReason` reads `mtp` where it had
+none. Pinned by the MTP row of `CacheClaimTests.theHandoffScopeIsOneRule`. No
+toy session engages MTP end to end (the suites' resident drafter traps if a
+request engages it), so the pin is the rule's; the Leaf Store reads it with
+the turn's decoding arm.

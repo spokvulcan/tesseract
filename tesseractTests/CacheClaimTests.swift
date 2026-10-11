@@ -427,7 +427,7 @@ struct CacheClaimTests {
     @Test(arguments: [
         ScopeRow(textOnly: true, kvBits: nil, arm: nil, exclusion: nil, copyReason: nil),
         ScopeRow(textOnly: true, kvBits: nil, arm: .dflash2, exclusion: nil, copyReason: nil),
-        ScopeRow(textOnly: true, kvBits: nil, arm: .mtp, exclusion: .mtpArm, copyReason: nil),
+        ScopeRow(textOnly: true, kvBits: nil, arm: .mtp, exclusion: .mtpArm, copyReason: .mtp),
         ScopeRow(
             textOnly: true, kvBits: 8, arm: .mtp, exclusion: .quantizedPartition,
             copyReason: .quantized),

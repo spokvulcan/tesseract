@@ -86,7 +86,8 @@ nonisolated extension LeafStorePhase {
             copyReason =
                 CacheClaim.HandoffExclusion.of(
                     textOnly: inputs.request.facts.isTextOnly,
-                    kvBits: inputs.request.facts.partitionKey.kvBits
+                    kvBits: inputs.request.facts.partitionKey.kvBits,
+                    arm: mlxStart.speculativeArm
                 )?.copyReason
         }
 
