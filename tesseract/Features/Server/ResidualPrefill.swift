@@ -93,8 +93,9 @@ nonisolated enum ResidualPrefill {
     /// `prefill` verb: every token consumed, the tokens at the processor's
     /// rank (`tokenNDim`), forwarded from `state` (the base's initial state
     /// for the residual's first tokens). Returns the state the next range
-    /// continues from. Cancellation is checked before every chunk, and a
-    /// chunk's MLX failure throws.
+    /// continues from. Cancellation is checked before every chunk. Under
+    /// `.checkedSynchronous` a chunk's MLX failure throws; under `.pipelined`
+    /// only the closing flush's does (`PrefillExecutor.EvalPolicy`).
     // Mirrors the prefill verb's own parameters.
     // swiftlint:disable:next function_parameter_count
     static func prefill(
@@ -104,6 +105,7 @@ nonisolated enum ResidualPrefill {
         state: LMOutput.State?,
         prefillStepSize: Int,
         tokenNDim: Int,
+        evalPolicy: PrefillExecutor.EvalPolicy,
         storedForm: KVScheme?,
         in session: any ModelSession
     ) throws -> LMOutput.State? {
@@ -122,7 +124,7 @@ nonisolated enum ResidualPrefill {
             prefillStepSize: prefillStepSize,
             consumeAll: true,
             initialState: state,
-            evalPolicy: .pipelined,
+            evalPolicy: evalPolicy,
             storedForm: storedForm
         ).state
     }

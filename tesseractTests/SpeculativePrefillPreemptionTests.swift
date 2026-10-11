@@ -322,4 +322,160 @@ import Testing
         #expect(forwards.offsets.count == forwardsBefore)
         #expect(manager.lookup(tokens: admitPath, partitionKey: partitionKey).snapshot == nil)
     }
+
+    // MARK: - The chunk loop (ADR-0094)
+
+    /// A pass over a 1,024-token boundary of a long admit path, its chunks
+    /// 1,024 tokens: what the chunk-loop cases share.
+    @MainActor
+    private struct ChunkedPass {
+        let provider: ToyModelSessionProvider
+        let manager: PrefixCacheManager
+        let seed: SpeculativeCanonicalPrefill.Seed
+        let admitPath: [Int]
+        let partitionKey: CachePartitionKey
+        let telemetry: TelemetryCapture
+
+        init(
+            onForward: (@Sendable (Int) -> Void)? = nil, prefillFault: ToyPrefillFault? = nil,
+            sessionRequests: SessionRequestLog? = nil
+        ) async throws {
+            let tokenizer = ToySequencingTokenizer()
+            let stored = HTTPPrefixCacheConversation(
+                systemPrompt: nil,
+                messages: [
+                    HTTPPrefixCacheMessage(
+                        role: .user, content: String(repeating: "a", count: 4000)),
+                    .assistant(content: "Done"),
+                ])
+            let future = try #require(
+                try LeafAdmissionBuilder.futureSharedPrefix(
+                    storedConversation: stored, keySpace: .identity(keyPath: []),
+                    render: ConversationRender.uncached(tokenizer: tokenizer))?.get())
+            admitPath = try #require(
+                SpeculativeCanonicalPrefill.admitPath(
+                    futureSharedPrefix: future, canonicalLeafOffset: 0))
+            provider = ToyModelSessionProvider(
+                model: ToyLanguageModel(script: [0], onForward: onForward),
+                tokenizer: tokenizer, prefillFault: prefillFault, sessionRequests: sessionRequests)
+            partitionKey = CachePartitionKey(
+                modelID: "toy/chunk-loop-\(UUID())", kvBits: nil, kvGroupSize: 64)
+            telemetry = TelemetryCapture(modelID: partitionKey.modelID)
+            manager = PrefixCacheManager(memoryBudgetBytes: 1 << 30)
+            let diagnostics = PrefixCacheDiagnostics.Context(
+                requestID: UUID(), modelID: partitionKey.modelID, kvBits: nil, kvGroupSize: 64)
+            let boundaryTokens = Array(admitPath[0..<1024])
+            let boundary = try #require(
+                try await provider.withSession { session -> HybridCacheSnapshot? in
+                    let cache = try session.newCache(parameters: GenerateParameters(temperature: 0))
+                    _ = try session.prefill(
+                        text: .init(tokens: MLXArray(boundaryTokens.map(Int32.init)), mask: nil),
+                        cache: cache, checkpoints: [:], checkpointBaseOffset: 0,
+                        prefillStepSize: 1024, consumeAll: true, initialState: nil,
+                        evalPolicy: .pipelined, storedForm: nil)
+                    return session.captureSnapshot(
+                        cache: cache, offset: boundaryTokens.count, type: .leaf, storedForm: nil)
+                })
+            _ = manager.admit(
+                try #require(
+                    SnapshotAdmission.leaf(
+                        storedTokens: boundaryTokens, snapshot: boundary, storage: .ramOnly,
+                        partitionKey: partitionKey, requestID: UUID())))
+            let request = try await ToyRequestKeying.keyedRequest(
+                provider: provider,
+                conversation: HTTPPrefixCacheConversation(
+                    systemPrompt: nil, messages: Array(stored.messages.dropLast())),
+                modelID: partitionKey.modelID, prefillStepSize: 1024)
+            seed = SpeculativeCanonicalPrefill.makeSeed(
+                storedConversation: stored, request: request, canonicalLeafOffset: 0,
+                diagnostics: diagnostics)
+        }
+
+        func deepest() -> Int? {
+            manager.lookup(tokens: admitPath, partitionKey: partitionKey).snapshot?.tokenOffset
+        }
+    }
+
+    /// Each chunk is one `prefill` verb, so each ends with the executor's
+    /// checked flush and its `Memory.clearCache()`: the pool is returned
+    /// between chunks. And each evaluates checked, so an MLX failure inside a
+    /// chunk throws instead of reaching MLX's process-fatal handler (ADR-0094's
+    /// declared changes).
+    @Test func eachChunkIsOneCheckedPrefill() async throws {
+        let pass = try await ChunkedPass()
+        defer { pass.telemetry.stop() }
+        let before = pass.provider.recorder.prefillEvalPolicies.count
+
+        await SpeculativeCanonicalPrefill.run(
+            seed: pass.seed, sessions: pass.provider, prefixCache: pass.manager)
+
+        let policies = Array(pass.provider.recorder.prefillEvalPolicies[before...])
+        let residual = pass.admitPath.count - 1024
+        #expect(policies.count == (residual + 1023) / 1024)
+        #expect(policies.allSatisfy { $0 == .checkedSynchronous }, "\(policies)")
+        #expect(pass.deepest() == pass.admitPath.count)
+    }
+
+    /// A chunk whose prefill throws (the checked MLX error's shape) ends the
+    /// pass with `speculativePrefill/prefill-threw`, and nothing is admitted.
+    @Test func aChunkThatThrowsEndsThePassWithNothingAdmitted() async throws {
+        let fault = ToyPrefillFault()
+        let pass = try await ChunkedPass(prefillFault: fault)
+        defer { pass.telemetry.stop() }
+        _ = pass.telemetry.drain()
+        fault.arm()
+
+        await SpeculativeCanonicalPrefill.run(
+            seed: pass.seed, sessions: pass.provider, prefixCache: pass.manager)
+
+        let skips = pass.telemetry.drain().filter { $0.eventName == "skip" }
+        #expect(
+            skips.map { "\($0.field("stage") ?? "")/\($0.field("reason") ?? "")" }
+                == ["speculativePrefill/prefill-threw"])
+        #expect(pass.provider.recorder.prefillEvalPolicies.last == .checkedSynchronous)
+        #expect(pass.deepest() == 1024)
+    }
+
+    /// A preemption that lands while a chunk waits for its session stops the
+    /// pass at the next check, not before that chunk: the chunk runs, as the
+    /// pass's chunks always have (ADR-0009's one-chunk bound), and the settle
+    /// admits it. The test holds the session while the pass's third chunk
+    /// waits for it, cancels the pass, then lets the chunk in.
+    @Test func aPreemptionWhileAChunkWaitsForItsSessionStillRunsThatChunk() async throws {
+        let gate = ForwardGate(threshold: 2048)
+        let requests = SessionRequestLog()
+        let pass = try await ChunkedPass(onForward: gate.onForward, sessionRequests: requests)
+        defer { pass.telemetry.stop() }
+        #expect(pass.admitPath.count > 3072)
+        let provider = pass.provider
+        let seed = pass.seed
+        let manager = pass.manager
+        let task = Task {
+            await SpeculativeCanonicalPrefill.run(
+                seed: seed, sessions: provider, prefixCache: manager)
+        }
+        // The pass is inside its second chunk's session.
+        await gate.reached()
+        let inside = requests.requests
+        let release = DispatchSemaphore(value: 0)
+        let holder = Task.detached {
+            await provider.withSession { _ in Self.hold(release) }
+        }
+        await requests.reached(inside + 1)
+        gate.open()
+        // The holder has the session; the pass has passed its check and
+        // waits for the third chunk's.
+        await requests.reached(inside + 2)
+        task.cancel()
+        release.signal()
+        await holder.value
+        await task.value
+
+        #expect(pass.deepest() == min(4096, pass.admitPath.count))
+    }
+
+    /// Hold the session a caller is in until `release` is signalled.
+    nonisolated private static func hold(_ release: DispatchSemaphore) {
+        release.wait()
+    }
 }

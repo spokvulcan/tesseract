@@ -49,8 +49,9 @@ ADR-0069's amendment admits.
    does everything after the rule, for the boundary route and the speculative
    pass: `restore` brings a snapshot back through its Backing Leaf and
    reserves the whole path's rows; `prefill` runs a range of the path as text
-   through the session's `prefill` verb, at the processor's token rank, from
-   the base's seeded Position Anchor or the previous range's state;
+   through the session's `prefill` verb, at the processor's token rank and
+   under the caller's eval policy, from the base's seeded Position Anchor or
+   the previous range's state;
    `matchingView` is the one request-local view rule. The producers hand the
    resulting cache to their Leaf Admission; ADR-0078 kept re-prefill out of
    the admission, and it stays out. Plan application keeps its shape switch
@@ -82,12 +83,26 @@ Each is pinned by a test; nothing else changes.
   (`<mode>LeafStore prefill-threw`, `speculativePrefill restore-failed`), and
   the `leafStore` report still reads `skip=prefill-threw`. A request-local
   view reports `drop=notFound`: there is nothing in the tree to drop.
-- **The speculative pass's chunks run through `session.prefill`.** A chunk's
-  MLX failure now throws and logs `skip stage=speculativePrefill
-  reason=prefill-threw level=warning error=…` instead of ending the process;
-  each chunk's prefill ends, as every `PrefillExecutor.run` does, with a
-  checked evaluation and `Memory.clearCache()`, so the pool is returned
-  between chunks; and the pass's verbs are recorded on the toy session.
+- **The speculative pass's chunks run through `session.prefill`, each
+  evaluated checked** (`.checkedSynchronous`; the pass forwards one chunk
+  per call, so it gives up no pipelining). A chunk's MLX failure now throws
+  inside the checked evaluation and logs `skip stage=speculativePrefill
+  reason=prefill-threw level=warning error=…` instead of ending the process
+  (`SpeculativePrefillPreemptionTests.aChunkThatThrowsEndsThePassWithNothingAdmitted`).
+  Each chunk is one `prefill` verb, which ends, as every `PrefillExecutor.run`
+  does, with a checked flush and `Memory.clearCache()`, so the pool is
+  returned between chunks (`eachChunkIsOneCheckedPrefill` counts one checked
+  verb per chunk). The pass's verbs are recorded on the toy session. The
+  boundary route keeps the `.pipelined` evaluation it had: one call over
+  the whole residual, whose closing flush is checked.
+- Not changed: when a preemption lands. A chunk that passed the loop's check
+  runs to its end even if the cancel lands while it waits for its session,
+  as the pass's chunks did on `container.perform`; it runs in a detached task
+  (the claim's conclusion's way), so the pass's cancellation does not reach
+  the prefill's own per-chunk check, and the next check stops the pass
+  (`aPreemptionWhileAChunkWaitsForItsSessionStillRunsThatChunk`). An earlier
+  build of this ADR broke there and settled one chunk short; review caught
+  it before any gate could, since no e2e request preempts at that moment.
 - Not observable: the `boundary-splits-image-run` skips of the boundary route
   and the speculative pass are gone. A text-only residual sits at or past the
   Minimum Warm Offset, where the anchor is always defined, so neither could

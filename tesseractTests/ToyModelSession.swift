@@ -495,11 +495,20 @@ nonisolated final class ModelVerbRecorder: @unchecked Sendable {
 
     private let lock = NSLock()
     private var _verbs: [ModelVerb] = []
+    private var _prefillEvalPolicies: [PrefillExecutor.EvalPolicy] = []
     private var _prefillCapacities: [Int] = []
     private var _captures: [Capture] = []
     private var _speculativeHandovers: [SpeculativeHandover] = []
 
     var prefillCapacities: [Int] { lock.withLock { _prefillCapacities } }
+    /// The eval policy each `prefill` verb ran its chunks under, in order.
+    var prefillEvalPolicies: [PrefillExecutor.EvalPolicy] {
+        lock.withLock { _prefillEvalPolicies }
+    }
+
+    func recordPrefillEvalPolicy(_ policy: PrefillExecutor.EvalPolicy) {
+        lock.withLock { _prefillEvalPolicies.append(policy) }
+    }
     var captures: [Capture] { lock.withLock { _captures } }
     var speculativeHandovers: [SpeculativeHandover] {
         lock.withLock { _speculativeHandovers }
@@ -527,6 +536,38 @@ nonisolated final class ModelVerbRecorder: @unchecked Sendable {
 
     func record(_ verb: ModelVerb) {
         lock.withLock { _verbs.append(verb) }
+    }
+}
+
+/// Session requests in the order callers make them, counted before the
+/// container is theirs: a test can act while a caller waits for its session.
+nonisolated final class SessionRequestLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    private var waiters: [(target: Int, continuation: CheckedContinuation<Void, Never>)] = []
+
+    var requests: Int { lock.withLock { count } }
+
+    func requested() {
+        let ready = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+            count += 1
+            let ready = waiters.filter { $0.target <= count }.map(\.continuation)
+            waiters.removeAll { $0.target <= count }
+            return ready
+        }
+        for continuation in ready { continuation.resume() }
+    }
+
+    /// Returns once `target` sessions have been requested.
+    func reached(_ target: Int) async {
+        await withCheckedContinuation { continuation in
+            let now = lock.withLock { () -> Bool in
+                if count >= target { return true }
+                waiters.append((target, continuation))
+                return false
+            }
+            if now { continuation.resume() }
+        }
     }
 }
 
@@ -675,6 +716,7 @@ nonisolated struct RecordingModelSession: ModelSession {
         storedForm: KVScheme?
     ) throws -> PrefillExecutor.Output {
         recorder.record(.prefill)
+        recorder.recordPrefillEvalPolicy(evalPolicy)
         try prefillFault?.fireIfArmed()
         let output = try base.prefill(
             text: text,
@@ -787,6 +829,9 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
     let prefillFault: ToyPrefillFault?
     /// Fails the next `restore` verb once armed; `nil` never fails.
     let restoreFault: ToyRestoreFault?
+    /// Counts session requests as callers make them, before the container
+    /// is theirs; `nil` counts nothing.
+    let sessionRequests: SessionRequestLog?
 
     init(
         model: ToyLanguageModel,
@@ -798,8 +843,10 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
         anchorsVision: Bool = false,
         speculation: Speculation = .none,
         prefillFault: ToyPrefillFault? = nil,
-        restoreFault: ToyRestoreFault? = nil
+        restoreFault: ToyRestoreFault? = nil,
+        sessionRequests: SessionRequestLog? = nil
     ) {
+        self.sessionRequests = sessionRequests
         self.reportsFlatTextTokens = reportsFlatTextTokens
         self.anchorsVision = anchorsVision
         self.speculation = speculation
@@ -825,6 +872,7 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
         let speculation = self.speculation
         let prefillFault = self.prefillFault
         let restoreFault = self.restoreFault
+        sessionRequests?.requested()
         return try await container.perform(nonSendable: payload) { context, payload in
             try await ModelSessionScope.$isInside.withValue(true) {
                 try await body(

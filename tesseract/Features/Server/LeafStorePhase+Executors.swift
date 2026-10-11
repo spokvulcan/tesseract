@@ -286,7 +286,7 @@ nonisolated extension LeafStorePhase {
                         range: boundaryOffset..<storedTokens.count,
                         state: base.initialState(seedsPositionAnchor: request.seedsPositionAnchor),
                         prefillStepSize: request.facts.prefillStepSize,
-                        tokenNDim: request.facts.tokenNDim,
+                        tokenNDim: request.facts.tokenNDim, evalPolicy: .pipelined,
                         storedForm: context.partitionKey.kvScheme, in: session)
                 }
                 timings.prefillSeconds = secondsSince(prefillStart)
