@@ -28,6 +28,7 @@ BUNDLE_ID="app.tesseract.agent"
 # module cache, and resolved SPM packages: this checkout's own, since every
 # worktree has one.
 . "$PROJECT_DIR/scripts/lib/checkout.sh"
+. "$PROJECT_DIR/scripts/lib/app.sh"
 
 # --- Helpers ---------------------------------------------------------------
 
@@ -57,10 +58,15 @@ normalize_config() {
     esac
 }
 
+# Quit the open app (the owner's, a scratch launch, from any checkout) so the
+# launch that follows isn't the second instance. A run (a test host, a gate) is
+# left to end by itself and named: until it does, a launch can quit as the
+# second instance.
 kill_app() {
-    if pkill -x "Tesseract Agent" 2>/dev/null; then
-        echo "Killed running Tesseract Agent process."
-        sleep 0.5
+    quit_opened_apps
+    if [ -n "$(app_processes)" ]; then
+        echo "A Tesseract Agent run is still going; until it ends, a launch can quit as the second instance:"
+        app_processes | sed 's/^/  /'
     fi
 }
 
@@ -262,37 +268,25 @@ _debug_benchmark_dir() {
     echo "$(getconf DARWIN_USER_TEMP_DIR)tesseract-debug/benchmark"
 }
 
-# Build the app, kill any running instance, then exec the binary with the
-# given CLI flag and any extra arguments. Tails the runner's `latest.log` and
-# propagates the binary's exit code. Used by all loaded-model verification
-# subcommands.
+# Run a loaded-model gate through scripts/gate.sh: it builds, waits for
+# another checkout's run instead of killing it, and keeps the run's report and
+# telemetry in a folder of its own, under the benchmark directory's runs/.
+# Prints the report; propagates the binary's exit code. Sets GATE_RUN_DIR.
 _run_loaded_model_check() {
     local flag="$1"
-    local report_subdir="$2"
-    shift 2
-    local configuration="Debug"
-    cmd_build "$configuration"
-    echo ""
-
-    local app_path
-    app_path=$(find_app "$configuration") || return 1
-    kill_app
-
-    local binary="$app_path/Contents/MacOS/Tesseract Agent"
-    echo "Running $flag against: $binary"
-    local report_dir
-    report_dir="$(_debug_benchmark_dir)/$report_subdir"
-
+    shift
+    GATE_RUN_DIR="$(_debug_benchmark_dir)/runs/${flag#--}-$(date +%Y%m%d-%H%M%S)"
     local exit_code=0
-    "$binary" "$flag" "$@" || exit_code=$?
-
-    if [ -f "$report_dir/latest.log" ]; then
+    "$PROJECT_DIR/scripts/gate.sh" "$GATE_RUN_DIR" "$flag" "$@" || exit_code=$?
+    local report
+    report=$(find "$GATE_RUN_DIR/bench" -name latest.log -print -quit 2>/dev/null || true)
+    if [ -n "$report" ]; then
         echo ""
         echo "── latest.log ──"
-        cat "$report_dir/latest.log" || true
+        cat "$report" || true
     fi
     echo ""
-    echo "Report dir: $report_dir"
+    echo "Run folder: $GATE_RUN_DIR"
     return $exit_code
 }
 
@@ -303,11 +297,11 @@ cmd_rotated_checkpoint_parity() {
     # arguments reach the binary; `--bench-model-id` defaults to MODEL_ID
     # (bonsai-2-27b) unless given (the first occurrence wins). Venv at
     # research/bonsai-venv.
-    _run_loaded_model_check --rotated-checkpoint-parity rotated-checkpoint-parity \
+    _run_loaded_model_check --rotated-checkpoint-parity \
         "$@" --bench-model-id "${MODEL_ID:-bonsai-2-27b}" || return $?
 
     local report
-    report="$(_debug_benchmark_dir)/rotated-checkpoint-parity/latest.json"
+    report=$(find "$GATE_RUN_DIR/bench" -name latest.json -print -quit)
     local venv="$PROJECT_DIR/research/bonsai-venv"
     if [ ! -x "$venv/bin/python" ]; then
         echo ""
@@ -322,9 +316,22 @@ cmd_rotated_checkpoint_parity() {
 }
 
 cmd_trace_replay() {
-    # No loaded model needed — replays the Completion Trace Log corpus
-    # (PRD #82, slice #85) through the offline LRU-baseline harness.
-    _run_loaded_model_check --trace-replay trace-replay
+    # No loaded model needed — replays the owner's Completion Trace Log corpus
+    # (PRD #82, slice #85) through the offline LRU-baseline harness. Not a
+    # gate: it reads the owner's telemetry, so it runs with it.
+    cmd_build Debug
+    local app_path
+    app_path=$(find_app Debug) || return 1
+    local exit_code=0
+    "$app_path/Contents/MacOS/Tesseract Agent" --trace-replay || exit_code=$?
+    local report
+    report="$(_debug_benchmark_dir)/trace-replay/latest.log"
+    if [ -f "$report" ]; then
+        echo ""
+        echo "── latest.log ──"
+        cat "$report" || true
+    fi
+    return $exit_code
 }
 
 cmd_archive() {
@@ -454,10 +461,10 @@ case "${1:-}" in
     dev)         shift; cmd_dev "$@" ;;
     dev-release) shift; cmd_dev_release "$@" ;;
     dev-profile) cmd_dev_profile ;;
-    prefix-cache-e2e)         shift; _run_loaded_model_check --prefix-cache-e2e prefix-cache-e2e "$@" ;;
-    hybrid-cache-correctness) shift; _run_loaded_model_check --hybrid-cache-correctness hybrid-cache-correctness "$@" ;;
-    prefill-step-benchmark)   shift; _run_loaded_model_check --prefill-step-benchmark prefill-step-benchmark "$@" ;;
-    paroquant-vlm-smoke)      shift; _run_loaded_model_check --paroquant-vlm-smoke paroquant-vlm-smoke "$@" ;;
+    prefix-cache-e2e)         shift; _run_loaded_model_check --prefix-cache-e2e "$@" ;;
+    hybrid-cache-correctness) shift; _run_loaded_model_check --hybrid-cache-correctness "$@" ;;
+    prefill-step-benchmark)   shift; _run_loaded_model_check --prefill-step-benchmark "$@" ;;
+    paroquant-vlm-smoke)      shift; _run_loaded_model_check --paroquant-vlm-smoke "$@" ;;
     rotated-checkpoint-parity) shift; cmd_rotated_checkpoint_parity "$@" ;;
     trace-replay)             cmd_trace_replay ;;
     archive)     cmd_archive ;;

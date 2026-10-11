@@ -4,6 +4,40 @@ The suites, opt-in gates and evidence runs behind the prefix cache, the KV
 cache's capacity and schemes, and request memory. Running tests, and the rules
 every test follows in a parallel run, are in [testing.md](testing.md).
 
+## Prove a refactor: the gate set
+
+A refactor of the server's completion path or the prefix cache keeps every
+diagnostics event, field and stage label byte-identical (ADR-0078 decision 8,
+ADR-0069 decision 8). The proof is a gate run on the base commit and on the
+change, compared.
+
+`scripts/gate.sh <run-folder> <harness-flag> [arguments]` runs one gate from
+this checkout's Debug build and keeps the run in its own folder: the report,
+and the run's own diagnostics and traces (`TESSERACT_TELEMETRY_DIR`), apart
+from the owner's telemetry and any other run's. A running test host or gate is
+waited for, an open app stops it. `scripts/gate-compare.py <before> <after>`
+compares two runs and exits 0 when they match: the check lines, the decode
+and acceptance lines, the diagnostics in order per request (ids and timings
+masked), and the trace records. Lines other tasks write compare as a multiset
+and print without failing: the Speculative Canonical Prefill's `not-idle`
+skips follow the machine's load.
+
+Capture the base first: `git switch --detach origin/main`, run the set into
+`before-*` folders, switch back, then run it again into `after-*`.
+
+```bash
+scripts/gate.sh "$TMPDIR/gates/before-e2e" --prefix-cache-e2e                                   # qwen3.5-4b-paro, 38 checks
+scripts/gate.sh --no-build "$TMPDIR/gates/before-e2e-27b" --prefix-cache-e2e --bench-model-id qwen3.8-27b   # DFlash2 acceptance lines
+TESSERACT_E2E_KV_SCHEME=turbo8v4 scripts/gate.sh --no-build "$TMPDIR/gates/before-e2e-turbo" --prefix-cache-e2e --bench-model-id qwen3.8-27b
+scripts/gate.sh --no-build "$TMPDIR/gates/before-correctness" --hybrid-cache-correctness       # every restore bitwise
+scripts/gate-compare.py "$TMPDIR/gates/before-e2e" "$TMPDIR/gates/after-e2e"
+```
+
+`--bench-model-id` takes a catalog id; `--bench-model` takes a model folder.
+A change to a decode path also runs `scripts/dflash2-bench.sh --bench-check`
+on each build and `scripts/dflash2-compare.py --require-identity` over the two
+reports. Record the numbers in the change's ADR, under As built.
+
 ## Request memory timeline (#471)
 
 `event=requestMemory` records the HTTP completion's memory timeline in the

@@ -23,11 +23,12 @@ ROUNDS="${4:-3}"
 CONTEXTS="${5:-128,8192,32768}"
 MAX_NEW="${6:-256}"
 OUT_ROOT="/tmp/parity-ab"
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+. "$PROJECT_DIR/scripts/lib/app.sh"
 
-if pgrep -x "Tesseract Agent" >/dev/null; then
-    echo "A Tesseract Agent instance is already running — refusing to start." >&2
-    exit 1
-fi
+# A quiet GPU: a run (a test host, a gate) is waited for; an open app stops
+# the script.
+wait_for_quiet_app 600
 
 # Stale reports from a previous experiment would mix into this run's verdict
 # (parity_compare.py rglobs everything under OUT_ROOT) — always start clean.
@@ -40,7 +41,7 @@ run_arm() {
     local app="$1" label="$2" round="$3"
     local outdir="$OUT_ROOT/$label/round$round"
     mkdir -p "$outdir"
-    killall "Tesseract Agent" 2>/dev/null || true
+    quit_apps_in "$BASELINE_APP" "$EXPERIMENT_APP"
     sleep 1
     echo "── round $round / $label: $(basename "$app")"
     # Optional per-arm env injection (e.g. ARM_ENV_experiment='MLX_X=1'); each
@@ -63,13 +64,13 @@ run_arm() {
     local open_pid=$!
     sleep 8  # allow launch before the nice check
     local app_pid
-    app_pid=$(pgrep -x "Tesseract Agent" | head -1 || true)
+    app_pid=$(app_processes | awk -F'\t' -v app="$app/" '!found && index($2, app) == 1 { print $1; found = 1 }')
     if [ -n "$app_pid" ]; then
         local nice
         nice=$(ps -o nice= -p "$app_pid" | tr -d ' ')
         if [ "$nice" != "0" ]; then
             echo "FATAL: app running at nice=$nice (expect 0) — map #230 trap 3." >&2
-            killall "Tesseract Agent" 2>/dev/null || true
+            quit_apps_in "$app"
             exit 1
         fi
     fi
@@ -82,9 +83,7 @@ run_arm() {
     # up to ARM_TIMEOUT seconds per arm (observed, same day).
     (
         sleep "${ARM_TIMEOUT:-600}"
-        if pgrep -x "Tesseract Agent" >/dev/null; then
-            killall "Tesseract Agent" 2>/dev/null || true
-        fi
+        quit_apps_in "$app"
     ) >/dev/null 2>&1 &
     local watchdog_pid=$!
     wait "$open_pid" 2>/dev/null || true
@@ -107,7 +106,7 @@ for round in $(seq 1 "$ROUNDS"); do
     fi
 done
 
-killall "Tesseract Agent" 2>/dev/null || true
+quit_apps_in "$BASELINE_APP" "$EXPERIMENT_APP"
 echo ""
 echo "Reports under $OUT_ROOT. Compare with:"
 echo "  scripts/parity_compare.py $OUT_ROOT/baseline $OUT_ROOT/experiment"

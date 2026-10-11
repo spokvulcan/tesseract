@@ -1036,7 +1036,11 @@ Both exit non-zero on any failed check. Run before releases and after any change
 to `LLMActor`, `ServerCompletion`, `PrefixCacheManager`, `HybridCacheSnapshot`,
 or `StablePrefixDetector`. Every loaded-model command forwards extra arguments
 to the harness, so `--bench-model-id <catalog id>` picks the model (default:
-`ModelDefinition.defaultAgentModelID`). The correctness runner is the stronger gate (bitwise
+`ModelDefinition.defaultAgentModelID`). They run through `scripts/gate.sh`,
+which keeps each run's report and telemetry in its own folder under the
+benchmark directory's `runs/` (the command prints it); to prove a refactor
+changed nothing, compare a run on the base commit with one on the change
+([prefix-cache-testing.md](prefix-cache-testing.md) → Prove a refactor). The correctness runner is the stronger gate (bitwise
 tensor comparison via raw `ModelContainer.perform` access); the e2e runner
 exercises the full HTTP path and is the right shape for catching pipeline
 regressions the correctness runner can't see.

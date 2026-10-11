@@ -15,6 +15,7 @@ SCHEME="tesseract"
 CONFIGURATION="Release"
 # This checkout's DerivedData and products dir (every worktree has its own).
 . "$PROJECT_DIR/scripts/lib/checkout.sh"
+. "$PROJECT_DIR/scripts/lib/app.sh"
 # The app is not sandboxed (ADR-0047), so FileManager.temporaryDirectory is
 # the real per-user temp dir, not the container tmp.
 BENCH_DIR="$(getconf DARWIN_USER_TEMP_DIR)tesseract-debug/benchmark"
@@ -195,10 +196,9 @@ echo "Running benchmark (sweep: $SWEEP)..."
 echo "App: $APP"
 echo "Source: $SOURCE_REV"
 
-# Kill any existing tesseract instance (process is named "Tesseract Agent" after the rename)
-killall "Tesseract Agent" 2>/dev/null || true
-killall tesseract 2>/dev/null || true
-sleep 0.5
+# A quiet GPU: wait for a run (a test host, a gate) to end; an open app stops
+# the bench, to be quit by whoever opened it.
+wait_for_quiet_app 600
 
 # Clean previous log
 mkdir -p "$BENCH_DIR"

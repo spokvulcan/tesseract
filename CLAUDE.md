@@ -46,6 +46,10 @@ Many cheap, trustworthy measurements per hour beat one slow end-to-end run.
   different builds or hours drift 10–20% on this machine.
   `MLX_KERNEL_PROFILE` serializes the GPU: read it for relative per-kernel
   cost only.
+- **Prove a refactor.** A server or cache refactor keeps every diagnostics
+  line: run the gate set on the base and on the change with `scripts/gate.sh`,
+  compare with `scripts/gate-compare.py` (docs/prefix-cache-testing.md →
+  Prove a refactor).
 - **Quiet GPU.** Check `ps -Ao pcpu,comm -r | head` before measuring;
   animated wallpapers, video and other GPU apps skew results.
 - **Watch long runs.** Run anything over two minutes in the background with
