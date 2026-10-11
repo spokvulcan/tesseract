@@ -196,7 +196,10 @@ were cleaned up):
 - On the last code commit (0a187a0f): the 27B e2e with its DFlash2 draft, 38
   of 38, the 32 acceptance lines identical, 0 of 2,020 in-order lines
   differing; `hybrid-cache-correctness`, 12 of 12, bitwise, its summary
-  identical to `main`'s.
+  identical to `main`'s; and the 27B e2e under `turbo8v4`, 37 of 38 with
+  `main`'s own `requestP3` failure, its check and acceptance lines identical
+  to `main`'s run (its diagnostics are not diffed: no reference capture was
+  kept for that configuration).
 - The other-task lines differ only by the Speculative Canonical Prefill's
   scheduling race, 3 to 14 lines per comparison, both ways.
 
