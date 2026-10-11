@@ -389,8 +389,7 @@ struct CacheClaimTests {
             reason: .hit(snapshotOffset: 8, totalTokens: 9, type: .leaf),
             promptTokens: 9, sharedPrefixLength: 9, skippedPrefillTokens: 8,
             newTokensToPrefill: 1, lookupMs: 0, restoreMs: 0, plannedCheckpoints: [],
-            restoreMode: "copy", copyReason: copy.reason, copyRefusal: copy.refusal,
-            copyWaitSeconds: copy.waitSeconds)
+            restore: .copy(copy))
         let lookupFields = Dictionary(uniqueKeysWithValues: lookup.fields)
         #expect(lookupFields["copyReason"] == "pendingFullPayload")
         #expect(lookupFields["copyRefusal"] == "pendingFullPayload")

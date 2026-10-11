@@ -12,7 +12,7 @@ struct PrefixCacheDiagnosticsTests {
             reason: .hit(snapshotOffset: 4, totalTokens: 5, type: .branchPoint), promptTokens: 5,
             sharedPrefixLength: 4, skippedPrefillTokens: 4, newTokensToPrefill: 1,
             lookupMs: 0, restoreMs: 0, plannedCheckpoints: [],
-            restoreMode: "copy", copyReason: .checkpoint, backingLeafOffset: 8,
+            restore: .copy(.init(refusal: .prefixView, waitSeconds: 0)), backingLeafOffset: 8,
             backingLeafWarm: warm)
         let line = context.render(event)
         #expect(line.contains("source=view backingLeafOffset=8"))
@@ -38,7 +38,7 @@ struct PrefixCacheDiagnosticsTests {
             reason: .hit(snapshotOffset: 8, totalTokens: 9, type: .leaf), promptTokens: 9,
             sharedPrefixLength: 8, skippedPrefillTokens: 8, newTokensToPrefill: 1,
             lookupMs: 0, restoreMs: 0.001, plannedCheckpoints: [],
-            restoreMode: "copy", copyReason: .warmBody, warmBody: true)
+            restore: .copy(.init(refusal: .warmBody, waitSeconds: 0)), warmBody: true)
         #expect(context.render(lookup).contains("source=warm"))
         #expect(context.render(lookup).contains("copyReason=warmBody"))
     }

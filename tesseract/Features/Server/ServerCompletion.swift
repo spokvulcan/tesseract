@@ -1043,14 +1043,7 @@ nonisolated final class ServerCompletion {
                 speculativeSeed = seed
             }
 
-            memory.mark(
-                .recordingRequest,
-                facts: [
-                    "leafSource": leafResult.report.source?.rawValue ?? "skipped",
-                    "leafCopyReason":
-                        (leafResult.report.restore?.copy?.reason ?? leafResult.report.copyReason)?
-                        .rawValue ?? "none",
-                ])
+            memory.mark(.recordingRequest, facts: leafResult.report.recordingFacts)
             // Record the request lifecycle for the alpha tuner. Fires
             // for every request, including the leaf-skipped paths
             // — the tuner needs the full workload trace, not just
@@ -1651,9 +1644,7 @@ nonisolated final class ServerCompletion {
                     hydratedFromSSD: resolved.hydratedFromSSD,
                     chainPrefixRestore: resolved.wasChainPrefixRestore,
                     divergence: lookupResult.divergence,
-                    restoreMode: restore.mode, restoreFellBack: restore.fellBack,
-                    copyReason: restore.copy?.reason, copyRefusal: restore.copy?.refusal,
-                    copyWaitSeconds: restore.waitSeconds,
+                    restore: restore,
                     backingLeafOffset: lookupResult.backingLeaf?.tokenOffset,
                     warmBody: lookupResult.snapshot?.isWarm == true,
                     backingLeafWarm: lookupResult.backingLeaf?.isWarm == true

@@ -472,6 +472,12 @@ its own for a rewind. Now each request's Cache Claim keeps a **Turn Report**
    the boundary Backing Leaf's supersession go into it, and the trace record
    is made from it.
 
+4. **Each output renders from it, not from loose copies.** The `lookup` line
+   takes the Turn Restore itself (its `restoreMode`, fallback, copy reason,
+   refusal and wait), and the `leafStore` report's `reportedCopyReason` is
+   the one copy-reason projection the event, the `recordingRequest` phase
+   (`recordingFacts`) and the trace record read, where each spelled it.
+
 No line changes: each line is written at the step it was, through the same
 request context. `TurnReportTests` drives the report's interface (the
 rewind before and after the phase, the filed restore); the cancelled-turn

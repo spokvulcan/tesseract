@@ -122,6 +122,18 @@ nonisolated extension LeafStorePhase {
         var source: Source? {
             Source.stored(path: path, restore: restore, handedOff: handedOff)
         }
+        /// The copy reason the turn reports: the claim's, on a copy restore,
+        /// else why the leaf itself was copied. What the `leafStore` event,
+        /// the `recordingRequest` phase and the trace record all say.
+        var reportedCopyReason: CopyReason? { restore?.copy?.reason ?? copyReason }
+        /// The `recordingRequest` phase's facts: the stored leaf's source and
+        /// copy reason.
+        var recordingFacts: [String: String] {
+            [
+                "leafSource": source?.rawValue ?? "skipped",
+                "leafCopyReason": reportedCopyReason?.rawValue ?? "none",
+            ]
+        }
         /// Why the turn took the boundary route (the `liveLeafCapture` skip
         /// token), whether or not a leaf was stored there.
         var boundaryReason: String?
@@ -159,7 +171,7 @@ nonisolated extension LeafStorePhase {
             var fields = [("mode", mode), ("path", path.rawValue)]
             if let generationPrompt { fields.append(("generationPrompt", generationPrompt)) }
             if let source { fields.append(("source", source.rawValue)) }
-            if let copyReason = restore?.copy?.reason ?? copyReason {
+            if let copyReason = reportedCopyReason {
                 fields.append(("copyReason", copyReason.rawValue))
             }
             if let refusal = restore?.copy?.refusal {
