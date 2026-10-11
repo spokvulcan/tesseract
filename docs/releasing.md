@@ -65,6 +65,12 @@ on `main`. Version-only changes still skip CI as described above.
   status checks in branch protection and rulesets. Both are optional before merge;
   the release pipeline still requires `build-release`, `test`, and `lint`
   to pass for the released code on `main`.
+- **Compiles reused between runs:** `build-release` and `build-ios` build
+  through Xcode's compilation cache, which each run saves for the job's next
+  run (`scripts/ci-xcodebuild.sh`). A compile whose inputs haven't changed is
+  replayed, not run again, on a fresh runner and DerivedData; the step's last
+  line counts both. The `test` job's Debug build compiles everything, since a
+  replayed compile writes no index data, and so does the signed release build.
 
 ## One-time setup (before the first release)
 
