@@ -80,19 +80,6 @@ struct ImagePreviewFileCacheTests {
     }
 
     @Test
-    func materializePreservesOrder() throws {
-        let fs = InMemoryImagePreviewFileSystem()
-        let cache = ImagePreviewFileCache(root: root, fileSystem: fs)
-        let a = makeAttachment(byte: 1), b = makeAttachment(byte: 2), c = makeAttachment(byte: 3)
-
-        let urls = cache.materialize([a, b, c])
-
-        #expect(urls.count == 3)
-        let expectedURLs = try [a, b, c].map { try cache.url(for: $0) }
-        #expect(urls == expectedURLs)
-    }
-
-    @Test
     func clearRemovesEveryFile() throws {
         let fs = InMemoryImagePreviewFileSystem()
         let cache = ImagePreviewFileCache(root: root, fileSystem: fs)

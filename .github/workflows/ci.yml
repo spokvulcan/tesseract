@@ -180,6 +180,11 @@ jobs:
             CODE_SIGN_IDENTITY=- \
             2>&1 | "$FILTER"
 
+      # The test build's index sees every reference by symbol, so a shared
+      # name (`stop`, `flush`) can't hide app code only the tests call.
+      - name: App code only tests use (the build's index)
+        run: python3 -I scripts/check-test-only-code.py --index-store DerivedData/Index.noindex/DataStore
+
       - name: Upload test results on failure
         if: failure()
         uses: actions/upload-artifact@v6

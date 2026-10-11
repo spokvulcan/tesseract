@@ -96,4 +96,21 @@ struct TelemetryEnvironmentTests {
             #expect(!path.hasPrefix(owners.standardizedFileURL.path + "/"))
         }
     }
+
+    /// A gate run (`scripts/gate.sh`) names its own folder: every component
+    /// lands under it, and an empty value is no folder at all.
+    @Test func aGateRunsFolderHoldsEveryComponent() {
+        let run = ["TESSERACT_TELEMETRY_DIR": "/tmp/gates/before-e2e/telemetry"]
+        #expect(
+            TelemetryEnvironment.durableDirectory(component: "CacheDiagnostics", environment: run)
+                .path == "/tmp/gates/before-e2e/telemetry/CacheDiagnostics")
+        #expect(
+            TelemetryEnvironment.durableDirectory(component: "PrefixCacheTraces", environment: run)
+                .path == "/tmp/gates/before-e2e/telemetry/PrefixCacheTraces")
+        let empty = ["TESSERACT_TELEMETRY_DIR": ""]
+        #expect(
+            TelemetryEnvironment.durableDirectory(component: "CacheDiagnostics", environment: empty)
+                == StorageEnvironment.applicationSupport.appendingPathComponent(
+                    "CacheDiagnostics", isDirectory: true))
+    }
 }

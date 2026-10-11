@@ -109,9 +109,8 @@ struct BenchmarkConfig {
         return String(format: "%08x", UInt32(truncatingIfNeeded: hash))
     }
 
-    /// Parse from `CommandLine.arguments`.
-    static func fromCommandLine() -> BenchmarkConfig {
-        let args = CommandLine.arguments
+    /// Parse from the process's arguments.
+    static func fromCommandLine(_ args: [String] = CommandLine.arguments) -> BenchmarkConfig {
 
         let sweep: Sweep = {
             if let idx = args.firstIndex(of: "--bench-sweep"), idx + 1 < args.count {

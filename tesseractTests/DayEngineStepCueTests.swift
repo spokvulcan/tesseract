@@ -490,7 +490,6 @@ struct DayEngineStepCueTests {
         #expect(MenuBarClockText.timeLeft(until: Self.local(12, 5), now: now) == "1h 5m")
         #expect(MenuBarClockText.timeLeft(until: Self.local(12, 0), now: now) == "1h")
         #expect(MenuBarClockText.timeLeft(until: now.addingTimeInterval(30), now: now) == "1m")
-        #expect(MenuBarClockText.spoken(until: Self.local(11, 25), now: now) == "25 min left")
         let focus = MenuBarClock(
             kind: .focus, title: "Write to the case worker", until: Self.local(11, 25))
         #expect(MenuBarClockText.label(focus, now: now) == "25m")

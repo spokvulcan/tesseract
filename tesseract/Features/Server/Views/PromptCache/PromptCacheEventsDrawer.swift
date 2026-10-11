@@ -291,20 +291,6 @@ private struct PromptCacheEventVerdict {
 /// Compact display strings for arbitrary telemetry events — shared by
 /// the console rows and covered directly by store tests.
 enum PromptCacheEventDisplay {
-    static func symbol(for eventName: String) -> String {
-        switch eventName {
-        case "lookup": "magnifyingglass"
-        case "capture": "tray.and.arrow.down"
-        case "eviction", "ssdEvictAtAdmission": "trash"
-        case "ssdAdmit": "internaldrive"
-        case "ssdHit", "ssdRecordHit": "checkmark.circle"
-        case "ssdMiss": "xmark.circle"
-        case "memory": "memorychip"
-        case "ttft": "timer"
-        default: "circle"
-        }
-    }
-
     static func reason(for event: PromptCacheTelemetryEvent) -> String {
         event.field("reason") ?? event.field("outcome") ?? event.field("checkpointType") ?? "-"
     }

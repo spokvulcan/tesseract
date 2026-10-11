@@ -21,7 +21,8 @@ struct AppTerminationCoordinatorTests {
                 unloadLLM: { order.append("unloadLLM") },
                 awaitLLMUnload: { order.append("awaitLLMUnload") },
                 unloadSpeech: { order.append("unloadSpeech") },
-                synchronizeGPU: { order.append("synchronizeGPU") }
+                synchronizeGPU: { order.append("synchronizeGPU") },
+                persistTelemetry: { order.append("persistTelemetry") }
             ))
 
         await coordinator.prepareForTermination()
@@ -38,6 +39,7 @@ struct AppTerminationCoordinatorTests {
                 "awaitLLMUnload",
                 "unloadSpeech",
                 "synchronizeGPU",
+                "persistTelemetry",
             ])
     }
 }

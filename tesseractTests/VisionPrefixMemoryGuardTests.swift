@@ -4,46 +4,17 @@ import Testing
 
 struct VisionPrefixMemoryGuardTests {
 
+    /// The 2026 Qwen3.6 crash: one single-shot `[heads, L, L]` score matrix
+    /// for a 55,355-token image prefix, 147 GB against the Metal limit's 30.
+    /// The windowed continuation below replaced the single-shot prefill; the
+    /// estimate still prices the vision tower and speculation's scratch.
     @Test func qwen36CrashReproEstimateMatchesMetalError() {
         let profile = ModelIdentity.FullAttentionScratchProfile(
             attentionHeads: 24,
             bytesPerElement: 2
         )
 
-        let rejection = VisionPrefixMemoryGuard.rejection(
-            prefixTokens: 55_355,
-            profile: profile,
-            maxBufferBytes: 30_150_672_384
-        )
-
-        #expect(rejection?.estimatedBytes == 147_080_449_200)
-        #expect(rejection?.prefixTokens == 55_355)
-        #expect(rejection?.maxBufferBytes == 30_150_672_384)
-    }
-
-    @Test func acceptsPrefixBelowMetalBufferLimit() {
-        let profile = ModelIdentity.FullAttentionScratchProfile(
-            attentionHeads: 24,
-            bytesPerElement: 2
-        )
-
-        let rejection = VisionPrefixMemoryGuard.rejection(
-            prefixTokens: 1_024,
-            profile: profile,
-            maxBufferBytes: 30_150_672_384
-        )
-
-        #expect(rejection == nil)
-    }
-
-    @Test func doesNotGuardUnknownProfiles() {
-        let rejection = VisionPrefixMemoryGuard.rejection(
-            prefixTokens: 55_355,
-            profile: nil,
-            maxBufferBytes: 30_150_672_384
-        )
-
-        #expect(rejection == nil)
+        #expect(profile.scoreMatrixBytes(sequenceLength: 55_355) == 147_080_449_200)
     }
 
     // MARK: - Chunked continuation (ADR-0007 phase 2)

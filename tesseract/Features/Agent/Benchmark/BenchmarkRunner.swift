@@ -530,6 +530,16 @@ final class BenchmarkRunner {
 
     func resolveModelDirectory() throws -> URL {
         if let dir = config.modelDir {
+            // `--bench-model` names a folder; a catalog id there was meant
+            // for `--bench-model-id`, and the error says so.
+            guard FileManager.default.fileExists(atPath: dir.path) else {
+                let id = dir.lastPathComponent
+                let hint =
+                    ModelDefinition.all.contains { $0.id == id }
+                    ? " --bench-model takes a model folder: pass --bench-model-id \(id) for the catalog's."
+                    : ""
+                throw BenchmarkError.modelNotFound("No model folder at \(dir.path).\(hint)")
+            }
             return dir
         }
 

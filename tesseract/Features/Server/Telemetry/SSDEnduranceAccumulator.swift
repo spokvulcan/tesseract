@@ -25,8 +25,8 @@
 //  Time series: hourly buckets (~3 days) and daily buckets (~60 days)
 //  feed the cache panel's write-pressure chart; the lifetime totals
 //  give it the endurance context. State persists to
-//  `CacheDiagnostics/ssd-endurance.json`, debounced; a crash loses at
-//  most the debounce window.
+//  `CacheDiagnostics/ssd-endurance.json`, debounced, and once more as
+//  the app terminates; a crash loses at most the debounce window.
 //
 
 import Foundation
@@ -235,7 +235,9 @@ nonisolated final class SSDEnduranceAccumulator: @unchecked Sendable {
         )
     }
 
-    /// Barrier for tests and shutdown: write the current state out now.
+    /// Write the current state out now: the app's termination does
+    /// (`AppTerminationCoordinator`), so a quit inside the debounce window
+    /// keeps its counters; tests use it as a barrier.
     func persistNow() {
         lock.lock()
         let snapshot = state
