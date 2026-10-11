@@ -32,12 +32,13 @@ struct TodayView: View {
 
     /// A fixed clock, for the Today gallery; nil follows the real one.
     private let fixedNow: Date?
-    @State private var mode: Mode = .day
+    @State private var mode: Mode
     @State private var now: Date
     @State private var speakingMessageID: UUID?
 
-    init(fixedNow: Date? = nil) {
+    init(fixedNow: Date? = nil, mode: Mode = .day) {
         self.fixedNow = fixedNow
+        _mode = State(initialValue: mode)
         _now = State(initialValue: fixedNow ?? Date())
     }
 
@@ -49,6 +50,15 @@ struct TodayView: View {
             case .chat:
                 ChatTranscriptView(speakingMessageID: $speakingMessageID, isSpeechActive: false)
                     .environment(thread.chat)
+                    // The thread's moments as cards, the opening as the day's
+                    // head, and the moment Jarvis is writing at the foot.
+                    .environment(
+                        \.chatMoments,
+                        ChatMoments(
+                            row: { request, reply in
+                                ThreadMomentRow(request: request, reply: reply)
+                            },
+                            inProgress: { MomentInProgressRow() }))
             }
         }
         .font(TodayLayout.font)

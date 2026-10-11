@@ -30,6 +30,7 @@ struct ChatTranscriptView: View {
     var isSpeechActive: Bool
 
     @Environment(ChatSession.self) private var session
+    @Environment(\.chatMoments) private var moments
 
     @State private var scrollPosition = ScrollPosition()
     @State private var isNearBottom = true
@@ -63,6 +64,10 @@ struct ChatTranscriptView: View {
                 }
 
                 LiveMessageSection()
+
+                // A moment being written, which joins the transcript whole
+                // when it's done.
+                moments?.inProgress()
             }
             .padding(.horizontal, 24)
             .padding(.vertical, 16)
@@ -160,6 +165,7 @@ private struct ChatItemRow: View {
     var isSpeechActive: Bool
 
     @Environment(ChatSession.self) private var session
+    @Environment(\.chatMoments) private var moments
 
     var body: some View {
         switch item {
@@ -195,8 +201,49 @@ private struct ChatItemRow: View {
 
         case .system(_, let text):
             SystemNoteRow(text: text)
+
+        case .moment(let request, let reply):
+            if let moments {
+                moments.row(request: request, reply: reply)
+            } else {
+                // No surface draws moments here: the request's header line.
+                SystemNoteRow(
+                    text: request.content.prefix { $0 != "\n" }
+                        .trimmingCharacters(in: CharacterSet(charactersIn: "[]")))
+            }
         }
     }
+}
+
+// MARK: - Moments
+
+/// How a transcript that folds moments draws them, the surface's own rows
+/// (Today's Chat draws the Day Thread's moments as cards): a moment's turn,
+/// and at the foot of the transcript the moment being written now. Without
+/// them, a moment reads as its request's header line.
+nonisolated struct ChatMoments: Sendable {
+    private let makeRow: @MainActor @Sendable (UserMessage, AssistantMessage?) -> AnyView
+    private let makeInProgress: @MainActor @Sendable () -> AnyView
+
+    init<Row: View, InProgress: View>(
+        row: @escaping @MainActor @Sendable (UserMessage, AssistantMessage?) -> Row,
+        inProgress: @escaping @MainActor @Sendable () -> InProgress
+    ) {
+        makeRow = { AnyView(row($0, $1)) }
+        makeInProgress = { AnyView(inProgress()) }
+    }
+
+    @MainActor
+    func row(request: UserMessage, reply: AssistantMessage?) -> AnyView {
+        makeRow(request, reply)
+    }
+
+    @MainActor
+    func inProgress() -> AnyView { makeInProgress() }
+}
+
+extension EnvironmentValues {
+    @Entry var chatMoments: ChatMoments? = nil
 }
 
 // MARK: - Live message

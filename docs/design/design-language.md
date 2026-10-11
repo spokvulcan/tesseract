@@ -100,6 +100,13 @@ native macOS metrics untouched.
   ("Tomorrow" looked like a due date), not as something to click.
 - **Quiet loading.** Small inline `ProgressView` plus plain status text
   (`AgentComposerView` model-loading states). No skeletons, no shimmers.
+- **A moment is a card, not a system note** (Today's Chat,
+  `TodayChatMoments.swift`). Its sign on the day's arc (sunrise to moon) in
+  the accent, its name and time, Jarvis's line as prose, then a +/− row over
+  what the card holds, in the chat's one type size. Content layer: the
+  neutral fill with a hairline edge, in the accent only while something in
+  the card waits on the owner. Its decisions are the small bordered buttons
+  above. The Day Opening heads the thread as the day's date.
 
 ## 3. Accent
 

@@ -141,9 +141,7 @@ final class DayThread {
             contextWindow: Self.compactionWindow(ceiling: settings.companionThreadCeilingTokens),
             summarize: summarize,
             restoreComposerDraft: restoreDraft,
-            momentSummary: { request, reply in
-                MomentTranscript.summary(request: request, reply: reply)
-            })
+            foldsMoments: true)
     }
 
     /// Compaction triggers when the thread passes its ceiling: the window is
@@ -326,29 +324,4 @@ private nonisolated struct MomentGenerationResult: Sendable {
     let reply: AssistantMessage
     let info: AgentGeneration.Info?
     let hitCap: Bool
-}
-
-// MARK: - Transcript
-
-/// How a moment turn reads in the Today chat: one quiet line instead of the
-/// request and the JSON card (the card itself shows at the top of Today).
-nonisolated enum MomentTranscript {
-    static func summary(request: UserMessage, reply: AssistantMessage?) -> String {
-        let header = request.content.split(separator: "\n").first.map(String.init) ?? ""
-        let name =
-            header.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-            .components(separatedBy: " — ").first ?? "Jarvis"
-        guard let reply else { return name }
-        let text = reply.content.compactMap { part -> String? in
-            if case .text(let text) = part { return text.text }
-            return nil
-        }.joined()
-        if let data = CardParser.jsonObject(in: text),
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let line = object["line"] as? String ?? object["carry_over"] as? String
-        {
-            return "\(name) · \(line)"
-        }
-        return name
-    }
 }

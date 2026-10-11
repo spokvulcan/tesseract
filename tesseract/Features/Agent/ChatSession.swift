@@ -27,6 +27,9 @@ enum ChatItem: Identifiable, Equatable {
     case assistant(AssistantMessage)
     case toolResult(ToolResultMessage)
     case system(id: UUID, text: String)
+    /// A Companion moment's turn — its request and Jarvis's reply — as one
+    /// row, in a transcript that folds moments (the Day Thread's).
+    case moment(request: UserMessage, reply: AssistantMessage?)
 
     var id: UUID {
         switch self {
@@ -34,6 +37,7 @@ enum ChatItem: Identifiable, Equatable {
         case .assistant(let msg): return msg.id
         case .toolResult(let msg): return msg.id
         case .system(let id, _): return id
+        case .moment(let request, _): return request.id
         }
     }
 }
@@ -166,10 +170,10 @@ final class ChatSession {
     /// Skill Pill ranking recompute, ephemeral composer state reset. The
     /// Composer Draft's *content* deliberately rides across the switch.
     private let onConversationSwitch: @MainActor () -> Void
-    /// How a Companion moment turn reads in this transcript (the Day
-    /// Thread): one quiet line in place of the request and its card. nil
-    /// shows moment turns as ordinary messages.
-    private let momentSummary: (@MainActor (UserMessage, AssistantMessage?) -> String)?
+    /// Whether a Companion moment turn (the Day Thread's) folds into one
+    /// `.moment` item, request and reply together, which the transcript's
+    /// surface draws. Otherwise moment turns read as ordinary messages.
+    private let foldsMoments: Bool
     private let debugLogger = AgentDebugLogger()
 
     @ObservationIgnored private var unsubscribe: (@MainActor () -> Void)?
@@ -194,10 +198,10 @@ final class ChatSession {
         restoreComposerDraft: @MainActor @escaping (String, [ImageAttachment]) -> Void = { _, _ in
         },
         onConversationSwitch: @MainActor @escaping () -> Void = {},
-        momentSummary: (@MainActor (UserMessage, AssistantMessage?) -> String)? = nil,
+        foldsMoments: Bool = false,
         liveMarkdownThrottle: Duration = .milliseconds(100)
     ) {
-        self.momentSummary = momentSummary
+        self.foldsMoments = foldsMoments
         self.agent = agent
         self.conversationStore = conversationStore
         self.settings = settings
@@ -532,10 +536,10 @@ final class ChatSession {
         var results: [String: ToolResultMessage] = [:]
         var skipNextAssistant = false
         for (index, message) in messages.enumerated() {
-            if let user = message.asUser, user.turnOrigin == .moment, let momentSummary {
+            if let user = message.asUser, user.turnOrigin == .moment, foldsMoments {
                 let reply =
                     messages.indices.contains(index + 1) ? messages[index + 1].asAssistant : nil
-                rebuilt.append(.system(id: user.id, text: momentSummary(user, reply)))
+                rebuilt.append(.moment(request: user, reply: reply))
                 skipNextAssistant = reply != nil
             } else if message.asAssistant != nil, skipNextAssistant {
                 skipNextAssistant = false

@@ -147,9 +147,9 @@ tesseract/
 │   │   ├── Capture/                   # Capture parser, capture door, hotkey panel
 │   │   ├── Engine/                    # Day Engine (pure decider), Delivery Ladder, governor, nudges
 │   │   ├── Moments/                   # Moments, cards, prompts, card parsing, fallbacks
-│   │   ├── Thread/                    # Day Thread: one conversation per day on its own agent; pictures seen in their turn
+│   │   ├── Thread/                    # Day Thread: one conversation per day on its own agent; pictures seen in their turn; moments read back
 │   │   ├── Loop/                      # Companion runtime: gather → decide → perform, day state
-│   │   ├── Today/                     # The Today page: the Now Card, today's and tomorrow's steps
+│   │   ├── Today/                     # The Today page: the Now Card, today's and tomorrow's steps, the chat's moment cards
 │   │   ├── Delivery/                  # Jarvis panel, banners and nudges, glyph state
 │   │   ├── Perception/                # Notification Center watcher, seen ledger, owner rules
 │   │   ├── CodingAgents/              # Agent signals, Claude Code hooks (Config Merge)
@@ -678,6 +678,14 @@ Whether they can be seen is the agent chat's verdict and remedy
 moments alike: the model sees a picture only in the turn it's shown, and a line
 in its place after, so neither a moment nor a cold re-prefill feeds the day's
 pictures to the vision tower again.
+
+Today's Chat draws the Day Thread with the agent chat's transcript. Its Chat
+Session folds each moment's request and reply into one `.moment` item, which
+Today draws through `ChatMoments`
+(`Features/Companion/Today/TodayChatMoments.swift`): the Day Opening as the
+day's head, read back by `DayOpeningDigest`; each moment as its card, which
+`ThreadMoment` finds in the day's state by kind and time, so its choices act
+as on the Now Card; and the moment being written, at the foot.
 
 Tests never touch EventKit or a model: the engine is covered by decision
 tables, the tools run against the in-memory Agenda, and cards parse canned
