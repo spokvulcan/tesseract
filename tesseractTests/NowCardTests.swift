@@ -136,7 +136,7 @@ struct NowCardTests {
         // And the way there is no free time to offer.
         let early = Timeline(
             snapshot: Self.events(events, at: Self.local(30, 12, 20)), state: state)
-        #expect(early.firstFreeSlot(minutes: 30).map { $0 >= Self.local(30, 13, 45) } != false)
+        #expect(early.firstFreeSlot(minutes: 30) == Self.local(30, 13, 45))
     }
 
     @Test func freeTimeHasNoSpan() {
