@@ -12,7 +12,8 @@
 //  to that start, so a step moved to a new start is cued anew; its end's
 //  check-in belongs to that end, so a step made longer or cut short checks
 //  in again; how often it was put off, and the minutes a meeting cut, go
-//  with the task all day, wherever its step moves.
+//  with the task all day, wherever its step moves. A repeating task's step
+//  is its series': the Agenda answers whether that day's occurrence is done.
 //
 
 import Foundation
@@ -93,12 +94,6 @@ nonisolated struct Step: Sendable, Equatable, Codable {
         }
         if slot.start != start || slot.minutes != minutes { checkedInAt = nil }
         self.slot = Placement(reminderID: reminderID, start: slot.start, minutes: slot.minutes)
-    }
-
-    /// What the day holds of the task, moved to another reminder (a
-    /// repeating task's occurrence done today).
-    mutating func follow(to reminderID: String) {
-        slot.reminderID = reminderID
     }
 
     // MARK: Its life

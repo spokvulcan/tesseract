@@ -2,13 +2,16 @@
 //  DayEngineRepeatingTaskTests.swift
 //  tesseractTests
 //
-//  A repeating task ticked off. Reminders keeps the done occurrence as a
-//  copy with an id of its own and moves the series, under the old id, on to
-//  its next date. The day follows the done occurrence: the must-do counts as
-//  done, the step stays done where it was planned, the minutes it took join
-//  the plan's pace, and the series' next date stays tomorrow's. A task moved
-//  on without being done, one that doesn't repeat, and an occurrence done
-//  another day are left as they are.
+//  A repeating task ticked off (ADR-0092). Reminders keeps the done
+//  occurrence as a copy with an id of its own and moves the series, under
+//  its own id, on to its next date. The day keeps the series' id, and the
+//  Agenda answers for that day's occurrence: the must-do counts as done, the
+//  step is done in its slot, the minutes it took join the plan's pace,
+//  Today's Chat shows it done, and the series' next date stays tomorrow's.
+//  Taken back — by Undo, by unticking the task or its copy — Reminders is as
+//  it was: the series back on the occurrence, the copy gone, one open
+//  reminder. A task moved on without being done, one that doesn't repeat,
+//  and an occurrence done another day are left as they are.
 //
 
 import Foundation
@@ -62,20 +65,19 @@ struct DayEngineRepeatingTaskTests {
         return state
     }
 
-    @Test func theDayFollowsTheDoneOccurrence() {
+    @Test func theDayKeepsTheSeriesAndCountsTodaysOccurrenceDone() {
         let state = DayEngine.decide(
             .agendaChanged, snapshot: Self.snapshot(at: Self.at(11, 16)), state: Self.state()
         ).state
-        let followed = Placement(reminderID: "daily-0930", start: Self.at(10), minutes: 90)
-        #expect(state.mustDoID == "daily-0930")
+        // The series' id, its step and its life, as they were.
+        #expect(state.mustDoID == "daily")
+        #expect(state.plan.map(\.slot) == [Self.slot])
+        #expect(state.step("daily")?.isStarted == true)
+        #expect(state.step("daily")?.putOff == 1)
+        // Its occurrence done at 11:15: the must-do counts as done.
         #expect(state.mustDoDoneAt == Self.at(11, 16))
-        let step = state.step("daily-0930")
-        #expect(state.plan.map(\.slot) == [followed])
-        #expect(step?.isStarted == true)
-        #expect(step?.cuedAt == Self.at(10))
-        #expect(step?.putOff == 1)
         // Started at 10:00 with 90 minutes, done at 11:15: the pace hears it.
-        #expect(step?.timedMinutes == nil)
+        #expect(state.step("daily")?.timedMinutes == nil)
         #expect(state.stepRuns.map(\.planned) == [90])
         #expect(state.stepRuns.map(\.actual) == [75])
         // The week's look-back counts the day's must-do done.
@@ -85,9 +87,10 @@ struct DayEngineRepeatingTaskTests {
             ])
     }
 
-    /// On Today: done where it was planned, wearing the star, and the evening
-    /// counts it; tomorrow's occurrence waits under the series' id.
-    @Test func todayShowsTheMustDoDoneInItsSlot() {
+    /// On Today: done where it was planned, wearing the star, shown once,
+    /// and the evening counts it; tomorrow's occurrence waits under the
+    /// series' id.
+    @Test @MainActor func todayShowsTheMustDoDoneInItsSlot() {
         let evening = Self.at(21, 30)
         let state = DayEngine.decide(
             .agendaChanged, snapshot: Self.snapshot(at: evening), state: Self.state()
@@ -96,10 +99,12 @@ struct DayEngineRepeatingTaskTests {
         let steps = timeline.rows.compactMap { row -> TimelineTask? in
             if case .task(let task) = row.kind { task } else { nil }
         }
-        #expect(steps.map(\.id) == ["daily-0930"])
+        #expect(steps.map(\.id) == ["daily"])
+        #expect(steps.first?.reminder.id == "daily-0930")
         #expect(steps.first?.start == Self.at(10))
         #expect(steps.first?.isDone == true)
         #expect(steps.first?.isMustDo == true)
+        #expect(!timeline.anytime.contains { $0.reminder.id == "daily-0930" })
         #expect(timeline.mustDo?.isDone == true)
         #expect(timeline.tomorrow.anytime.map(\.id) == ["daily"])
         #expect(timeline.tomorrow.anytime.first?.isMustDo == false)
@@ -120,7 +125,7 @@ struct DayEngineRepeatingTaskTests {
         #expect(morning.state.mustDoDays == ["2026-09-30": true])
     }
 
-    /// Moved on by hand, a repeating task has no done occurrence to follow.
+    /// Moved on by hand, a repeating task has no done occurrence.
     @Test func aRepeatingTaskMovedOnUndoneIsLeftAsItIs() {
         let state = DayEngine.decide(
             .agendaChanged, snapshot: Self.snapshot(at: Self.at(11, 16), done: []),
@@ -160,18 +165,18 @@ struct DayEngineRepeatingTaskTests {
             snapshot: Self.snapshot(at: Self.at(11, 16), open: [evening], done: [morning]),
             state: Self.state()
         ).state
-        #expect(state.mustDoID == "daily")
         #expect(state.mustDoDoneAt == nil)
-        // The evening's own occurrence, done at 20:00, is followed.
+        // The evening's own occurrence, done at 20:05, is its occurrence.
         var done = morning
         done.due = Self.at(20)
         done.completedAt = Self.at(20, 5)
-        let followed = DayEngine.decide(
+        let counted = DayEngine.decide(
             .agendaChanged,
             snapshot: Self.snapshot(at: Self.at(20, 6), open: [evening], done: [done]),
             state: Self.state()
         ).state
-        #expect(followed.mustDoID == "daily-0930")
+        #expect(counted.mustDoID == "daily")
+        #expect(counted.mustDoDoneAt == Self.at(20, 6))
     }
 
     /// Yesterday's done occurrence isn't today's.
@@ -183,35 +188,124 @@ struct DayEngineRepeatingTaskTests {
             snapshot: Self.snapshot(at: Self.at(11, 16), done: [], doneEarlier: [yesterdays]),
             state: Self.state()
         ).state
-        #expect(state.mustDoID == "daily")
         #expect(state.mustDoDoneAt == nil)
     }
 
+    // MARK: Through the Agenda
+
+    /// Today's occurrence of the daily step, open, in the in-memory store.
+    @MainActor
+    struct Store {
+        let store: InMemoryAgendaStore
+        let agenda: Agenda
+
+        init(at now: Date = DayEngineRepeatingTaskTests.at(11, 15)) async {
+            var today = DayEngineRepeatingTaskTests.series
+            today.due = DayEngineRepeatingTaskTests.at(0)
+            store = InMemoryAgendaStore(
+                lists: [AgendaList(id: "daily", title: "Daily", isDefault: true)],
+                reminders: [today], now: { now })
+            agenda = Agenda(store: store, now: { now })
+            await agenda.refresh()
+        }
+
+        /// Reminders as the owner would see them: every reminder, done or open.
+        var reminders: [AgendaReminder] {
+            store.reminders.values.sorted { $0.id < $1.id }
+        }
+    }
+
     /// The in-memory store ticks a repeating reminder off as Reminders does,
-    /// and the day follows what it keeps.
+    /// and the day sees its occurrence done.
     @Test @MainActor func theStoreKeepsTheDoneOccurrenceAndMovesTheSeriesOn() async throws {
-        var today = Self.series
-        today.due = Self.at(0)
-        let store = InMemoryAgendaStore(
-            lists: [AgendaList(id: "daily", title: "Daily", isDefault: true)],
-            reminders: [today], now: { Self.at(11, 15) })
-        let agenda = Agenda(store: store, now: { Self.at(11, 15) })
-        try await agenda.updateReminder(id: "daily", completed: true, source: "test")
-        await agenda.refresh()
-        #expect(agenda.snapshot.open.map(\.id) == ["daily"])
-        #expect(agenda.snapshot.open.first?.due == Self.at(0, day: 31))
-        let done = try #require(agenda.snapshot.doneToday.first)
+        let reminders = await Store()
+        try await reminders.agenda.updateReminder(id: "daily", completed: true, source: "test")
+        await reminders.agenda.refresh()
+        let snapshot = reminders.agenda.snapshot
+        #expect(snapshot.open.map(\.id) == ["daily"])
+        #expect(snapshot.open.first?.due == Self.at(0, day: 31))
+        let done = try #require(snapshot.doneToday.first)
         #expect(done.id != "daily")
         #expect(done.title == "Implement the Companion")
         #expect(done.due == Self.at(0))
         #expect(done.completedAt == Self.at(11, 15))
         #expect(!done.repeats)
+        #expect(snapshot.doneOccurrence(of: "daily", on: DayKey(rawValue: "2026-09-30")) == done)
 
-        let snapshot = DaySnapshot(
-            now: Self.at(11, 16), settings: DaySettings(), agenda: agenda.snapshot,
-            ownerPresent: false)
-        let state = DayEngine.decide(.agendaChanged, snapshot: snapshot, state: Self.state()).state
-        #expect(state.mustDoID == done.id)
+        let state = DayEngine.decide(
+            .agendaChanged,
+            snapshot: DaySnapshot(
+                now: Self.at(11, 16), settings: DaySettings(), agenda: snapshot,
+                ownerPresent: false),
+            state: Self.state()
+        ).state
+        #expect(state.mustDoID == "daily")
         #expect(state.mustDoDoneAt == Self.at(11, 16))
+    }
+
+    /// Today's Chat's Morning Plan shows each task as today sees it: a
+    /// repeating one ticked off is today's occurrence, done — not its series
+    /// moved on to tomorrow, open, whose tick would have ticked off
+    /// tomorrow's.
+    @Test @MainActor func theMorningPlanShowsTodaysOccurrenceDone() async throws {
+        let reminders = await Store()
+        let today = DayKey(rawValue: "2026-09-30")
+        #expect(reminders.agenda.snapshot.occurrence(of: "daily", on: today)?.isCompleted == false)
+        try await reminders.agenda.apply(.tick(reminderID: "daily", done: true))
+        await reminders.agenda.refresh()
+        let shown = try #require(reminders.agenda.snapshot.occurrence(of: "daily", on: today))
+        #expect(shown.isCompleted)
+        #expect(shown.due == Self.at(0))
+        #expect(shown.completedAt == Self.at(11, 15))
+    }
+
+    /// Ticked off and taken back, Reminders is as it was: the series on
+    /// today's occurrence, no copy, one reminder — whether by the change's
+    /// Undo, by unticking the task (a cue's Undo, Today's ring), or by
+    /// unticking the copy. Reopening the copy made two open reminders, and
+    /// the Undo reopened the series, already open, leaving the copy done.
+    @Test(arguments: ["undo", "the task", "the copy"])
+    @MainActor func takenBackTheOccurrenceLeavesRemindersAsItWas(_ how: String) async throws {
+        let reminders = await Store()
+        let before = reminders.reminders
+        let (_, done) = try await reminders.agenda.updateReminder(
+            id: "daily", completed: true, source: "test")
+        #expect(reminders.reminders.count == 2)
+        switch how {
+        case "undo":
+            try await reminders.agenda.undo(done)
+        case "the task":
+            try await reminders.agenda.apply(.reopen(reminderID: "daily"))
+        default:
+            let copy = try #require(reminders.reminders.first { $0.id != "daily" })
+            try await reminders.agenda.apply(.tick(reminderID: copy.id, done: false))
+        }
+        #expect(reminders.reminders == before)
+        await reminders.agenda.refresh()
+        #expect(
+            reminders.agenda.snapshot.doneOccurrence(
+                of: "daily", on: DayKey(rawValue: "2026-09-30")) == nil)
+    }
+
+    /// The day sees its occurrence open again: the must-do isn't done.
+    @Test @MainActor func aMustDoTakenBackIsNotDoneAfterAll() async throws {
+        let reminders = await Store()
+        let (_, done) = try await reminders.agenda.updateReminder(
+            id: "daily", completed: true, source: "test")
+        await reminders.agenda.refresh()
+        func decide(_ state: DayState) -> DayState {
+            DayEngine.decide(
+                .agendaChanged,
+                snapshot: DaySnapshot(
+                    now: Self.at(11, 16), settings: DaySettings(),
+                    agenda: reminders.agenda.snapshot, ownerPresent: false),
+                state: state
+            ).state
+        }
+        let ticked = decide(Self.state())
+        #expect(ticked.mustDoDoneAt != nil)
+        try await reminders.agenda.undo(done)
+        await reminders.agenda.refresh()
+        #expect(decide(ticked).mustDoDoneAt == nil)
     }
 }

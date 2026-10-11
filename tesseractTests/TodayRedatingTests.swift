@@ -316,9 +316,6 @@ struct TodayRedatingTests {
     /// the engine, then the Agenda, which confirms it with an undo.
     @Test func aTickOnTodayGoesThroughTheEngineToReminders() async throws {
         let today = await Today([Self.bank], now: Self.at(10, day: 1))
-        // Ticked a minute before the Agenda's clock: it looks for a done
-        // reminder among those done before now.
-        today.store.now = { Self.at(9, 59, day: 1) }
         today.actions.setDone("bank", true)
         await observe(until: { [agenda = today.agenda] in
             agenda.snapshot.doneToday.contains { $0.id == "bank" }

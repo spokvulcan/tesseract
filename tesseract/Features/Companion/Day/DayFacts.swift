@@ -45,6 +45,10 @@ nonisolated struct DayFacts: Sendable, Equatable {
     var departures: [Departure] = []
     /// How long the owner's started steps took against their plan, lately.
     var stepRuns: [StepRun] = []
+    /// A repeating task the day holds (in its plan, or its must-do), done
+    /// today, by the task's id: the copy Reminders kept of the occurrence,
+    /// which the task's own slot shows (`AgendaSnapshot.doneOccurrence`).
+    var doneOccurrences: [String: AgendaReminder] = [:]
 
     /// Actual over planned minutes across at least five recent steps: how
     /// far the owner's days run past (or short of) their plans.
@@ -108,6 +112,12 @@ nonisolated struct DayFacts: Sendable, Equatable {
         }
         if state.mustDoID != nil {
             mustDoDays[state.day.rawValue] = state.mustDoDoneAt != nil
+        }
+        for id in Set(state.plan.map(\.reminderID) + [state.mustDoID].compactMap(\.self)) {
+            guard let done = agenda.doneOccurrence(of: id, on: state.day, calendar: calendar),
+                done.id != id
+            else { continue }
+            doneOccurrences[id] = done
         }
     }
 

@@ -684,17 +684,6 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         return next
     }
 
-    /// What the day holds of a repeating task, moved from its series to the
-    /// occurrence ticked off today (`DayEngine.followDoneOccurrences`): the
-    /// must-do, its step with all its life, and its cue on the panel.
-    mutating func follow(series: String, to occurrence: String) {
-        if mustDoID == series { mustDoID = occurrence }
-        for index in plan.indices where plan[index].reminderID == series {
-            plan[index].follow(to: occurrence)
-        }
-        if cueOnPanel?.reminderID == series { cueOnPanel?.reminderID = occurrence }
-    }
-
     /// The day key a week before `day`: older must-dos leave the record.
     static func weekBefore(_ day: DayKey) -> String {
         guard let date = day.date(),

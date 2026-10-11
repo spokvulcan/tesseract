@@ -351,10 +351,10 @@ nonisolated extension DayEngine {
         var effects: [DayEffect] = []
         for index in state.plan.indices {
             let step = state.plan[index]
+            // A repeating task's step is done when its occurrence today is.
             guard let planned = step.timedMinutes,
-                let completed = snapshot.agenda.doneToday.first(where: {
-                    $0.id == step.reminderID
-                })?.completedAt,
+                let completed = snapshot.agenda.doneOccurrence(
+                    of: step.reminderID, on: state.day, calendar: snapshot.calendar)?.completedAt,
                 completed >= step.start
             else { continue }
             state.plan[index].timedMinutes = nil

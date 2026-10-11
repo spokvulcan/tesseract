@@ -38,6 +38,9 @@ nonisolated enum AgendaUndo: Sendable, Equatable {
     case deleteReminder(id: String)
     case changeReminder(id: String, ReminderChange)
     case restoreReminder(ReminderDraft)
+    /// An occurrence of a repeating reminder ticked off: the copy Reminders
+    /// kept of it goes, and the series is back on its date.
+    case reopenOccurrence(seriesID: String, due: Date?, dueHasTime: Bool)
     case deleteEvent(id: String)
     case changeEvent(id: String, EventChange)
     case restoreEvent(EventDraft)
@@ -193,7 +196,9 @@ final class Agenda {
         return (reminder, change)
     }
 
-    /// Change a reminder: complete or reopen, rename, re-time, re-file.
+    /// Change a reminder: complete or reopen, rename, re-time, re-file. A
+    /// repeating reminder is ticked off and taken back by its occurrence
+    /// (`Agenda+Occurrences`).
     @discardableResult
     func updateReminder(
         id: String, title: String? = nil, areaName: String? = nil, due: ReminderChange.Due? = nil,
@@ -201,6 +206,22 @@ final class Agenda {
     ) async throws -> (AgendaReminder, AgendaChange) {
         guard let before = await store.reminder(id: id, now: now()) else {
             throw AgendaError.notFound("reminder \(id)")
+        }
+        // Not done after all, a repeating task's occurrence — by the task or
+        // by the copy of it — leaves Reminders as before it was ticked off.
+        if completed == false, title == nil, areaName == nil, due == nil, notes == nil,
+            let occurrence = await doneOccurrence(touching: before)
+        {
+            try await reopenOccurrence(
+                series: occurrence.series.id, due: occurrence.copy.due,
+                dueHasTime: occurrence.copy.dueHasTime, copy: occurrence.copy)
+            let after =
+                await store.reminder(id: occurrence.series.id, now: now()) ?? occurrence.series
+            let record = AgendaChange(
+                at: now(), line: "Reopened “\(after.title)”.",
+                undo: .changeReminder(id: after.id, ReminderChange(completed: true)))
+            self.record(record, kind: "reminder.updated", source: source, id: id)
+            return (after, record)
         }
         let lists = store.reminderLists()
         var listID: String?
@@ -241,7 +262,16 @@ final class Agenda {
         } else {
             line = "Updated “\(after.title)”."
         }
-        let record = AgendaChange(at: now(), line: line, undo: .changeReminder(id: id, inverse))
+        // A repeating reminder ticked off moved on, its occurrence kept as a
+        // copy: taking it back is the occurrence's.
+        let movedOn =
+            completed == true && before.repeats && !before.isCompleted && !after.isCompleted
+            && title == nil && listID == nil && due == nil && notes == nil
+        let undo: AgendaUndo =
+            movedOn
+            ? .reopenOccurrence(seriesID: id, due: before.due, dueHasTime: before.dueHasTime)
+            : .changeReminder(id: id, inverse)
+        let record = AgendaChange(at: now(), line: line, undo: undo)
         self.record(
             record, kind: completed == true ? "reminder.completed" : "reminder.updated",
             source: source, id: id)
@@ -365,6 +395,8 @@ final class Agenda {
         case .deleteReminder(let id): try store.deleteReminder(id: id)
         case .changeReminder(let id, let inverse): _ = try store.updateReminder(id: id, inverse)
         case .restoreReminder(let draft): _ = try store.addReminder(draft)
+        case .reopenOccurrence(let id, let due, let hasTime):
+            try await reopenOccurrence(series: id, due: due, dueHasTime: hasTime)
         case .deleteEvent(let id): try store.deleteEvent(id: id)
         case .changeEvent(let id, let inverse): _ = try store.updateEvent(id: id, inverse)
         case .restoreEvent(let draft): _ = try store.addEvent(draft)

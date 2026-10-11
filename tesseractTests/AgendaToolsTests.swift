@@ -152,6 +152,11 @@ struct AgendaToolsTests {
             f.store.events(from: Self.local(30, 0, 0), to: Self.local(31, 0, 0)).first)
         #expect(after.start == Self.local(30, 17, 0))
         #expect(after.end == Self.local(30, 17, 30))
+        // As in Calendar, an occurrence's id names its start: moved, it is
+        // known by a new one.
+        #expect(after.id != event.id)
+        #expect(after.id.hasSuffix("|\(Int(after.start.timeIntervalSince1970))"))
+        #expect(f.store.events[event.id] == nil)
     }
 
     @Test func deleteEventRemovesTheOwnersBlockAndUndoBringsItBack() async throws {

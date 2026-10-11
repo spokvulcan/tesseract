@@ -12,7 +12,9 @@
 - Amended by: ADR-0090 (2026-10-10: the owner shows Jarvis pictures; the Day
   Thread sees each in the turn it's shown); ADR-0091 (2026-10-11: a step is
   one value in the day's state; the day is read once, as the Timeline, with
-  one rule for the step under way)
+  one rule for the step under way); ADR-0092 (2026-10-11: the Agenda answers
+  for a repeating task's occurrence that day; the day no longer follows the
+  copy)
 
 ## Context
 
@@ -607,6 +609,10 @@ the owner must remember to read does not. What changed:
 
 ## Amendments (2026-10-10, a repeating task ticked off)
 
+_Its mechanism, the day following the copy, is superseded by ADR-0092 (the
+amendment of 2026-10-11, the Agenda answers for today's occurrence); what it
+promises stands._
+
 On 9 October the must-do was a daily reminder. The owner ticked it off from
 its Step Cue (`agenda.changed`, `reminder.completed`), and the day never saw
 it done: `mustDoDoneAt` stayed empty, Today showed it done without its star
@@ -701,3 +707,26 @@ changed:
 - `DayWalkTests` walks the day over the in-memory Agenda, which makes each
   change the engine asks for, instead of a hand-written copy of it.
 
+## Amendments (2026-10-11, the Agenda answers for today's occurrence)
+
+The day followed a repeating task's done occurrence (2026-10-10) by moving
+what it held to the copy's id, and the Agenda still passed Reminders' series
+straight through. The tick's Undo reopened the series, which was already
+open, so the occurrence stayed done. Unticking the copy on Today reopened it
+beside the series, leaving two open reminders for one task. Today's Chat's
+plan showed the series moved on, open, and its ring ticked off tomorrow's
+occurrence. What changed (ADR-0092):
+
+- **The day keeps the series' id.** The Agenda answers for the task's
+  occurrence on the owner's day: open, or done and when, as the copy
+  Reminders kept (`Agenda+Occurrences`). It matches the copy by the rule the
+  engine used: same list and title, the series' time of day when it has one,
+  done on a day the series has since moved past. `followDoneOccurrences` and
+  `DayState.follow` are gone. The must-do, a step's run, the Day Line's row
+  and Today's Chat ask the Agenda.
+- **Taken back, Reminders is as it was.** The copy is deleted, then the
+  series is put back on the occurrence's date. That holds for the tick's
+  Undo, for unticking the task (a cue's Undo, Today's ring) and for
+  unticking the copy.
+- The in-memory store also names an event by its start, as EventKit does,
+  so a moved event gets a new id in the tests too.

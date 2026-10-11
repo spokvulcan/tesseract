@@ -674,12 +674,15 @@ private struct PlanDetails: View {
 
     var body: some View {
         let actions = TodayActions(runtime: runtime)
-        let reminders = Dictionary(
-            (agenda.snapshot.open + agenda.snapshot.doneToday).map { ($0.id, $0) },
-            uniquingKeysWith: { first, _ in first })
+        // Each task as today sees it: a repeating one ticked off is today's
+        // occurrence, done, not its series moved on.
+        let today = DayKey(for: runtime.now(), calendar: agenda.calendar)
         VStack(alignment: .leading, spacing: MomentLayout.sectionSpacing) {
             let steps = plan.placements.compactMap { slot in
-                reminders[slot.reminderID].map { PlanEntry(slot: slot, reminder: $0) }
+                agenda.snapshot.occurrence(
+                    of: slot.reminderID, on: today, calendar: agenda.calendar
+                )
+                .map { PlanEntry(slot: slot, reminder: $0) }
             }
             if !steps.isEmpty {
                 MomentSection("The plan") {
@@ -692,7 +695,7 @@ private struct PlanDetails: View {
                                 .foregroundStyle(.secondary)
                                 .frame(width: MomentLayout.clockWidth, alignment: .leading)
                             Button {
-                                actions.setDone(reminder.id, !reminder.isCompleted)
+                                actions.setDone(slot.reminderID, !reminder.isCompleted)
                             } label: {
                                 Image(
                                     systemName: reminder.isCompleted

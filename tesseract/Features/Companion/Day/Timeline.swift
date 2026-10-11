@@ -21,7 +21,10 @@
 import Foundation
 
 nonisolated struct TimelineTask: Sendable, Equatable, Identifiable {
-    var id: String { reminder.id }
+    /// The task: its reminder's id (a repeating reminder's, its series').
+    let id: String
+    /// The reminder shown: the task itself — or, for a repeating task done
+    /// today, the copy Reminders kept of its occurrence.
     var reminder: AgendaReminder
     var start: Date?
     var minutes: Int
@@ -349,25 +352,27 @@ nonisolated struct Timeline: Sendable, Equatable {
         let rollover = DayKey(for: now, calendar: calendar).end(calendar: calendar) ?? endOfToday
         let plan = Dictionary(
             facts.plan.map { ($0.reminderID, $0) }, uniquingKeysWith: { first, _ in first })
-        func task(_ reminder: AgendaReminder, start: Date?, minutes: Int, planned: Bool)
-            -> TimelineTask
-        {
+        func task(
+            _ id: String, _ reminder: AgendaReminder, start: Date?, minutes: Int, planned: Bool
+        ) -> TimelineTask {
             var task = timelineTask(
-                reminder, start: start, minutes: minutes, planned: planned,
-                isMustDo: facts.mustDoID == reminder.id, facts: facts)
+                id, reminder, start: start, minutes: minutes, planned: planned,
+                isMustDo: facts.mustDoID == id, facts: facts)
             task.isStarted =
                 planned
-                && steps.contains {
-                    $0.reminderID == reminder.id && $0.start == start && $0.isStarted
-                }
+                && steps.contains { $0.reminderID == id && $0.start == start && $0.isStarted }
             return task
         }
 
-        // Every reminder that belongs to today: open ones due today or
+        // Every task that belongs to today, by its id: open ones due today or
         // earlier, open planned ones, and today's done ones (one due
-        // tomorrow and done early stays with tomorrow).
+        // tomorrow and done early stays with tomorrow). A repeating task the
+        // day holds, done today, is its occurrence — the copy Reminders kept,
+        // shown once, in the task's own slot.
+        let copies = Set(facts.doneOccurrences.values.map(\.id))
         var byID: [String: AgendaReminder] = [:]
-        for reminder in facts.dueOrOverdue + facts.doneToday where !isDueTomorrow(reminder, facts) {
+        for reminder in facts.dueOrOverdue + facts.doneToday
+        where !isDueTomorrow(reminder, facts) && !copies.contains(reminder.id) {
             byID[reminder.id] = reminder
         }
         for reminder in facts.undated where plan[reminder.id] != nil {
@@ -376,25 +381,26 @@ nonisolated struct Timeline: Sendable, Equatable {
         if let mustDo = facts.mustDoID, let reminder = facts.task(mustDo) {
             byID[mustDo] = reminder
         }
+        byID.merge(facts.doneOccurrences) { _, occurrence in occurrence }
 
         var timed: [TimelineTask] = []
         var anytime: [TimelineTask] = []
-        for reminder in byID.values {
-            if let placement = plan[reminder.id], placement.start >= startOfToday,
+        for (id, reminder) in byID {
+            if let placement = plan[id], placement.start >= startOfToday,
                 placement.start < rollover
             {
                 timed.append(
                     task(
-                        reminder, start: placement.start, minutes: placement.minutes, planned: true)
-                )
+                        id, reminder, start: placement.start, minutes: placement.minutes,
+                        planned: true))
             } else if reminder.dueHasTime, let due = reminder.due, due >= startOfToday,
                 due < endOfToday
             {
                 timed.append(
-                    task(reminder, start: due, minutes: defaultTaskMinutes, planned: false))
+                    task(id, reminder, start: due, minutes: defaultTaskMinutes, planned: false))
             } else {
                 anytime.append(
-                    task(reminder, start: nil, minutes: defaultTaskMinutes, planned: false))
+                    task(id, reminder, start: nil, minutes: defaultTaskMinutes, planned: false))
             }
         }
 
@@ -463,8 +469,8 @@ nonisolated struct Timeline: Sendable, Equatable {
         for reminder in facts.dueTomorrow + doneEarly {
             if reminder.dueHasTime, let due = reminder.due {
                 let item = timelineTask(
-                    reminder, start: due, minutes: defaultTaskMinutes, planned: false,
-                    isMustDo: false, facts: facts)
+                    reminder.id, reminder, start: due, minutes: defaultTaskMinutes,
+                    planned: false, isMustDo: false, facts: facts)
                 let finish = due.addingTimeInterval(TimeInterval(item.minutes * 60))
                 rows.append(
                     TimelineRow(
@@ -473,8 +479,8 @@ nonisolated struct Timeline: Sendable, Equatable {
             } else {
                 anytime.append(
                     timelineTask(
-                        reminder, start: nil, minutes: defaultTaskMinutes, planned: false,
-                        isMustDo: false, facts: facts))
+                        reminder.id, reminder, start: nil, minutes: defaultTaskMinutes,
+                        planned: false, isMustDo: false, facts: facts))
             }
         }
         rows.sort(by: order)
@@ -512,8 +518,8 @@ nonisolated struct Timeline: Sendable, Equatable {
     }
 
     private static func timelineTask(
-        _ reminder: AgendaReminder, start: Date?, minutes: Int, planned: Bool, isMustDo: Bool,
-        facts: DayFacts
+        _ id: String, _ reminder: AgendaReminder, start: Date?, minutes: Int, planned: Bool,
+        isMustDo: Bool, facts: DayFacts
     ) -> TimelineTask {
         let area = facts.areas.first { $0.id == reminder.listID }
         let done = reminder.isCompleted || facts.doneToday.contains { $0.id == reminder.id }
@@ -523,7 +529,7 @@ nonisolated struct Timeline: Sendable, Equatable {
         }
         let carried = !done && (reminder.due.map { $0 < facts.startOfToday } ?? false)
         return TimelineTask(
-            reminder: reminder, start: start, minutes: minutes,
+            id: id, reminder: reminder, start: start, minutes: minutes,
             areaName: facts.areaName(of: reminder),
             areaColorHex: area?.colorHex ?? reminder.colorHex,
             isMustDo: isMustDo, isDone: done, isSlid: slid, isPlanned: planned,
