@@ -11,24 +11,14 @@
 import SwiftUI
 
 struct TodaySideColumn: View {
-    let facts: DayFacts
-    let isEvening: Bool
+    let day: Timeline
+    /// The Now Card: the Inbox's offers keep clear of its own.
+    let card: NowCard
 
     var body: some View {
         VStack(alignment: .leading, spacing: TodayLayout.rhythm) {
-            InboxSection(facts: facts, isEvening: isEvening)
+            InboxSection(day: day, card: card)
             JarvisNoticed()
-        }
-    }
-
-    /// Undated captures in the Inbox. One that has a slot in today's plan
-    /// has left the Inbox for the day's steps.
-    @MainActor
-    static func inbox(agenda: Agenda, plan: [Placement]) -> [AgendaReminder] {
-        let inboxID = agenda.inbox?.id
-        let planned = Set(plan.map(\.reminderID))
-        return agenda.snapshot.open.filter {
-            $0.due == nil && $0.listID == inboxID && !planned.contains($0.id)
         }
     }
 }
@@ -37,16 +27,16 @@ private struct InboxSection: View {
     @Environment(Agenda.self) private var agenda
     @Environment(CompanionRuntime.self) private var runtime
     @Environment(SettingsManager.self) private var settings
-    let facts: DayFacts
-    let isEvening: Bool
+    let day: Timeline
+    let card: NowCard
 
     /// The most the column lists; Reminders holds the rest.
     private static let shown = 12
 
     var body: some View {
-        let items = TodaySideColumn.inbox(agenda: agenda, plan: runtime.state.plan.map(\.slot))
+        let items = day.inbox
         let shown = Array(items.prefix(Self.shown))
-        let slots = InboxSlot.suggest(for: shown.map(\.id), facts: facts, evening: isEvening)
+        let slots = day.inboxOffers(for: shown.map(\.id), reserving: card.offeredPlacements)
         let actions = TodayActions(agenda: agenda, runtime: runtime)
         VStack(alignment: .leading, spacing: TodayLayout.rowSpacing) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {

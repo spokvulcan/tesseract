@@ -37,7 +37,7 @@ nonisolated enum DayEngine {
         var effects: [DayEffect] = []
         let today = DayKey(for: snapshot.now, calendar: snapshot.calendar)
         // Counted before the rollover, so cards a new day clears clear the glyph.
-        let waitingBefore = waitingCount(state, now: snapshot.now)
+        let waitingBefore = WaitingOnYou(state: state, now: snapshot.now).glyphCount
         if state.day != today {
             // Done on the phone while the Mac slept through 04:00: it counts
             // for the day it was the must-do of — if done within that day.
@@ -151,7 +151,7 @@ nonisolated enum DayEngine {
         noteMustDoDone(snapshot: snapshot, state: &state)
         effects += noteStepRuns(snapshot: snapshot, state: &state)
         holdCueUnderCard(effects, snapshot: snapshot, state: &state)
-        let waitingAfter = waitingCount(state, now: snapshot.now)
+        let waitingAfter = WaitingOnYou(state: state, now: snapshot.now).glyphCount
         if waitingAfter != waitingBefore { effects.append(.setWaiting(waitingAfter)) }
         return Decision(state: state, effects: effects)
     }
@@ -292,7 +292,7 @@ nonisolated enum DayEngine {
     static func waitingPlanIfFree(snapshot: DaySnapshot, state: inout DayState)
         -> [DayEffect]
     {
-        guard state.morningPlanWaiting, !isEvening(snapshot) else { return [] }
+        guard state.morningPlanWaiting, !snapshot.isEvening else { return [] }
         return planTheDayOrWait(snapshot: snapshot, state: &state)
     }
 
@@ -308,8 +308,8 @@ nonisolated enum DayEngine {
     /// after the step the owner started, if one is running: like a Step
     /// Cue, it doesn't interrupt a focus session.
     static func eveningIfDue(snapshot: DaySnapshot, state: inout DayState) -> [DayEffect] {
-        guard state.eveningWrapUpAt == nil, isEvening(snapshot),
-            focus(snapshot: snapshot, state: state) == nil
+        guard state.eveningWrapUpAt == nil, snapshot.isEvening,
+            Timeline(snapshot: snapshot, state: state).focus == nil
         else { return [] }
         return run(.eveningWrapUp, trigger: .eveningTime, snapshot: snapshot, state: &state)
     }
@@ -321,7 +321,7 @@ nonisolated enum DayEngine {
         guard state.nightReflectionAt == nil, state.running == nil,
             !state.deferred.contains(.nightReflection),
             let wrapUp = state.eveningWrapUpAt,
-            snapshot.now.timeIntervalSince(wrapUp) >= 30 * 60, isEvening(snapshot)
+            snapshot.now.timeIntervalSince(wrapUp) >= 30 * 60, snapshot.isEvening
         else { return [] }
         return run(
             .nightReflection, trigger: .night, snapshot: snapshot, state: &state,
@@ -346,7 +346,7 @@ nonisolated enum DayEngine {
         let sinceStart = (snapshot.minuteOfDay - settings.quietStartMinutes + 24 * 60) % (24 * 60)
         guard sinceStart < 60 else { return [] }
         state.windDownAt = snapshot.now
-        let tomorrow = TimelineBuilder.tomorrow(facts: snapshot.facts(state: state))
+        let tomorrow = Timeline(snapshot: snapshot, state: state).tomorrow
         var fields: [String: CompanionTraceValue] = [:]
         if let first = tomorrow.rows.first {
             fields["minutesUntil"] = .int(Int(first.start.timeIntervalSince(snapshot.now) / 60))
@@ -383,11 +383,6 @@ nonisolated enum DayEngine {
         return "Nothing is set for tomorrow yet. Rest well."
     }
 
-    static func isEvening(_ snapshot: DaySnapshot) -> Bool {
-        let minute = snapshot.minuteOfDay
-        return minute >= snapshot.settings.eveningMinutes || minute < 3 * 60
-    }
-
     /// A meeting the owner attended just ended (since the last tick).
     private static func meetingEnded(snapshot: DaySnapshot, state: inout DayState) -> [DayEffect] {
         guard let last = state.lastTickAt else { return [] }
@@ -397,24 +392,6 @@ nonisolated enum DayEngine {
         guard let meeting = ended.max(by: { $0.end < $1.end }) else { return [] }
         return breakpoint(
             awayFrom: meeting.start, trigger: .meetingEnded, snapshot: snapshot, state: &state)
-    }
-
-    // MARK: - Waiting
-
-    /// What is waiting on the owner, for the glyph: waiting agents, and the
-    /// open cards' items.
-    static func waitingCount(_ state: DayState, now: Date) -> Int {
-        // A card the owner took in waits on them no more.
-        let cards = state.openCards.filter { !$0.kept }.reduce(0) { count, card in
-            switch card.body {
-            case .eveningWrapUp(let wrapUp): count + wrapUp.leftovers.count
-            case .breakpoint(let breakpoint):
-                count + breakpoint.needsYou.filter { $0.kind != .agent }.count
-            case .triage(let triage): count + triage.raise.count
-            case .morningPlan, .reflection: count
-            }
-        }
-        return cards + state.agentsWaiting(now: now).count
     }
 
     // MARK: - Nudges

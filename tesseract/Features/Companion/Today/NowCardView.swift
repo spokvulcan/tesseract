@@ -15,14 +15,13 @@ struct NowCardView: View {
     @Environment(Agenda.self) private var agenda
     @Environment(CompanionRuntime.self) private var runtime
     let card: NowCard
-    let facts: DayFacts
+    let day: Timeline
 
     var body: some View {
-        let state = runtime.state
         // Jarvis's word: the day's latest card with something to say, until
         // it is dismissed or the day moves past it.
-        let jarvis = DayCard.word(in: state.cards, at: facts.now)
-        let waiting = Waiting(state: state, now: facts.now)
+        let jarvis = DayCard.word(in: runtime.state.cards, at: day.facts.now)
+        let waiting = day.waiting
         VStack(alignment: .leading, spacing: 12) {
             header(jarvis)
             VStack(alignment: .leading, spacing: 3) {
@@ -44,7 +43,7 @@ struct NowCardView: View {
                 }
             }
             if let span = card.span {
-                TimeLeft(span: span, now: facts.now)
+                TimeLeft(span: span, now: day.facts.now)
             }
             if !card.actions.isEmpty {
                 actionRow
@@ -66,7 +65,7 @@ struct NowCardView: View {
 
     private func header(_ jarvis: DayCard?) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text("Now · \(AgendaTime.clock(facts.now))")
+            Text("Now · \(AgendaTime.clock(day.facts.now))")
                 .fontWeight(.semibold)
                 .monospacedDigit()
                 .foregroundStyle(Color.accentColor)
@@ -250,51 +249,11 @@ private struct JarvisWord: View {
 
 // MARK: - Needs you
 
-/// What waits on the owner: the waiting coding agents, the open cards'
-/// items (a waiting agent once, from the agents themselves), and the
-/// evening's leftovers.
-private struct Waiting {
-    struct Entry: Identifiable {
-        let cardID: String
-        let item: WaitingItem
-        var id: String { "\(cardID)/\(item.id)" }
-    }
-
-    let agents: [AgentSignal]
-    let entries: [Entry]
-    let wrapUps: [(cardID: String, card: EveningWrapUpCard)]
-
-    @MainActor
-    init(state: DayState, now: Date) {
-        agents = state.agentsWaiting(now: now)
-        entries = state.openCards.flatMap { card -> [Entry] in
-            switch card.body {
-            case .breakpoint(let breakpoint):
-                breakpoint.needsYou.filter { $0.kind != .agent }.map {
-                    Entry(cardID: card.id, item: $0)
-                }
-            case .triage(let triage):
-                triage.raise.map { Entry(cardID: card.id, item: $0) }
-            case .morningPlan, .eveningWrapUp, .reflection:
-                []
-            }
-        }
-        wrapUps = state.openCards.compactMap { card in
-            guard case .eveningWrapUp(let wrapUp) = card.body, !wrapUp.leftovers.isEmpty else {
-                return nil
-            }
-            return (card.id, wrapUp)
-        }
-    }
-
-    var isEmpty: Bool { agents.isEmpty && entries.isEmpty && wrapUps.isEmpty }
-}
-
 /// People, coding agents and missed notifications that need the owner, one
 /// action each.
 private struct NeedsYou: View {
     @Environment(CompanionRuntime.self) private var runtime
-    let waiting: Waiting
+    let waiting: WaitingOnYou
 
     var body: some View {
         if !waiting.agents.isEmpty || !waiting.entries.isEmpty {
@@ -363,17 +322,17 @@ private struct ItemLine<Actions: View>: View {
 /// kept for later, or let go; Jarvis's choice is tinted.
 private struct Leftovers: View {
     @Environment(CompanionRuntime.self) private var runtime
-    let wrapUps: [(cardID: String, card: EveningWrapUpCard)]
+    let wrapUps: [WaitingOnYou.WrapUp]
 
     var body: some View {
-        ForEach(wrapUps, id: \.cardID) { cardID, wrapUp in
+        ForEach(wrapUps, id: \.cardID) { wrapUp in
             VStack(alignment: .leading, spacing: 8) {
-                Text(wrapUp.leftoversHeading).fontWeight(.semibold)
-                ForEach(wrapUp.leftovers) { leftover in
-                    LeftoverRow(cardID: cardID, leftover: leftover)
+                Text(wrapUp.card.leftoversHeading).fontWeight(.semibold)
+                ForEach(wrapUp.card.leftovers) { leftover in
+                    LeftoverRow(cardID: wrapUp.cardID, leftover: leftover)
                 }
                 Button("Do What Jarvis Suggests for All") {
-                    runtime.act(.allLeftovers(cardID: cardID))
+                    runtime.act(.allLeftovers(cardID: wrapUp.cardID))
                 }
                 .focusable(false)
             }

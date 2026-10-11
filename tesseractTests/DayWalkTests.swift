@@ -86,7 +86,7 @@ struct DayWalkTests {
         }
 
         func clock(at now: Date) -> MenuBarClock? {
-            DayEngine.clock(snapshot: snapshot(now), state: state)
+            Timeline(snapshot: snapshot(now), state: state).clock
         }
     }
 

@@ -11,7 +11,8 @@
   ADR-0031 (the trace vocabulary pattern)
 - Amended by: ADR-0090 (2026-10-10: the owner shows Jarvis pictures; the Day
   Thread sees each in the turn it's shown); ADR-0091 (2026-10-11: a step is
-  one value in the day's state)
+  one value in the day's state; the day is read once, as the Timeline, with
+  one rule for the step under way)
 
 ## Context
 

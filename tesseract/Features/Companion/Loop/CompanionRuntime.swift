@@ -148,6 +148,19 @@ final class CompanionRuntime {
     /// The owner's notification rules.
     var rules: [TriageRule] { TriageRules.decode(settings.companionTriageRulesJSON) }
 
+    // MARK: The day
+
+    /// The day as Today, the Jarvis Panel and the menu bar read it at `now`
+    /// (the runtime's clock, unless a page keeps its own): the Agenda's
+    /// snapshot, the Areas and the settings, with the day's state.
+    func timeline(at now: Date? = nil) -> Timeline {
+        Timeline(
+            snapshot: DaySnapshot(
+                now: now ?? self.now(), settings: daySettings, agenda: agenda.snapshot,
+                areas: agenda.areas, inboxListID: agenda.inbox?.id),
+            state: state)
+    }
+
     // MARK: Lifecycle
 
     private func activate() async {
@@ -218,7 +231,7 @@ final class CompanionRuntime {
         // The thread turns to the new day only between moments: one in
         // flight at 04:00 finishes in its own day's thread, not the next.
         if thread.momentRunning == nil { thread.show(day: state.day) }
-        presence.setClock(isActive ? DayEngine.clock(snapshot: snapshot, state: state) : nil)
+        presence.setClock(isActive ? Timeline(snapshot: snapshot, state: state).clock : nil)
         for effect in decision.effects { await perform(effect) }
     }
 

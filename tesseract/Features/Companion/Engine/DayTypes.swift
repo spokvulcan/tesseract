@@ -347,25 +347,10 @@ nonisolated struct DaySnapshot: Sendable, Equatable {
         self.panelUp = panelUp
     }
 
+    /// The facts a moment is asked about, read from this snapshot and the
+    /// day's state: the one projection of the two (`DayFacts`).
     func facts(state: DayState) -> DayFacts {
-        var facts = DayFacts(
-            snapshot: agenda, areas: areas, inboxListID: inboxListID, now: now,
-            calendar: calendar, mustDoID: state.mustDoID, plan: state.plan.map(\.slot),
-            weekFocus: state.weekFocus)
-        facts.mustDoDays = state.mustDoDays
-        facts.departures = state.departures
-        facts.stepRuns = state.stepRuns
-        // At the Mac past midnight (until 05:00) on this day's date.
-        if let last = state.lastActiveAt, let midnight = state.day.date(calendar: calendar),
-            last >= midnight, last < midnight.addingTimeInterval(5 * 3600),
-            last <= now, now.timeIntervalSince(last) < 12 * 3600
-        {
-            facts.upLateUntil = last
-        }
-        if state.mustDoID != nil {
-            facts.mustDoDays[state.day.rawValue] = state.mustDoDoneAt != nil
-        }
-        return facts
+        DayFacts(snapshot: self, state: state)
     }
 
     /// Minutes after local midnight.
@@ -373,6 +358,9 @@ nonisolated struct DaySnapshot: Sendable, Equatable {
         let parts = calendar.dateComponents([.hour, .minute], from: now)
         return (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
     }
+
+    /// The Evening Wrap-up's window (`DaySettings.isEvening`).
+    var isEvening: Bool { settings.isEvening(minuteOfDay: minuteOfDay) }
 }
 
 /// The owner's Companion settings, as the engine reads them.
@@ -394,6 +382,12 @@ nonisolated struct DaySettings: Sendable, Equatable {
     var breakCues: Bool = true
     /// The owner's notification rules.
     var rules: [TriageRule] = []
+
+    /// The evening, from the evening time until 03:00: the Evening Wrap-up's
+    /// window, and when the Now Card closes the day.
+    func isEvening(minuteOfDay minute: Int) -> Bool {
+        minute >= eveningMinutes || minute < 3 * 60
+    }
 
     /// The overnight gap that makes a return the day's first sit-down.
     static let overnightGap: TimeInterval = 4 * 3600

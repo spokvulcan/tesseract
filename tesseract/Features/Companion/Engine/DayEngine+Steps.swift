@@ -71,7 +71,7 @@ nonisolated extension DayEngine {
         // interrupted. What comes due meanwhile waits, its check-in names
         // what is under way, and it is cued once the owner is free — but a
         // break isn't held past half an hour: a long step gets one midway.
-        if let focus = focus(snapshot: snapshot, state: state) {
+        if let focus = Timeline(snapshot: snapshot, state: state).focus {
             let left = focus.end.timeIntervalSince(snapshot.now)
             guard left >= TimeInterval(breakHeldMinutes * 60) else { return [] }
             return breakCueIfDue(snapshot: snapshot, state: &state, during: focus) ?? []
@@ -89,11 +89,11 @@ nonisolated extension DayEngine {
         -> [DayEffect]?
     {
         let now = snapshot.now
-        let facts = snapshot.facts(state: state)
+        let day = Timeline(snapshot: snapshot, state: state)
         let starting = state.plan.filter { $0.spans(now) && $0.cuedAt == nil }
         for step in starting.sorted(by: { $0.start < $1.start }) {
             // Done, or gone from Reminders: nothing to start.
-            guard let task = facts.task(step.reminderID),
+            guard let task = day.facts.task(step.reminderID),
                 let index = state.plan.firstIndex(where: { $0.reminderID == step.reminderID })
             else { continue }
             state.plan[index].cuedAt = now
@@ -103,7 +103,7 @@ nonisolated extension DayEngine {
             }
             state.cueOnPanel = CueOnPanel(reminderID: step.reminderID, phase: .start)
             return present(
-                cue(task, step: step, phase: .start, facts: facts, state: state, now: now),
+                cue(task, step: step, phase: .start, day: day, state: state),
                 late: now.timeIntervalSince(step.start))
         }
         return nil
@@ -128,16 +128,16 @@ nonisolated extension DayEngine {
         -> [DayEffect]?
     {
         let now = snapshot.now
-        let facts = snapshot.facts(state: state)
+        let day = Timeline(snapshot: snapshot, state: state)
         let ended = state.plan.filter { $0.isStarted && $0.end <= now && $0.checkedInAt == nil }
         for step in ended.sorted(by: { $0.end > $1.end }) {
-            guard let task = facts.task(step.reminderID),
+            guard let task = day.facts.task(step.reminderID),
                 let index = state.plan.firstIndex(where: { $0.reminderID == step.reminderID })
             else { continue }
             state.plan[index].checkedInAt = now
             state.cueOnPanel = CueOnPanel(reminderID: step.reminderID, phase: .end)
             return present(
-                cue(task, step: step, phase: .end, facts: facts, state: state, now: now),
+                cue(task, step: step, phase: .end, day: day, state: state),
                 late: now.timeIntervalSince(step.end))
         }
         return nil
@@ -156,11 +156,11 @@ nonisolated extension DayEngine {
     }
 
     private static func cue(
-        _ task: AgendaReminder, step: Step, phase: StepCue.Phase, facts: DayFacts,
-        state: DayState, now: Date
+        _ task: AgendaReminder, step: Step, phase: StepCue.Phase, day: Timeline, state: DayState
     ) -> StepCue {
+        let (facts, now) = (day.facts, day.facts.now)
         let moment = phase == .start ? step.start : step.end
-        let next = nextStep(after: step.slot, facts: facts)
+        let next = day.nextStep(after: step.slot)
         return StepCue(
             reminderID: task.id, title: task.title, start: step.start, minutes: step.minutes,
             areaName: facts.areaName(of: task), isMustDo: state.mustDoID == task.id,
@@ -176,11 +176,9 @@ nonisolated extension DayEngine {
 
     // MARK: - Clear of meetings
 
-    /// What ends a step: a meeting with other people, or somewhere to be. A
-    /// block of the owner's own ("Work", 09:00–13:00) is where steps happen.
-    private static func endsAStep(_ event: AgendaEvent) -> Bool {
-        event.hasOtherAttendees || !(event.location ?? "").isEmpty
-    }
+    // A meeting ends a step (`AgendaEvent.isMeeting`: other people, or a
+    // place to be), and so does the time to leave for one; a block of the
+    // owner's own ("Work", 09:00–13:00) is where steps happen, and ends none.
 
     /// How long a step from `start` gets so it keeps clear of what's fixed
     /// after it: it ends `transitionMinutes` before the next meeting, or the
@@ -188,13 +186,8 @@ nonisolated extension DayEngine {
     /// leaves too little; with not even five minutes before it, as wanted.
     static func clearMinutes(from start: Date, wanted: Int, facts: DayFacts) -> Int {
         let end = start.addingTimeInterval(TimeInterval(wanted * 60))
-        let events = facts.eventsToday.filter(endsAStep)
         let fixed =
-            events.map(\.start)
-            + facts.departures.compactMap { departure in
-                events.contains { $0.id == departure.eventID && $0.start == departure.eventStart }
-                    ? departure.at : nil
-            }
+            facts.meetingsToday.map(\.start) + facts.departuresToMeetings.map(\.departure.at)
         guard let next = fixed.filter({ $0 > start && $0 <= end }).min() else { return wanted }
         let room = Int(next.timeIntervalSince(start) / 60)
         if room - transitionMinutes >= smallStartMinutes { return room - transitionMinutes }
@@ -229,20 +222,17 @@ nonisolated extension DayEngine {
             started
             ? max(end(of: slot), now).addingTimeInterval(quarter + transition)
             : now.addingTimeInterval(2 * quarter + transition)
-        let events = facts.eventsToday.filter(endsAStep)
-        var coming = events.filter { $0.start > now && $0.start < limit }.map {
+        let meetings = facts.meetingsToday
+        var coming = meetings.filter { $0.start > now && $0.start < limit }.map {
             (at: $0.start, end: $0.end)
         }
-        for departure in facts.departures where departure.at > now && departure.at < limit {
-            if let event = events.first(where: {
-                $0.id == departure.eventID && $0.start == departure.eventStart
-            }) {
-                coming.append((at: departure.at, end: event.end))
-            }
+        for leaving in facts.departuresToMeetings
+        where leaving.departure.at > now && leaving.departure.at < limit {
+            coming.append((at: leaving.departure.at, end: leaving.event.end))
         }
         guard var end = coming.min(by: { $0.at < $1.at })?.end else { return nil }
         // Back to back: after the last of the run.
-        while let next = events.first(where: { $0.start <= end && $0.end > end }) {
+        while let next = meetings.first(where: { $0.start <= end && $0.end > end }) {
             end = next.end
         }
         return end
@@ -258,10 +248,11 @@ nonisolated extension DayEngine {
     static func clearStepsOfMeetings(snapshot: DaySnapshot, state: inout DayState)
         -> [DayEffect]
     {
-        let facts = snapshot.facts(state: state)
-        let meetings = facts.eventsToday.filter(endsAStep)
+        let day = Timeline(snapshot: snapshot, state: state)
+        let facts = day.facts
+        let meetings = facts.meetingsToday
         guard !meetings.isEmpty else { return [] }
-        if let focus = focus(snapshot: snapshot, state: state) {
+        if let focus = day.focus {
             keepClear(focus.reminderID, snapshot: snapshot, state: &state)
         }
         let calendar = snapshot.calendar
@@ -272,14 +263,7 @@ nonisolated extension DayEngine {
             let midnight = calendar.date(
                 byAdding: .day, value: 1, to: calendar.startOfDay(for: snapshot.now))
         else { return [] }
-        let away = facts.departures.compactMap { departure -> DateInterval? in
-            guard departure.at < departure.eventStart,
-                meetings.contains(where: {
-                    $0.id == departure.eventID && $0.start == departure.eventStart
-                })
-            else { return nil }
-            return DateInterval(start: departure.at, end: departure.eventStart)
-        }
+        let away = facts.departuresToMeetings.compactMap(\.wayThere)
         var effects: [DayEffect] = []
         for step in state.plan.sorted(by: { $0.start < $1.start }) {
             let span = DateInterval(start: step.start, end: step.end)
@@ -343,78 +327,6 @@ nonisolated extension DayEngine {
             $0.hasOtherAttendees && !$0.isAllDay && $0.start <= snapshot.now
                 && $0.end > snapshot.now
         }
-    }
-
-    /// The day's next step once this slot ends, and when it starts: an open
-    /// task already under way (one a focus session held back; no time),
-    /// else the next event or task.
-    private static func nextStep(after slot: Placement, facts: DayFacts)
-        -> (title: String, at: Date?, link: URL?)?
-    {
-        let slotEnd = end(of: slot)
-        for row in TimelineBuilder.build(facts: facts).rows {
-            let at = AgendaTime.clock(row.start, calendar: facts.calendar)
-            switch row.kind {
-            case .event(let event) where row.start >= slotEnd:
-                return ("\(event.title) at \(at)", row.start, event.meetingLink)
-            case .task(let task) where !task.isDone && task.id != slot.reminderID:
-                if row.start >= slotEnd {
-                    return ("\(task.reminder.title) at \(at)", row.start, nil)
-                }
-                if (row.end ?? row.start) > slotEnd { return (task.reminder.title, nil, nil) }
-            default:
-                continue
-            }
-        }
-        return nil
-    }
-
-    // MARK: - Focus
-
-    /// The step the owner started that is running now, its task still open:
-    /// the menu bar shows its time left, so the time can be seen from any app.
-    static func focus(snapshot: DaySnapshot, state: DayState) -> StepFocus? {
-        let now = snapshot.now
-        let facts = snapshot.facts(state: state)
-        for step in state.plan.sorted(by: { $0.start < $1.start }) where step.isUnderWay(at: now) {
-            guard let task = facts.task(step.reminderID) else { continue }
-            return StepFocus(reminderID: task.id, title: task.title, end: step.end)
-        }
-        return nil
-    }
-
-    // MARK: - The menu bar's clock
-
-    /// How far ahead the menu bar counts down to what comes next.
-    static let clockLead: TimeInterval = 30 * 60
-
-    /// The menu bar's countdown: whichever comes first of the started step's
-    /// end, the time to leave for an event in person and an event's start —
-    /// the last two only within half an hour. A meeting coming up shows even
-    /// over a step that would run into it.
-    static func clock(snapshot: DaySnapshot, state: DayState) -> MenuBarClock? {
-        let now = snapshot.now
-        let horizon = now.addingTimeInterval(clockLead)
-        var times: [MenuBarClock] = []
-        if let focus = focus(snapshot: snapshot, state: state) {
-            times.append(MenuBarClock(kind: .focus, title: focus.title, until: focus.end))
-        }
-        let ahead = snapshot.agenda.events.filter {
-            !$0.isAllDay && $0.start > now && $0.start <= horizon
-        }
-        if let event = ahead.min(by: { $0.start < $1.start }) {
-            times.append(MenuBarClock(kind: .event, title: event.title, until: event.start))
-        }
-        for departure in state.departures where departure.at > now && departure.at <= horizon {
-            // Still on the calendar at the time the plan set it for.
-            guard
-                let event = snapshot.agenda.events.first(where: {
-                    $0.id == departure.eventID && $0.start == departure.eventStart
-                })
-            else { continue }
-            times.append(MenuBarClock(kind: .leave, title: event.title, until: departure.at))
-        }
-        return times.min { $0.until < $1.until }
     }
 
     // MARK: - Started

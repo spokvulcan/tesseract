@@ -265,7 +265,7 @@ struct DayEngineMomentTests {
             snapshot: Self.snapshot(at: Self.local(30, 9, 10)), state: &state)
         #expect(state.plan.map(\.reminderID) == ["R2", "R1"])
         #expect(
-            DayEngine.focus(snapshot: Self.snapshot(at: Self.local(30, 9, 20)), state: state)?
+            Timeline(snapshot: Self.snapshot(at: Self.local(30, 9, 20)), state: state).focus?
                 .reminderID == "R2")
     }
 
@@ -666,7 +666,7 @@ struct KeptCardWaitingTests {
                         ],
                         tomorrowFirst: nil)))
         ]
-        #expect(DayEngine.waitingCount(state, now: DayEngineMomentTests.local(30, 21)) == 1)
+        #expect(WaitingOnYou(state: state, now: DayEngineMomentTests.local(30, 21)).glyphCount == 1)
         let kept = DayEngine.decide(
             .cardAction(.keep(cardID: "w")),
             snapshot: DayEngineMomentTests.snapshot(at: DayEngineMomentTests.local(30, 22)),

@@ -145,6 +145,7 @@ tesseract/
 │   ├── Companion/                     # Jarvis: the owner's day (ADR-0080)
 │   │   ├── Agenda/                    # Reminders + Calendar port (EventKit, in-memory), facade, tools, Areas
 │   │   ├── Capture/                   # Capture parser, capture door, hotkey panel
+│   │   ├── Day/                       # The day read once: the Timeline, its facts, meetings, blocks and times to leave, Waiting on You, the Day Key
 │   │   ├── Engine/                    # Day Engine (pure decider), the Step, Delivery Ladder, governor, nudges
 │   │   ├── Moments/                   # Moments, cards, prompts, card parsing, fallbacks
 │   │   ├── Thread/                    # Day Thread: one conversation per day on its own agent; pictures seen in their turn; moments read back
@@ -664,7 +665,22 @@ the panel as a **Step Cue** (`DayEngine+Steps`), built by code. The plan is a
 list of **Steps** (`Step`, ADR-0091): a task's slot and its life that day —
 cued, started, checked in, put off, cut short — each part bound to the
 step's start, its end or its task, so moving a step is one operation that
-keeps what goes with it. The system prompt carries no time;
+keeps what goes with it.
+
+The day is read once (ADR-0091): `Timeline(snapshot:state:)`
+(`Features/Companion/Day/`) projects the Agenda's snapshot and the day's
+state into `DayFacts` — what a moment is asked about — and the Timeline —
+the Day Line's rows, free time, tomorrow — and answers what every surface
+asks: the **Step under way** (one rule, `UnderWay`), the next step, when to
+leave for an event, the Inbox's offers, Waiting on You, the menu bar's
+clock. Today draws it (`CompanionRuntime.timeline(at:)`, one call), the Now
+Card is a decision table on it (`NowCardBuilder`), the Jarvis Panel lists a
+plan's steps from it, and the engine reads its focus, next step and tomorrow
+from it. How time is taken is said once (`DayFacts+Time`): an event is a
+meeting (other people, or a place) or a block of the owner's own, and a
+time to leave stands while its event does; the Day Line's free time, a
+step's boundaries and a plan's placements are each a named composition of
+that. The system prompt carries no time;
 every user message carries a stored **Now Tag**. Other apps' banners are sorted
 by code on arrival (`NotificationSources`: a person, an app's news, or noise —
 the system's banners and games, recognised by `AppIdentityResolver`), so only

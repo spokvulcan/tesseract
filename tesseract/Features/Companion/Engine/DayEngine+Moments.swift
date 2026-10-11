@@ -93,7 +93,7 @@ nonisolated extension DayEngine {
     static func resumeInterrupted(snapshot: DaySnapshot, state: inout DayState) -> [DayEffect] {
         guard let kind = state.interrupted else { return [] }
         state.interrupted = nil
-        guard kind == .morningPlan, !state.morningPlanResumed, !isEvening(snapshot),
+        guard kind == .morningPlan, !state.morningPlanResumed, !snapshot.isEvening,
             let index = state.cards.lastIndex(where: { $0.kind == .morningPlan }),
             !state.cards[index].dismissed
         else { return [] }

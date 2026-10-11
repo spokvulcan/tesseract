@@ -1784,12 +1784,46 @@ reads as its card (its line, what it holds, its choices live while the day
 still holds the card), never as a system note.
 _Avoid_: dashboard, Mission Control (retired), home screen (unqualified).
 
+**Timeline**:
+The day as the owner lives it, read once from Reminders, Calendar and the Day
+Engine's state at one moment: events and tasks in time order on the Day Line,
+free time, the Now line, the Anytime tasks, then tomorrow — with what every
+surface asks of the day: the step under way, the next step, when to leave for
+an event, the Inbox's offers, what waits on the owner. Today draws it, the
+Jarvis Panel lists a plan's steps from it, the menu bar counts down from it,
+and the Day Engine reads its focus and tomorrow from it, so no two of them
+read the day two ways.
+_Avoid_: day model, schedule.
+
+**Step under way**:
+The one step the day is on, by one rule, the first that matches: a step the
+owner started whose slot holds now (inside a block of theirs, or over a
+meeting it runs into); a meeting under way; a block of the owner's own under
+way; a task whose slot or time holds now, not started. The Now Card leads with
+it, the Day Line tints its row alone, and while a started one runs the menu
+bar counts it down and no other Step Cue interrupts it.
+_Avoid_: current step, active step, focus (unqualified).
+
+**Meeting**:
+An event with other people invited, or a place to be (an appointment, a
+class): it ends a step five minutes before it, the time to leave for it does
+too, and under way it is the step under way over a block. Only one with other
+people keeps a Step Cue off the panel.
+_Avoid_: event (unqualified: a block is one too).
+
+**Block**:
+An event of the owner's own: no one else invited and nowhere to be ("Work",
+09:00–13:00). Steps happen in it: it ends none and moves none, and a step the
+owner starts inside it is the step under way. A plan still places nothing
+over it.
+_Avoid_: focus time, meeting.
+
 **Now Card**:
-The top of Today: the step the day is on (the meeting under way, the task
-whose slot is now — once the owner started it, how much of it is left, in
-words and a short bar that drains like a visual timer; not started (its cue
-closed, missed or answered by mistake), its time and Start now — a task
-that slid, free time and what fits
+The top of Today: the step the day is on (the step under way — one the owner
+started, how much of it is left, in words and a short bar that drains like a
+visual timer; the meeting or block under way; a task whose slot is now, not
+started (its cue closed, missed or answered by mistake), its time and Start
+now — the time to leave, a task that slid, free time and what fits
 in it, the next step, what's left, or a done day and how tomorrow starts —
 within half a day, how far off that is; in
 the evening it closes the day — what is still ahead tonight, else what got

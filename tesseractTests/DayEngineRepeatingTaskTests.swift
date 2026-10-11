@@ -92,8 +92,7 @@ struct DayEngineRepeatingTaskTests {
         let state = DayEngine.decide(
             .agendaChanged, snapshot: Self.snapshot(at: evening), state: Self.state()
         ).state
-        let facts = Self.snapshot(at: evening).facts(state: state)
-        let timeline = TimelineBuilder.build(facts: facts)
+        let timeline = Timeline(snapshot: Self.snapshot(at: evening), state: state)
         let steps = timeline.rows.compactMap { row -> TimelineTask? in
             if case .task(let task) = row.kind { task } else { nil }
         }
@@ -104,10 +103,7 @@ struct DayEngineRepeatingTaskTests {
         #expect(timeline.mustDo?.isDone == true)
         #expect(timeline.tomorrow.anytime.map(\.id) == ["daily"])
         #expect(timeline.tomorrow.anytime.first?.isMustDo == false)
-        let card = NowCardBuilder.build(
-            timeline: timeline, facts: facts,
-            context: NowCardBuilder.Context(
-                companionOn: true, planned: true, wrappedUp: false, eveningMinutes: 21 * 60))
+        let card = NowCardBuilder.build(timeline, companionOn: true)
         #expect(card.headline == "1 of 2 done today, the must-do among them.")
     }
 

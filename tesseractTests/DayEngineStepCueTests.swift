@@ -469,17 +469,17 @@ struct DayEngineStepCueTests {
     @Test func theStepTheOwnerStartedIsTheMenuBarsFocusWhileItRuns() throws {
         let started = Self.started()
         let focus = try #require(
-            DayEngine.focus(snapshot: Self.snapshot(at: Self.local(11, 20)), state: started))
+            Timeline(snapshot: Self.snapshot(at: Self.local(11, 20)), state: started).focus)
         #expect(focus.reminderID == "letter")
         #expect(focus.end == Self.local(11, 32))
         #expect(
-            DayEngine.focus(snapshot: Self.snapshot(at: Self.local(11, 32)), state: started) == nil)
+            Timeline(snapshot: Self.snapshot(at: Self.local(11, 32)), state: started).focus == nil)
         let doneEarly = Self.snapshot(
             at: Self.local(11, 20), open: [Self.deck, Self.dentist], done: [Self.letter])
-        #expect(DayEngine.focus(snapshot: doneEarly, state: started) == nil)
+        #expect(Timeline(snapshot: doneEarly, state: started).focus == nil)
         // A slot that was only cued, never started, is no focus.
         #expect(
-            DayEngine.focus(snapshot: Self.snapshot(at: Self.local(11, 15)), state: Self.cued())
+            Timeline(snapshot: Self.snapshot(at: Self.local(11, 15)), state: Self.cued()).focus
                 == nil)
     }
 
@@ -508,7 +508,7 @@ struct DayEngineStepCueTests {
 
     @Test func theMenuBarCountsDownTheStartedStep() {
         #expect(
-            DayEngine.clock(snapshot: Self.snapshot(at: Self.local(11, 20)), state: Self.started())
+            Timeline(snapshot: Self.snapshot(at: Self.local(11, 20)), state: Self.started()).clock
                 == MenuBarClock(
                     kind: .focus, title: "Write to the case worker", until: Self.local(11, 32)))
     }
@@ -519,20 +519,23 @@ struct DayEngineStepCueTests {
             calendarID: "c", calendarTitle: "Work", hasOtherAttendees: true)
         let state = Self.state()
         #expect(
-            DayEngine.clock(
-                snapshot: Self.snapshot(at: Self.local(11, 29), events: [review]), state: state)
+            Timeline(
+                snapshot: Self.snapshot(at: Self.local(11, 29), events: [review]), state: state
+            ).clock
                 == nil)
         #expect(
-            DayEngine.clock(
-                snapshot: Self.snapshot(at: Self.local(11, 30), events: [review]), state: state)
+            Timeline(
+                snapshot: Self.snapshot(at: Self.local(11, 30), events: [review]), state: state
+            ).clock
                 == MenuBarClock(kind: .event, title: "Design review", until: Self.local(12)))
         // An all-day event has no start to count down to.
         let birthday = AgendaEvent(
             id: "b", title: "Birthday", start: Self.local(0), end: Self.local(24), isAllDay: true,
             calendarID: "c", calendarTitle: "Home")
         #expect(
-            DayEngine.clock(
-                snapshot: Self.snapshot(at: Self.local(11, 30), events: [birthday]), state: state)
+            Timeline(
+                snapshot: Self.snapshot(at: Self.local(11, 30), events: [birthday]), state: state
+            ).clock
                 == nil)
     }
 
@@ -544,8 +547,9 @@ struct DayEngineStepCueTests {
             end: Self.local(12, 30), calendarID: "c", calendarTitle: "Work",
             hasOtherAttendees: true)
         let clock = try #require(
-            DayEngine.clock(
-                snapshot: Self.snapshot(at: Self.local(11, 35), events: [review]), state: started))
+            Timeline(
+                snapshot: Self.snapshot(at: Self.local(11, 35), events: [review]), state: started
+            ).clock)
         #expect(clock.kind == .event)
         #expect(clock.until == Self.local(11, 45))
     }
@@ -561,21 +565,24 @@ struct DayEngineStepCueTests {
                 eventStart: Self.local(18, 30))
         ]
         #expect(
-            DayEngine.clock(
-                snapshot: Self.snapshot(at: Self.local(17, 40), events: [climbing]), state: state)
+            Timeline(
+                snapshot: Self.snapshot(at: Self.local(17, 40), events: [climbing]), state: state
+            ).clock
                 == MenuBarClock(kind: .leave, title: "Climbing", until: Self.local(18)))
         // Past the time to leave: the event's own start.
         let late = try #require(
-            DayEngine.clock(
-                snapshot: Self.snapshot(at: Self.local(18, 5), events: [climbing]), state: state))
+            Timeline(
+                snapshot: Self.snapshot(at: Self.local(18, 5), events: [climbing]), state: state
+            ).clock)
         #expect(late.kind == .event)
         // Moved since the plan set the time: no time to leave, and the event
         // is more than half an hour off.
         var moved = climbing
         moved.start = Self.local(19)
         #expect(
-            DayEngine.clock(
-                snapshot: Self.snapshot(at: Self.local(17, 40), events: [moved]), state: state)
+            Timeline(
+                snapshot: Self.snapshot(at: Self.local(17, 40), events: [moved]), state: state
+            ).clock
                 == nil)
     }
 
@@ -827,7 +834,7 @@ struct DayEngineStepCueTests {
         #expect(slot.start == Self.local(11, 50))
         #expect(slot.minutes == 15)
         #expect(
-            DayEngine.focus(snapshot: Self.snapshot(at: Self.local(11, 55)), state: longer.state)?
+            Timeline(snapshot: Self.snapshot(at: Self.local(11, 55)), state: longer.state).focus?
                 .end == Self.local(12, 5))
         #expect(Self.cues(Self.tick(longer.state, at: Self.local(11, 51)).effects).isEmpty)
         let again = try #require(
@@ -1073,7 +1080,7 @@ struct DayEngineStepCueTests {
         #expect(slot.minutes == 5)
         #expect(Self.traced(.cueReaction, in: small.effects)?["action"] == .string("startSmall"))
         #expect(
-            DayEngine.focus(snapshot: Self.snapshot(at: Self.local(11, 13)), state: small.state)?
+            Timeline(snapshot: Self.snapshot(at: Self.local(11, 13)), state: small.state).focus?
                 .end == Self.local(11, 16))
         let check = Self.tick(small.state, at: Self.local(11, 16))
         let cue = try #require(Self.cues(check.effects).first)
@@ -1100,7 +1107,7 @@ struct DayEngineStepCueTests {
         #expect(slot.start == Self.local(11, 12))
         #expect(slot.minutes == DayEngine.lostSlotMinutes)
         #expect(
-            DayEngine.focus(snapshot: Self.snapshot(at: Self.local(11, 20)), state: started.state)?
+            Timeline(snapshot: Self.snapshot(at: Self.local(11, 20)), state: started.state).focus?
                 .reminderID == "letter")
         let small = DayEngine.decide(
             .cardAction(.step(reminderID: "letter", .startSmall)),
