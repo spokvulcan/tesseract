@@ -64,7 +64,9 @@ in a dozen suites, and every one of them passed serially.
   - To find a park these rules miss, run the target on a one-thread pool:
     `TEST_RUNNER_LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 scripts/test.sh` (about
     a minute). The trait cancels its cases there, and any other park hangs the
-    run within seconds; `sample <test host pid>` shows the parked stack. In CI,
+    run within seconds; `sample <test host pid>` shows the parked stack. A
+    check on the clock can fail there and pass in a parallel run:
+    `backReturnsToPreviousPagePromptly`'s back navigation took 17 s. In CI,
     `scripts/test-hang-watchdog.sh` samples a run still going after 20
     minutes, prints the parked threads and stops it.
 - **Wait for the state change, not the clock.** Every `@MainActor` suite
