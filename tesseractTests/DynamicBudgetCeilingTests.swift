@@ -770,7 +770,7 @@ struct HydrationGateResolveTests {
         // Deep body-less state-5 node whose chain is absurdly large —
         // recomputing 4 tokens beats a terabyte read at any throughput.
         let ref = PrefixCacheTestFixtures.makeRef(tokenOffset: 8, bytesOnDisk: 1 << 40)
-        manager.restoreSnapshotRef(
+        manager.testSeam().restoreSnapshotRef(
             path: path, snapshotRef: ref, partitionKey: key, lastAccessTime: .now
         )
 
@@ -796,7 +796,7 @@ struct HydrationGateResolveTests {
         let manager = makeManager(hydrating: hydrating)
         let path = Array(1...8)
         let ref = PrefixCacheTestFixtures.makeRef(tokenOffset: 8, bytesOnDisk: 0)
-        manager.restoreSnapshotRef(
+        manager.testSeam().restoreSnapshotRef(
             path: path, snapshotRef: ref, partitionKey: key, lastAccessTime: .now
         )
         hydrating.programSuccess(
@@ -823,7 +823,7 @@ struct HydrationGateResolveTests {
         let manager = makeManager(hydrating: hydrating)
         let path = Array(1...8)
         let ref = PrefixCacheTestFixtures.makeRef(tokenOffset: 8, bytesOnDisk: 1024)
-        manager.restoreSnapshotRef(
+        manager.testSeam().restoreSnapshotRef(
             path: path, snapshotRef: ref, partitionKey: key, lastAccessTime: .now
         )
         hydrating.programSuccess(

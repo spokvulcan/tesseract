@@ -7,8 +7,9 @@
   application inline; the inline decision itself stands), ADR-0079 (where the
   keyed path asks for its Speculation Plan, and when the MTP fold it deferred
   fits)
-- Partly built by: ADR-0093 (2026-10-11, decision 8's Decode Start; see the
-  amendment at the end)
+- Partly built by: ADR-0093 (2026-10-11, decision 8's Decode Start), ADR-0094
+  (2026-10-11, decision 7's usable-restore rule) and the manager's call order
+  around decision 6 (2026-10-11); see the amendments at the end
 - Relates to: ADR-0069 and its 2026-10-03 amendment (the cold fallback after
   a failed restore, whose rule this ADR gives a home), ADR-0007 (Cache Key
   Space and Position Anchor; its rejection of app-side patch-count math
@@ -272,3 +273,43 @@ Image Span (the keyed turn) or text only (every re-prefill). The planner's
 restore decision, the Leaf Admission Builder, the Leaf Store's boundary route,
 the Speculative Canonical Prefill and salvage-on-cancel all read it, and the
 latter two producers restore and extend through one Residual Prefill.
+
+## Amendment (2026-10-11): the manager keeps the order around the cold fallback
+
+Decision 6 has plan application perform the drop and read the checkpoint plan
+again. Both plans had to follow Snapshot Resolution and take the hit's
+alignment (`alignTo: resolved.alignmentLookup`), an order held only by
+comments at plan application. The Prefix Cache Manager now keeps it, ahead of
+the rest of this ADR:
+
+1. **Resolution returns its plan.** A keyed turn calls
+   `resolve(…, planningFrom: stablePrefixOffset, for: claim)`. It resolves,
+   then plans the checkpoints against the settled tree in its own MainActor
+   hop, aligned to the hit, and returns a `PlannedResolution`: the resolution,
+   the plan and what the plan was made from. The hops and their order are the
+   ones plan application made.
+2. **The drop returns the re-plan.** `dropUnrestorableSnapshot(_:corruptLayers:replanning:)`
+   drops the snapshot the keyed turn failed to restore and, when a body went,
+   plans the turn's checkpoints again in the same hop. The failed-restore
+   policy (`ResidualPrefill.dropUnrestorable`) returns that re-plan to plan
+   application, which only takes it; the policy's generic follow-up closure is
+   gone.
+3. **The manager's own steps are private.** Both `planCheckpoints` overloads,
+   `alignmentCheckpointOffset`, `promote`, `promoteChainPrefix`,
+   `restoreSnapshotRef`, `evictToFitBudget`, `applyMemoryPressure` and
+   `budgetFloorBytes` run only inside the manager's sequences. The suites
+   reach the ones they drive through `testSeam()`, which
+   scripts/test-only-code.allow lists with its reason. `LookupResult.restoreCache()`,
+   dead in production since every restore goes through the Model Session's
+   `restore` verb, is deleted; the suites restore through the snapshot.
+
+Left where they are, each with one caller that names its order: the Leaf
+Admission settles its `extensionBase` before the Model Session is entered,
+view persistence follows check-in outside the claim (ADR-0069 decision 3), and
+the Leaf Store releases a boundary turn's Backing Leaf after the canonical
+leaf is admitted. Moving them into the manager would carry effects across the
+claim's seam for no second caller.
+
+No diagnostics line changes. `SnapshotResolutionTests.aKeyedResolutionCarriesItsPlanAndADropPlansItAgain`
+drives both returns through the manager's interface, and replaces
+`PrefixCacheManagerTests.planCheckpointsWithAlignToIncludesAlignmentCheckpoint`.

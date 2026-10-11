@@ -96,7 +96,7 @@ struct LeafHomeGuaranteeTests {
         #expect(resolved.lookup.snapshot != nil)
         PrefixCacheTestFixtures.admitUniformLeaf(
             manager, tokens: Array(40...49), partitionKey: key)  // freshest leaf
-        #expect(manager.budgetFloorBytes() == snapBytes * 2, "pin + freshest leaf")
+        #expect(manager.testSeam().budgetFloorBytes() == snapBytes * 2, "pin + freshest leaf")
 
         manager.setMemoryBudget(0)
         #expect(manager.lookup(tokens: Array(20...39), partitionKey: key).snapshot != nil)

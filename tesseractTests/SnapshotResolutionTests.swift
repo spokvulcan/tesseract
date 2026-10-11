@@ -163,7 +163,7 @@ import MLXLMCommon
             telemetry.trees.flatMap(\.nodes).first { $0.tokenOffset == 4 })
         #expect(checkpoint.hasSnapshot)
         #expect(checkpoint.checkpointKind == "prefixView")
-        let restored = try #require(resolved.lookup.restoreCache())
+        let restored = try #require(resolved.lookup.restoredCache())
         #expect(restored[0].offset == 4)
         #expect(restored[1].state[0].item(Float.self) == 42)
         let ownedAddresses = Set(
@@ -211,10 +211,57 @@ import MLXLMCommon
         _ manager: PrefixCacheManager, path: [Int], offset: Int
     ) -> SnapshotRef {
         let ref = PrefixCacheTestFixtures.makeRef(tokenOffset: offset)
-        manager.restoreSnapshotRef(
+        manager.testSeam().restoreSnapshotRef(
             path: path, snapshotRef: ref, partitionKey: key, lastAccessTime: .now
         )
         return ref
+    }
+
+    // MARK: - A keyed turn's planned resolution
+
+    /// A keyed turn's resolution returns its checkpoint plan (ADR-0087
+    /// decision 6), made against the settled tree and aligned to the hit:
+    /// the tree matches 400 tokens past the system checkpoint it hits, so
+    /// the plan adds the alignment branch point there and leaves out the
+    /// system checkpoint the tree already holds. Dropping that checkpoint as
+    /// unrestorable plans the turn again in the same hop, and the re-plan
+    /// wants it back; a drop that took nothing returns no re-plan.
+    @Test func aKeyedResolutionCarriesItsPlanAndADropPlansItAgain() async throws {
+        let manager = makeManager()
+        let matched = Array(1...500)
+        manager.admit(
+            SnapshotAdmission.checkpoints(
+                fullPromptTokens: matched,
+                candidates: [.ramOnly(makeSnapshot(offset: 100, type: .system))],
+                partitionKey: key)!)
+        let request = matched + [999]
+        let context = diagnostics
+        let (planned, handOver) = await CacheClaim.withRequestClaim(
+            context: context, prefixCache: manager,
+            sessions: ToyModelSessionProvider(model: ToyLanguageModel(script: [1, 2])),
+            memory: nil, tripwire: .standard
+        ) { claim in
+            await manager.resolve(
+                tokens: request, promptTokenCount: request.count, partitionKey: key,
+                modelFingerprint: nil, diagnostics: context, planningFrom: 100, for: claim)
+        }
+        #expect(planned.resolved.lookup.snapshotTokenOffset == 100)
+        #expect(planned.checkpointPlan.contains { $0.offset == 500 && $0.type == .branchPoint })
+        #expect(!planned.checkpointPlan.contains { $0.offset == 100 })
+
+        let failed = try #require(planned.resolved.lookup.snapshot)
+        let dropped = manager.dropUnrestorableSnapshot(
+            failed, corruptLayers: false, replanning: planned)
+        #expect(dropped.drop == .body)
+        let replanned = try #require(dropped.replanned)
+        #expect(replanned.contains { $0.offset == 100 && $0.type == .system })
+        #expect(replanned.contains { $0.offset == 500 && $0.type == .branchPoint })
+
+        let again = manager.dropUnrestorableSnapshot(
+            failed, corruptLayers: false, replanning: planned)
+        #expect(again.drop == .notFound)
+        #expect(again.replanned == nil)
+        await handOver.withClaim { _ in }
     }
 
     // MARK: - Without hydration (passthrough)

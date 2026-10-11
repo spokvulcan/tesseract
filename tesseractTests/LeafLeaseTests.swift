@@ -123,7 +123,9 @@ struct LeafLeaseTests {
         // Letting go of the pins and the lane never ends a lease.
         await owner.withClaim { _ in }
 
-        try #require(manager.budgetFloorBytes() == 8_320, "a claim's release cannot end the lease")
+        try #require(
+            manager.testSeam().budgetFloorBytes() == 8_320, "a claim's release cannot end the lease"
+        )
         manager.setMemoryBudget(0)
         #expect(tree.totalSnapshotBytes == 8_320)
         #expect(manager.clearRAMTier() == 0)

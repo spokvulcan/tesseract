@@ -624,7 +624,10 @@ replay allocated multi-gigabyte synthetic arrays and blocked MainActor
 pressure response and SSD demotion remain active. Each keyed request holds one
 Cache Claim (`CacheClaim`, ADR-0069): its reserve lane, its Restore Pins and,
 after a Leaf Handoff, its Leaf Lease, concluded exactly once inside the
-request's LLM gate turn. Its check-out answer and what the restore yielded
+request's LLM gate turn. A keyed turn's resolution returns its checkpoint
+plan (`PlannedResolution`), and dropping a snapshot that failed to restore
+returns the re-plan, so the manager keeps that order rather than plan
+application (ADR-0087 amendment). Its check-out answer and what the restore yielded
 are the turn's one Turn Restore (`TurnRestore`), which the `lookup` line, the
 memory phases, the `leafStore` report and the leaf's reserve source all read.
 Whether a snapshot can seed a prefill is one rule,

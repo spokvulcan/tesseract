@@ -82,8 +82,7 @@ nonisolated enum ResidualPrefill {
         } catch {
             let drop = await dropUnrestorable(
                 base.snapshot, error: error, tokens: base.path, partitionKey: partitionKey,
-                prefixCache: prefixCache, diagnostics: diagnostics
-            ) { _ in }.drop
+                prefixCache: prefixCache, diagnostics: diagnostics)
             throw .unrestorable(drop: drop, error: error)
         }
         for layer in cache { layer.reserveCapacity(base.path.count) }
@@ -129,28 +128,56 @@ nonisolated enum ResidualPrefill {
     }
 
     /// The one failed-restore policy (ADR-0069 amendment): a snapshot whose
-    /// restore threw is dropped through the manager, so no later request
-    /// resolves to it and pays the same failed restore; `then` runs against
-    /// the settled tree in the same MainActor hop (the keyed turn plans its
-    /// checkpoints again there); and one skip line says what went. A
-    /// `HybridCacheSnapshot.RestoreError` means the layers themselves are
-    /// corrupt, so the SSD copy goes too.
-    static func dropUnrestorable<Then: Sendable>(
+    /// restore threw is dropped through the manager, in one MainActor hop, so
+    /// no later request resolves to it and pays the same failed restore; and
+    /// one skip line says what went. A `HybridCacheSnapshot.RestoreError`
+    /// means the layers themselves are corrupt, so the SSD copy goes too.
+    static func dropUnrestorable(
         _ snapshot: HybridCacheSnapshot,
         error: any Error,
         tokens: [Int],
         partitionKey: CachePartitionKey,
         prefixCache: PrefixCacheManager,
-        diagnostics: PrefixCacheDiagnostics.Context,
-        then: @MainActor @Sendable (PrefixCacheManager.UnrestorableSnapshotDrop) -> Then
-    ) async -> (drop: PrefixCacheManager.UnrestorableSnapshotDrop, then: Then) {
+        diagnostics: PrefixCacheDiagnostics.Context
+    ) async -> PrefixCacheManager.UnrestorableSnapshotDrop {
         let corruptLayers = error is HybridCacheSnapshot.RestoreError
-        let outcome = await MainActor.run {
-            let drop = prefixCache.dropUnrestorableSnapshot(
+        let drop = await MainActor.run {
+            prefixCache.dropUnrestorableSnapshot(
                 snapshot, tokens: tokens, partitionKey: partitionKey,
                 corruptLayers: corruptLayers)
-            return (drop: drop, then: then(drop))
         }
+        logDropped(snapshot, drop: drop, error: error, diagnostics: diagnostics)
+        return drop
+    }
+
+    /// The same policy for a keyed turn's own restore, whose drop also
+    /// returns the turn's checkpoint plan made again against the settled tree
+    /// in the same hop (`nil` unless a body went).
+    static func dropUnrestorable(
+        _ snapshot: HybridCacheSnapshot,
+        error: any Error,
+        replanning planned: PrefixCacheManager.PlannedResolution,
+        prefixCache: PrefixCacheManager,
+        diagnostics: PrefixCacheDiagnostics.Context
+    ) async -> (
+        drop: PrefixCacheManager.UnrestorableSnapshotDrop,
+        replanned: PrefixCacheManager.CheckpointPlan?
+    ) {
+        let corruptLayers = error is HybridCacheSnapshot.RestoreError
+        let outcome = await MainActor.run {
+            prefixCache.dropUnrestorableSnapshot(
+                snapshot, corruptLayers: corruptLayers, replanning: planned)
+        }
+        logDropped(snapshot, drop: outcome.drop, error: error, diagnostics: diagnostics)
+        return outcome
+    }
+
+    private static func logDropped(
+        _ snapshot: HybridCacheSnapshot,
+        drop: PrefixCacheManager.UnrestorableSnapshotDrop,
+        error: any Error,
+        diagnostics: PrefixCacheDiagnostics.Context
+    ) {
         diagnostics.logSkip(
             stage: "restore",
             reason: "unrestorable-snapshot",
@@ -158,10 +185,9 @@ nonisolated enum ResidualPrefill {
             extraFields: [
                 ("offset", "\(snapshot.tokenOffset)"),
                 ("checkpointType", snapshot.checkpointType.wireString),
-                ("drop", outcome.drop.rawValue),
+                ("drop", drop.rawValue),
                 ("error", String(describing: error)),
             ]
         )
-        return outcome
     }
 }

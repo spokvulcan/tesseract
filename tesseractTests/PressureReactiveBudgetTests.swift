@@ -148,7 +148,7 @@ struct PressureReactiveBudgetManagerTests {
         admit(manager, tokens: Array(60...69), type: .branchPoint)
         #expect(manager.stats.snapshotCount == 4)
 
-        let floor = manager.budgetFloorBytes()
+        let floor = manager.testSeam().budgetFloorBytes()
         #expect(floor == snapBytes, "floor = the freshest leaf")
 
         pressure.send(.critical)

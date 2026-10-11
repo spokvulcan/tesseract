@@ -456,7 +456,7 @@ struct CacheClaimTests {
         #expect(copy.refusal.rawValue == expected.refusal)
         #expect(tree.leaseCount == 0)
         #expect(await rewindAndConclude(handOver) == nil)
-        let restored = try #require(resolved.lookup.restoreCache())
+        let restored = try #require(resolved.lookup.restoredCache())
         #expect(restored[0] as AnyObject !== layer as AnyObject)
         #expect(backingAddress(restored[0].state[0]) != backingAddress(body.layers[0].state[0]))
     }
@@ -557,7 +557,7 @@ struct CacheClaimTests {
         #expect(body.layers.isEmpty, "retained lookup handles must release the frozen array views")
         #expect(tree.allSnapshotNodes().allSatisfy { $0.state.body == nil })
         #expect(manager.totalSnapshotBytes == 4_096)
-        #expect(manager.budgetFloorBytes() == 4_096)
+        #expect(manager.testSeam().budgetFloorBytes() == 4_096)
 
         _ = kv.update(keys: MLXArray.ones([1, 1, 1, 64]), values: MLXArray.ones([1, 1, 1, 64]))
         eval(kv)

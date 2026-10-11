@@ -56,9 +56,10 @@ ADR-0069's amendment admits.
    the admission, and it stays out. Plan application keeps its shape switch
    (ADR-0033) and reads the same rule.
 3. **One failed-restore policy.** `ResidualPrefill.dropUnrestorable` drops the
-   snapshot through the manager, runs a follow-up against the settled tree in
-   the same MainActor hop (the keyed turn's checkpoint re-plan), and logs the
-   one `restore/unrestorable-snapshot` line. The keyed turn, the boundary
+   snapshot through the manager in one MainActor hop and logs the one
+   `restore/unrestorable-snapshot` line; for the keyed turn the manager's drop
+   also returns the turn's checkpoint plan made again in that hop (ADR-0087's
+   2026-10-11 amendment on the manager's call order). The keyed turn, the boundary
    route and the speculative pass all use it; a failed restore returns a typed
    failure the producer words as before.
 4. **The speculative pass is a Model Session client.** It takes a session

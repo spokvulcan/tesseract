@@ -167,11 +167,14 @@ Admission carries out); admission tail (the retired hand-sequenced shape).
 **Snapshot Resolution**:
 The read side of the prefix cache: resolve a token path to the best usable
 snapshot, returning a hit or a miss. The read-side counterpart to **Snapshot
-Admission**; distinct from `restoreCache`, the later model-affine step that applies
-a resolved snapshot into a live cache (resolution picks *which*, restore
-*applies* it). Owned by the **Prefix Cache Manager** as its single read-side
-entry, never a free-standing module reaching back across the manager's mutation
-seam. The lookup-then-hydrate *choosing* — the Hydration Gate outcome, the
+Admission**; distinct from restore, the later model-affine step (the **Model
+Session**'s `restore` verb) that applies a resolved snapshot into a live cache
+(resolution picks *which*, restore *applies* it). Owned by the **Prefix Cache
+Manager** as its single read-side entry, never a free-standing module reaching
+back across the manager's mutation seam. A keyed turn's resolution returns its
+checkpoint plan too, made in its own hop against the settled tree and aligned
+to the hit, so no caller plans before resolution or without its alignment
+(`PlannedResolution`, ADR-0087 decision 6). The lookup-then-hydrate *choosing* — the Hydration Gate outcome, the
 promote-on-success vs typed-cleanup-on-failure fork, the gate-fallback shapes —
 now lives in a pure decision ladder (`SnapshotResolutionLadder`) the manager
 consults; ownership is unmoved, the manager still performs every effect (the
@@ -181,8 +184,8 @@ _Avoid_: a standalone "hydrator" module (the retired shape that reached back int
 the manager — resolution is manager-owned); a ladder holding references to the
 manager/tree/ledger/hydrating handle (the retired hydrator's shape again — the
 ladder takes plain facts, returns decision values); **Snapshot Hydrating** (a
-different concept: the off-main handle, not the choose step); restore/restoreCache
-(the apply step, not the choose step).
+different concept: the off-main handle, not the choose step); restore (the
+apply step, not the choose step).
 
 **Snapshot Hydrating**:
 The narrow off-main handle that **Snapshot Resolution** depends on to materialize

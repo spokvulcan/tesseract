@@ -92,13 +92,13 @@ struct PromptCacheCountersTests {
         let body = PrefixCacheTestFixtures.makeUniformSnapshot(
             offset: tokens.count, type: .leaf
         )
-        manager.promote(node: node, snapshot: body, partitionKey: key)
+        manager.testSeam().promote(node: node, snapshot: body, partitionKey: key)
         #expect(manager.cumulativeCounters.hydrations == 1)
         #expect(manager.cumulativeCounters.hitTokens == tokens.count)
 
         // A promote that misses its window (node no longer ssdOnly) is
         // ignored and must not count.
-        manager.promote(node: node, snapshot: body, partitionKey: key)
+        manager.testSeam().promote(node: node, snapshot: body, partitionKey: key)
         #expect(manager.cumulativeCounters.hydrations == 1)
     }
 

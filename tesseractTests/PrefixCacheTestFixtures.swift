@@ -351,6 +351,15 @@ extension SnapshotAdmission.CheckpointCandidate {
     }
 }
 
+extension PrefixCacheManager.LookupResult {
+    /// The hit's cache as a fresh deep copy, restored through its Backing
+    /// Leaf the way the session's `restore` verb restores it; `nil` on a miss
+    /// or a restore that throws.
+    func restoredCache() -> [any KVCache]? {
+        try? snapshot?.restore(backingLeaf: backingLeaf)
+    }
+}
+
 extension PrefixCacheManager {
     /// Resolve for a fresh request **Cache Claim** and hand the claim over
     /// unredeemed: it keeps the lane and the Restore Pins resolution added

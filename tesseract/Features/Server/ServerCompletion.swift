@@ -1332,30 +1332,21 @@ nonisolated final class ServerCompletion {
             // Resolve the best usable snapshot in one place: radix lookup plus
             // lazy SSD hydration (consumed internally — only `.hit`/miss surface
             // here). `loadSync` stays off-MainActor inside this scope per
-            // ADR-0001; promote/clear hop to MainActor inside `resolve`.
-            let resolved = await prefixCache.resolve(
+            // ADR-0001; promote/clear hop to MainActor inside `resolve`, which
+            // then plans the turn's checkpoints against the settled tree in its
+            // own hop (ADR-0087 decision 6).
+            let planned = await prefixCache.resolve(
                 tokens: keySpace.keyPath,
                 promptTokenCount: fullTokenCount,
                 partitionKey: partitionKey,
                 modelFingerprint: modelFingerprint,
                 diagnostics: diagnosticsContext,
+                planningFrom: boundaries.stablePrefixOffset,
                 for: claim
             )
+            let resolved = planned.resolved
             let lookupResult = resolved.lookup
-            // Plan AFTER resolution, against the settled tree: any promote or
-            // forgiving clear has already happened, so the post-hydration-failure
-            // replan becomes the ordinary single plan. `resolved.alignmentLookup`
-            // carries the SSD-hydrated-hit special case — it aligns against
-            // nothing, matching the pre-carve ordering against the unhydrated
-            // `.ssdHit`.
-            var checkpointPlan = await MainActor.run {
-                prefixCache.planCheckpoints(
-                    tokens: keySpace.keyPath,
-                    stablePrefixOffset: boundaries.stablePrefixOffset,
-                    partitionKey: partitionKey,
-                    alignTo: resolved.alignmentLookup
-                )
-            }
+            var checkpointPlan = planned.checkpointPlan
             let lookupMs = Date.timeIntervalSinceReferenceDate - lookupStarted
 
             // 7. Fold resolution + plan into the request's Prefill Plan:
@@ -1541,24 +1532,14 @@ nonisolated final class ServerCompletion {
                     if let restoreFailure, let failed = lookupResult.snapshot {
                         // The failed-restore policy drops the snapshot that
                         // threw, so no later request pays the same failed
-                        // restore; in the same hop, plan checkpoints again
-                        // against the settled tree: one the drop took is
-                        // captured anew on this turn (ADR-0069 amendment).
-                        let keyPath = keySpace.keyPath
-                        let stablePrefixOffset = boundaries.stablePrefixOffset
+                        // restore; in the same hop the manager plans the
+                        // turn's checkpoints again against the settled tree:
+                        // one the drop took is captured anew on this turn
+                        // (ADR-0069 amendment).
                         let replanned = await ResidualPrefill.dropUnrestorable(
-                            failed, error: restoreFailure, tokens: keyPath,
-                            partitionKey: partitionKey, prefixCache: prefixCache,
-                            diagnostics: diagnosticsContext
-                        ) { drop in
-                            drop == .body || drop == .bodyAndSSDCopy
-                                ? prefixCache.planCheckpoints(
-                                    tokens: keyPath,
-                                    stablePrefixOffset: stablePrefixOffset,
-                                    partitionKey: partitionKey,
-                                    alignTo: resolved.alignmentLookup)
-                                : nil
-                        }.then
+                            failed, error: restoreFailure, replanning: planned,
+                            prefixCache: prefixCache, diagnostics: diagnosticsContext
+                        ).replanned
                         if let replanned { checkpointPlan = replanned }
                     }
                     prefillPlan = PrefillPlanner.coldPlan(
@@ -2164,10 +2145,10 @@ nonisolated final class ServerCompletion {
         throw AgentEngineError.generationFailed(rejection.message)
     }
 
-    /// The restore verb with `LookupResult.restoreCache`'s degrade-to-miss
-    /// contract: a snapshot whose persisted layers fail restoration is a
-    /// cache miss (no cache), never a crashed request — routed through the
-    /// **Model Session** so the sequencing suite observes restore ordering.
+    /// The restore verb with a degrade-to-miss contract: a snapshot whose
+    /// persisted layers fail restoration is a cache miss (no cache), never a
+    /// crashed request — routed through the **Model Session** so the
+    /// sequencing suite observes restore ordering.
     /// `failure` is what the restore threw, so the caller can drop the
     /// snapshot; `nil` when it restored or there was nothing to restore.
     private static func restoreCache(
