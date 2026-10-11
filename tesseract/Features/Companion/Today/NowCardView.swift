@@ -53,7 +53,7 @@ struct NowCardView: View {
                     JarvisWord(card: jarvis)
                 }
                 NeedsYou(waiting: waiting)
-                Leftovers(wrapUps: waiting.wrapUps, today: day.facts.startOfToday)
+                Leftovers(wrapUps: waiting.wrapUps, days: day.facts.anotherDays)
             }
         }
         .padding(16)
@@ -322,15 +322,15 @@ private struct ItemLine<Actions: View>: View {
 private struct Leftovers: View {
     @Environment(CompanionRuntime.self) private var runtime
     let wrapUps: [WaitingOnYou.WrapUp]
-    /// The owner's today, at midnight: until 04:00, the day that is ending.
-    let today: Date
+    /// Each leftover's Another Day (`DayFacts.anotherDays`).
+    let days: [Date]
 
     var body: some View {
         ForEach(wrapUps, id: \.cardID) { wrapUp in
             VStack(alignment: .leading, spacing: 8) {
                 Text(wrapUp.card.leftoversHeading).fontWeight(.semibold)
                 ForEach(wrapUp.card.leftovers) { leftover in
-                    LeftoverRow(cardID: wrapUp.cardID, leftover: leftover, today: today)
+                    LeftoverRow(cardID: wrapUp.cardID, leftover: leftover, days: days)
                 }
                 Button("Do What Jarvis Suggests for All") {
                     runtime.act(.allLeftovers(cardID: wrapUp.cardID))
@@ -345,7 +345,7 @@ private struct LeftoverRow: View {
     @Environment(CompanionRuntime.self) private var runtime
     let cardID: String
     let leftover: Leftover
-    let today: Date
+    let days: [Date]
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
@@ -370,19 +370,10 @@ private struct LeftoverRow: View {
 
     @ViewBuilder private var choices: some View {
         choice("Tomorrow", .tomorrow)
-        Menu("Another day") {
-            // From the owner's today: until 04:00, the day that is ending.
-            ForEach(2..<8, id: \.self) { offset in
-                let day = Calendar.current.date(byAdding: .day, value: offset, to: today) ?? today
-                Button(day.formatted(.dateTime.weekday(.wide).day().month())) {
-                    runtime.act(
-                        .leftoverOn(cardID: cardID, reminderID: leftover.reminderID, day: day))
-                }
-            }
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .controlSize(.small)
+        AnotherDayMenu(cardID: cardID, reminderID: leftover.reminderID, days: days)
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .controlSize(.small)
         choice("Later", .later)
         choice("Let go", .drop)
     }
@@ -395,5 +386,24 @@ private struct LeftoverRow: View {
         .buttonStyle(.bordered)
         .tint(leftover.suggestion == suggestion ? .accentColor : nil)
         .focusable(false)
+    }
+}
+
+/// A leftover's Another Day, on the Now Card and in Today's Chat: one of
+/// `days` (`DayFacts.anotherDays`), from the day model and its clock.
+struct AnotherDayMenu: View {
+    @Environment(CompanionRuntime.self) private var runtime
+    let cardID: String
+    let reminderID: String
+    let days: [Date]
+
+    var body: some View {
+        Menu("Another day") {
+            ForEach(days, id: \.self) { day in
+                Button(day.formatted(.dateTime.weekday(.wide).day().month())) {
+                    runtime.act(.leftoverOn(cardID: cardID, reminderID: reminderID, day: day))
+                }
+            }
+        }
     }
 }

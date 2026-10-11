@@ -190,7 +190,7 @@ nonisolated struct StepCue: Sendable, Equatable {
     /// The start is offered small: starting is the hard part.
     var offersSmallStart: Bool { phase == .start && putOff >= 2 }
 
-    var end: Date { start.addingTimeInterval(TimeInterval(minutes * 60)) }
+    var end: Date { Placement.end(of: start, minutes: minutes) }
 }
 
 /// A step the owner started whole and saw done in time: the minutes it
@@ -622,15 +622,22 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         plan.first { $0.reminderID == reminderID }
     }
 
+    /// Change the step `reminderID` names, in place; false when the plan
+    /// holds none.
+    @discardableResult
+    mutating func changeStep(_ reminderID: String, _ change: (inout Step) -> Void) -> Bool {
+        guard let index = plan.firstIndex(where: { $0.reminderID == reminderID }) else {
+            return false
+        }
+        change(&plan[index])
+        return true
+    }
+
     /// The Step Cue on the panel came off it unanswered (a card took the
     /// panel, the app quit, the Companion went off): its step is cued again
     /// by its rules.
     mutating func uncuePanel() {
-        if let cue = cueOnPanel,
-            let index = plan.firstIndex(where: { $0.reminderID == cue.reminderID })
-        {
-            plan[index].uncue(cue.phase)
-        }
+        if let cue = cueOnPanel { changeStep(cue.reminderID) { $0.uncue(cue.phase) } }
         cueOnPanel = nil
     }
 

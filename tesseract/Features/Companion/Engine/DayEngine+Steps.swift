@@ -93,10 +93,8 @@ nonisolated extension DayEngine {
         let starting = state.plan.filter { $0.spans(now) && $0.cuedAt == nil }
         for step in starting.sorted(by: { $0.start < $1.start }) {
             // Done, or gone from Reminders: nothing to start.
-            guard let task = day.facts.task(step.reminderID),
-                let index = state.plan.firstIndex(where: { $0.reminderID == step.reminderID })
-            else { continue }
-            state.plan[index].cuedAt = now
+            guard let task = day.facts.task(step.reminderID) else { continue }
+            state.changeStep(step.reminderID) { $0.cue(at: now) }
             // Its own alarm rings now: Reminders has it.
             if task.dueHasTime, let due = task.due, abs(due.timeIntervalSince(step.start)) < 60 {
                 continue
@@ -131,10 +129,8 @@ nonisolated extension DayEngine {
         let day = Timeline(snapshot: snapshot, state: state)
         let ended = state.plan.filter { $0.isStarted && $0.end <= now && $0.checkedInAt == nil }
         for step in ended.sorted(by: { $0.end > $1.end }) {
-            guard let task = day.facts.task(step.reminderID),
-                let index = state.plan.firstIndex(where: { $0.reminderID == step.reminderID })
-            else { continue }
-            state.plan[index].checkedInAt = now
+            guard let task = day.facts.task(step.reminderID) else { continue }
+            state.changeStep(step.reminderID) { $0.checkIn(at: now) }
             state.cueOnPanel = CueOnPanel(reminderID: step.reminderID, phase: .end)
             return present(
                 cue(task, step: step, phase: .end, day: day, state: state),
@@ -170,10 +166,6 @@ nonisolated extension DayEngine {
             resumeAt: resumeTime(for: step.slot, started: phase == .end, now: now, facts: facts))
     }
 
-    private static func end(of slot: Placement) -> Date {
-        slot.start.addingTimeInterval(TimeInterval(slot.minutes * 60))
-    }
-
     // MARK: - Clear of meetings
 
     // A meeting ends a step (`AgendaEvent.isMeeting`: other people, or a
@@ -197,15 +189,11 @@ nonisolated extension DayEngine {
     /// The task's step, cut to keep clear of the next meeting; what was cut
     /// is kept, for going on after it.
     static func keepClear(_ reminderID: String, snapshot: DaySnapshot, state: inout DayState) {
-        guard let index = state.plan.firstIndex(where: { $0.reminderID == reminderID }) else {
-            return
-        }
-        let step = state.plan[index]
+        guard let step = state.step(reminderID) else { return }
         let minutes = clearMinutes(
             from: step.start, wanted: step.minutes, facts: snapshot.facts(state: state))
         guard minutes < step.minutes else { return }
-        state.plan[index].resize(to: minutes)
-        state.plan[index].cutMinutes = step.minutes - minutes
+        state.changeStep(reminderID) { $0.cut(to: minutes) }
     }
 
     /// When a step can go on if a meeting, or the way to one, would cut into
@@ -220,7 +208,7 @@ nonisolated extension DayEngine {
         let transition = TimeInterval(transitionMinutes * 60)
         let limit =
             started
-            ? max(end(of: slot), now).addingTimeInterval(quarter + transition)
+            ? max(slot.end, now).addingTimeInterval(quarter + transition)
             : now.addingTimeInterval(2 * quarter + transition)
         let meetings = facts.meetingsToday
         var coming = meetings.filter { $0.start > now && $0.start < limit }.map {
@@ -278,10 +266,9 @@ nonisolated extension DayEngine {
             guard
                 let start = firstFree(
                     from: hit.end, minutes: step.minutes, busy: busy,
-                    until: step.start < evening ? evening : midnight, calendar: calendar),
-                let index = state.plan.firstIndex(where: { $0.reminderID == step.reminderID })
+                    until: step.start < evening ? evening : midnight, calendar: calendar)
             else { continue }
-            state.plan[index].move(to: start)
+            state.changeStep(step.reminderID) { $0.move(to: start) }
             effects.append(
                 .trace(
                     .cueMoved,
@@ -337,10 +324,10 @@ nonisolated extension DayEngine {
     static func markStartedIfNow(
         _ reminderID: String, snapshot: DaySnapshot, state: inout DayState, timed: Bool = true
     ) {
-        guard let index = state.plan.firstIndex(where: { $0.reminderID == reminderID }),
-            state.plan[index].start <= snapshot.now.addingTimeInterval(60)
+        guard let step = state.step(reminderID),
+            step.start <= snapshot.now.addingTimeInterval(60)
         else { return }
-        state.plan[index] = state.plan[index].started(at: snapshot.now, timed: timed)
+        state.changeStep(reminderID) { $0 = $0.started(at: snapshot.now, timed: timed) }
     }
 
     /// The task's step, its slot from now, started: cut clear of the next
@@ -407,7 +394,6 @@ nonisolated extension DayEngine {
             }
             if resumeAt == nil { applied = started ? .extend : .later }
         }
-        let index = state.plan.firstIndex { $0.reminderID == reminderID }
         switch applied {
         case .start:
             if move(reminderID, to: minute, state: &state) {
@@ -415,31 +401,23 @@ nonisolated extension DayEngine {
             }
         case .startSmall:
             // Five minutes from now; its end asks to keep going.
-            if let index { state.plan[index].resize(to: smallStartMinutes) }
+            state.changeStep(reminderID) { $0.resize(to: smallStartMinutes) }
             if move(reminderID, to: minute, state: &state) {
                 markStartedIfNow(reminderID, snapshot: snapshot, state: &state, timed: false)
-                if let index = state.plan.firstIndex(where: { $0.reminderID == reminderID }) {
-                    state.plan[index].isSmall = true
-                }
+                state.changeStep(reminderID) { $0.isSmall = true }
             }
         case .later:
             let later = minute.addingTimeInterval(TimeInterval(stepLaterMinutes * 60))
-            if let index { state.plan[index].putOff += 1 }
+            state.changeStep(reminderID) { $0.putOffOnce() }
             _ = move(reminderID, to: later, state: &state)
             keepClear(reminderID, snapshot: snapshot, state: &state)
         case .resume:
             // When the meeting is over, cued again then: a started step for
             // the time cut to end before it (a quarter hour at least), one not
             // begun whole. Not put off: the meeting came first.
-            if let resumeAt, let index {
-                let step = state.plan[index]
-                state.plan[index].cutMinutes = 0
-                state.plan[index].reslot(
-                    Placement(
-                        reminderID: reminderID, start: resumeAt,
-                        minutes: step.isStarted
-                            ? max(step.cutMinutes, stepLaterMinutes)
-                            : step.minutes + step.cutMinutes))
+            if let resumeAt,
+                state.changeStep(reminderID, { $0.resume(at: resumeAt, minimum: stepLaterMinutes) })
+            {
                 state.plan.sort { $0.start < $1.start }
                 keepClear(reminderID, snapshot: snapshot, state: &state)
             }
@@ -448,20 +426,14 @@ nonisolated extension DayEngine {
             // gone by: a late answer doesn't make it already over. Answered
             // late — the owner was away — it is a fresh block from now, not
             // one stretched back to its first start.
-            if let index {
-                let step = state.plan[index]
-                let quarter = TimeInterval(stepLaterMinutes * 60)
-                // Going on past five minutes: no longer a small start.
-                state.plan[index].isSmall = false
-                if minute.timeIntervalSince(step.end) >= stepCueLate {
-                    state.plan[index].reslot(
-                        Placement(
-                            reminderID: reminderID, start: minute, minutes: stepLaterMinutes))
+            if let step = state.step(reminderID) {
+                let late = minute.timeIntervalSince(step.end) >= stepCueLate
+                state.changeStep(reminderID) {
+                    $0.extend(by: stepLaterMinutes, from: minute, late: late)
+                }
+                if late {
                     markStartedIfNow(reminderID, snapshot: snapshot, state: &state, timed: false)
                     state.plan.sort { $0.start < $1.start }
-                } else {
-                    let until = max(step.end, minute).addingTimeInterval(quarter)
-                    state.plan[index].resize(to: Int(until.timeIntervalSince(step.start) / 60))
                 }
             }
         case .tomorrow:
@@ -488,10 +460,7 @@ nonisolated extension DayEngine {
     /// The task's step, keeping its length, at `start`; false when the plan
     /// has none.
     private static func move(_ reminderID: String, to start: Date, state: inout DayState) -> Bool {
-        guard let index = state.plan.firstIndex(where: { $0.reminderID == reminderID }) else {
-            return false
-        }
-        state.plan[index].move(to: start)
+        guard state.changeStep(reminderID, { $0.move(to: start) }) else { return false }
         state.plan.sort { $0.start < $1.start }
         return true
     }

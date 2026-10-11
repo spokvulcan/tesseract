@@ -960,22 +960,10 @@ private struct LeftoverChoiceRow: View {
         if let cardID {
             HStack(spacing: 6) {
                 choice("Tomorrow", .tomorrow, cardID)
-                Menu("Another day") {
-                    // From the owner's today, by the runtime's clock: until
-                    // 04:00, the day that is ending.
-                    let now = runtime.now()
-                    let today =
-                        DayKey(for: now).date() ?? Calendar.current.startOfDay(for: now)
-                    ForEach(2..<8, id: \.self) { offset in
-                        let day =
-                            Calendar.current.date(byAdding: .day, value: offset, to: today) ?? today
-                        Button(day.formatted(.dateTime.weekday(.wide).day().month())) {
-                            runtime.act(
-                                .leftoverOn(
-                                    cardID: cardID, reminderID: leftover.reminderID, day: day))
-                        }
-                    }
-                }
+                AnotherDayMenu(
+                    cardID: cardID, reminderID: leftover.reminderID,
+                    days: runtime.timeline().facts.anotherDays
+                )
                 .menuStyle(.button)
                 .fixedSize()
                 choice("Later", .later, cardID)

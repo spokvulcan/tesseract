@@ -135,6 +135,14 @@ nonisolated struct Placement: Sendable, Equatable, Hashable, Codable {
     var reminderID: String
     var start: Date
     var minutes: Int
+
+    var end: Date { Self.end(of: start, minutes: minutes) }
+
+    /// When a slot of `minutes` from `start` ends: the day's one sum of a
+    /// start and its minutes.
+    static func end(of start: Date, minutes: Int) -> Date {
+        start.addingTimeInterval(TimeInterval(minutes * 60))
+    }
 }
 
 // MARK: - Evening Wrap-up

@@ -322,6 +322,18 @@ struct TimelineTests {
         #expect(DaySteps.steps(overTask).filter(\.isUnderWay).map(\.id) == ["task-letter"])
     }
 
+    /// A leftover's Another Day: the day after tomorrow to a week on, from
+    /// the owner's today — at 01:00 still the day that is ending.
+    @Test func anotherDayIsTheDayAfterTomorrowToAWeekOn() {
+        let days = [2, 3, 4, 5, 6, 7].map {
+            Calendar.current.date(from: DateComponents(year: 2026, month: 10, day: $0))!
+        }
+        for now in [Self.local(30, 22), Self.local(31, 1)] {
+            let facts = DayFacts(snapshot: DayFixture.snapshot(now: now), state: DayFixture.state())
+            #expect(facts.anotherDays == days)
+        }
+    }
+
     // MARK: The Inbox
 
     @Test func theInboxHoldsUndatedCapturesUntilTheyArePlanned() {

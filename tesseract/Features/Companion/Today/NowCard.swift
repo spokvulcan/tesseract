@@ -351,7 +351,7 @@ nonisolated enum NowCardBuilder {
     }
 
     private static func end(of task: TimelineTask) -> Date {
-        (task.start ?? .distantPast).addingTimeInterval(TimeInterval(task.minutes * 60))
+        task.end ?? .distantPast
     }
 
     /// The current minute, seconds dropped, so a task started now reads "now".

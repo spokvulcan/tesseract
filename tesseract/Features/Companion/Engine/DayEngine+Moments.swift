@@ -709,9 +709,7 @@ nonisolated extension DayEngine {
     /// A task's slot in today's plan, in place of any it had; one from now
     /// is started, and ends before the next meeting.
     private static func place(_ slot: Placement, snapshot: DaySnapshot, state: inout DayState) {
-        if let index = state.plan.firstIndex(where: { $0.reminderID == slot.reminderID }) {
-            state.plan[index].reslot(slot)
-        } else {
+        if !state.changeStep(slot.reminderID, { $0.reslot(slot) }) {
             state.plan.append(Step(slot))
         }
         state.plan.sort { $0.start < $1.start }

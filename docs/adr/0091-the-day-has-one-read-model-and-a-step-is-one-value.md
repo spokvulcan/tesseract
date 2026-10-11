@@ -66,7 +66,13 @@ third from the plan card's placements. On top of them:
    that applies those rules, so no caller resets a life by hand. Starting is
    one too (`Step.started(at:timed:)`): a step whose slot is now is cut
    clear of the next meeting first, then started (`DayEngine.startNow`),
-   whether the owner starts it from Today or from its cue.
+   whether the owner starts it from Today or from its cue. The rest of its
+   life changes through the value as well — cued, checked in, put off, cut
+   before a meeting, going on after one, kept going a quarter hour more
+   (`cue(at:)`, `checkIn(at:)`, `putOffOnce()`, `cut(to:)`,
+   `resume(at:minimum:)`, `extend(by:from:late:)`) — reached through one
+   accessor (`DayState.changeStep`). A slot's end is one sum
+   (`Placement.end`).
 3. **The cue on the panel names a step and a phase** (`CueOnPanel`), not a
    key. Taking it down unanswered — the app quitting, the Companion going
    off, a card taking the panel — is one operation (`DayState.uncuePanel`):
