@@ -397,3 +397,23 @@ live or direct path, and on no other:
 `TurnRestoreTests.aFailedRestoresLeafReadsLikeAColdTurns` and by
 `ServerCompletionRestoreFallbackTests`: the text-only fallback turn's leaf
 reads `handoff`, the image turn's `live`, on both lines.
+
+### Declared: a turn that restored nothing records `restoredOffset=0`
+
+The trace record re-derived the restored offset from the lookup reason alone,
+so a hit the turn never restored still recorded the hit's offset beside
+`hitTokens=0`. The Completion Trace Accumulator's rule now reads the Turn
+Restore too: the restored offset is the hit's offset on a handoff or a copy,
+and 0 when the generation began from an empty cache. In the Completion Trace
+Log, and nowhere else, two kinds of record change:
+
+- a turn whose planned restore fell back cold (`failedCopy`);
+- a hit the plan ran cold because the Usable Restore refused it (a snapshot
+  covering the whole prompt, or one splitting an image run).
+
+Each records `restoredOffset=0` where it recorded the hit's offset, so it
+carries no `rewind` block (a rewind needs a restored offset), and the cache
+corpus, which counts a record as a hit when either offset is positive, counts
+it as the miss it was. No diagnostics line changes. Pinned by
+`CompletionTraceAccumulatorTests.restoredOffsetIsWhatTheTurnRestored` (hit and
+miss reasons against every outcome) and `aFallbackTurnsRecordRestoredNothing`.

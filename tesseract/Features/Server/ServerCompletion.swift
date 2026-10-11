@@ -1119,6 +1119,7 @@ nonisolated final class ServerCompletion {
                         unkeyedReason: mlxStart.keying.unkeyedReason,
                         keyPath: keyPath,
                         lookupReason: mlxStart.lookupReason,
+                        restore: mlxStart.restore,
                         restoredFromSSD: mlxStart.restoredFromSSD,
                         hitTokens: mlxStart.skippedPrefillTokens,
                         sharedPrefixLength: mlxStart.sharedPrefixLength,

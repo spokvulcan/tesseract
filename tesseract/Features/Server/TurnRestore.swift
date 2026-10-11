@@ -68,6 +68,14 @@ nonisolated enum TurnRestore: Sendable, Equatable {
         if case .failedThenCold = self { true } else { false }
     }
 
+    /// Whether the turn began from a restored cache, by handoff or by copy.
+    var restored: Bool {
+        switch self {
+        case .handoff, .copy: true
+        case .cold, .failedThenCold: false
+        }
+    }
+
     /// The `restored` memory phase's restore facts (beside the cache's own).
     var memoryFacts: [String: String] {
         var facts = [

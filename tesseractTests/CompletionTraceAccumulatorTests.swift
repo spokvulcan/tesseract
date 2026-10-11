@@ -42,6 +42,7 @@ struct CompletionTraceAccumulatorTests {
     private func makeStartFacts(
         unkeyedReason: CacheKeySpace.UnkeyedReason? = nil,
         lookupReason: PrefixCacheManager.LookupReason = .missNoEntries,
+        restore: TurnRestore = .cold,
         sharedPrefixLength: Int = 0
     ) -> CompletionTraceAccumulator.StartFacts {
         CompletionTraceAccumulator.StartFacts(
@@ -49,6 +50,7 @@ struct CompletionTraceAccumulatorTests {
             unkeyedReason: unkeyedReason,
             keyPath: [1, 2, 3],
             lookupReason: lookupReason,
+            restore: restore,
             restoredFromSSD: false,
             hitTokens: 0,
             sharedPrefixLength: sharedPrefixLength,
@@ -83,13 +85,52 @@ struct CompletionTraceAccumulatorTests {
 
     // MARK: - Restored offset rule
 
-    @Test
-    func restoredOffsetIsTheHitOffsetOrZero() {
+    nonisolated private static let hit = PrefixCacheManager.LookupReason.hit(
+        snapshotOffset: 342, totalTokens: 400, type: .leaf)
+    nonisolated private static let handoff = TurnRestore.handoff(
+        .init(leaseID: UUID(), rewindStateBytes: 0, waitSeconds: 0))
+
+    /// The restored offset is what the turn restored: the hit's offset on a
+    /// handoff or a copy, and 0 when the generation began from an empty
+    /// cache. The two cold rows of a hit are the declared fix (ADR-0069's
+    /// 2026-10-11 amendment): a restore that fell back cold, and a hit the
+    /// plan ran cold (one covering the whole prompt), used to record the
+    /// hit's offset beside `hitTokens=0`.
+    @Test(arguments: [
+        (hit, handoff, 342),
+        (hit, TurnRestore.copy(nil), 342),
+        (hit, TurnRestore.failedThenCold(nil), 0),
+        (hit, TurnRestore.cold, 0),
+        (PrefixCacheManager.LookupReason.missNoEntries, TurnRestore.cold, 0),
+        (PrefixCacheManager.LookupReason.missNoSnapshotInPrefix, TurnRestore.cold, 0),
+    ])
+    func restoredOffsetIsWhatTheTurnRestored(
+        _ reason: PrefixCacheManager.LookupReason, _ restore: TurnRestore, _ offset: Int
+    ) {
         #expect(
-            CompletionTraceAccumulator.restoredOffset(
-                for: .hit(snapshotOffset: 342, totalTokens: 400, type: .leaf)) == 342)
-        #expect(CompletionTraceAccumulator.restoredOffset(for: .missNoEntries) == 0)
-        #expect(CompletionTraceAccumulator.restoredOffset(for: .missNoSnapshotInPrefix) == 0)
+            CompletionTraceAccumulator.restoredOffset(for: reason, restore: restore) == offset)
+    }
+
+    /// A fallback turn's record restores nothing, so it carries no rewind
+    /// either.
+    @Test func aFallbackTurnsRecordRestoredNothing() throws {
+        let record = try #require(
+            CompletionTraceAccumulator().makeRecord(
+                timestamp: 1_000,
+                requestID: UUID(),
+                modelID: "test-model",
+                start: makeStartFacts(
+                    lookupReason: Self.hit, restore: .failedThenCold(nil),
+                    sharedPrefixLength: 350),
+                capturedSnapshots: [],
+                leafStore: nil,
+                ramBudgetBytes: 8_192,
+                residualPromptSeconds: 0.1,
+                deviceEstimates: nil
+            ))
+        #expect(record.restoredOffset == 0)
+        #expect(record.hitTokens == 0)
+        #expect(record.rewind == nil)
     }
 
     // MARK: - Record derivation
@@ -126,7 +167,7 @@ struct CompletionTraceAccumulatorTests {
                 modelID: "test-model",
                 start: makeStartFacts(
                     lookupReason: .hit(snapshotOffset: 300, totalTokens: 400, type: .leaf),
-                    sharedPrefixLength: 350),
+                    restore: .copy(nil), sharedPrefixLength: 350),
                 capturedSnapshots: [],
                 leafStore: leaf,
                 ramBudgetBytes: 8_192,

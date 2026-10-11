@@ -926,7 +926,8 @@ last); restore outcome (the claim's check-out answer, one input to it);
 The fold of one cache-aware **Server Completion**'s trace facts into the terminal
 trace record — the terminal-vs-recovered eviction tally paired with its correlated
 diagnostics emission (so tally and log lines cannot drift), the restored-offset
-rule, and the admitted-snapshot projections. The drive feeds facts; the value
+rule (the offset the **Turn Restore** restored, 0 when it restored nothing),
+and the admitted-snapshot projections. The drive feeds facts; the value
 decides what the record contains.
 _Avoid_: telemetry store (the window-scoped event buffer); trace logger (it
 derives, the diagnostics context logs).
