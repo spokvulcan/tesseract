@@ -24,6 +24,14 @@ struct MenuBarClockGalleryTests {
         URL(fileURLWithPath: $0, isDirectory: true)
     }
 
+    /// The glyph and the short clock are drawing, not elements VoiceOver
+    /// visits: it reads the status item's button, whose label says both.
+    @Test func theGlyphAndTheClockAreNotReadOnTheirOwn() {
+        let (_, icon, label) = MenuBarManager.makeStatusContent()
+        #expect(!icon.isAccessibilityElement())
+        #expect(!label.isAccessibilityElement())
+    }
+
     @Test(arguments: [MenuBarClock.Kind.focus, .event, .leave])
     func theClockSitsBesideTheGlyph(_ kind: MenuBarClock.Kind) throws {
         let now = Date(timeIntervalSinceReferenceDate: 0)

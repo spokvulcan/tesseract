@@ -82,6 +82,9 @@ final class MenuBarManager: NSObject {
     private var clockLabel: NSTextField?
     private var clock: MenuBarClock?
     private var clockRefresh: Timer?
+    /// What the glyph says it is doing ("Tesseract Agent — recording"): the
+    /// start of the status item's VoiceOver label.
+    private var activityDescription = "Tesseract Agent"
     private var settingsObservationTask: Task<Void, Never>?
     /// The Models section's live state, and the clock that refreshes it while
     /// the menu is open.
@@ -155,10 +158,17 @@ final class MenuBarManager: NSObject {
         applyClock()
     }
 
+    /// The clock beside the glyph, while it still counts down.
+    private func shownClock(at now: Date) -> MenuBarClock? {
+        guard let clock, clock.until > now else { return nil }
+        return clock
+    }
+
     private func applyClock() {
         guard let item = statusItem, let label = clockLabel else { return }
         let now = Date()
-        if let clock, clock.until > now {
+        defer { applyAccessibilityLabel(now: now) }
+        if let clock = shownClock(at: now) {
             label.stringValue = MenuBarClockText.label(clock, now: now)
             label.isHidden = false
             item.length = 22 + 3 + label.intrinsicContentSize.width + 6
@@ -172,6 +182,15 @@ final class MenuBarManager: NSObject {
                 clockRefresh = nil
             }
         }
+    }
+
+    /// VoiceOver reads the status item as one element, the button: what the
+    /// glyph shows, then the clock in words. The glyph and the short clock
+    /// beside it are not elements of their own, so "25m" is never read alone.
+    private func applyAccessibilityLabel(now: Date = Date()) {
+        statusItem?.button?.setAccessibilityLabel(
+            MenuBarClockText.accessibilityLabel(
+                activity: activityDescription, clock: shownClock(at: now), now: now))
     }
 
     // MARK: - Status item
@@ -227,9 +246,11 @@ final class MenuBarManager: NSObject {
     static func makeStatusContent() -> (stack: NSStackView, icon: NSImageView, label: NSTextField) {
         let icon = ClickThroughImageView()
         icon.imageScaling = .scaleNone
+        icon.setAccessibilityElement(false)
         let label = ClickThroughLabel(labelWithString: "")
         label.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
         label.isHidden = true
+        label.setAccessibilityElement(false)
         let stack = NSStackView(views: [icon, label])
         stack.orientation = .horizontal
         stack.spacing = 3
@@ -271,6 +292,9 @@ final class MenuBarManager: NSObject {
             symbolName = "bell.badge"
             description = "Tesseract Agent — something is waiting for you"
         }
+
+        activityDescription = description
+        applyAccessibilityLabel()
 
         iconView.removeAllSymbolEffects()
         let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)
@@ -719,7 +743,8 @@ private final class ClickThroughLabel: NSTextField {
 }
 
 /// How the menu bar says its clock: short beside the glyph ("25m" left of a
-/// started step, "in 12m" to an event, "leave in 12m"), whole in its tooltip.
+/// started step, "in 12m" to an event, "leave in 12m"), whole in its tooltip,
+/// and in words to VoiceOver ("25 minutes left").
 nonisolated enum MenuBarClockText {
     static func label(_ clock: MenuBarClock, now: Date) -> String {
         let time = timeLeft(until: clock.until, now: now)
@@ -733,12 +758,50 @@ nonisolated enum MenuBarClockText {
     static func tooltip(_ clock: MenuBarClock, now: Date, calendar: Calendar = .current)
         -> String
     {
+        sentence(clock, now: now, calendar: calendar, pause: " — ", time: MomentPrompts.minutesText)
+    }
+
+    /// The tooltip's sentence as VoiceOver says it: a pause it reads, and the
+    /// time in words.
+    static func spoken(_ clock: MenuBarClock, now: Date, calendar: Calendar = .current)
+        -> String
+    {
+        sentence(clock, now: now, calendar: calendar, pause: ", ", time: spokenTime)
+    }
+
+    /// The status item's VoiceOver label: what the glyph shows, then the
+    /// clock that counts down beside it, if one does.
+    static func accessibilityLabel(
+        activity: String, clock: MenuBarClock?, now: Date, calendar: Calendar = .current
+    ) -> String {
+        guard let clock else { return activity }
+        return "\(activity). \(spoken(clock, now: now, calendar: calendar))"
+    }
+
+    /// "1 minute", "25 minutes", "2 hours", "1 hour 5 minutes".
+    static func spokenTime(_ minutes: Int) -> String {
+        func count(_ value: Int, _ unit: String) -> String {
+            "\(value) \(unit)\(value == 1 ? "" : "s")"
+        }
+        let hours = minutes / 60
+        let rest = minutes % 60
+        switch (hours, rest) {
+        case (0, _): return count(rest, "minute")
+        case (_, 0): return count(hours, "hour")
+        default: return "\(count(hours, "hour")) \(count(rest, "minute"))"
+        }
+    }
+
+    private static func sentence(
+        _ clock: MenuBarClock, now: Date, calendar: Calendar, pause: String,
+        time: (Int) -> String
+    ) -> String {
         let at = AgendaTime.clock(clock.until, calendar: calendar)
-        let minutes = MomentPrompts.minutesText(minutesLeft(until: clock.until, now: now))
+        let left = time(minutesLeft(until: clock.until, now: now))
         switch clock.kind {
-        case .focus: return "\(clock.title) — \(minutes) left"
-        case .event: return "\(clock.title) at \(at) — in \(minutes)"
-        case .leave: return "Leave for \(clock.title) at \(at) — in \(minutes)"
+        case .focus: return "\(clock.title)\(pause)\(left) left"
+        case .event: return "\(clock.title) at \(at)\(pause)in \(left)"
+        case .leave: return "Leave for \(clock.title) at \(at)\(pause)in \(left)"
         }
     }
 
