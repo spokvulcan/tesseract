@@ -1916,6 +1916,14 @@ joining is one click. Reminders with a due time need none: they carry their own
 alarm, delivered by Reminders on every device.
 _Avoid_: wake (retired), alert (unqualified).
 
+**Time to leave**:
+When the owner sets off for an event in person, set by the Morning Plan from
+how long the way there takes. It stands while its event is on the calendar at
+the same time; the event moved or gone, it no longer applies. The way there is
+busy time: no free time is offered in it, and a step ends before it. When it
+comes, the Now Card says so and a Nudge rings.
+_Avoid_: departure (the code's word), travel time.
+
 **Step**:
 One task's slot in today's plan, and what became of it that day: cued at its
 start, started, checked in at its end, put off, cut short before a meeting. The

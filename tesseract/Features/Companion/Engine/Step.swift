@@ -98,19 +98,15 @@ nonisolated struct Step: Sendable, Equatable, Codable {
 
     // MARK: Its life
 
-    /// The owner started it now: it counts as cued, its end checks in, and
-    /// one started `timed` (whole) is timed once seen done.
-    mutating func start(at now: Date, timed: Bool = true) {
-        isStarted = true
-        cuedAt = now
-        if timed { timedMinutes = minutes }
-    }
-
-    /// The step as started at `now`: a fixture's one line, and the engine's
-    /// own word for it.
+    /// The step as the owner started it at `now`: it counts as cued, its end
+    /// checks in, and one started `timed` (whole) is timed against its
+    /// minutes once seen done. The engine's one word for a start, and a
+    /// fixture's one line.
     func started(at now: Date, timed: Bool = true) -> Step {
         var step = self
-        step.start(at: now, timed: timed)
+        step.isStarted = true
+        step.cuedAt = now
+        if timed { step.timedMinutes = minutes }
         return step
     }
 

@@ -30,12 +30,9 @@ nonisolated enum AgendaMutation: Sendable, Equatable {
     case clearDue(reminderID: String)
     /// Let it go. A repeating reminder skips to tomorrow instead.
     case delete(reminderID: String)
-    /// Done (a card's item, a Step Cue's Did it or Done).
-    case complete(reminderID: String)
-    /// Not done after all: open again (a Step Cue's Undo).
-    case reopen(reminderID: String)
-    /// Ticked off on Today, or unticked: done, or open again.
-    case tick(reminderID: String, done: Bool)
+    /// Done, or not done after all: a card's item, a Step Cue's Did it or
+    /// Done, its Undo — or, `onToday`, a tick on Today.
+    case setDone(reminderID: String, done: Bool, onToday: Bool = false)
     /// Due on this day, keeping a time of day if it had one.
     case dueOn(reminderID: String, day: Date)
     /// Due at this moment.
@@ -75,12 +72,8 @@ extension Agenda {
             } else {
                 try await deleteReminder(id: id, source: "wrapUp")
             }
-        case .complete(let id):
-            try await updateReminder(id: id, completed: true, source: "card")
-        case .reopen(let id):
-            try await updateReminder(id: id, completed: false, source: "card")
-        case .tick(let id, let done):
-            try await updateReminder(id: id, completed: done, source: "today")
+        case .setDone(let id, let done, let onToday):
+            try await updateReminder(id: id, completed: done, source: onToday ? "today" : "card")
         case .dueOn(let id, let day):
             try await move(id, to: calendar.startOfDay(for: day))
         case .dueAt(let id, let at):

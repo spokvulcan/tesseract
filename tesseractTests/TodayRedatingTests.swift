@@ -167,6 +167,25 @@ struct TodayRedatingTests {
         #expect(today.store.writeLog.isEmpty)
     }
 
+    /// The engine says what the owner chose and traces it, for a repeating
+    /// reminder too (it used to drop that one untraced); the Agenda keeps
+    /// the series rule.
+    @Test func moveToTodayIsTracedForARepeatingReminderToo() {
+        var tomorrows = Self.plants
+        tomorrows.due = Self.at(8, day: 2)
+        var agenda = AgendaSnapshot.empty
+        agenda.access = .full
+        agenda.open = [tomorrows]
+        let now = Self.at(10, day: 1)
+        let decision = DayEngine.decide(
+            .cardAction(.today(reminderID: "plants")),
+            snapshot: DaySnapshot(
+                now: now, settings: DaySettings(), agenda: agenda, ownerPresent: true),
+            state: DayState(day: DayKey(for: now)))
+        #expect(decision.effects.contains(.mutateAgenda(.dueToday(reminderID: "plants"))))
+        #expect(decision.effects.contains(.trace(.cardReaction, ["action": "today"])))
+    }
+
     /// A one-off task due tomorrow joins today's Anytime tasks: today, by
     /// the runtime's clock, at no set time.
     @Test func moveToTodayTakesAOneOffTaskIntoTodayWithoutATime() async throws {

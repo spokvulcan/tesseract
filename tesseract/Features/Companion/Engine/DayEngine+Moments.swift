@@ -531,7 +531,7 @@ nonisolated extension DayEngine {
             ]
 
         case .tick(let reminderID, let done):
-            return [.mutateAgenda(.tick(reminderID: reminderID, done: done))]
+            return [.mutateAgenda(.setDone(reminderID: reminderID, done: done, onToday: true))]
 
         case .place(let reminderID, let start, let minutes):
             let slot = Placement(reminderID: reminderID, start: start, minutes: minutes)
@@ -716,9 +716,7 @@ nonisolated extension DayEngine {
         }
         state.plan.sort { $0.start < $1.start }
         guard slot.start <= snapshot.now.addingTimeInterval(60) else { return }
-        // Timed against the minutes it was given, before a meeting cuts them.
-        markStartedIfNow(slot.reminderID, snapshot: snapshot, state: &state)
-        keepClear(slot.reminderID, snapshot: snapshot, state: &state)
+        startNow(slot.reminderID, snapshot: snapshot, state: &state)
     }
 
     /// A reply that landed after the 04:00 rollover (the lid closed on the
@@ -803,7 +801,7 @@ nonisolated extension DayEngine {
         case .reminder:
             guard completing else { return [] }
             let reminderID = String(item.id.dropFirst("reminder:".count))
-            return [.mutateAgenda(.complete(reminderID: reminderID))]
+            return [.mutateAgenda(.setDone(reminderID: reminderID, done: true))]
         }
     }
 

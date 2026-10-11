@@ -258,7 +258,7 @@ struct DayEngineRepeatingTaskTests {
         let reminders = await Store()
         let today = DayKey(rawValue: "2026-09-30")
         #expect(reminders.agenda.snapshot.occurrence(of: "daily", on: today)?.isCompleted == false)
-        try await reminders.agenda.apply(.tick(reminderID: "daily", done: true))
+        try await reminders.agenda.apply(.setDone(reminderID: "daily", done: true, onToday: true))
         await reminders.agenda.refresh()
         let shown = try #require(reminders.agenda.snapshot.occurrence(of: "daily", on: today))
         #expect(shown.isCompleted)
@@ -287,10 +287,11 @@ struct DayEngineRepeatingTaskTests {
         case "undo":
             try await reminders.agenda.undo(done)
         case "the task":
-            try await reminders.agenda.apply(.reopen(reminderID: "daily"))
+            try await reminders.agenda.apply(.setDone(reminderID: "daily", done: false))
         default:
             let copy = try #require(reminders.reminders.first { $0.id != "daily" })
-            try await reminders.agenda.apply(.tick(reminderID: copy.id, done: false))
+            try await reminders.agenda.apply(
+                .setDone(reminderID: copy.id, done: false, onToday: true))
         }
         #expect(reminders.reminders == before)
         await reminders.agenda.refresh()
@@ -333,7 +334,7 @@ struct DayEngineRepeatingTaskTests {
         let nextWeek = try #require(Calendar.current.date(byAdding: .day, value: 7, to: Self.at(0)))
         let reminders = await Store(due: nextWeek, others: [call])
         let before = reminders.reminders
-        try await reminders.agenda.apply(.tick(reminderID: "call", done: true))
+        try await reminders.agenda.apply(.setDone(reminderID: "call", done: true, onToday: true))
         #expect(reminders.store.reminders["call"]?.isCompleted == true)
         let (_, opened) = try await reminders.agenda.updateReminder(
             id: "call", completed: false, source: "test")
@@ -349,10 +350,11 @@ struct DayEngineRepeatingTaskTests {
     /// it can't be sure of. Unticking the series changes nothing.
     @Test @MainActor func aCopyTickedOffElsewhereIsOnlyOpenedAgain() async throws {
         let reminders = await Store(due: Self.at(0, day: 31), others: [Self.occurrence])
-        try await reminders.agenda.apply(.reopen(reminderID: "daily"))
+        try await reminders.agenda.apply(.setDone(reminderID: "daily", done: false))
         #expect(reminders.store.reminders["daily"]?.due == Self.at(0, day: 31))
         #expect(reminders.store.reminders["daily-0930"]?.isCompleted == true)
-        try await reminders.agenda.apply(.tick(reminderID: "daily-0930", done: false))
+        try await reminders.agenda.apply(
+            .setDone(reminderID: "daily-0930", done: false, onToday: true))
         #expect(reminders.store.reminders["daily-0930"]?.isCompleted == false)
         #expect(reminders.store.reminders["daily"]?.due == Self.at(0, day: 31))
         #expect(reminders.reminders.count == 2)
@@ -363,12 +365,12 @@ struct DayEngineRepeatingTaskTests {
     /// only opens the copy again and moves nothing back.
     @Test @MainActor func anOccurrenceChangedSinceItsTickIsOnlyOpenedAgain() async throws {
         let reminders = await Store()
-        try await reminders.agenda.apply(.tick(reminderID: "daily", done: true))
+        try await reminders.agenda.apply(.setDone(reminderID: "daily", done: true, onToday: true))
         let copy = try #require(reminders.reminders.first { $0.id != "daily" })
         let later = Self.at(9, day: 31)
         _ = try reminders.store.updateReminder(
             id: "daily", ReminderChange(due: .set(later, hasTime: true)))
-        try await reminders.agenda.apply(.tick(reminderID: copy.id, done: false))
+        try await reminders.agenda.apply(.setDone(reminderID: copy.id, done: false, onToday: true))
         #expect(reminders.store.reminders[copy.id]?.isCompleted == false)
         #expect(reminders.store.reminders["daily"]?.due == later)
     }

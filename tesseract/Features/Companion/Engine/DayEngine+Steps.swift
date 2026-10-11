@@ -340,7 +340,16 @@ nonisolated extension DayEngine {
         guard let index = state.plan.firstIndex(where: { $0.reminderID == reminderID }),
             state.plan[index].start <= snapshot.now.addingTimeInterval(60)
         else { return }
-        state.plan[index].start(at: snapshot.now, timed: timed)
+        state.plan[index] = state.plan[index].started(at: snapshot.now, timed: timed)
+    }
+
+    /// The task's step, its slot from now, started: cut clear of the next
+    /// meeting first, then started, so a whole start is timed against the
+    /// minutes it has. Today's Start now and a cue's Start are this one
+    /// operation.
+    static func startNow(_ reminderID: String, snapshot: DaySnapshot, state: inout DayState) {
+        keepClear(reminderID, snapshot: snapshot, state: &state)
+        markStartedIfNow(reminderID, snapshot: snapshot, state: &state)
     }
 
     /// A step started whole, now seen done: how long it took against the
@@ -402,8 +411,7 @@ nonisolated extension DayEngine {
         switch applied {
         case .start:
             if move(reminderID, to: minute, state: &state) {
-                keepClear(reminderID, snapshot: snapshot, state: &state)
-                markStartedIfNow(reminderID, snapshot: snapshot, state: &state)
+                startNow(reminderID, snapshot: snapshot, state: &state)
             }
         case .startSmall:
             // Five minutes from now; its end asks to keep going.
@@ -460,9 +468,9 @@ nonisolated extension DayEngine {
             state.plan.removeAll { $0.reminderID == reminderID }
             effects.append(.mutateAgenda(.dueTomorrow(reminderID: reminderID)))
         case .done:
-            effects.append(.mutateAgenda(.complete(reminderID: reminderID)))
+            effects.append(.mutateAgenda(.setDone(reminderID: reminderID, done: true)))
         case .undo:
-            effects.append(.mutateAgenda(.reopen(reminderID: reminderID)))
+            effects.append(.mutateAgenda(.setDone(reminderID: reminderID, done: false)))
             // The cue the owner answered is back on the panel.
             state.cueOnPanel = state.step(reminderID)?.latestCue.map {
                 CueOnPanel(reminderID: reminderID, phase: $0.phase)

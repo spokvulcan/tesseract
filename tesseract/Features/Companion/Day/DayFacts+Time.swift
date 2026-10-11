@@ -36,7 +36,7 @@ nonisolated extension Departure {
 
 nonisolated extension DayFacts {
 
-    /// A time to leave that still stands, with its event.
+    /// A **Time to leave** that still stands (CONTEXT.md), with its event.
     struct StandingDeparture: Sendable, Equatable {
         var departure: Departure
         var event: AgendaEvent

@@ -399,7 +399,7 @@ struct DayEngineStepCueTests {
 
     @Test func doneCompletesTheReminderAndKeepsItsPlaceInTheDay() {
         let done = Self.choose(.done, at: Self.local(11, 11))
-        #expect(done.effects.contains(.mutateAgenda(.complete(reminderID: "letter"))))
+        #expect(done.effects.contains(.mutateAgenda(.setDone(reminderID: "letter", done: true))))
         #expect(done.state.plan == Self.cued().plan)
     }
 
@@ -409,7 +409,8 @@ struct DayEngineStepCueTests {
         let undone = DayEngine.decide(
             .cardAction(.step(reminderID: "letter", .undo)),
             snapshot: Self.snapshot(at: Self.local(11, 11), panelUp: true), state: done.state)
-        #expect(undone.effects.contains(.mutateAgenda(.reopen(reminderID: "letter"))))
+        #expect(
+            undone.effects.contains(.mutateAgenda(.setDone(reminderID: "letter", done: false))))
         #expect(undone.state.cueOnPanel == CueOnPanel(reminderID: "letter", phase: .start))
         #expect(Self.traced(.cueReaction, in: undone.effects)?["action"] == .string("undo"))
         // Chosen again: Start starts it.
@@ -694,6 +695,11 @@ struct DayEngineStepCueTests {
             at: Self.local(11, 40), Self.cued())
         let slot = try #require(placed.state.plan.first { $0.reminderID == "deck" })
         #expect(slot.minutes == 15)
+        // Timed against the quarter hour it has, as a cue's Start is: the
+        // pace doesn't read the meeting's cut as the owner being quick (it
+        // was timed against the 50 offered).
+        #expect(slot.isStarted)
+        #expect(slot.timedMinutes == 15)
         // A slot for later is the plan's, kept as offered.
         let later = Self.atReview(
             .cardAction(.place(reminderID: "deck", start: Self.local(14), minutes: 50)),

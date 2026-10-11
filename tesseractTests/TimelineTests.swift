@@ -297,6 +297,31 @@ struct TimelineTests {
         #expect(day.focus == nil)
     }
 
+    /// A step the owner started is the step the day is on over a meeting it
+    /// runs into, and over an earlier task, not started, whose slot holds
+    /// now too. The Now Card led with the meeting, and else offered the
+    /// earlier task's Start now.
+    @Test @MainActor func aStartedStepLeadsTheNowCardOverAMeetingAndAnEarlierTask() {
+        let started = Self.letterStep.started(at: Self.local(30, 10))
+        let overMeeting = Timeline(
+            snapshot: DayFixture.snapshot(
+                now: Self.local(30, 10, 10), events: [Self.sync], open: [Self.letter], done: []),
+            state: DayFixture.state(plan: [started]))
+        #expect(
+            NowCardBuilder.build(overMeeting, companionOn: true).headline
+                == "Write to the case worker")
+        let earlier = Step("rent", at: Self.local(30, 9, 45), minutes: 60)
+        let overTask = Timeline(
+            snapshot: DayFixture.snapshot(
+                now: Self.local(30, 10, 10), events: [], open: [Self.letter, DayFixture.rent],
+                done: []),
+            state: DayFixture.state(plan: [earlier, started]))
+        let card = NowCardBuilder.build(overTask, companionOn: true)
+        #expect(card.headline == "Write to the case worker")
+        #expect(card.span == DateInterval(start: Self.local(30, 10), end: Self.local(30, 10, 30)))
+        #expect(DaySteps.steps(overTask).filter(\.isUnderWay).map(\.id) == ["task-letter"])
+    }
+
     // MARK: The Inbox
 
     @Test func theInboxHoldsUndatedCapturesUntilTheyArePlanned() {
