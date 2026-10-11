@@ -45,7 +45,7 @@ enum GlobalHotkey: String, CaseIterable {
                 label: "Fix Last Take",
                 help:
                     "Reopens the last dictated take so you can fix a word by typing the one you meant.",
-                combo: \.fixHotkey,
+                offersReset: true, combo: \.fixHotkey,
                 defaultCombo: KeyCombo(
                     defaultOf: SettingsCatalogue.fixHotkeyKeyCode,
                     SettingsCatalogue.fixHotkeyModifiers),
@@ -69,7 +69,7 @@ enum GlobalHotkey: String, CaseIterable {
             // Tap to type, hold to speak. As one key (Right ⌥ by default),
             // another key pressed with it cancels: the owner is typing.
             HotkeyRow(
-                label: "Capture to Reminders", combo: \.captureHotkey,
+                label: "Capture to Reminders", offersReset: true, combo: \.captureHotkey,
                 defaultCombo: KeyCombo(
                     defaultOf: SettingsCatalogue.captureHotkeyKeyCode,
                     SettingsCatalogue.captureHotkeyModifiers),
@@ -78,7 +78,7 @@ enum GlobalHotkey: String, CaseIterable {
         case .appshot:
             // One-shot: no held state.
             HotkeyRow(
-                label: "Capture Frontmost Window", combo: \.appshotHotkey,
+                label: "Capture Frontmost Window", offersReset: true, combo: \.appshotHotkey,
                 defaultCombo: KeyCombo(
                     defaultOf: SettingsCatalogue.appshotHotkeyKeyCode,
                     SettingsCatalogue.appshotHotkeyModifiers),
@@ -95,6 +95,8 @@ struct HotkeyRow {
     /// Effect-first help under the row in Settings, for a hotkey whose label
     /// alone doesn't say what it does.
     var help: String?
+    /// Settings offers a reset to the default once the combo differs.
+    var offersReset = false
     /// The setting that holds its combo.
     let combo: ReferenceWritableKeyPath<SettingsManager, KeyCombo>
     /// Its default, as the Settings Catalogue declares it.

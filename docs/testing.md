@@ -600,7 +600,8 @@ or Caches without going through `StorageEnvironment`.
 A scratch launch (`scripts/dev.sh dev --scratch`) gives the running app the
 same data choices, with its windows open, so a change to a page or a panel can
 be tried by hand, or driven by an agent, without the owner's data: scratch
-storage, settings at their defaults with onboarding done, the in-memory
+storage, settings at their defaults, the main window open (never the
+Welcome window: the Launch Mode decides it, `LaunchModeTests`), the in-memory
 Agenda, and no OS notifications (`CompanionNotifierTests`). Each launch starts
 empty.
 

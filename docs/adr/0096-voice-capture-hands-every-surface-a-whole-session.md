@@ -88,7 +88,9 @@ when one left a stage out.
   voice session's take now shows "Listening" and "Transcribing" like any
   other (before, the row said "Voice session" throughout), and the
   Proofreader row shows "Proofreading" for any surface's pass, not only
-  dictation's.
+  dictation's. While a pass reads a take, the Dictation row is idle for every
+  surface, as it always was for dictation (a Voice Input's pass read
+  "Transcribing" there).
 - "Insert anyway" commits like any take: its history entry keeps the take's
   length (it kept 0 s) and the take's own app.
 - Spoken words join the agent composer's text the way they join every other
@@ -107,14 +109,16 @@ when one left a stage out.
   `transcribeAndCommit(_:onTake:commit:)`, `commitRejectedTake(_:)`,
   `cancel()`).
 - `tesseract/Features/Agent/AgentVoiceInputController.swift`: Voice Input over
-  a session, `joining(_:to:)`, `View.holdToTalk`.
+  a session, `joining(_:to:)`; `tesseract/Features/Agent/Views/HoldToTalk.swift`:
+  `View.holdToTalk`.
 - `tesseract/Features/Dictation/DictationCoordinator.swift`: dictation's commit
   shared by a landed take and "insert anyway"; the feed follows the session's
   phase.
 - `tesseract/Features/Companion/Voice/CompanionVoiceSessionController.swift`,
   `tesseract/Features/Onboarding/Views/DictationChapter.swift`, the composers
-  and panels, `tesseract/App/DependencyContainer.swift` (`voiceCapture`),
-  `tesseract/App/DependencyContainer+ModelActivity.swift`.
+  and panels, `tesseract/App/DependencyContainer.swift` (`voiceCapture`), and
+  the Models section's rows (then `DependencyContainer+ModelActivity.swift`;
+  since ADR-0081's 2026-10-11 amendment, `tesseract/App/ModelResidency.swift`).
 - Tests: `VoiceCaptureSessionTests` (through the module; the preview and the
   take read the same; insert anyway; one open take across surfaces),
   `AgentVoiceInputControllerTests` (every stage; the joining rule),

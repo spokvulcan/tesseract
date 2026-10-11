@@ -2127,7 +2127,8 @@ _Avoid_: flight recorder (the retired one it replaced).
 ### Voice capture
 
 **Operation Guard**:
-The shared stale-result protocol for the capture→transcribe→commit coordinators: a
+The stale-result protocol of the capture→transcribe→commit lifecycle (the **Voice
+Capture Session**'s): a
 monotonic epoch that advances on cancel and on each new operation, so a post-`await`
 epoch check can reject a result from a superseded operation. Distinct from `Task`
 cancellation — it catches a recognizer that ignores cancellation and returns success
@@ -2137,7 +2138,7 @@ cancellation token (it does not own `Task` cancellation), debounce, sequence num
 not Swift's `guard` statement — say "operation guard".
 
 **Operation Ticket**:
-The epoch snapshot a coordinator captures when it enters async work; its `isCurrent`
+The epoch snapshot a session captures when it enters async work; its `isCurrent`
 check, after each `await` resume, decides whether still-running work may commit.
 _Avoid_: operation ID, token (unqualified), snapshot (the prefix-cache concept).
 
@@ -2460,7 +2461,8 @@ Whisper stays: always armed). The **Models section**, the Models page's in-memor
 mark and Offload Model all read it, so they can't disagree. Offload frees every
 model a holder lets go of at once, the language model after the running
 generation. Where a model's files are once usable is one answer too
-(`ModelDownloadManager.usableDirectory(for:)`), which every loader asks.
+(`ModelDownloadManager.usableDirectory(for:)`), which the loaders of a complete
+model ask (Whisper keeps its own completeness contract).
 _Avoid_: residency mirror (the arbiter's retired `.llm`/`.tts` slots), model
 manager, slots, loaded models list (the page's retired `LoadedModels`).
 
@@ -2494,7 +2496,7 @@ One admitted request's live generation inside the **Batch Engine** — its
 execution identity from admission to drain. One request is one lane for its
 whole completion; admitted lanes are FIFO-fair, never descheduled for a
 sibling.
-_Avoid_: slot (the arbiter's `.llm`/`.tts` co-residency unit, and oMLX's static
+_Avoid_: slot (the arbiter's retired `.llm`/`.tts` co-residency unit, and oMLX's static
 per-slot KV reservation — both different things), worker, stream (the wire
 concept), request (the HTTP envelope; a lane is its execution).
 

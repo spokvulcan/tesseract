@@ -288,11 +288,11 @@ final class DictationCoordinator {
             }
 
             let outcome = await session.transcribeAndCommit(audioData, onTake: onTake) {
-                [self] take in
-                lastTranscription = take.text
-                committedDuration = take.duration
+                [self] words in
+                lastTranscription = words.text
+                committedDuration = words.duration
                 // A held take waits in the Lens: it pastes from there.
-                try await commit(take, pairID: recordedPairID, held: holdsTake)
+                try await commit(words, pairID: recordedPairID, held: holdsTake)
             }
             DictationPerf.record(span: "session", ms: DictationPerf.msSince(sessionStart))
 
@@ -349,27 +349,27 @@ final class DictationCoordinator {
     /// paste, before another key can reach the app (the Lens anchors "still
     /// the last thing typed" there).
     private func commit(
-        _ take: VoiceCaptureSession.Commit, pairID: UUID?, held: Bool
+        _ words: VoiceCaptureSession.Commit, pairID: UUID?, held: Bool
     ) async throws {
         history.add(
-            text: take.text,
-            duration: take.duration,
+            text: words.text,
+            duration: words.duration,
             model: ModelDefinition.withID(settings.selectedSpeechToTextModelID)?.displayName
                 ?? settings.selectedSpeechToTextModelID,
             pairID: pairID,
-            catches: take.catches,
-            app: Self.historyApp(take.app)
+            catches: words.catches,
+            app: Self.historyApp(words.app)
         )
         let pastes = settings.autoInsertText && !held
         if pastes {
             textInjector.restoreClipboard = settings.restoreClipboard
             let injectStart = DispatchTime.now()
-            try await textInjector.inject(take.text + " ")
+            try await textInjector.inject(words.text + " ")
             DictationPerf.record(span: "inject", ms: DictationPerf.msSince(injectStart))
         }
         onTakeCommitted?(
             DictatedTake(
-                pairID: pairID, text: take.text, catches: take.catches, app: take.app,
+                pairID: pairID, text: words.text, catches: words.catches, app: words.app,
                 pasted: pastes, pastedInto: pastes ? frontmostApp() : nil, held: held))
     }
 
@@ -384,8 +384,8 @@ final class DictationCoordinator {
         }
         let pairID = lastTakePairID
         Task {
-            let outcome = await session.commitRejectedTake { [self] take in
-                try await commit(take, pairID: pairID, held: false)
+            let outcome = await session.commitRejectedTake { [self] words in
+                try await commit(words, pairID: pairID, held: false)
             }
             // Surface a failed injection: the loan can refuse to borrow the
             // pasteboard (unreadable, or an earlier return still unrestored),

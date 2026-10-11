@@ -27,7 +27,7 @@ final class InferenceArbiter: InferenceArbitrating {
     /// (e.g., AppDelegate teardown).
     var isLLMLoaded: Bool { agentEngine.isModelLoaded }
 
-    /// Identity of the currently-loaded `.llm` slot — model ID and vision mode.
+    /// Identity of the loaded language model — model ID and vision mode.
     /// Kept as a single struct so reload-relevant keys can never drift out of
     /// sync.
     ///
@@ -48,7 +48,7 @@ final class InferenceArbiter: InferenceArbitrating {
 
     private(set) var loadedLLMState: LoadedLLMState?
 
-    /// The model ID currently loaded in the `.llm` slot, or `nil` if unloaded.
+    /// The language model's ID while it is loaded, or `nil`.
     /// Thin accessor over `loadedLLMState` — retained for existing call sites.
     var loadedLLMModelID: String? { loadedLLMState?.modelID }
 

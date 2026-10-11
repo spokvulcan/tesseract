@@ -23,10 +23,10 @@ final class AppBindings {
         /// Tracked read of the speech coordinator's state — feeds the menu
         /// bar's status glyph (the speaking animation).
         let speechState: @MainActor () -> SpeechState
-        /// Gate read of the inference arbiter's LLM slot — read in the rule
-        /// body (not tracked), so the initial model-id emission never forces a
-        /// model load and lazy loading is preserved.
-        let isLLMSlotLoaded: @MainActor () -> Bool
+        /// Gate read of whether the language model is loaded — read in the
+        /// rule body (not tracked), so the initial model-id emission never
+        /// forces a model load and lazy loading is preserved.
+        let isLLMLoaded: @MainActor () -> Bool
         /// Gate read of the selected speech-to-text model's on-disk location;
         /// nil while it is not downloaded.
         let whisperModelPath: @MainActor () -> URL?
@@ -40,14 +40,14 @@ final class AppBindings {
         init(
             dictationState: @escaping @MainActor () -> DictationFeed.Phase,
             speechState: @escaping @MainActor () -> SpeechState,
-            isLLMSlotLoaded: @escaping @MainActor () -> Bool,
+            isLLMLoaded: @escaping @MainActor () -> Bool,
             whisperModelPath: @escaping @MainActor () -> URL?,
             isTranscriptionModelLoaded: @escaping @MainActor () -> Bool,
             modelDownloadStatuses: AnyPublisher<[String: ModelStatus], Never>
         ) {
             self.dictationState = dictationState
             self.speechState = speechState
-            self.isLLMSlotLoaded = isLLMSlotLoaded
+            self.isLLMLoaded = isLLMLoaded
             self.whisperModelPath = whisperModelPath
             self.isTranscriptionModelLoaded = isTranscriptionModelLoaded
             self.modelDownloadStatuses = modelDownloadStatuses
@@ -236,14 +236,15 @@ final class AppBindings {
                 }
             })
 
-        // Reload the agent model when the selection changes — but only while an
-        // LLM slot is already loaded. The gate drops the initial emission, so a
-        // selected-but-unused model never forces a multi-gigabyte load at launch.
+        // Reload the agent model when the selection changes — but only while
+        // the language model is already loaded. The gate drops the initial
+        // emission, so a selected-but-unused model never forces a
+        // multi-gigabyte load at launch.
         observationTasks.append(
             Task { [weak self] in
                 guard let self else { return }
                 for await _ in Observations({ self.settings.selectedAgentModelID }) {
-                    guard self.inputs.isLLMSlotLoaded() else { continue }
+                    guard self.inputs.isLLMLoaded() else { continue }
                     do {
                         try await self.effects.reloadLLMIfNeeded()
                     } catch {

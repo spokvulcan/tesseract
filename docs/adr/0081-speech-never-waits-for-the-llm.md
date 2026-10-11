@@ -127,16 +127,21 @@ the composition root.
   turn at the gate). Dictation's Whisper stays, as before (always-armed
   dictation, ADR-0025). Unloading the embedder is safe: an embed already
   running keeps its own reference to the model, and the next recall loads it
-  again (0.4 s). Clear Disk Cache offloads the same way before it wipes.
+  again (0.4 s). Clear Disk Cache still frees the voice and the language
+  model before it wipes.
 - The arbiter no longer mirrors residency: `ModelSlot`, `loadedSlots` and the
   voice closures are gone; it is the language model's holder.
-- Every loader finds a model's files through one answer,
+- The loaders that need a complete model find its files through one answer,
   `ModelDownloadManager.usableDirectory(for:)`: the proofreader, the recall
   embedder (now `RecallEmbedder`, which keeps its own loaded mirror), the
-  arbiter's load and the vision probe.
+  arbiter's load and the vision probe. Whisper keeps its own completeness
+  contract, and the voice engine reads the folder of the spec it shares with
+  its catalog entry. It lives with the download manager rather than Model
+  Residency: the download manager already decides where a model's files go and
+  whether they are complete, and the iPhone app shares it.
 
 Behaviour changes: Offload frees the recall embedder, and frees the
 proofreader without waiting for the language model's generation; the Offload
 item is enabled while any model it can free is loaded, the proofreader or the
-embedder alone included; Clear Disk Cache frees the proofreader and the
-embedder too. Tests: `ModelResidencyTests` (replacing `LoadedModelsTests`).
+embedder alone included. Tests: `ModelResidencyTests` (replacing
+`LoadedModelsTests`).

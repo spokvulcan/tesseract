@@ -77,6 +77,12 @@ struct LaunchModeTests {
                     == .harness(flag: flag), "\(flag)")
         }
         #expect(Self.decide(["--benchmark"]) == .harness(flag: "--benchmark"))
+        // The old chain's order, kept: the rotated-checkpoint parity harness
+        // comes after `--benchmark` (`scripts/dev.sh` starts it, without
+        // `--benchmark`).
+        #expect(
+            Self.decide(["--benchmark", "--rotated-checkpoint-parity"])
+                == .harness(flag: "--benchmark"))
     }
 
     // MARK: - What each mode may do

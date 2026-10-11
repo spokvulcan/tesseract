@@ -128,12 +128,16 @@ struct HotkeyTableTests {
     }
 
     /// Each default is the Settings Catalogue's (a fresh settings store reads
-    /// it), and the pane's reset says it.
+    /// it), and the rows Settings offers a reset on name it as before.
     @Test func everyDefaultIsTheCataloguesAndTheResetNamesIt() {
         let fresh = SettingsManager(store: InMemorySettingsStore())
         for hotkey in GlobalHotkey.allCases {
             #expect(hotkey.row.defaultCombo == fresh[keyPath: hotkey.row.combo], "\(hotkey)")
         }
+        #expect(
+            GlobalHotkey.allCases.filter(\.row.offersReset) == [
+                .fixLastTake, .captureToReminders, .appshot,
+            ])
         #expect(GlobalHotkey.fixLastTake.row.resetLabel == "Reset to ⌃⌥Space")
         #expect(GlobalHotkey.captureToReminders.row.resetLabel == "Reset to Right ⌥")
         #expect(GlobalHotkey.appshot.row.resetLabel == "Reset to ⌘⌘")

@@ -471,7 +471,7 @@ parameters.
 .injectDependencies(from: container)
 // Expands to:
 //   .injectCoreDependencies(...)       — settings, permissions, container
-//   .injectDictationDependencies(...)  — coordinator, engine, history, pairs, Learned Words, audio, fixInLens
+//   .injectDictationDependencies(...)  — coordinator, Voice Capture, engine, history, pairs, Learned Words, audio, fixInLens
 //   .injectSpeechDependencies(...)     — coordinator, engine presenter
 //   .injectAgentDependencies(...)      — coordinator, engine, conversation store
 //   .injectModelDependencies(...)      — download manager, inference arbiter
@@ -588,8 +588,11 @@ engine, the Proofread Pass, the `RecallEmbedder`) reports to it as one row, in
 `App/DependencyContainer+ModelResidency.swift` — the model, whether it is loaded and
 what it is doing, and how to free it. The menu bar's Models section, the Models
 page's in-memory mark and Offload Model all read it; Offload frees every model a
-holder lets go of, at once, the language model after the running generation. Every
-loader finds a model's files through `ModelDownloadManager.usableDirectory(for:)`.
+holder lets go of, at once, the language model after the running generation. The
+proofreader, the recall embedder, the arbiter's load and the vision probe find a
+model's files through one answer, `ModelDownloadManager.usableDirectory(for:)`;
+Whisper keeps its own completeness contract (`WhisperModelContract`), and the voice
+engine reads the folder of the catalog spec it shares with its entry.
 Vocabulary: CONTEXT.md → LLM gate.
 
 ### 6. HTTP Server and Prefix Cache

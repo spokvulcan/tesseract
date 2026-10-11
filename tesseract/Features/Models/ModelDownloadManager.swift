@@ -471,9 +471,9 @@ final class ModelDownloadManager: ObservableObject {
     // MARK: - Path Resolution
 
     /// The usable directory for a model: where its files are, once they are
-    /// all there by its entry's completeness rule — nil until then. Every
-    /// loader asks here, so a model's holder and the catalog can't disagree
-    /// on its folder.
+    /// all there by its entry's completeness rule — nil until then. A loader
+    /// that needs a complete model asks here, so the model's holder and the
+    /// catalog can't disagree on its folder.
     func usableDirectory(for modelID: String) -> URL? {
         isDownloaded(modelID) ? modelPath(for: modelID) : nil
     }

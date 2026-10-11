@@ -154,7 +154,7 @@ struct AppBindingsTests {
     func initialAgentModelEmissionNeverForcesAModelLoad() async {
         let h = makeHarness()
         defer { h.bindings.stop() }
-        h.driver.isLLMSlotLoaded = false
+        h.driver.isLLMLoaded = false
 
         h.bindings.start()
 
@@ -171,7 +171,7 @@ struct AppBindingsTests {
     func agentModelChangeWhileAnLLMSlotIsLoadedReloadsTheModel() async {
         let h = makeHarness()
         defer { h.bindings.stop() }
-        h.driver.isLLMSlotLoaded = false
+        h.driver.isLLMLoaded = false
 
         h.bindings.start()
 
@@ -181,7 +181,7 @@ struct AppBindingsTests {
                 !h.recorder.events(withPrefix: "updateHTTPServerPort").isEmpty
             }))
 
-        h.driver.isLLMSlotLoaded = true
+        h.driver.isLLMLoaded = true
         h.settings.selectedAgentModelID = "another-agent-model"
 
         #expect(
@@ -391,7 +391,7 @@ private final class EffectRecorder {
 private final class InputDriver {
     var dictationState: DictationFeed.Phase = .idle
     var speechState: SpeechState = .idle
-    var isLLMSlotLoaded = false
+    var isLLMLoaded = false
     var whisperModelPath: URL?
     var isTranscriptionModelLoaded = false
 }
@@ -438,7 +438,7 @@ private func makeHarness(
         inputs: .init(
             dictationState: { driver.dictationState },
             speechState: { driver.speechState },
-            isLLMSlotLoaded: { driver.isLLMSlotLoaded },
+            isLLMLoaded: { driver.isLLMLoaded },
             whisperModelPath: { driver.whisperModelPath },
             isTranscriptionModelLoaded: { driver.isTranscriptionModelLoaded },
             modelDownloadStatuses: statuses.eraseToAnyPublisher()

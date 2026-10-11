@@ -103,3 +103,13 @@ final class ModelResidency {
         }
     }
 }
+
+nonisolated extension ModelActivityRow.State {
+    /// A holder's state from its facts: loading, not loaded, doing `work`, or
+    /// loaded and idle.
+    static func of(loading: Bool = false, loaded: Bool, doing work: String? = nil) -> Self {
+        if loading { return .loading }
+        guard loaded else { return .notLoaded }
+        return work.map { .working($0) } ?? .loaded
+    }
+}

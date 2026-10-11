@@ -62,9 +62,9 @@ struct HotkeysSettingsPane: View {
 }
 
 /// One hotkey recorder line: the row's label, its current combo,
-/// Change/Cancel, and a reset to its default once it differs — the single
-/// generic row that replaced the four copy-pasted recorder sections of the
-/// retired Preferences page.
+/// Change/Cancel, and, where the row offers one, a reset to its default once
+/// it differs — the single generic row that replaced the four copy-pasted
+/// recorder sections of the retired Preferences page.
 struct HotkeyRecorderRow: View {
     @Environment(SettingsManager.self) private var settings
     @EnvironmentObject private var container: DependencyContainer
@@ -102,7 +102,7 @@ struct HotkeyRecorderRow: View {
             .accessibilityHint(
                 isRecording ? "Cancel recording new hotkey" : "Record a new hotkey")
 
-            if combo != row.defaultCombo {
+            if row.offersReset, combo != row.defaultCombo {
                 Button(row.resetLabel) {
                     combo = row.defaultCombo
                 }

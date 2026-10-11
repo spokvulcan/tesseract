@@ -29,10 +29,9 @@ extension DependencyContainer {
                 inferenceArbiter.loadedLLMModelID ?? settingsManager.selectedAgentModelID
             },
             state: { [unowned self] in
-                agentEngine.isLoading
-                    ? .loading
-                    : !agentEngine.isModelLoaded
-                        ? .notLoaded : inferenceArbiter.isLLMBusy ? .working(llmWork) : .loaded
+                .of(
+                    loading: agentEngine.isLoading, loaded: agentEngine.isModelLoaded,
+                    doing: inferenceArbiter.isLLMBusy ? llmWork : nil)
             },
             unload: { [unowned self] in await inferenceArbiter.offloadLLM() })
     }
@@ -43,13 +42,22 @@ extension DependencyContainer {
             id: "draft", role: "Speed-up draft",
             model: { DFlash2Support.draftModelID },
             state: { [unowned self] in
-                !agentEngine.isDFlash2DraftLoaded
-                    ? .notLoaded : inferenceArbiter.isLLMBusy ? .working("Drafting") : .loaded
+                .of(
+                    loaded: agentEngine.isDFlash2DraftLoaded,
+                    doing: inferenceArbiter.isLLMBusy ? "Drafting" : nil)
             },
             isListedOnlyWhileLoaded: true)
     }
 
-    /// The voice: freed at once (the engine cancels its own utterance first).
+    /// The voice's part of Offload Model: freed at once if it is loaded (the
+    /// engine cancels its own utterance first); a voice still loading
+    /// finishes.
+    func offloadVoice() async {
+        guard speechEnginePresenter.isModelLoaded else { return }
+        await speechEnginePresenter.unload()
+    }
+
+    /// The voice.
     private var voice: ModelResidency.Holder {
         ModelResidency.Holder(
             id: "tts", role: "Voice",
@@ -60,12 +68,11 @@ extension DependencyContainer {
                     case .generating, .streaming, .streamingLongForm, .playing: true
                     case .idle, .capturingText, .paused, .error: false
                     }
-                return speechEnginePresenter.isLoading
-                    ? .loading
-                    : !speechEnginePresenter.isModelLoaded
-                        ? .notLoaded : speaking ? .working("Speaking") : .loaded
+                return .of(
+                    loading: speechEnginePresenter.isLoading,
+                    loaded: speechEnginePresenter.isModelLoaded, doing: speaking ? "Speaking" : nil)
             },
-            unload: { [unowned self] in await speechEnginePresenter.unload() })
+            unload: { [unowned self] in await offloadVoice() })
     }
 
     /// Dictation: listening while a take records on any surface, transcribing
@@ -77,14 +84,17 @@ extension DependencyContainer {
             id: "stt", role: "Dictation",
             model: { [unowned self] in settingsManager.selectedSpeechToTextModelID },
             state: { [unowned self] in
-                !transcriptionEngine.isModelLoaded
-                    ? .notLoaded
-                    : transcriptionEngine.isTranscribing || voiceCapture.isTranscribing
-                        ? .working("Transcribing")
-                        : voiceCapture.isListening
-                            ? .working("Listening")
-                            : builtVoiceSession?.isActive == true
-                                ? .working("Voice session") : .loaded
+                let work: String? =
+                    if transcriptionEngine.isTranscribing || voiceCapture.isTranscribing {
+                        "Transcribing"
+                    } else if voiceCapture.isListening {
+                        "Listening"
+                    } else if builtVoiceSession?.isActive == true {
+                        "Voice session"
+                    } else {
+                        nil
+                    }
+                return .of(loaded: transcriptionEngine.isModelLoaded, doing: work)
             },
             hasSize: false)
     }
@@ -95,8 +105,9 @@ extension DependencyContainer {
             id: "proofread", role: "Proofreader",
             model: { ModelDefinition.defaultProofreadModelID },
             state: { [unowned self] in
-                !proofreadPass.isModelLoaded
-                    ? .notLoaded : voiceCapture.isProofreading ? .working("Proofreading") : .loaded
+                .of(
+                    loaded: proofreadPass.isModelLoaded,
+                    doing: voiceCapture.isProofreading ? "Proofreading" : nil)
             },
             unload: { [unowned self] in await proofreadPass.unload() })
     }
@@ -106,7 +117,7 @@ extension DependencyContainer {
         ModelResidency.Holder(
             id: "embedder", role: "Memory search",
             model: { ModelDefinition.defaultEmbeddingModelID },
-            state: { [unowned self] in recallEmbedder.isModelLoaded ? .loaded : .notLoaded },
+            state: { [unowned self] in .of(loaded: recallEmbedder.isModelLoaded) },
             unload: { [unowned self] in await recallEmbedder.unload() })
     }
 

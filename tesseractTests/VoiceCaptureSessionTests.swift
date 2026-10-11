@@ -895,6 +895,44 @@ struct VoiceCaptureSessionTests {
         #expect(!voiceCapture.isProofreading)
     }
 
+    /// A press that can't open the microphone still supersedes the take in
+    /// flight (it commits nothing), so the session reads idle at once — never
+    /// stuck transcribing a take that will never land.
+    @Test func aStartThatFailsLeavesNoTakeOpen() async throws {
+        struct Boom: Error {}
+        let engine = ControllableTranscribing()
+        let capture = FakeAudioCapture(cannedAudio: makeAudio())
+        let voiceCapture = makeVoiceCapture(microphone: capture, recognizer: engine)
+        let session = voiceCapture.makeSession()
+        _ = session.start()
+        guard case .audio(let audio, _) = session.stop() else {
+            Issue.record("expected audio")
+            return
+        }
+        let recorder = CommitRecorder()
+        let task = Task {
+            await session.transcribeAndCommit(audio) { try await recorder.commit($0) }
+        }
+        while !engine.isAwaiting { await Task.yield() }
+        #expect(voiceCapture.isTranscribing)
+
+        capture.startError = Boom()
+        guard case .captureFailed = session.start() else {
+            Issue.record("expected the start to fail")
+            return
+        }
+        #expect(session.phase == .idle)
+
+        engine.completeWithSuccess()
+        guard case .superseded = await task.value else {
+            Issue.record("expected the take in flight to be superseded")
+            return
+        }
+        #expect(session.phase == .idle)
+        #expect(!voiceCapture.isTranscribing)
+        #expect(recorder.commits.isEmpty)
+    }
+
     // MARK: - The Live Preview reads like the take (ADR-0086)
 
     @MainActor @Observable

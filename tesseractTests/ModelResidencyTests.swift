@@ -207,6 +207,22 @@ struct ModelResidencyTests {
         #expect(residency.canOffload)
     }
 
+    /// The app's own holders: the menu lists every model the app can hold,
+    /// in order (the draft only beside its target), and with nothing loaded
+    /// Offload has nothing to free.
+    @Test func theAppsHoldersListEveryModel() {
+        let container = DependencyContainer()
+
+        let activity = container.modelResidency.activity
+
+        #expect(
+            activity.rows.map(\.role) == [
+                "Language model", "Voice", "Dictation", "Proofreader", "Memory search",
+            ])
+        #expect(activity.rows.allSatisfy { $0.state == .notLoaded })
+        #expect(!container.modelResidency.canOffload)
+    }
+
     // MARK: - The usable directory
 
     /// One answer for every loader: a model's folder once its files are all

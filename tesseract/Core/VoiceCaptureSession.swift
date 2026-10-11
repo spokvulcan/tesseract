@@ -266,6 +266,9 @@ final class VoiceCaptureSession {
             if let preview { startPreview(preview) }
             return .started
         } catch {
+            // The epoch moved: whatever this session still had in flight is
+            // superseded and commits nothing, so no take of its is open.
+            setPhase(.idle)
             return .captureFailed(error)
         }
     }

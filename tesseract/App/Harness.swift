@@ -32,9 +32,9 @@ nonisolated struct Harness: Sendable {
     let run: @MainActor @Sendable () async throws -> Void
 
     /// Every harness, in precedence order: the first row whose flag the
-    /// arguments carry runs. `--paro-parity-bench` (and every harness
-    /// `scripts/bench.sh` starts) precedes `--benchmark`, which `bench.sh`
-    /// always passes.
+    /// arguments carry runs. `--benchmark`, which `scripts/bench.sh` always
+    /// passes, comes after `--paro-parity-bench` and the other harnesses
+    /// `bench.sh` is asked for (`LaunchModeTests` lists them), so those win.
     static let table: [Harness] = [
         Harness(
             flag: "--paro-parity-bench", label: "PARO parity bench",

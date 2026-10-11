@@ -63,8 +63,10 @@ flag written out at the call site.
 3. **One harness table** (`tesseract/App/Harness.swift`) replaces both the
    flag set and the dispatch chain. Each row holds the flag, the label, the log
    subdirectory, the exit code a failure ends with, and how it runs. Its order
-   is precedence: `--paro-parity-bench`, and every harness `bench.sh` starts,
-   comes before `--benchmark`, which `bench.sh` always passes. `--benchmark`
+   is precedence, the old chain's: `--paro-parity-bench` and the other
+   harnesses `bench.sh` is asked for (snapshot, prefix detect, tokenize cache,
+   agent CPU, prefix cache E2E, TurboQuant, DFlash2) come before `--benchmark`,
+   which `bench.sh` always passes. `--benchmark`
    keeps its own behaviour: it logs a failure and exits 0. The table decides
    the Mac's `LaunchMode.current`, and `TesseractApp.init` starts the harness it
    names.

@@ -620,11 +620,13 @@ final class DependencyContainer: ObservableObject {
             agentEngine.llmActor.prefixCacheAdmin.clearRAMTier()
         }
         // Disk clear must not race the detached unload: a live ledger's
-        // manifest persist after the wipe would resurrect the store.
-        manager.onClearDiskCache = { [weak self, agentEngine, settingsManager] in
+        // manifest persist after the wipe would resurrect the store. It frees
+        // the voice and the language model, as it always has.
+        manager.onClearDiskCache = { [weak self, inferenceArbiter, agentEngine, settingsManager] in
             let root = settingsManager.ssdPrefixCacheRootURL
             Task {
-                await self?.modelResidency.offload()
+                await self?.offloadVoice()
+                await inferenceArbiter.offloadLLM()
                 await agentEngine.awaitPendingUnload()
                 SSDSnapshotStore.wipeArtifacts(at: root)
             }
@@ -912,7 +914,7 @@ final class DependencyContainer: ObservableObject {
                 speechState: { [speechCoordinator] in
                     speechCoordinator.state
                 },
-                isLLMSlotLoaded: { [inferenceArbiter] in inferenceArbiter.isLLMLoaded },
+                isLLMLoaded: { [inferenceArbiter] in inferenceArbiter.isLLMLoaded },
                 whisperModelPath: { [modelDownloadManager, settingsManager] in
                     guard
                         let path = modelDownloadManager.modelPath(

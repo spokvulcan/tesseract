@@ -31,7 +31,7 @@ nonisolated struct LivePreview: Equatable, Sendable {
 }
 
 /// Folds decodes into a preview with WhisperKit's confirmation rule. Pure:
-/// the coordinator's pump feeds it audio windows and decode results.
+/// the Voice Capture Session's pump feeds it audio windows and decode results.
 nonisolated struct LivePreviewAssembler: Sendable {
     /// No decode before this much new audio: sub-second snippets return
     /// noise, and the first words deserve one clean pass.
