@@ -81,7 +81,7 @@ nonisolated extension LeafStorePhase {
             memory = inputs.memory
             claim = inputs.claim
             isTextOnly = inputs.request.facts.isTextOnly
-            restore = mlxStart.restore
+            restore = inputs.claim.report.restore
             maximumAdvance = mlxStart.maximumAdvance
             copyReason =
                 CacheClaim.HandoffExclusion.of(

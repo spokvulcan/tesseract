@@ -444,3 +444,35 @@ none. Pinned by the MTP row of `CacheClaimTests.theHandoffScopeIsOneRule`. No
 toy session engages MTP end to end (the suites' resident drafter traps if a
 request engages it), so the pin is the rule's; the Leaf Store reads it with
 the turn's decoding arm.
+
+### One Turn Report renders the turn's outputs
+
+The Turn Restore was one value, but each output still took it from wherever
+it happened to be: the generation value, the Leaf Admission's context and the
+`leafStore` report the drive patched; the trace tally sat in the drive and
+was threaded into the Leaf Store phase; and the one-`leafStore` rule was held
+by a flag the drive had to set on the claim before the phase
+(`enterLeafStorePhase`, #589), because the claim built a `leafStore` report of
+its own for a rewind. Now each request's Cache Claim keeps a **Turn Report**
+(`TurnReport`):
+
+1. **Plan application files the Turn Restore in it once**, where the
+   `restored` phase is marked. The generation value no longer carries it; the
+   Leaf Admission's context (the reserve's source), the phase's report, the
+   `recordingRequest` phase and the trace record read the filed one.
+2. **It owns the turn's one `leafStore` event.** The Leaf Store phase begins
+   it (`beginLeafStorePhase`, the phase's first step), and its report, with
+   the restore filed in, is logged through it. The claim reports each Leaf
+   Rewind to it (`leafRewound`) instead of building a report: before the
+   phase the rewind is the turn's one `leafStore` (`path=rewind
+   restoreMode=handoff`, as the claim's read); from the phase on, the phase's
+   report says it. The claim no longer knows the Leaf Store phase exists.
+3. **It carries the trace tally** (the Completion Trace Accumulator it grew
+   from): checkpoint admission's evictions, each Leaf Admission's tally and
+   the boundary Backing Leaf's supersession go into it, and the trace record
+   is made from it.
+
+No line changes: each line is written at the step it was, through the same
+request context. `TurnReportTests` drives the report's interface (the
+rewind before and after the phase, the filed restore); the cancelled-turn
+replay cases and the keyed sequencing suite check it through a real turn.

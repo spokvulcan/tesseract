@@ -234,13 +234,14 @@ nonisolated final class CacheClaim: @unchecked Sendable {
     private let sessions: (any ModelSessionProviding)?
     private let memory: RequestMemoryTelemetry?
     private let tripwire: Tripwire
+    /// The request's **Turn Report**: plan application files the turn's
+    /// restore in it, the drive renders the turn's outputs from it, and the
+    /// claim reports its Leaf Rewinds into it.
+    let report: TurnReport
     private let lock = NSLock()
     private var owner: Owner
     private var held: CheckedOutLeaf?
     private var checkedOut = false
-    /// Set once the drive enters the Leaf Store phase, whose report is then
-    /// the turn's one `leafStore` event.
-    private var leafStorePhaseReports = false
 
     private init(
         requestID: UUID, owner: Owner, context: PrefixCacheDiagnostics.Context,
@@ -254,6 +255,7 @@ nonisolated final class CacheClaim: @unchecked Sendable {
         self.sessions = sessions
         self.memory = memory
         self.tripwire = tripwire
+        report = TurnReport(diagnostics: context)
     }
 
     deinit {
@@ -417,15 +419,6 @@ nonisolated final class CacheClaim: @unchecked Sendable {
         return await rewindHeld()
     }
 
-    /// The drive enters the Leaf Store phase and will log the phase's report
-    /// as the turn's one `leafStore` event. A rewind from here on, in the
-    /// phase or at the conclusion, logs only its `leafRewind`, and the report
-    /// says what became of the turn's leaf. A turn that ends before the phase
-    /// has no report, so its rewind also logs `leafStore source=rewind`.
-    func enterLeafStorePhase() {
-        lock.withLock { leafStorePhaseReports = true }
-    }
-
     /// Whether the claim still holds the lease its check-out took.
     var holdsLease: Bool { lock.withLock { held != nil } }
 
@@ -536,16 +529,10 @@ nonisolated final class CacheClaim: @unchecked Sendable {
                     rewoundFacts["requestFullAttentionLogicalBytes"] ?? "") ?? 0,
                 compactedBytes: compaction.freedBytes),
             level: .notice)
-        if !lock.withLock({ leafStorePhaseReports }) {
-            var report = LeafStorePhase.Report()
-            report.mode = "keyed"
-            report.path = .rewind
-            report.restore = .handoff(
-                .init(
-                    leaseID: lease.id, rewindStateBytes: held.rewind.stateBytes, waitSeconds: 0))
-            report.leafOffset = lease.offset
-            lease.context.log(report, level: .notice)
-        }
+        // What became of the turn's leaf: the report logs it as the turn's
+        // one `leafStore` event unless the Leaf Store phase reports it.
+        report.leafRewound(
+            leaseID: lease.id, rewindStateBytes: held.rewind.stateBytes, offset: lease.offset)
         memory?.markCacheReleased(
             .rewoundLeaf,
             facts: [

@@ -124,11 +124,6 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     /// once `completion` has finished — the tail of the turn's **Emitted
     /// Path**, which the live leaf is keyed on and the index registers.
     let generatedTokens: GeneratedTokenRecorder
-    /// How the request's cache opened (**Turn Restore**): the claim's
-    /// check-out and what the restore yielded — what the `leafStore` report
-    /// says, and one input to the stored leaf's source. `.cold` for a turn
-    /// that planned no restore, an Unkeyed Completion included.
-    var restore = TurnRestore.cold
 }
 
 /// All copies of the generation handle share this one reference. Handoff
@@ -872,10 +867,10 @@ nonisolated final class ServerCompletion {
         // Set only when a canonical leaf landed: the **Speculative Canonical
         // Prefill** seed handed to the post-finish hook (issue #76).
         var speculativeSeed: SpeculativeCanonicalPrefill.Seed?
-        // The one home for the trace record's derivation rules: eviction
-        // tallies (with their correlated diagnostics events), the
-        // restored-offset rule, and the admitted-snapshot projections.
-        var trace = CompletionTraceAccumulator()
+        // The turn's report: the trace tally (with its correlated
+        // diagnostics events), the filed Turn Restore, and the one
+        // `leafStore` event.
+        let turnReport = claim.report
         var terminalOutcome = "completed"
         memory.mark(.decoding)
 
@@ -1000,7 +995,7 @@ nonisolated final class ServerCompletion {
                 let diagnostics = await MainActor.run {
                     prefixCache.admit(admission)
                 }
-                trace.ingest(evictions: diagnostics.evictions, diagnostics: diagnosticsContext)
+                turnReport.ingest(evictions: diagnostics.evictions)
                 storedSnapshotsForTuner = admission.snapshots
             }
 
@@ -1020,9 +1015,6 @@ nonisolated final class ServerCompletion {
             // leaf store completed.
             memory.mark(
                 .storingLeaf, facts: await MainActor.run { prefixCache.memoryTelemetryFacts() })
-            // The phase's report, logged below, is now the turn's one
-            // `leafStore` event, a rewind in the phase included.
-            claim.enterLeafStorePhase()
             let leafStoreStart = Date.timeIntervalSinceReferenceDate
             var leafResult = await LeafStorePhase.run(
                 mlxStartBox: mlxStartBox,
@@ -1035,14 +1027,13 @@ nonisolated final class ServerCompletion {
                 assistantReasoning: accumulator.thinking,
                 toolCalls: toolCalls,
                 diagnosticsContext: diagnosticsContext,
-                trace: &trace,
                 memory: memory
             )
             if mlxStart.facts.ssdEnabled, !Task.isCancelled {
                 await prefixCache.persistViewCheckpoints(
                     partitionKey: mlxStart.facts.partitionKey, sessions: sessions)
             }
-            leafResult.report.restore = mlxStart.restore
+            leafResult.report = turnReport.filed(leafResult.report)
             leafResult.report.leafStoreSeconds =
                 Date.timeIntervalSinceReferenceDate - leafStoreStart
             let leafStoreForTuner = leafResult.leafStore
@@ -1102,7 +1093,7 @@ nonisolated final class ServerCompletion {
             // edge, planner, leaf store) into the same account.
             let emittedPathSummary = mlxStart.keying.keyed?.render.emittedPathTelemetry?.summary
             leafResult.report.emittedPathResolves = emittedPathSummary
-            diagnosticsContext.log(leafResult.report, level: .notice)
+            turnReport.logLeafStore(leafResult.report)
 
             // Per-completion trace record (PRD #82, slice #83): one line in
             // the replay corpus for every finished cache-aware completion.
@@ -1110,7 +1101,7 @@ nonisolated final class ServerCompletion {
             // stream closed without an `.info` event have no TTFT and emit
             // nothing — same condition as the live `ttft` event.
             if let completionInfo = outcome.completionInfo {
-                let record = trace.makeRecord(
+                let record = turnReport.trace.makeRecord(
                     timestamp: Date().timeIntervalSinceReferenceDate,
                     requestID: requestID,
                     modelID: diagnosticsContext.modelID,
@@ -1119,7 +1110,7 @@ nonisolated final class ServerCompletion {
                         unkeyedReason: mlxStart.keying.unkeyedReason,
                         keyPath: keyPath,
                         lookupReason: mlxStart.lookupReason,
-                        restore: mlxStart.restore,
+                        restore: turnReport.restore,
                         restoredFromSSD: mlxStart.restoredFromSSD,
                         hitTokens: mlxStart.skippedPrefillTokens,
                         sharedPrefixLength: mlxStart.sharedPrefixLength,
@@ -1554,6 +1545,7 @@ nonisolated final class ServerCompletion {
                         outputCeiling: parameters.maxTokens,
                         speculativeAllowance: speculation?.advanceAllowance ?? 0)
                 }
+                claim.report.file(restore)
                 memory.mark(
                     .restored,
                     facts: RequestMemoryTelemetry.cacheFacts(restoredCache ?? [])
@@ -2038,8 +2030,7 @@ nonisolated final class ServerCompletion {
                 snapshotAdmission: snapshotAdmission,
                 transientLastMessageBoundarySnapshot: transientLastMessageBoundarySnapshot,
                 transientLastUserBoundarySnapshot: transientLastUserBoundarySnapshot,
-                generatedTokens: generatedTokens,
-                restore: restore
+                generatedTokens: generatedTokens
             )
         }
     }

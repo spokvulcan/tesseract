@@ -927,13 +927,24 @@ _Avoid_: restore mode (its wire string, which reads `failedCopy` for the
 last); restore outcome (the claim's check-out answer, one input to it);
 **Cache Opening** (the plan's intent, decided before the check-out).
 
+**Turn Report**:
+One request's account of its cache, kept by its **Cache Claim**: the turn's
+**Turn Restore**, filed once by plan application; the trace tally; and the
+turn's one `leafStore` event — the Leaf Store phase's report once the phase
+begins, or the claim's **Leaf Rewind** for a turn that ends before it, which
+the claim reports to it rather than logging. The outputs that say how the
+turn's cache opened read the filed restore from it (ADR-0069 amendment).
+_Avoid_: leaf store report (the phase's account, one of its inputs); a flag
+the drive sets on the claim (the retired `enterLeafStorePhase`); turn record
+(the trace corpus's line, which it makes).
+
 **Completion Trace Accumulator**:
 The fold of one cache-aware **Server Completion**'s trace facts into the terminal
 trace record — the terminal-vs-recovered eviction tally paired with its correlated
 diagnostics emission (so tally and log lines cannot drift), the restored-offset
 rule (the offset the **Turn Restore** restored, 0 when it restored nothing),
-and the admitted-snapshot projections. The drive feeds facts; the value
-decides what the record contains.
+and the admitted-snapshot projections. A turn's **Turn Report** carries its
+tally and the drive feeds facts; the value decides what the record contains.
 _Avoid_: telemetry store (the window-scoped event buffer); trace logger (it
 derives, the diagnostics context logs).
 

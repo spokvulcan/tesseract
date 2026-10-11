@@ -298,6 +298,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/ServerCompletionExitMatrixTests \
   -only-testing:tesseractTests/ServerCompletionRestoreFallbackTests \
   -only-testing:tesseractTests/TurnRestoreTests \
+  -only-testing:tesseractTests/TurnReportTests \
   -only-testing:tesseractTests/TokenRadixTreeTests \
   -only-testing:tesseractTests/StablePrefixDetectorTests \
   -only-testing:tesseractTests/PrefixCacheManagerTests \
