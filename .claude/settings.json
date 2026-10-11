@@ -13,6 +13,19 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|MultiEdit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/hooks/format-swift.py",
+            "timeout": 30,
+            "statusMessage": "Formatting Swift"
+          }
+        ]
+      }
     ]
   }
 }
