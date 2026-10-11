@@ -856,7 +856,7 @@ struct VoiceCaptureSessionTests {
         let recorder = CommitRecorder()
         let inserted = await session.commitRejectedTake { try await recorder.commit($0) }
 
-        guard case .committed = inserted else {
+        guard case .success = inserted else {
             Issue.record("expected the rejected take to commit")
             return
         }

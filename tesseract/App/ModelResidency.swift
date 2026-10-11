@@ -70,7 +70,7 @@ final class ModelResidency {
             let model = holder.model()
             return ModelActivityRow(
                 id: holder.id, role: holder.role,
-                name: ModelDefinition.withID(model)?.displayName ?? model, state: state,
+                name: ModelDefinition.displayName(of: model), state: state,
                 bytes: resident && holder.hasSize ? sizeOnDisk(model) : nil)
         }
         let memory = memory()

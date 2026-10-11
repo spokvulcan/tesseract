@@ -63,14 +63,10 @@ extension DependencyContainer {
             id: "tts", role: "Voice",
             model: { ModelDefinition.defaultTextToSpeechModelID },
             state: { [unowned self] in
-                let speaking: Bool =
-                    switch speechCoordinator.state {
-                    case .generating, .streaming, .streamingLongForm, .playing: true
-                    case .idle, .capturingText, .paused, .error: false
-                    }
-                return .of(
+                .of(
                     loading: speechEnginePresenter.isLoading,
-                    loaded: speechEnginePresenter.isModelLoaded, doing: speaking ? "Speaking" : nil)
+                    loaded: speechEnginePresenter.isModelLoaded,
+                    doing: speechCoordinator.state.isSpeaking ? "Speaking" : nil)
             },
             unload: { [unowned self] in await offloadVoice() })
     }

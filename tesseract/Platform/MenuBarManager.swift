@@ -67,7 +67,8 @@ final class MenuBarManager: NSObject {
 
     // Live-state pulls (wired by the container), read at menu-open time.
     var serverStatus: (() -> (isRunning: Bool, port: Int))?
-    var isModelLoaded: (() -> Bool)?
+    /// Whether Offload Model would free anything.
+    var canOffload: (() -> Bool)?
     var residentCacheBytes: (() -> Int?)?
     var diskCacheBytes: (() -> Int)?
     /// Every model, loaded or not, and what each is doing right now.
@@ -655,7 +656,7 @@ extension MenuBarManager: NSMenuDelegate {
             action: #selector(offloadModel),
             badge: nil
         )
-        offload.isEnabled = isModelLoaded?() ?? false
+        offload.isEnabled = canOffload?() ?? false
         submenu.addItem(offload)
         submenu.addItem(.separator())
 
@@ -780,10 +781,7 @@ nonisolated enum MenuBarActivityResolver {
     /// Anything audibly in flight reads as speaking; capture and pause
     /// leave the glyph alone.
     static func activity(fromSpeech state: SpeechState) -> MenuBarManager.Activity {
-        switch state {
-        case .idle, .capturingText, .paused, .error: .idle
-        case .generating, .streaming, .streamingLongForm, .playing: .speaking
-        }
+        state.isSpeaking ? .speaking : .idle
     }
 
     /// The Companion's presence states map one-to-one.

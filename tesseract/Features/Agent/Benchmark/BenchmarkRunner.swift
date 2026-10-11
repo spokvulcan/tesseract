@@ -552,8 +552,7 @@ final class BenchmarkRunner {
     }
 
     var resolvedModelName: String {
-        let targetID = config.resolvedModelID
-        return ModelDefinition.all.first(where: { $0.id == targetID })?.displayName ?? targetID
+        ModelDefinition.displayName(of: config.resolvedModelID)
     }
 
     var resolvedHardwareDescription: String {

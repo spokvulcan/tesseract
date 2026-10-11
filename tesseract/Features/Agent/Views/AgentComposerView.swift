@@ -524,8 +524,7 @@ struct AgentComposerView: View {
     // MARK: - Computed State
 
     private var selectedModelDisplayName: String {
-        ModelDefinition.all.first { $0.id == settings.selectedAgentModelID }?.displayName
-            ?? settings.selectedAgentModelID
+        ModelDefinition.displayName(of: settings.selectedAgentModelID)
     }
 
     private var isWhisperAvailable: Bool {
@@ -655,8 +654,7 @@ private struct ModelButtonView: View {
     }
 
     private var selectedDisplayName: String {
-        ModelDefinition.all.first { $0.id == settings.selectedAgentModelID }?.displayName
-            ?? settings.selectedAgentModelID
+        ModelDefinition.displayName(of: settings.selectedAgentModelID)
     }
 
     private var loadStateHelp: String {

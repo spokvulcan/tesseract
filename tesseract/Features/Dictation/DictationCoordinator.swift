@@ -277,9 +277,8 @@ final class DictationCoordinator {
                     conditions: CorrectionPair.Conditions(
                         duration: audioData.duration,
                         language: settings.language,
-                        asrModel: ModelDefinition.withID(
-                            settings.selectedSpeechToTextModelID)?.displayName
-                            ?? settings.selectedSpeechToTextModelID
+                        asrModel: ModelDefinition.displayName(
+                            of: settings.selectedSpeechToTextModelID)
                     ),
                     audioFileName: dumpFile
                 )
@@ -354,8 +353,7 @@ final class DictationCoordinator {
         history.add(
             text: words.text,
             duration: words.duration,
-            model: ModelDefinition.withID(settings.selectedSpeechToTextModelID)?.displayName
-                ?? settings.selectedSpeechToTextModelID,
+            model: ModelDefinition.displayName(of: settings.selectedSpeechToTextModelID),
             pairID: pairID,
             catches: words.catches,
             app: Self.historyApp(words.app)
@@ -390,7 +388,7 @@ final class DictationCoordinator {
             // Surface a failed injection: the loan can refuse to borrow the
             // pasteboard (unreadable, or an earlier return still unrestored),
             // and a silent no-op here reads as the button doing nothing.
-            guard case .failed(let error) = outcome else { return }
+            guard case .failure(let error) = outcome else { return }
             if let dictationError = error as? DictationError {
                 handleError(dictationError)
             } else {

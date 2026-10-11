@@ -639,7 +639,7 @@ final class DependencyContainer: ObservableObject {
                 port: Int(HTTPServer.clampedPort(settingsManager.serverPort))
             )
         }
-        manager.isModelLoaded = { [weak self] in self?.modelResidency.canOffload ?? false }
+        manager.canOffload = { [weak self] in self?.modelResidency.canOffload ?? false }
         manager.residentCacheBytes = { [agentEngine] in
             agentEngine.llmActor.prefixCacheAdmin.residentRAMBytes
         }

@@ -78,7 +78,8 @@ enum GlobalHotkey: String, CaseIterable {
         case .appshot:
             // One-shot: no held state.
             HotkeyRow(
-                label: "Capture Frontmost Window", offersReset: true, combo: \.appshotHotkey,
+                label: "Capture Frontmost Window", offersReset: true,
+                hasOwnSettingsSection: true, combo: \.appshotHotkey,
                 defaultCombo: KeyCombo(
                     defaultOf: SettingsCatalogue.appshotHotkeyKeyCode,
                     SettingsCatalogue.appshotHotkeyModifiers),
@@ -97,6 +98,9 @@ struct HotkeyRow {
     var help: String?
     /// Settings offers a reset to the default once the combo differs.
     var offersReset = false
+    /// Settings lists it in a section of its own (the Appshot gesture, with
+    /// its explanation), not with the global hotkeys.
+    var hasOwnSettingsSection = false
     /// The setting that holds its combo.
     let combo: ReferenceWritableKeyPath<SettingsManager, KeyCombo>
     /// Its default, as the Settings Catalogue declares it.

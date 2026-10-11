@@ -433,6 +433,12 @@ extension ModelDefinition {
         ),
     ]
 
+    /// A model's name to show: its catalog entry's, or its id when the
+    /// catalog doesn't list it.
+    static func displayName(of id: String) -> String {
+        withID(id)?.displayName ?? id
+    }
+
     static func withID(_ id: String) -> ModelDefinition? {
         all.first { $0.id == id }
     }

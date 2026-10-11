@@ -12,10 +12,15 @@ import SwiftUI
 struct HotkeysSettingsPane: View {
     @EnvironmentObject private var container: DependencyContainer
 
+    /// The rows listed together: a row with a section of its own has it below.
+    private var globalHotkeys: [GlobalHotkey] {
+        GlobalHotkey.allCases.filter { !$0.row.hasOwnSettingsSection }
+    }
+
     var body: some View {
         Form {
             Section("Global Hotkeys") {
-                ForEach(GlobalHotkey.allCases.filter { $0 != .appshot }, id: \.self) {
+                ForEach(globalHotkeys, id: \.self) {
                     HotkeyRecorderRow(hotkey: $0)
                 }
             }

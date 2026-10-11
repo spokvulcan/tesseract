@@ -381,11 +381,12 @@ final class VoiceCaptureSession {
 
     /// "Insert anyway" on a take the Proofread Pass rejected: commits its text
     /// as the Learned Words left it through `commit`, exactly like a take that
-    /// landed, and counts its catches once it is in. Nil when no rejected take
-    /// waits; the take is spent either way, so a second press inserts nothing.
+    /// landed, and counts its catches once it is in. Returns the commit's
+    /// result, or nil when no rejected take waits; the take is spent either
+    /// way, so a second press inserts nothing.
     func commitRejectedTake(
         _ commit: @MainActor (Commit) async throws -> Void
-    ) async -> Outcome? {
+    ) async -> Result<Void, any Error>? {
         guard let waiting = rejected else { return nil }
         rejected = nil
         let committed = waiting.take.committing(waiting.take.learned)
@@ -393,10 +394,10 @@ final class VoiceCaptureSession {
         do {
             try await commit(committed)
         } catch {
-            return .failed(error)
+            return .failure(error)
         }
         stages.learnedWords.recordCatches(committed.catches)
-        return .committed(edits: [])
+        return .success(())
     }
 
     /// Cancels the operation: advances the epoch (so a late success commits

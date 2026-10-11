@@ -24,4 +24,17 @@ enum SpeechState: Equatable, Sendable {
             true
         }
     }
+
+    /// The voice is speaking: generating, streaming or playing — not
+    /// settled, paused or still reading the selection. The menu bar's glyph
+    /// (whose resolver is nonisolated) and the Models section's Voice row
+    /// both read it. Exhaustive for the same reason as `isActive`.
+    nonisolated var isSpeaking: Bool {
+        switch self {
+        case .idle, .capturingText, .paused, .error:
+            false
+        case .generating, .streaming, .streamingLongForm, .playing:
+            true
+        }
+    }
 }

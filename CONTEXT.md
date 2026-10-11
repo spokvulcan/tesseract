@@ -2468,7 +2468,8 @@ default (the **Settings Catalogue**'s), its label in Settings, and what its key
 does — press, release, a spoiled one-key press, a ⇧ tap — by the name of an
 action the composition root supplies. It registers every row at launch and
 re-binds a row's key when its setting changes; the Hotkeys pane lists the same
-rows. Its rows mark the interrupt keys: while a **Voice Session** is active,
+rows (a row can ask for a section of its own, as the Appshot gesture's does). Its
+rows mark the interrupt keys: while a **Voice Session** is active,
 Speak Selected Text and Talk to Tesseract interrupt it (**Barge-In**) instead
 of doing what they otherwise do. A registrar seam takes its bindings:
 `HotkeyManager` in the app, an in-memory peer in the tests.
