@@ -374,3 +374,26 @@ and the Leaf Store's copy reason each spell (an MTP turn's copied leaf has no
 copy reason). Each moves where lines are written, which the byte-identical
 bar pins line by line; they were left for a change that can run the
 before-and-after diagnostics diff on them alone.
+
+### Declared: a fallback turn's leaf reads its source like a cold turn's
+
+`Source.stored` matched `failedCopy` as `copy`, but since the 2026-10-03
+amendment such a turn runs cold from a fresh cache: its leaf is no copy of a
+body the tree already counts. It now reports what the capture did, as any cold
+turn's does. On a turn whose planned restore yielded no cache
+(`restoreMode=failedCopy restoreFallback=cold`) and whose leaf is stored on the
+live or direct path, and on no other:
+
+- the `leafStore` event's `source` reads `handoff` when the capture moved the
+  generation's objects (a text-only, unquantized, non-MTP turn) and `live`
+  when it deep-copied them, where it read `copy`;
+- the `recordingRequest` phase's `leafSource` and the trace record's
+  emitted-path `leafSource` read the same;
+- the **Active-Inference Reserve** observes a `live` leaf as a capture by copy,
+  so the next lane is priced at the capture copy factor, as after any cold
+  turn's copied capture; a `handoff` leaf is priced as before.
+
+`copyReason` and `copyRefusal` keep the claim's answer. Pinned by
+`TurnRestoreTests.aFailedRestoresLeafReadsLikeAColdTurns` and by
+`ServerCompletionRestoreFallbackTests`: the text-only fallback turn's leaf
+reads `handoff`, the image turn's `live`, on both lines.

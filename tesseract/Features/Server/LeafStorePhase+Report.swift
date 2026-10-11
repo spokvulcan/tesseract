@@ -69,15 +69,17 @@ nonisolated extension LeafStorePhase {
             /// it, the request's **Turn Restore** and whether the capture
             /// moved the generation's objects. Shared by the report and the
             /// leaf admission so the reserve observes exactly what the
-            /// `leafStore` event says.
+            /// `leafStore` event says. A turn whose restore failed ran cold
+            /// from a fresh cache (ADR-0069's 2026-10-03 amendment), so its
+            /// leaf reports what the capture did, as a cold turn's does.
             static func stored(
                 path: Path, restore: TurnRestore?, handedOff: Bool
             ) -> Source? {
                 switch path {
                 case .live, .direct:
                     switch restore {
-                    case .copy?, .failedThenCold?: .copy
-                    case .cold?, .handoff?, nil: handedOff ? .handoff : .live
+                    case .copy?: .copy
+                    case .cold?, .handoff?, .failedThenCold?, nil: handedOff ? .handoff : .live
                     }
                 case .boundary: handedOff ? .handoff : .boundary
                 case .rewind: .rewind

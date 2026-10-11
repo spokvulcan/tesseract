@@ -384,7 +384,8 @@ each captured checkpoint labelled with the offset its cache held
 (`ModelVerbRecorder.captures` records both), and every body left in the cache
 reading back the path it is stored under
 (`PrefixCacheAdmin.residentSnapshotsForTesting`; the toy writes each fed id
-into its K/V row). A resident MTP drafter that traps if engaged
+into its K/V row), and the leaf reporting the source its capture took
+(`handoff` or `live`, never `copy`). A resident MTP drafter that traps if engaged
 (`Speculation.inactiveMTP`) checks that the fallback keeps its Speculation
 Plan. The failed snapshot is dropped: a system checkpoint that failed is gone
 after the turn, recaptured on the same turn, and restored by the next request;

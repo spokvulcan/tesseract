@@ -81,10 +81,8 @@ struct TurnRestoreTests {
     /// is already counted); otherwise it reads what the capture did.
     @Test func theStoredLeafsSourceFollowsThePathAndTheRestore() {
         typealias Source = LeafStorePhase.Report.Source
-        let failed = TurnRestore.failedThenCold(nil)
         for path in [LeafStorePhase.Report.Path.live, .direct] {
             #expect(Source.stored(path: path, restore: .copy(nil), handedOff: false) == .copy)
-            #expect(Source.stored(path: path, restore: failed, handedOff: true) == .copy)
             #expect(Source.stored(path: path, restore: .cold, handedOff: true) == .handoff)
             #expect(Source.stored(path: path, restore: .cold, handedOff: false) == .live)
             #expect(Source.stored(path: path, restore: nil, handedOff: false) == .live)
@@ -93,5 +91,22 @@ struct TurnRestoreTests {
         #expect(Source.stored(path: .boundary, restore: .cold, handedOff: false) == .boundary)
         #expect(Source.stored(path: .rewind, restore: .cold, handedOff: false) == .rewind)
         #expect(Source.stored(path: .skipped, restore: .cold, handedOff: false) == nil)
+    }
+
+    /// The declared fix (ADR-0069's 2026-10-11 amendment): a turn whose
+    /// restore failed ran cold, so its leaf is no copy of a body the tree
+    /// counts. It reads what the capture did: `handoff` when the capture moved
+    /// the generation's objects, `live` when it deep-copied them, which the
+    /// reserve doubles a lane for. It used to read `copy` on both.
+    @Test(arguments: [LeafStorePhase.Report.Path.live, .direct], [nil, disabled])
+    func aFailedRestoresLeafReadsLikeAColdTurns(
+        _ path: LeafStorePhase.Report.Path, _ copy: CacheClaim.Copy?
+    ) {
+        typealias Source = LeafStorePhase.Report.Source
+        let failed = TurnRestore.failedThenCold(copy)
+        #expect(Source.stored(path: path, restore: failed, handedOff: true) == .handoff)
+        let copied = Source.stored(path: path, restore: failed, handedOff: false)
+        #expect(copied == .live)
+        #expect(copied?.capturesByCopy == true)
     }
 }
