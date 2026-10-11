@@ -28,8 +28,6 @@ import Testing
 ///   processors do the same from `Vendor/`, outside the scan); ADR-0063
 ///   decision 5 narrows that path in #475.
 /// - `ProofreadModel.swift` — the dictation proofread processor.
-/// - `LLMActor.swift` — the agent's raw-prompt inspector (`formatRawPrompt`),
-///   a display of the rendered string, never a prompt the server feeds.
 ///
 /// Doc comments legitimately name the calls, so comment lines are dropped
 /// before matching; the pattern requires the open paren of a call.
@@ -41,12 +39,11 @@ import Testing
     /// The module: the verbs plus the resolve arm below them.
     private static let moduleFiles: Set<String> = [moduleFile, "RenderTokenCache.swift"]
 
-    /// The tokenizer bridge, non-server processors, and inspectors, by name.
+    /// The tokenizer bridge and non-server processors, by name.
     private static let excludedByName: Set<String> = [
         "AppTokenizerLoader.swift",
         "ParoQuantLoader.swift",
         "ProofreadModel.swift",
-        "LLMActor.swift",
     ]
 
     /// Benchmarks, excluded by directory name.

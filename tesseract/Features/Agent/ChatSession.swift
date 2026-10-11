@@ -166,8 +166,8 @@ final class ChatSession {
     /// so silently discarding it is not an option.
     private let restoreComposerDraft: @MainActor (String, [ImageAttachment]) -> Void
     /// Fired on every conversation boundary (new / load / delete-current) so
-    /// the view-owned leaves can react: System Prompt Inspector re-probe,
-    /// Skill Pill ranking recompute, ephemeral composer state reset. The
+    /// the view-owned leaves can react: Skill Pill ranking recompute,
+    /// ephemeral composer state reset. The
     /// Composer Draft's *content* deliberately rides across the switch.
     private let onConversationSwitch: @MainActor () -> Void
     /// Whether a Companion moment turn (the Day Thread's) folds into one

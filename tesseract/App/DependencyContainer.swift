@@ -404,16 +404,6 @@ final class DependencyContainer: ObservableObject {
             modelDownloadManager.downloadedModels(in: .agent)
         }
     )
-    lazy var agentSystemPromptInspector: AgentSystemPromptInspector = {
-        AgentSystemPromptInspector(
-            promptSource: { [agent] in (agent.state.systemPrompt, agent.state.tools) },
-            formatRawPrompt: { [weak self] systemPrompt, tools in
-                guard let self else { throw AgentEngineError.modelNotLoaded }
-                return try await self.agentEngine.formatRawPrompt(
-                    systemPrompt: systemPrompt, tools: tools)
-            }
-        )
-    }()
     lazy var commandPalette = SlashCommandPaletteController(
         extensionHost: extensionHost, packageRegistry: packageRegistry
     )
@@ -452,10 +442,8 @@ final class DependencyContainer: ObservableObject {
             restoreComposerDraft: { [composerDraft] text, images in
                 composerDraft.restore(text: text, images: images)
             },
-            onConversationSwitch: {
-                [composerDraft, agentSystemPromptInspector, skillPills] in
+            onConversationSwitch: { [composerDraft, skillPills] in
                 composerDraft.resetEphemeral()
-                agentSystemPromptInspector.reset()
                 skillPills.refreshPills()
             }
         )
