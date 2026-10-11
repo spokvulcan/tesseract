@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.19.0](https://github.com/spokvulcan/tesseract/compare/v1.18.0...v1.19.0) (2026-10-11)
+
+
+### Features
+
+* **companion:** Today marks the step under way, shortens links, and lets Inbox items be ticked off ([#632](https://github.com/spokvulcan/tesseract/issues/632)) ([0e838bf](https://github.com/spokvulcan/tesseract/commit/0e838bf688faa88bee9396bf70ebb647da94d4b1))
+* **companion:** Today's Chat shows the day's moments as cards you can act on ([#635](https://github.com/spokvulcan/tesseract/issues/635)) ([9e64c6b](https://github.com/spokvulcan/tesseract/commit/9e64c6b46c7f5f356b410300b96f9fbc28161fc9))
+
+
+### Bug Fixes
+
+* **companion:** a repeating must-do ticked off counts as done, in its slot ([#634](https://github.com/spokvulcan/tesseract/issues/634)) ([011778a](https://github.com/spokvulcan/tesseract/commit/011778ace38813f81c9b5332d7f0c0184caed68f))
+* **companion:** Today's Tomorrow keeps a task's time, and Later and Move to Today leave a repeating series alone ([#637](https://github.com/spokvulcan/tesseract/issues/637)) ([d3f38c6](https://github.com/spokvulcan/tesseract/commit/d3f38c69ce90e135d9383fe00e75e1b45abba529))
+* **menubar:** a take on Today's mic shows on the Models section's Dictation row ([#636](https://github.com/spokvulcan/tesseract/issues/636)) ([95e51b1](https://github.com/spokvulcan/tesseract/commit/95e51b122c0dd95ee3be6f4d7d66d275f31aedf7))
+
 ## [1.18.0](https://github.com/spokvulcan/tesseract/compare/v1.17.0...v1.18.0) (2026-10-10)
 
 
