@@ -25,7 +25,9 @@ struct ModelDefinitionCatalogTests {
         #expect(model.displayName == "Qwen3.6-27B PARO")
         #expect(model.category == .agent)
         #expect(model.repoID == "z-lab/Qwen3.6-27B-PARO")
-        #expect(model.cacheSubdirectory == "z-lab_Qwen3.6-27B-PARO")
+        #expect(
+            model.repoID.map(ModelDefinition.storageSubdirectory(forRepo:))
+                == "z-lab_Qwen3.6-27B-PARO")
         #expect(model.requiredExtension == "safetensors")
         #expect(
             ModelDefinition.byCategory()
@@ -86,7 +88,9 @@ struct ModelDefinitionCatalogTests {
         #expect(model.displayName == "Qwen3.8-27B PARO")
         #expect(model.category == .agent)
         #expect(model.repoID == "z-lab/Qwen3.8-27B-PARO")
-        #expect(model.cacheSubdirectory == "z-lab_Qwen3.8-27B-PARO")
+        #expect(
+            model.repoID.map(ModelDefinition.storageSubdirectory(forRepo:))
+                == "z-lab_Qwen3.8-27B-PARO")
         #expect(model.requiredExtension == "safetensors")
         #expect(
             ModelDefinition.byCategory()
@@ -105,7 +109,9 @@ struct ModelDefinitionCatalogTests {
         #expect(model.displayName == "Bonsai 2 27B (Ternary 2bit)")
         #expect(model.category == .agent)
         #expect(model.repoID == "prism-ml/Ternary-Bonsai-2-27B-mlx-2bit")
-        #expect(model.cacheSubdirectory == "prism-ml_Ternary-Bonsai-2-27B-mlx-2bit")
+        #expect(
+            model.repoID.map(ModelDefinition.storageSubdirectory(forRepo:))
+                == "prism-ml_Ternary-Bonsai-2-27B-mlx-2bit")
         #expect(model.requiredExtension == "safetensors")
         #expect(model.dependencies.isEmpty)
         #expect(
@@ -126,7 +132,9 @@ struct ModelDefinitionCatalogTests {
         #expect(model.displayName == "Qwen3.6-35B-A3B PARO")
         #expect(model.category == .agent)
         #expect(model.repoID == "z-lab/Qwen3.6-35B-A3B-PARO")
-        #expect(model.cacheSubdirectory == "z-lab_Qwen3.6-35B-A3B-PARO")
+        #expect(
+            model.repoID.map(ModelDefinition.storageSubdirectory(forRepo:))
+                == "z-lab_Qwen3.6-35B-A3B-PARO")
         #expect(model.requiredExtension == "safetensors")
         #expect(
             ModelDefinition.byCategory()
@@ -145,7 +153,9 @@ struct ModelDefinitionCatalogTests {
         #expect(model.category == .agent)
         #expect(model.repoID == "unsloth/Qwen3.6-35B-A3B-UD-MLX-4bit")
         #expect(model.requiredExtension == "safetensors")
-        #expect(model.cacheSubdirectory == "unsloth_Qwen3.6-35B-A3B-UD-MLX-4bit")
+        #expect(
+            model.repoID.map(ModelDefinition.storageSubdirectory(forRepo:))
+                == "unsloth_Qwen3.6-35B-A3B-UD-MLX-4bit")
         #expect(
             ModelDefinition.byCategory()
                 .first(where: { $0.0 == .agent })?
@@ -163,7 +173,9 @@ struct ModelDefinitionCatalogTests {
         #expect(model.category == .agent)
         #expect(model.repoID == "mlx-community/Qwen3.6-27B-4bit")
         #expect(model.requiredExtension == "safetensors")
-        #expect(model.cacheSubdirectory == "mlx-community_Qwen3.6-27B-4bit")
+        #expect(
+            model.repoID.map(ModelDefinition.storageSubdirectory(forRepo:))
+                == "mlx-community_Qwen3.6-27B-4bit")
         #expect(
             ModelDefinition.byCategory()
                 .first(where: { $0.0 == .agent })?

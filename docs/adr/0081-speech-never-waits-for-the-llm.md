@@ -134,11 +134,17 @@ the composition root.
 - The loaders that need a complete model find its files through one answer,
   `ModelDownloadManager.usableDirectory(for:)`: the proofreader, the recall
   embedder (now `RecallEmbedder`, which keeps its own loaded mirror), the
-  arbiter's load and the vision probe. Whisper keeps its own completeness
-  contract, and the voice engine reads the folder of the spec it shares with
-  its catalog entry. It lives with the download manager rather than Model
-  Residency: the download manager already decides where a model's files go and
-  whether they are complete, and the iPhone app shares it.
+  arbiter's load, the vision probe (which the server's integration snapshot
+  now asks instead of probing on its own) and the Server Configuration's
+  preserve-thinking scan. Every folder comes from one pure, nonisolated folder
+  rule, `ModelDefinition.directory(forRepo:pathPrefix:in:)`, which the download
+  manager's downloads, status checks and deletes, the voice engine's
+  checkpoint closure, the benchmark runner and the phone's voice apply too.
+  Whisper's dictation load keeps its own, stricter `WhisperModelContract`: the
+  catalog is shared with the iPhone app and can't see it. The usable directory
+  lives with the download manager rather than Model Residency: the download
+  manager already decides where a model's files go and whether they are
+  complete, and the iPhone app shares it.
 
 Behaviour changes: Offload frees the recall embedder, and frees the
 proofreader without waiting for the language model's generation; the Offload

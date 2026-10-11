@@ -38,8 +38,7 @@ struct GenerationPromptCatalogRealTests {
     @MainActor
     static var anyChatModelDownloaded: Bool {
         chatModels.contains { model in
-            model.cacheSubdirectory.map { hasTokenizer(modelsRoot.appendingPathComponent($0)) }
-                ?? false
+            hasTokenizer(model.directory(in: modelsRoot))
         }
     }
 
@@ -85,7 +84,10 @@ struct GenerationPromptCatalogRealTests {
     @MainActor
     static var entries: [Entry] {
         chatModels.map {
-            Entry(id: $0.id, subdirectory: $0.cacheSubdirectory, family: family(of: $0.id))
+            Entry(
+                id: $0.id,
+                subdirectory: $0.repoID.map(ModelDefinition.storageSubdirectory(forRepo:)),
+                family: family(of: $0.id))
         }
     }
 

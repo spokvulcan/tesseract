@@ -155,10 +155,12 @@ struct DFlash2SupportTests {
 
     @MainActor
     @Test func draftCacheSubdirectoryMatchesDefinitionRule() {
-        // `DFlash2Support.draftCacheSubdirectory` duplicates the definition's
-        // `cacheSubdirectory` because the latter is MainActor-isolated; this
-        // pins them together.
+        // `DFlash2Support.draftCacheSubdirectory` spells out the folder the
+        // catalog's folder rule gives the draft's entry; this pins them
+        // together.
         let draft = ModelDefinition.withID(DFlash2Support.draftModelID)
-        #expect(draft?.cacheSubdirectory == DFlash2Support.draftCacheSubdirectory)
+        #expect(
+            draft?.repoID.map(ModelDefinition.storageSubdirectory(forRepo:))
+                == DFlash2Support.draftCacheSubdirectory)
     }
 }

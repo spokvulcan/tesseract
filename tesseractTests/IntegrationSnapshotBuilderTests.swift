@@ -26,24 +26,17 @@ struct IntegrationSnapshotBuilderTests {
             statuses: statuses,
             selectedAgentModelID: "downloaded-a",
             port: 8321,
-            modelDirectory: { _ in nil }
+            isVisionCapable: { _ in false }
         )
 
         #expect(snapshot.models.map(\.id) == ["downloaded-a"])
         #expect(snapshot.port == 8321)
     }
 
-    @Test func visionCapabilityIsReadFromTheModelDirectory() throws {
-        let visionDir = try makeModelDir(
-            config: #"{ "model_type": "qwen3_5", "vision_config": { "spatial_merge_size": 2 } }"#
-        )
-        let textDir = try makeModelDir(config: #"{ "model_type": "qwen3_5" }"#)
-        defer {
-            try? FileManager.default.removeItem(at: visionDir)
-            try? FileManager.default.removeItem(at: textDir)
-        }
-        let directories = ["vision-model": visionDir, "text-model": textDir]
-
+    /// Each model carries the catalog's own vision verdict
+    /// (`ModelDownloadManager.isVisionCapable`, probed and memoized there;
+    /// `ModelCatalogTests` pin the probe).
+    @Test func eachModelCarriesTheCatalogsVisionVerdict() throws {
         let snapshot = IntegrationSnapshotBuilder.build(
             definitions: [
                 agentDefinition(id: "vision-model"),
@@ -55,23 +48,11 @@ struct IntegrationSnapshotBuilderTests {
             ],
             selectedAgentModelID: "vision-model",
             port: 8321,
-            modelDirectory: { directories[$0] }
+            isVisionCapable: { $0 == "vision-model" }
         )
 
         #expect(snapshot.models.first { $0.id == "vision-model" }?.visionCapable == true)
         #expect(snapshot.models.first { $0.id == "text-model" }?.visionCapable == false)
-    }
-
-    @Test func missingDirectoryMeansNoVision() throws {
-        let snapshot = IntegrationSnapshotBuilder.build(
-            definitions: [agentDefinition(id: "a")],
-            statuses: ["a": .downloaded(sizeOnDisk: 1)],
-            selectedAgentModelID: "a",
-            port: 8321,
-            modelDirectory: { _ in nil }
-        )
-
-        #expect(snapshot.models.first?.visionCapable == false)
     }
 
     @Test func contextLengthMirrorsTheModelsEndpoint() throws {
@@ -80,7 +61,7 @@ struct IntegrationSnapshotBuilderTests {
             statuses: ["a": .downloaded(sizeOnDisk: 1)],
             selectedAgentModelID: "a",
             port: 8321,
-            modelDirectory: { _ in nil }
+            isVisionCapable: { _ in false }
         )
 
         #expect(snapshot.models.first?.contextLength == 262_144)
@@ -97,7 +78,7 @@ struct IntegrationSnapshotBuilderTests {
             ],
             selectedAgentModelID: "b",
             port: 8321,
-            modelDirectory: { _ in nil }
+            isVisionCapable: { _ in false }
         )
 
         #expect(snapshot.defaultModelID == "b")
@@ -109,7 +90,7 @@ struct IntegrationSnapshotBuilderTests {
             statuses: ["b": .downloaded(sizeOnDisk: 1)],
             selectedAgentModelID: "a",
             port: 8321,
-            modelDirectory: { _ in nil }
+            isVisionCapable: { _ in false }
         )
 
         #expect(snapshot.defaultModelID == "b")
@@ -121,7 +102,7 @@ struct IntegrationSnapshotBuilderTests {
             statuses: [:],
             selectedAgentModelID: "a",
             port: 8321,
-            modelDirectory: { _ in nil }
+            isVisionCapable: { _ in false }
         )
 
         #expect(snapshot.models.isEmpty)
@@ -152,16 +133,5 @@ struct IntegrationSnapshotBuilderTests {
             sizeDescription: "",
             dependencies: []
         )
-    }
-
-    private func makeModelDir(config: String) throws -> URL {
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("integrationsnapshot-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try config.write(
-            to: dir.appendingPathComponent("config.json"),
-            atomically: true, encoding: .utf8
-        )
-        return dir
     }
 }

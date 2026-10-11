@@ -284,7 +284,7 @@ private struct ServerPreserveThinkingSection: View {
     private func refreshCapabilities() async {
         var supporting: Set<String> = []
         for model in downloadedAgentModels {
-            guard let directory = modelDownloadManager.modelPath(for: model.id) else {
+            guard let directory = modelDownloadManager.usableDirectory(for: model.id) else {
                 continue
             }
             if await ModelIdentity.declares(.preserveThinking, atDirectory: directory) {

@@ -25,10 +25,11 @@ nonisolated enum DFlash2Support {
     static let draftModelID = "qwen3.8-27b-dflash2-draft"
 
     /// The draft's folder name under the models directory
-    /// (`incoai/Qwen3.8-27B-DFlash2` under the `/` → `_` `cacheSubdirectory`
-    /// rule). Duplicated here because `ModelDefinition` is MainActor-isolated
-    /// by the project's default isolation and this enum is nonisolated; the
-    /// test target pins the two together.
+    /// (`incoai/Qwen3.8-27B-DFlash2` under the `/` → `_` folder rule,
+    /// `ModelDefinition.storageSubdirectory(forRepo:)`). Spelled out here
+    /// because the catalog (`ModelDefinition.all`) is MainActor-isolated by
+    /// the project's default isolation and this enum is nonisolated; the test
+    /// target pins the two together.
     static let draftCacheSubdirectory = "incoai_Qwen3.8-27B-DFlash2"
 
     /// Tokens per verify pass (1 anchor + 7 drafts): the width the checkpoint

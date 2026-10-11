@@ -535,19 +535,13 @@ final class BenchmarkRunner {
 
         // Resolve model ID to cache subdirectory
         let targetID = config.resolvedModelID
-        guard let definition = ModelDefinition.all.first(where: { $0.id == targetID }),
-            let cacheSub = definition.cacheSubdirectory
-        else {
+        guard let definition = ModelDefinition.all.first(where: { $0.id == targetID }) else {
             throw BenchmarkError.modelNotFound(
                 "Unknown model ID '\(targetID)'. Available: \(ModelDefinition.all.filter { $0.category == .agent }.map(\.id))"
             )
         }
 
-        let cacheBase = ModelDownloadManager.modelStorageURL
-        var modelDir = cacheBase.appendingPathComponent(cacheSub)
-        if let prefix = definition.pathPrefix {
-            modelDir = modelDir.appendingPathComponent(prefix)
-        }
+        let modelDir = definition.directory(in: ModelDownloadManager.modelStorageURL)
 
         guard FileManager.default.fileExists(atPath: modelDir.path) else {
             throw BenchmarkError.modelNotFound(

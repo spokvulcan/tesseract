@@ -600,11 +600,13 @@ engine, the Proofread Pass, the `RecallEmbedder`) reports to it as one row, in
 `App/DependencyContainer+ModelResidency.swift` — the model, whether it is loaded and
 what it is doing, and how to free it. The menu bar's Models section, the Models
 page's in-memory mark and Offload Model all read it; Offload frees every model a
-holder lets go of, at once, the language model after the running generation. The
-proofreader, the recall embedder, the arbiter's load and the vision probe find a
-model's files through one answer, `ModelDownloadManager.usableDirectory(for:)`;
-Whisper keeps its own completeness contract (`WhisperModelContract`), and the voice
-engine reads the folder of the catalog spec it shares with its entry.
+holder lets go of, at once, the language model after the running generation. A
+loader that needs a whole model asks one answer for its files,
+`ModelDownloadManager.usableDirectory(for:)` (the **Usable Directory**), and every
+model folder comes from one pure folder rule,
+`ModelDefinition.directory(forRepo:pathPrefix:in:)`, which the voice engine's
+off-main checkpoint closure applies too; Whisper keeps its own stricter
+`WhisperModelContract`.
 Vocabulary: CONTEXT.md → LLM gate.
 
 ### 6. HTTP Server and Prefix Cache

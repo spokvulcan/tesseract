@@ -46,19 +46,15 @@ nonisolated enum IntegrationSnapshotBuilder {
         statuses: [String: ModelStatus],
         selectedAgentModelID: String,
         port: Int,
-        modelDirectory: (String) -> URL?
+        isVisionCapable: (String) -> Bool
     ) -> IntegrationSnapshot {
         let models: [IntegrationSnapshot.Model] =
             ModelCatalog.downloaded(in: .agent, definitions: definitions, statuses: statuses)
             .map { definition in
-                let visionCapable =
-                    modelDirectory(definition.id)
-                    .map { ModelCatalog.isVisionCapable(directory: $0) }
-                    ?? false
-                return IntegrationSnapshot.Model(
+                IntegrationSnapshot.Model(
                     id: definition.id,
                     displayName: definition.displayName,
-                    visionCapable: visionCapable,
+                    visionCapable: isVisionCapable(definition.id),
                     contextLength: contextLength
                 )
             }
@@ -85,7 +81,7 @@ nonisolated enum IntegrationSnapshotBuilder {
             statuses: downloads.statuses,
             selectedAgentModelID: settings.selectedAgentModelID,
             port: settings.serverPort,
-            modelDirectory: { downloads.modelPath(for: $0) }
+            isVisionCapable: { downloads.isVisionCapable($0) }
         )
     }
 }

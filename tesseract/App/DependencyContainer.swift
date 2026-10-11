@@ -529,9 +529,10 @@ final class DependencyContainer: ObservableObject {
     lazy var speechEnginePresenter: SpeechEnginePresenter = {
         // The catalog's Voice Engine entry downloads this same spec (the
         // ADR-0037 precision gate is recorded there), and the engine loads it
-        // from that entry's folder: the store root plus the repo's
-        // subdirectory, as `modelPath(for:)` builds it. The engine never
-        // downloads; without the files it throws `modelUnavailable`.
+        // from that entry's folder, by the one folder rule `modelPath(for:)`
+        // applies (pure, so the engine's off-main closure applies it too).
+        // The engine never downloads; without the files it throws
+        // `modelUnavailable`.
         let store = ModelDownloadManager.modelStorageURL
         return SpeechEnginePresenter(
             engine: SpeechEngine(
@@ -540,8 +541,7 @@ final class DependencyContainer: ObservableObject {
                 // checkpoint once and kept in Caches (ADR-0075).
                 synthesizer: Qwen3Synthesizer(
                     checkpointDirectory: { spec in
-                        store.appendingPathComponent(
-                            ModelDefinition.storageSubdirectory(forRepo: spec.repo))
+                        ModelDefinition.directory(forRepo: spec.repo, in: store)
                     },
                     neuralEngineCache: Qwen3Synthesizer.neuralEngineCache(
                         in: StorageEnvironment.caches))

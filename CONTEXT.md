@@ -567,6 +567,19 @@ downloaded that the engine refuses to load.
 _Avoid_: "has weights" (one nested `.safetensors` is not a checkpoint), verify
 (that compares sizes against the hub listing, a separate step).
 
+**Usable Directory**:
+Where a model's files are once they are complete by its entry's **Model
+Completeness**, nil until then: the one answer a loader that needs a whole model
+asks (`ModelDownloadManager.usableDirectory(for:)`). Every model folder comes from
+one pure folder rule, `ModelDefinition.directory(forRepo:pathPrefix:in:)` — the
+repo's folder under the model store, beneath the entry's path prefix — which the
+downloads, status checks and deletes, the voice engine's checkpoint closure, the
+benchmark runner and the phone's voice all apply. Whisper's dictation load keeps
+its own, stricter `WhisperModelContract`: the catalog is shared with the iPhone
+app and can't see it.
+_Avoid_: model path (the folder, complete or not), cache subdirectory (retired),
+checkpoint directory (one engine's word).
+
 **Retired Checkpoint**:
 A directory in the model store that an earlier catalog entry downloaded and
 that no entry lists or loads anymore. Removed once at launch, because the
