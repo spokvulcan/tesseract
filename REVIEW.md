@@ -25,7 +25,13 @@ Reserve **Important** for:
 - Assertions that pass on wrong output: `contains(fixtureText)` over generated
   text (a prompt, a summary, a render) holds with garbage around the fixture,
   as a summary prompt's debug-described assistant turns once did. Pin the
-  whole line.
+  whole line. So does `allSatisfy` over a list that can be empty, and
+  `!= false` on an optional, which holds for nil.
+- A behaviour change a `refactor:` PR doesn't declare: an output, a log or
+  diagnostics line, a persisted shape, an order or a timing that differs from
+  the base, named in no commit message and not in the PR body. A refactor
+  promises its base's behaviour, so each change it makes is declared and
+  pinned by a test.
 
 Everything else — naming, style, structure preferences — is a nit.
 

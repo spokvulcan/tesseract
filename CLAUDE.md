@@ -54,9 +54,11 @@ Many cheap, trustworthy measurements per hour beat one slow end-to-end run.
   animated wallpapers, video and other GPU apps skew results.
 - **Watch long runs.** Run anything over two minutes in the background with
   a timeout, note its expected duration, poll its output, and kill it when it
-  overruns. A subagent with no new tool call for five minutes is stuck: stop
-  it and do the work directly. The app's logs:
-  `scripts/dev.sh log-show [minutes] [pattern]`, which returns at once.
+  overruns. Watch a subagent through its worktree (`git log`, `git status`,
+  file times): no new commit or file change for 15 minutes, outside a build
+  or a gate run, means it is stuck: stop it and do the work directly. The
+  app's logs: `scripts/dev.sh log-show [minutes] [pattern]`, which returns at
+  once.
 - **Failures in unrelated suites:** run the same suite on the base commit
   and diff the failure lists before chasing them.
 
