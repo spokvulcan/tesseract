@@ -1843,8 +1843,11 @@ _Avoid_: hero, focus card, "the card" (unqualified: each Moment makes a card).
 **Agenda**:
 Apple Reminders and Calendar as Tesseract reads and writes them: one port with
 an EventKit store and an in-memory store (the test host's, ADR-0073), and a
-facade that keeps today's snapshot and turns every write into a one-line
-confirmation with an undo. The single source of truth for tasks and plans.
+facade that keeps today's snapshot, turns every write into a one-line
+confirmation with an undo, and makes the day's changes by Reminders' rules for
+dates and series: the owner's today and tomorrow, a task's time of day kept
+when it moves, a repeating reminder never losing its date. The single source
+of truth for tasks and plans.
 _Avoid_: tasks file (retired `tasks.md`), task store (Reminders is the store).
 
 **Area**:

@@ -66,8 +66,10 @@ final class Agenda {
     @ObservationIgnored private let areaMapJSON: @MainActor () -> String
     @ObservationIgnored private let defaultCalendarID: @MainActor () -> String?
     @ObservationIgnored private let trace: CompanionTrace?
-    @ObservationIgnored private let now: @MainActor () -> Date
-    @ObservationIgnored private var calendar: Calendar
+    /// The Agenda's clock and calendar: the owner's day and its dates are
+    /// read by them.
+    @ObservationIgnored let now: @MainActor () -> Date
+    @ObservationIgnored let calendar: Calendar
 
     private(set) var snapshot: AgendaSnapshot = .empty
     /// The latest change, for the "Added … · Undo" line.

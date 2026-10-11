@@ -12,7 +12,6 @@
 import SwiftUI
 
 struct NowCardView: View {
-    @Environment(Agenda.self) private var agenda
     @Environment(CompanionRuntime.self) private var runtime
     let card: NowCard
     let day: Timeline
@@ -54,7 +53,7 @@ struct NowCardView: View {
                     JarvisWord(card: jarvis)
                 }
                 NeedsYou(waiting: waiting)
-                Leftovers(wrapUps: waiting.wrapUps)
+                Leftovers(wrapUps: waiting.wrapUps, today: day.facts.startOfToday)
             }
         }
         .padding(16)
@@ -89,7 +88,7 @@ struct NowCardView: View {
     }
 
     private var actionRow: some View {
-        let actions = TodayActions(agenda: agenda, runtime: runtime)
+        let actions = TodayActions(runtime: runtime)
         let thinking = runtime.state.running != nil
         return HStack(spacing: 8) {
             ForEach(Array(card.actions.enumerated()), id: \.element.id) { index, action in
@@ -323,13 +322,15 @@ private struct ItemLine<Actions: View>: View {
 private struct Leftovers: View {
     @Environment(CompanionRuntime.self) private var runtime
     let wrapUps: [WaitingOnYou.WrapUp]
+    /// The owner's today, at midnight: until 04:00, the day that is ending.
+    let today: Date
 
     var body: some View {
         ForEach(wrapUps, id: \.cardID) { wrapUp in
             VStack(alignment: .leading, spacing: 8) {
                 Text(wrapUp.card.leftoversHeading).fontWeight(.semibold)
                 ForEach(wrapUp.card.leftovers) { leftover in
-                    LeftoverRow(cardID: wrapUp.cardID, leftover: leftover)
+                    LeftoverRow(cardID: wrapUp.cardID, leftover: leftover, today: today)
                 }
                 Button("Do What Jarvis Suggests for All") {
                     runtime.act(.allLeftovers(cardID: wrapUp.cardID))
@@ -344,6 +345,7 @@ private struct LeftoverRow: View {
     @Environment(CompanionRuntime.self) private var runtime
     let cardID: String
     let leftover: Leftover
+    let today: Date
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
@@ -370,7 +372,6 @@ private struct LeftoverRow: View {
         choice("Tomorrow", .tomorrow)
         Menu("Another day") {
             // From the owner's today: until 04:00, the day that is ending.
-            let today = DayKey(for: Date()).date() ?? Calendar.current.startOfDay(for: Date())
             ForEach(2..<8, id: \.self) { offset in
                 let day = Calendar.current.date(byAdding: .day, value: offset, to: today) ?? today
                 Button(day.formatted(.dateTime.weekday(.wide).day().month())) {

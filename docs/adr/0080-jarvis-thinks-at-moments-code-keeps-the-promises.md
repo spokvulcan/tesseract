@@ -672,3 +672,32 @@ put off at 14:07, would ring at 14:37 every day. What changed:
   the in-memory store, where the series, ticked off, goes on at its time.
   The store keeps no alarms: the alarm is read from the EventKit adapter,
   not tested.
+
+## Amendments (2026-10-11, one door for the day's changes)
+
+Today's buttons wrote Reminders themselves: a tick on the Day Line, the Now
+Card's Done, the Inbox's ring went straight to the Agenda, while a card's
+Done and a cue's Did it went through the engine. The runtime, whose own
+header said it only does the I/O, held the rules for dates — the owner's
+tomorrow, a time of day kept on a move — and the engine held the rules for
+series (Later or Let go on a repeating leftover skips to tomorrow; Move to
+Today leaves a repeating reminder alone). The views read the real clock. What
+changed:
+
+- **Every owner action is decided by the engine** (decision 2): a tick on
+  Today is `CardAction.tick`, as a card's Done is `itemDone` and a cue's
+  `step(.done)`. The engine says what the owner chose; the change it asks of
+  Reminders is an `AgendaMutation`.
+- **The Agenda makes the day's changes, by Reminders' rules**
+  (`Agenda.apply`): the owner's today and tomorrow by the Day Key and the
+  Agenda's clock, a time of day kept when a task moves to another day, a
+  repeating reminder never losing its date (kept for later or let go, it
+  skips to tomorrow at its time) and never re-dated to today. The runtime
+  only performs. The trace says where each change came from, as before:
+  `today` for a tick on Today.
+- **Views read the time from the runtime's clock**: Today's minute, the
+  leftovers' Another Day, the composer's confirmation, the Jarvis Panel's
+  words.
+- `DayWalkTests` walks the day over the in-memory Agenda, which makes each
+  change the engine asks for, instead of a hand-written copy of it.
+

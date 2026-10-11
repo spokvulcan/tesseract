@@ -673,7 +673,7 @@ private struct PlanDetails: View {
     let plan: MorningPlanCard
 
     var body: some View {
-        let actions = TodayActions(agenda: agenda, runtime: runtime)
+        let actions = TodayActions(runtime: runtime)
         let reminders = Dictionary(
             (agenda.snapshot.open + agenda.snapshot.doneToday).map { ($0.id, $0) },
             uniquingKeysWith: { first, _ in first })
@@ -958,9 +958,11 @@ private struct LeftoverChoiceRow: View {
             HStack(spacing: 6) {
                 choice("Tomorrow", .tomorrow, cardID)
                 Menu("Another day") {
-                    // From the owner's today: until 04:00, the day that is ending.
+                    // From the owner's today, by the runtime's clock: until
+                    // 04:00, the day that is ending.
+                    let now = runtime.now()
                     let today =
-                        DayKey(for: Date()).date() ?? Calendar.current.startOfDay(for: Date())
+                        DayKey(for: now).date() ?? Calendar.current.startOfDay(for: now)
                     ForEach(2..<8, id: \.self) { offset in
                         let day =
                             Calendar.current.date(byAdding: .day, value: offset, to: today) ?? today

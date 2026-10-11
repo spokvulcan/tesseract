@@ -30,23 +30,21 @@ struct TodayView: View {
         var id: String { rawValue }
     }
 
-    /// A fixed clock, for the Today gallery; nil follows the real one.
-    private let fixedNow: Date?
     @State private var mode: Mode
-    @State private var now: Date
+    /// The minute Today shows, read from the runtime's clock on the minute;
+    /// nil until the first read.
+    @State private var now: Date?
     @State private var speakingMessageID: UUID?
 
-    init(fixedNow: Date? = nil, mode: Mode = .day) {
-        self.fixedNow = fixedNow
+    init(mode: Mode = .day) {
         _mode = State(initialValue: mode)
-        _now = State(initialValue: fixedNow ?? Date())
     }
 
     var body: some View {
         Group {
             switch mode {
             case .day:
-                TodayDayPage(now: now)
+                TodayDayPage(now: now ?? runtime.now())
             case .chat:
                 ChatTranscriptView(speakingMessageID: $speakingMessageID, isSpeechActive: false)
                     .environment(thread.chat)
@@ -83,14 +81,14 @@ struct TodayView: View {
         }
         .task {
             runtime.todayOpened()
-            guard fixedNow == nil else { return }
             // Tick on the minute, so the Now line and card read the clock.
             while !Task.isCancelled {
-                let day = DayKey(for: now)
-                now = Date()
+                let shown = now ?? runtime.now()
+                let current = runtime.now()
+                now = current
                 // A new day at 04:00: fetch its tomorrow.
-                if DayKey(for: now) != day { await agenda.refresh() }
-                let intoMinute = now.timeIntervalSinceReferenceDate.truncatingRemainder(
+                if DayKey(for: current) != DayKey(for: shown) { await agenda.refresh() }
+                let intoMinute = current.timeIntervalSinceReferenceDate.truncatingRemainder(
                     dividingBy: 60)
                 try? await Task.sleep(for: .seconds(60 - intoMinute))
             }

@@ -24,7 +24,6 @@ struct TodaySideColumn: View {
 }
 
 private struct InboxSection: View {
-    @Environment(Agenda.self) private var agenda
     @Environment(CompanionRuntime.self) private var runtime
     @Environment(SettingsManager.self) private var settings
     let day: Timeline
@@ -37,7 +36,7 @@ private struct InboxSection: View {
         let items = day.inbox
         let shown = Array(items.prefix(Self.shown))
         let slots = day.inboxOffers(for: shown.map(\.id), reserving: card.offeredPlacements)
-        let actions = TodayActions(agenda: agenda, runtime: runtime)
+        let actions = TodayActions(runtime: runtime)
         VStack(alignment: .leading, spacing: TodayLayout.rowSpacing) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text("Inbox").fontWeight(.semibold)

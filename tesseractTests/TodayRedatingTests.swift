@@ -10,10 +10,13 @@
 //  one-off task into today's Anytime tasks and never re-dates a repeating
 //  one (done early, it is ticked off where it is). Later on a repeating
 //  reminder that came due is a step in today's plan half an hour on, cued
-//  then; its series stays as it was. Through Today's actions, the runtime,
-//  the Agenda and the in-memory store, which ticks a repeating reminder off
-//  as Reminders does (a daily series) but keeps no alarms: what EventKit
-//  does to a series' alarm is read from the adapter, not tested (ADR-0073).
+//  then; its series stays as it was. Later or Let go on a repeating
+//  leftover skips it to tomorrow at its time. A tick on Today is the same
+//  door's: the engine, then the Agenda. Through Today's actions, the
+//  runtime, the Agenda (which keeps the rules for dates and series) and the
+//  in-memory store, which ticks a repeating reminder off as Reminders does
+//  (a daily series) but keeps no alarms: what EventKit does to a series'
+//  alarm is read from the adapter, not tested (ADR-0073).
 //
 
 import Foundation
@@ -85,7 +88,7 @@ struct TodayRedatingTests {
                 thread: container.dayThread, stateStore: stateStore,
                 frontmost: container.frontmostApp, power: container.powerMonitor,
                 delivery: CompanionDelivery(), now: { now })
-            actions = TodayActions(agenda: agenda, runtime: runtime)
+            actions = TodayActions(runtime: runtime)
         }
 
         /// Waits for the Agenda to see `id` dated anew.
@@ -153,21 +156,15 @@ struct TodayRedatingTests {
 
     // MARK: Move to Today
 
-    /// The engine never re-dates a repeating reminder to today (the Day Line
-    /// doesn't offer it); a one-off task is due today.
-    @Test func moveToTodayLeavesARepeatingReminderAlone() {
-        var state = DayState(day: DayKey(rawValue: "2026-10-01"))
-        state.syncedNudgeIDs = []
-        state.morningPlanAt = Self.at(7, day: 1)
+    /// The Agenda never re-dates a repeating reminder to today (the Day Line
+    /// doesn't offer it either): its date is its whole series'.
+    @Test func moveToTodayLeavesARepeatingReminderAlone() async throws {
         var tomorrows = Self.plants
         tomorrows.due = Self.at(8, day: 2)
-        let snapshot = Self.snapshot(at: Self.at(10, day: 1), open: [tomorrows, Self.dentist])
-        let repeating = DayEngine.decide(
-            .cardAction(.today(reminderID: "plants")), snapshot: snapshot, state: state)
-        #expect(Self.mutations(repeating.effects).isEmpty)
-        let oneOff = DayEngine.decide(
-            .cardAction(.today(reminderID: "dentist")), snapshot: snapshot, state: state)
-        #expect(Self.mutations(oneOff.effects) == [.dueToday(reminderID: "dentist")])
+        let today = await Today([tomorrows], now: Self.at(10, day: 1))
+        try await today.agenda.apply(.dueToday(reminderID: "plants"))
+        #expect(today.store.reminders["plants"] == tomorrows)
+        #expect(today.store.writeLog.isEmpty)
     }
 
     /// A one-off task due tomorrow joins today's Anytime tasks: today, by
@@ -181,7 +178,28 @@ struct TodayRedatingTests {
         #expect(!moved.dueHasTime)
     }
 
-    // MARK: Later
+    // MARK: Later, and Let go
+
+    /// Kept for later or let go from the Evening Wrap-up, a repeating
+    /// reminder skips to tomorrow at its time: it can't lose its date, and
+    /// deleting it would delete every occurrence. A one-off one is cleared
+    /// of its date, or let go.
+    @Test func aRepeatingLeftoverSkipsToTomorrowInsteadOfLosingItsSeries() async throws {
+        for mutation in [
+            AgendaMutation.clearDue(reminderID: "pills"), .delete(reminderID: "pills"),
+        ] {
+            let today = await Today([Self.pills, Self.bank], now: Self.at(21, 30, day: 1))
+            try await today.agenda.apply(mutation)
+            let series = try #require(today.store.reminders["pills"])
+            #expect(series.due == Self.at(9, day: 2))
+            #expect(series.dueHasTime)
+        }
+        let later = await Today([Self.bank], now: Self.at(21, 30, day: 1))
+        try await later.agenda.apply(.clearDue(reminderID: "bank"))
+        #expect(later.store.reminders["bank"]?.due == nil)
+        try await later.agenda.apply(.delete(reminderID: "bank"))
+        #expect(later.store.reminders["bank"] == nil)
+    }
 
     /// Back at 10:05 from a morning away: the Breakpoint holds both
     /// reminders that came due.
@@ -290,5 +308,26 @@ struct TodayRedatingTests {
         let series = try #require(today.store.reminders["pills"])
         #expect(series.due == Self.at(9, day: 2))
         #expect(series.dueHasTime)
+    }
+
+    // MARK: A tick
+
+    /// Ticked off on Today and unticked: the same door as a card's Done —
+    /// the engine, then the Agenda, which confirms it with an undo.
+    @Test func aTickOnTodayGoesThroughTheEngineToReminders() async throws {
+        let today = await Today([Self.bank], now: Self.at(10, day: 1))
+        // Ticked a minute before the Agenda's clock: it looks for a done
+        // reminder among those done before now.
+        today.store.now = { Self.at(9, 59, day: 1) }
+        today.actions.setDone("bank", true)
+        await observe(until: { [agenda = today.agenda] in
+            agenda.snapshot.doneToday.contains { $0.id == "bank" }
+        })
+        #expect(today.agenda.lastChange?.line == "Done: “Call the bank”.")
+        today.actions.setDone("bank", false)
+        await observe(until: { [agenda = today.agenda] in
+            agenda.snapshot.open.contains { $0.id == "bank" }
+        })
+        #expect(today.store.reminders["bank"]?.isCompleted == false)
     }
 }

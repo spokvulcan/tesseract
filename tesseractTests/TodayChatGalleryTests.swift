@@ -88,7 +88,7 @@ struct TodayChatGalleryTests {
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         defer { window.close() }
         let host = NSHostingView(
-            rootView: TodayView(fixedNow: fixture.now, mode: .chat)
+            rootView: TodayView(mode: .chat)
                 .injectCompanionDependencies(from: container)
                 .frame(width: width, height: height)
                 .background(Color(nsColor: .windowBackgroundColor)))

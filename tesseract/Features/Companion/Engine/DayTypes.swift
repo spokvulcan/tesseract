@@ -60,6 +60,9 @@ nonisolated enum CardAction: Sendable, Equatable {
     /// Move to Today on a task due tomorrow: into today's Anytime tasks.
     /// Never a repeating reminder, whose date is its whole series'.
     case today(reminderID: String)
+    /// Done on Today, or not done after all: the Now Card's Done, the Day
+    /// Line's ring, the Inbox's, the chat's plan.
+    case tick(reminderID: String, done: Bool)
     /// Put a task into today's plan at a time ("Find a time").
     case place(reminderID: String, start: Date, minutes: Int)
     /// Tasks that slid, back into today's plan in one go ("Fit all 3 in").
@@ -268,30 +271,6 @@ nonisolated enum DeliveryRung: String, Sendable, Equatable, Codable {
     case banner
     /// A spoken line.
     case voice
-}
-
-nonisolated enum AgendaMutation: Sendable, Equatable {
-    /// Due tomorrow, keeping a time of day if it had one.
-    case dueTomorrow(reminderID: String)
-    /// Due on the owner's today, at no set time: one of today's Anytime tasks.
-    case dueToday(reminderID: String)
-    /// No date: it waits in its Area or the Inbox.
-    case clearDue(reminderID: String)
-    /// Let it go.
-    case delete(reminderID: String)
-    /// Done.
-    case complete(reminderID: String)
-    /// Not done after all: open again.
-    case reopen(reminderID: String)
-    /// Due on this day, keeping a time of day if it had one.
-    case dueOn(reminderID: String, day: Date)
-    /// Due at this moment.
-    case dueAt(reminderID: String, at: Date)
-    /// A new reminder: a follow-up for something that can't be handled now.
-    case followUp(title: String, at: Date)
-    /// A new reminder the owner accepted from a proposal: due that day, or
-    /// in the Inbox.
-    case add(title: String, due: Date?)
 }
 
 // MARK: - Snapshot

@@ -481,17 +481,20 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # leftovers; TEST_RUNNER_PANEL_GALLERY_DIR=<dir> writes the PNGs), the menu
 # bar's clock beside the glyph (a started step's time left, the next event or
 # time to leave in its last half hour; the same directory gets its PNGs), one
-# day walked through the engine signal by signal where those rules meet (the
-# plan, a cue started, an absence and the late check-in, the must-do put off
-# and started small, the clock, the evening),
+# day walked through the engine signal by signal where those rules meet, the
+# in-memory Agenda making each change it asks for (the plan, a cue started,
+# an absence and the late check-in, the must-do put off and started small,
+# the clock, the evening),
 # a repeating task ticked off (the day follows its done occurrence: the
 # must-do done, the step in its slot, its pace; the in-memory store keeps the
 # copy and moves the series on, as Reminders does), a task re-dated from
 # Today, by the runtime's clock and never moving a repeating reminder's series
 # by accident (Tomorrow is the Step Cue's, at its own time of day; Move to
 # Today is a one-off task's; Later on a repeating reminder is a step half an
-# hour on, cued then; through Today's actions, the runtime and the in-memory
-# Agenda),
+# hour on, cued then; Later or Let go on a repeating leftover skips it to
+# tomorrow at its time — the Agenda's rules for dates and series; a tick on
+# Today goes through the engine like a card's Done; through Today's actions,
+# the runtime and the in-memory Agenda),
 # cards and prompts, the Day Thread's store, a moment's turn read back for
 # Today's Chat (ThreadMomentTests: every request names its moment, the line
 # from its card, the card it made found in the day's state, the Day Opening

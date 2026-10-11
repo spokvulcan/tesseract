@@ -357,7 +357,6 @@ private struct AreaTag: View {
 // MARK: - Steps
 
 private struct EventStep: View {
-    @Environment(Agenda.self) private var agenda
     @Environment(CompanionRuntime.self) private var runtime
     let event: AgendaEvent
     let isPast: Bool
@@ -401,7 +400,7 @@ private struct EventStep: View {
             // the Now Card as it starts.
             if let link = event.meetingLink, !isPast {
                 Button("Join Call") {
-                    TodayActions(agenda: agenda, runtime: runtime).perform(.join(link))
+                    TodayActions(runtime: runtime).perform(.join(link))
                 }
             }
         }
@@ -424,7 +423,6 @@ private struct EventStep: View {
 }
 
 private struct TaskStep: View {
-    @Environment(Agenda.self) private var agenda
     @Environment(CompanionRuntime.self) private var runtime
     let task: TimelineTask
     /// Due tomorrow: today's must-do and plan are not its own.
@@ -435,7 +433,7 @@ private struct TaskStep: View {
     let line: DayLine?
 
     var body: some View {
-        let actions = TodayActions(agenda: agenda, runtime: runtime)
+        let actions = TodayActions(runtime: runtime)
         StepRow(line: line, isUnderWay: isUnderWay) {
             Button {
                 actions.setDone(task.id, !task.isDone)
@@ -635,12 +633,11 @@ private struct NowStep: View {
 
 // MARK: - Actions
 
-/// What Today's buttons do to the day: a task ticked off through the Agenda;
-/// the plan, and a task moved to another day, through the runtime (its
-/// clock, and the engine's rules for a repeating reminder).
+/// What Today's buttons do to the day: each is the action a card or a cue
+/// sends, through the runtime — decided by the Day Engine, and made in
+/// Reminders by the Agenda, with its rules for dates and series.
 @MainActor
 struct TodayActions {
-    let agenda: Agenda
     let runtime: CompanionRuntime
 
     func perform(_ kind: NowAction.Kind) {
@@ -656,8 +653,9 @@ struct TodayActions {
         }
     }
 
+    /// Ticked off, or unticked.
     func setDone(_ id: String, _ done: Bool) {
-        Task { _ = try? await agenda.updateReminder(id: id, completed: done, source: "today") }
+        runtime.act(.tick(reminderID: id, done: done))
     }
 
     /// Off today's plan and due on the owner's tomorrow, as a Step Cue's

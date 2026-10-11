@@ -4,8 +4,10 @@
 //
 //  The Companion's loop: it gathers a snapshot, feeds the Day Engine one
 //  signal at a time, and performs the effects the engine returns. All the
-//  deciding lives in the engine; this type only does the I/O — the clock,
+//  deciding lives in the engine, and Reminders' rules for dates and series
+//  in the Agenda (`Agenda.apply`); this type only does the I/O — the clock,
 //  presence, the agenda, the Day Thread, the notification center, the trace.
+//  Every owner action, Today's buttons included, comes in through `act`.
 //
 //  It rides the Companion switch: on, it asks for Reminders, Calendar and
 //  notification access once and starts the clock; off, it withdraws every
@@ -51,7 +53,9 @@ final class CompanionRuntime {
     @ObservationIgnored private let power: PowerMonitor
     @ObservationIgnored private let delivery: CompanionDelivery
     @ObservationIgnored private let profile: ProfileStore?
-    @ObservationIgnored private let now: @MainActor () -> Date
+    /// The day's clock — the owner's, or a test's: the engine decides by it,
+    /// and Today and the Jarvis Panel read the time from it.
+    @ObservationIgnored let now: @MainActor () -> Date
     @ObservationIgnored private var watcher: NotificationCenterWatcher?
 
     @ObservationIgnored private var clockTask: Task<Void, Never>?
@@ -364,61 +368,11 @@ final class CompanionRuntime {
     }
 
     private func mutate(_ mutation: AgendaMutation) async {
-        let calendar = Calendar.current
         do {
-            switch mutation {
-            case .dueTomorrow(let id):
-                // The owner's tomorrow: after a wrap-up at 01:30 it is today's date.
-                let tomorrow =
-                    DayKey(for: now(), calendar: calendar).next(calendar: calendar).date(
-                        calendar: calendar)
-                    ?? now()
-                try await moveReminder(id, toDay: tomorrow)
-            case .dueToday(let id):
-                // The owner's today: at 01:30 it is yesterday's date.
-                let today =
-                    DayKey(for: now(), calendar: calendar).date(calendar: calendar) ?? now()
-                _ = try await agenda.updateReminder(
-                    id: id, due: .set(today, hasTime: false), source: "today")
-            case .dueOn(let id, let day):
-                try await moveReminder(id, toDay: calendar.startOfDay(for: day))
-            case .dueAt(let id, let at):
-                _ = try await agenda.updateReminder(
-                    id: id, due: .set(at, hasTime: true), source: "card")
-            case .clearDue(let id):
-                _ = try await agenda.updateReminder(id: id, due: .clear, source: "wrapUp")
-            case .delete(let id):
-                try await agenda.deleteReminder(id: id, source: "wrapUp")
-            case .complete(let id):
-                _ = try await agenda.updateReminder(id: id, completed: true, source: "card")
-            case .reopen(let id):
-                _ = try await agenda.updateReminder(id: id, completed: false, source: "card")
-            case .followUp(let title, let at):
-                _ = try agenda.addReminder(title: title, due: at, dueHasTime: true, source: "card")
-            case .add(let title, let due):
-                _ = try agenda.addReminder(title: title, due: due, source: "proposal")
-            }
+            try await agenda.apply(mutation)
         } catch {
             Log.companion.error("Agenda change failed: \(error.localizedDescription)")
         }
-    }
-
-    /// Re-date a reminder to `day`, keeping its time of day if it had one (a
-    /// repeating reminder's is its whole series'). Every Tomorrow comes
-    /// here: a Step Cue's, the Evening Wrap-up's and Today's.
-    private func moveReminder(_ id: String, toDay day: Date) async throws {
-        let calendar = Calendar.current
-        let reminder = await agenda.store.reminder(id: id, now: now())
-        var target = day
-        if let due = reminder?.due, reminder?.dueHasTime == true {
-            let time = calendar.dateComponents([.hour, .minute], from: due)
-            target =
-                calendar.date(
-                    bySettingHour: time.hour ?? 9, minute: time.minute ?? 0, second: 0, of: day)
-                ?? day
-        }
-        _ = try await agenda.updateReminder(
-            id: id, due: .set(target, hasTime: reminder?.dueHasTime ?? false), source: "wrapUp")
     }
 }
 

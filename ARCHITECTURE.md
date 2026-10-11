@@ -680,7 +680,17 @@ from it. How time is taken is said once (`DayFacts+Time`): an event is a
 meeting (other people, or a place) or a block of the owner's own, and a
 time to leave stands while its event does; the Day Line's free time, a
 step's boundaries and a plan's placements are each a named composition of
-that. The system prompt carries no time;
+that.
+
+Every owner action — a card's, a cue's, a button on Today — comes in
+through `CompanionRuntime.act` and is decided by the engine; what it changes
+in Reminders the Agenda makes (`Agenda.apply`, `Features/Companion/Agenda/Agenda+Changes.swift`), with
+Reminders' rules for dates and series in that one place, and the runtime
+only performs. Views read the time from the runtime's clock. The Jarvis Panel
+keeps what it shows (a card by id, read live from the day's state; a cue; the
+Done it says; a Break Cue); the engine keeps which cue it put there
+(`cueOnPanel`, `breakCuedAt`), so one taken down unanswered — under a card,
+by a quit, with the Companion off — is cued again. The system prompt carries no time;
 every user message carries a stored **Now Tag**. Other apps' banners are sorted
 by code on arrival (`NotificationSources`: a person, an app's news, or noise —
 the system's banners and games, recognised by `AppIdentityResolver`), so only

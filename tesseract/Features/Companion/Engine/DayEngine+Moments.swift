@@ -523,13 +523,15 @@ nonisolated extension DayEngine {
             ]
 
         case .today(let reminderID):
-            // A repeating reminder's date is its whole series': done early,
-            // it is ticked off where it is.
-            guard !repeats(reminderID, snapshot: snapshot) else { return [] }
+            // The Agenda leaves a repeating reminder's date alone: it is its
+            // whole series'.
             return [
                 .mutateAgenda(.dueToday(reminderID: reminderID)),
                 .trace(.cardReaction, ["action": "today"]),
             ]
+
+        case .tick(let reminderID, let done):
+            return [.mutateAgenda(.tick(reminderID: reminderID, done: done))]
 
         case .place(let reminderID, let start, let minutes):
             let slot = Placement(reminderID: reminderID, start: start, minutes: minutes)
@@ -550,7 +552,7 @@ nonisolated extension DayEngine {
             state.plan.removeAll { $0.reminderID == reminderID }
             return [
                 .mutateAgenda(
-                    mutation(for: suggestion, reminderID: reminderID, snapshot: snapshot)),
+                    mutation(for: suggestion, reminderID: reminderID)),
                 reaction(
                     "leftover.\(suggestion.rawValue)", card: state.cards[index], snapshot: snapshot),
             ]
@@ -561,7 +563,7 @@ nonisolated extension DayEngine {
             else { return [] }
             let mutations = card.leftovers.map {
                 DayEffect.mutateAgenda(
-                    mutation(for: $0.suggestion, reminderID: $0.reminderID, snapshot: snapshot))
+                    mutation(for: $0.suggestion, reminderID: $0.reminderID))
             }
             let moved = Set(card.leftovers.map(\.reminderID))
             card.leftovers = []
@@ -805,18 +807,15 @@ nonisolated extension DayEngine {
         }
     }
 
-    /// A repeating reminder is one item for its whole series: Later can't
-    /// take its date (EventKit refuses) and Let go would delete every
-    /// occurrence, so for it both skip to tomorrow and the series goes on.
-    private static func mutation(
-        for suggestion: Leftover.Suggestion, reminderID: String, snapshot: DaySnapshot
-    ) -> AgendaMutation {
-        let repeats = Self.repeats(reminderID, snapshot: snapshot)
+    /// A leftover's choice, as a change to Reminders. (The Agenda keeps a
+    /// repeating reminder's series: later or let go, it skips to tomorrow.)
+    private static func mutation(for suggestion: Leftover.Suggestion, reminderID: String)
+        -> AgendaMutation
+    {
         switch suggestion {
-        case .tomorrow: return .dueTomorrow(reminderID: reminderID)
-        case .later where !repeats: return .clearDue(reminderID: reminderID)
-        case .drop where !repeats: return .delete(reminderID: reminderID)
-        case .later, .drop: return .dueTomorrow(reminderID: reminderID)
+        case .tomorrow: .dueTomorrow(reminderID: reminderID)
+        case .later: .clearDue(reminderID: reminderID)
+        case .drop: .delete(reminderID: reminderID)
         }
     }
 

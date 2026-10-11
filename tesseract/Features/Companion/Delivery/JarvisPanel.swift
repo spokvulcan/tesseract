@@ -56,6 +56,7 @@ final class JarvisPanelController {
     private let thread: DayThread
     private let voice: AgentVoiceInputController
     private let day: () -> Timeline?
+    private let now: () -> Date
     private let liveCard: (String) -> DayCard?
     private let onAction: (CardAction) -> Void
     private let onExpand: () -> Void
@@ -83,17 +84,20 @@ final class JarvisPanelController {
     /// - Parameters:
     ///   - day: the day as it stands, read once (`CompanionRuntime.timeline`):
     ///     a plan's steps are listed from it.
+    ///   - now: the day's clock (the runtime's), which the panel's words are
+    ///     said by.
     ///   - liveCard: the card as the day has it now, so items the owner
     ///     handles leave the panel and a refined card updates in it.
     init(
         thread: DayThread, voice: AgentVoiceInputController, day: @escaping () -> Timeline?,
-        liveCard: @escaping (String) -> DayCard?,
+        now: @escaping () -> Date, liveCard: @escaping (String) -> DayCard?,
         onAction: @escaping (CardAction) -> Void, onExpand: @escaping () -> Void,
         capture: CaptureService, pictureRemedy: @escaping () -> String? = { nil }
     ) {
         self.thread = thread
         self.voice = voice
         self.day = day
+        self.now = now
         self.liveCard = liveCard
         self.onAction = onAction
         self.onExpand = onExpand
@@ -102,7 +106,6 @@ final class JarvisPanelController {
     }
 
     var isShowing: Bool { panel?.isVisible == true }
-    var shownCardID: String? { isShowing ? model.card?.id : nil }
 
     /// How long a step marked done is said, with its Undo, before the panel
     /// closes.
@@ -317,7 +320,8 @@ final class JarvisPanelController {
                     // On the next turn: never resize the window inside its own
                     // layout pass.
                     Task { @MainActor [weak self] in self?.fit(content: height) }
-                }),
+                },
+                now: now),
             drop: GlassPanel.Drop(
                 types: PasteboardImageReader.dragTypes + [.fileURL],
                 accepts: PasteboardImageReader.containsImageContent,
@@ -479,7 +483,7 @@ struct JarvisPanelView: View {
     var removePicture: (UUID) -> Void = { _ in }
     /// What the panel says was laid out at this height.
     var onContentHeight: (CGFloat) -> Void = { _ in }
-    /// The clock the plan's steps are read against (fixed in the gallery).
+    /// The day's clock (the runtime's; fixed in the gallery).
     var now: () -> Date = Date.init
 
     var body: some View {
