@@ -30,9 +30,14 @@ nonisolated enum TurnRestore: Sendable, Equatable {
     /// (`restore/unrestorable-snapshot`); no report reads them from here.
     case failedThenCold(CacheClaim.Copy?)
 
+    /// The Cache Claim's handoff as the turn reports it, carried by the
+    /// claim's own `CacheClaim.Handoff` beside the cache objects.
     struct Handoff: Sendable, Equatable {
         let leaseID: UUID
+        /// The recurrent backup exact rewind keeps.
         let rewindStateBytes: Int
+        /// Seconds a Pending-Payload Wait cost before it ended in the
+        /// handoff; `0` when it never waited.
         let waitSeconds: TimeInterval
     }
 

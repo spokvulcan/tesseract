@@ -95,13 +95,10 @@ nonisolated final class CacheClaim: @unchecked Sendable {
     struct Handoff: Sendable {
         /// The leaf's own cache objects, now the request's live cache.
         let cache: FinalGenerationCache
-        let leaseID: UUID
-        /// The recurrent backup exact rewind keeps: the claim's only array
-        /// allocation.
-        let rewindStateBytes: Int
-        /// Seconds a Pending-Payload Wait cost before it ended in this
-        /// handoff; `0` when it never waited.
-        let waitSeconds: TimeInterval
+        /// What the turn reports of the handoff: the lease, the recurrent
+        /// backup exact rewind keeps (the claim's only array allocation) and
+        /// what a Pending-Payload Wait cost before it ended here.
+        let lease: TurnRestore.Handoff
     }
 
     /// The **Leaf Handoff**'s scope (ADR-0064 decision 7): a cache moves
@@ -377,8 +374,10 @@ nonisolated final class CacheClaim: @unchecked Sendable {
             lock.withLock { held = taken }
             return .handoff(
                 Handoff(
-                    cache: taken.live, leaseID: grant.lease.id,
-                    rewindStateBytes: taken.rewind.stateBytes, waitSeconds: waited))
+                    cache: taken.live,
+                    lease: .init(
+                        leaseID: grant.lease.id, rewindStateBytes: taken.rewind.stateBytes,
+                        waitSeconds: waited)))
         }
     }
 

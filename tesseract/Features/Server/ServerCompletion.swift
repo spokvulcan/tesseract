@@ -1500,10 +1500,7 @@ nonisolated final class ServerCompletion {
                 }
                 restoreMs = Date.timeIntervalSinceReferenceDate - restoreStarted
                 if let handoff {
-                    restore = .handoff(
-                        .init(
-                            leaseID: handoff.leaseID, rewindStateBytes: handoff.rewindStateBytes,
-                            waitSeconds: handoff.waitSeconds))
+                    restore = .handoff(handoff.lease)
                 } else if restoredCache != nil {
                     restore = .copy(copy)
                 }

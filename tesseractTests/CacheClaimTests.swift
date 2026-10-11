@@ -313,7 +313,7 @@ struct CacheClaimTests {
 
         let handoff = try #require(
             outcome.handoff, "the wait should have turned the copy into a move")
-        #expect(handoff.waitSeconds > 0)
+        #expect(handoff.lease.waitSeconds > 0)
         // The move is the real thing: the request holds the leaf's own
         // cache objects, not a restored copy of them.
         #expect(handoff.cache.cache[0] as AnyObject === scene.kv)
@@ -550,7 +550,7 @@ struct CacheClaimTests {
             resolved(manager, tokens + [9]), tokens: tokens + [9], maximumAdvance: 20,
             manager: manager)
         let handoff = try #require(outcome.handoff)
-        #expect(handoff.rewindStateBytes == 8)
+        #expect(handoff.lease.rewindStateBytes == 8)
         _ = kv.update(
             keys: MLXArray.zeros([1, 1, 10, 64]), values: MLXArray.zeros([1, 1, 10, 64]))
         recurrent[1] = MLXArray([Float(99), 100])
@@ -977,7 +977,7 @@ struct CacheClaimTests {
             let (outcome, _) = await checkOut(
                 resolved, tokens: Array(1...9), manager: manager,
                 context: context(modelID: modelID), tripwire: .reporting)
-            return outcome.handoff?.leaseID
+            return outcome.handoff?.lease.leaseID
         }
         let leaseID = await checkOutAndDropTheHandOver()
         let event = try #require(await Self.tripwireEvent(capture))
