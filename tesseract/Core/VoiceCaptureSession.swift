@@ -237,6 +237,13 @@ final class VoiceCaptureSession {
     /// recognizer are shared, so ``cancel()`` stops only what it started.
     @ObservationIgnored private var ownsCapture = false
 
+    /// This session's own calls into the shared recognizer, still running.
+    /// The recognizer cancels whichever transcription it is running, so
+    /// ``cancel()`` tells it to only while one of them is this session's:
+    /// while this session's take proofreads or commits, the transcription it
+    /// runs is another surface's.
+    @ObservationIgnored private var ownTranscriptions = 0
+
     /// The Live Preview pump and where it shows each preview.
     @ObservationIgnored private var previewTask: Task<Void, Never>?
     @ObservationIgnored private var showPreview: (@MainActor (LivePreview?) -> Void)?
@@ -305,8 +312,7 @@ final class VoiceCaptureSession {
         setPhase(.transcribing)
         let task = Task { () -> Outcome in
             do {
-                let result = try await stages.recognizer.transcribe(
-                    audio, language: stages.language())
+                let result = try await transcribe(audio)
 
                 // A cancel-and-restart since this operation began means a newer
                 // operation owns the caller's state — drop this result.
@@ -404,18 +410,25 @@ final class VoiceCaptureSession {
     func cancel() {
         operations.invalidate()
         stopPreview()
-        let transcribing = inFlightTask != nil
         inFlightTask?.cancel()
         inFlightTask = nil
         if ownsCapture, stages.microphone.isCapturing {
             _ = stages.microphone.stopCapture()
         }
         ownsCapture = false
-        if transcribing { stages.recognizer.cancelTranscription() }
+        if ownTranscriptions > 0 { stages.recognizer.cancelTranscription() }
         setPhase(.idle)
     }
 
     // MARK: - Private
+
+    /// One call into the shared recognizer, counted as this session's own
+    /// while it runs.
+    private func transcribe(_ audio: AudioData) async throws -> TranscriptionResult {
+        ownTranscriptions += 1
+        defer { ownTranscriptions -= 1 }
+        return try await stages.recognizer.transcribe(audio, language: stages.language())
+    }
 
     private func setPhase(_ newPhase: Phase) {
         guard phase != newPhase else { return }

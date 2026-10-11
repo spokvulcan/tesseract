@@ -331,6 +331,72 @@ struct VoiceCaptureSessionTests {
         #expect(!capture.isCapturing)
     }
 
+    /// The recognizer is shared and cancels whichever transcription it runs:
+    /// a session whose take is proofreading cancels only its own work, never
+    /// the transcription another surface's take is waiting on (the capture
+    /// panel's Escape while dictation transcribes).
+    @Test func cancelWhileProofreadingLeavesAnotherSessionsTranscription() async throws {
+        let engine = ControllableTranscribing(
+            result: TranscriptionResult(
+                text: "hello world", segments: [], language: "en", processingTime: 0))
+        let stub = ProofreadStub()
+        stub.gated = true
+        let voiceCapture = makeVoiceCapture(
+            microphone: FakeAudioCapture(cannedAudio: makeAudio()), recognizer: engine,
+            proofread: { await stub.proofread($0) })
+        let panel = voiceCapture.makeSession()
+        let dictation = voiceCapture.makeSession()
+        let recorder = CommitRecorder()
+
+        let panelTake = Task {
+            await panel.transcribeAndCommit(makeAudio()) { try await recorder.commit($0) }
+        }
+        while !engine.isAwaiting { await Task.yield() }
+        engine.completeWithSuccess()
+        while !stub.isAwaitingGate { await Task.yield() }
+        #expect(panel.phase == .proofreading)
+        stub.gated = false
+
+        let dictationTake = Task {
+            await dictation.transcribeAndCommit(makeAudio()) { try await recorder.commit($0) }
+        }
+        while !engine.isAwaiting { await Task.yield() }
+        panel.cancel()
+        #expect(engine.cancelCount == 0)
+
+        engine.completeWithSuccess()
+        guard case .committed = await dictationTake.value else {
+            Issue.record("expected dictation's take to commit")
+            return
+        }
+        #expect(recorder.commits.count == 1)
+        stub.releaseGate()
+        guard case .superseded = await panelTake.value else {
+            Issue.record("expected the panel's take to be superseded")
+            return
+        }
+        #expect(recorder.commits.count == 1)
+    }
+
+    /// While its own take is transcribing, a session's cancel does tell the
+    /// recognizer.
+    @Test func cancelWhileTranscribingCancelsItsOwnTranscription() async throws {
+        let engine = ControllableTranscribing()
+        let session = makeSession(engine: engine)
+        let recorder = CommitRecorder()
+        let take = Task {
+            await session.transcribeAndCommit(makeAudio()) { try await recorder.commit($0) }
+        }
+        while !engine.isAwaiting { await Task.yield() }
+
+        session.cancel()
+
+        #expect(engine.cancelCount == 1)
+        engine.completeWithCancellation()
+        _ = await take.value
+        #expect(recorder.commits.isEmpty)
+    }
+
     // MARK: - transcribeAndCommit()
 
     @Test func transcribeAndCommitDeliversProcessedTextThenReportsCommitted() async throws {

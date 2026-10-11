@@ -21,7 +21,6 @@ struct HotkeyTableTests {
 
     @Test func launchBindsEveryRowToItsSetting() {
         let h = TableHarness()
-        defer { h.table.stop() }
 
         h.table.start()
 
@@ -33,7 +32,6 @@ struct HotkeyTableTests {
 
     @Test func eachKeyDoesWhatItsRowSays() {
         let h = TableHarness()
-        defer { h.table.stop() }
         h.table.start()
 
         h.registrar.press(h.settings.hotkey)
@@ -64,7 +62,6 @@ struct HotkeyTableTests {
     /// one fires the row's action.
     @Test func aChangedSettingMovesItsKey() async {
         let h = TableHarness()
-        defer { h.table.stop() }
         h.table.start()
         let old = h.settings.fixHotkey
         let new = KeyCombo(keyCode: 3, modifiers: [.control, .option])
@@ -82,7 +79,6 @@ struct HotkeyTableTests {
     /// written back to the combo it already has binds nothing again.
     @Test func anUnchangedComboIsNeverReBound() async {
         let h = TableHarness()
-        defer { h.table.stop() }
         h.table.start()
         let rows = GlobalHotkey.allCases.count
 
@@ -103,7 +99,6 @@ struct HotkeyTableTests {
     /// do; the other keys never do.
     @Test func theInterruptKeysInterruptAnActiveVoiceSession() {
         let h = TableHarness()
-        defer { h.table.stop() }
         h.table.start()
         h.actions.voiceSessionActive = true
 

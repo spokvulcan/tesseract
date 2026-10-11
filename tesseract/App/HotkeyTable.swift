@@ -166,28 +166,27 @@ final class HotkeyTable {
         self.actions = actions
     }
 
+    /// Following stops with the table: the followers hold it weakly.
+    isolated deinit {
+        for follower in followers { follower.cancel() }
+    }
+
     /// Registers every row with its setting's combo, then follows each
-    /// setting: a combo that changes re-binds its key. Idempotent.
+    /// setting for as long as the table lives: a combo that changes re-binds
+    /// its key. Idempotent.
     func start() {
         guard followers.isEmpty else { return }
         for hotkey in GlobalHotkey.allCases {
             bind(hotkey, to: settings[keyPath: hotkey.row.combo])
             followers.append(
-                Task { [weak self] in
-                    guard let self else { return }
+                Task { [weak self, settings] in
                     let setting = hotkey.row.combo
-                    for await combo in Observations({ self.settings[keyPath: setting] })
-                    where combo != self.bound[hotkey] {
-                        self.bind(hotkey, to: combo)
+                    for await combo in Observations({ settings[keyPath: setting] }) {
+                        guard let self else { return }
+                        if combo != self.bound[hotkey] { self.bind(hotkey, to: combo) }
                     }
                 })
         }
-    }
-
-    /// Stops following the settings; the keys stay bound.
-    func stop() {
-        for follower in followers { follower.cancel() }
-        followers = []
     }
 
     private func bind(_ hotkey: GlobalHotkey, to combo: KeyCombo) {

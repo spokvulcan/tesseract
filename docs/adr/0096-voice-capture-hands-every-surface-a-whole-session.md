@@ -81,6 +81,11 @@ when one left a stage out.
 
 ## Consequences
 
+- A session's cancel tells the shared recognizer to cancel only while the
+  transcription it runs is that session's own. Before, a session whose take
+  was proofreading or committing cancelled whatever the recognizer ran: the
+  capture panel's Escape could cut off a dictation take transcribing behind it
+  (a race older than this module, pinned in `VoiceCaptureSessionTests`).
 - No surface can build a take that skips a stage. The Onboarding Tour's takes
   gain the Learned Words, the Capture Dump and the Proofread Pass (a
   behaviour change, pinned in `AgentVoiceInputControllerTests`).
