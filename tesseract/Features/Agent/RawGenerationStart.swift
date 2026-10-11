@@ -81,6 +81,8 @@ nonisolated enum RawGenerationStart {
         // capture prefill — over a fresh cache. A prompt with images (a tool
         // result's screenshot) has the vision target prefill through its last
         // image first, and the iterator takes the text after it (ADR-0089).
+        // Without a plan the Prefill Strategy route prefills into a cache of
+        // its own.
         //
         // `prefillMs` is stamped right after the iterator build, before the
         // MainActor round trips of the badge and the loop start — the number
@@ -90,50 +92,31 @@ nonisolated enum RawGenerationStart {
                 isTextOnly: prepared.image == nil && prepared.video == nil
                     && prepared.audio == nil,
                 kvBits: parameters.kvBits,
-                kvScheme: parameters.kvScheme.flatMap(KVScheme.init(rawValue:)),
+                kvScheme: KVScheme(parameters),
                 temperature: parameters.temperature,
                 promptTokens: promptTokenCount,
                 restoresPrefix: false,
                 storedLeaf: nil
             ))
-        let loop: (AsyncStream<RawGeneration>, Task<Void, Never>)
-        var engagedArm: SpeculativeArm?
+        // No reference outlives the Decode Start's conversion: it hands back
+        // the array the iterator advances.
+        var cache: [any KVCache] = []
+        let handover: DecodeHandover
         if let speculation {
-            // The array stays inside this call: a KV Scheme replaces its
-            // attention entries in the iterator, and a reference held here
-            // would keep the full-precision buffers for the whole generation.
-            let iterator = try session.makeSpeculativeDecodeIterator(
-                prepared,
-                cache: try {
-                    let cache = try session.newCache(parameters: parameters)
-                    for layer in cache { layer.reserveCapacity(promptTokenCount) }
-                    return cache
-                }(), prefilledPrefixTokens: 0, positionDelta: 0, plan: speculation,
-                parameters: parameters)
-            prefill.prefillMs = (Date.timeIntervalSinceReferenceDate - prefillStarted) * 1000
-            engagedArm = speculation.arm
-            loop = iterator.startGeneration(
-                promptTokenCount: promptTokenCount,
-                modelConfiguration: session.configuration,
-                tokenizer: session.tokenizer,
-                tools: tools
-            )
+            cache = try session.newCache(parameters: parameters)
+            for layer in cache { layer.reserveCapacity(promptTokenCount) }
+            handover = .speculative(
+                speculation, input: prepared, prefilledPrefixTokens: 0, positionDelta: 0)
         } else {
-            let iterator = try session.makeRawDecodeIterator(prepared, parameters: parameters)
-            prefill.prefillMs = (Date.timeIntervalSinceReferenceDate - prefillStarted) * 1000
-            loop = TokenGenerationLoop.start(
-                promptTokenCount: promptTokenCount,
-                modelConfiguration: session.configuration,
-                tokenizer: session.tokenizer,
-                iterator: iterator,
-                tools: tools
-            )
+            handover = .prefillStrategy(prepared)
         }
-        if let engagedArm {
-            await progressHandler?(.speculationEngaged(engagedArm))
-        }
-        await progressHandler?(.prefillFinished(prefill))
-        let (stream, completion) = loop
+        let decode = try DecodeStart.make(
+            handover, cache: &cache, session: session, parameters: parameters)
+        prefill.prefillMs = (Date.timeIntervalSinceReferenceDate - prefillStarted) * 1000
+        let (stream, completion) = decode.startLoop(
+            promptTokenCount: promptTokenCount, session: session, tools: tools,
+            generatedTokens: nil)
+        await decode.reportPrefillFinished(prefill, to: progressHandler)
         return HTTPServerRawGenerationStart(
             stream: stream,
             generationPrompt: generationPrompt,

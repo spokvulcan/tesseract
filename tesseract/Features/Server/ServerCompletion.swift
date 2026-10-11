@@ -34,12 +34,12 @@ nonisolated final class UnsafeSendableBox<T>: @unchecked Sendable {
 nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     let stream: AsyncStream<RawGeneration>
     let completion: Task<Void, Never>
-    /// The app-owned KV cache array the generation runs on. The module
-    /// quantizes it *before* building the `TokenIterator` (so the iterator's
-    /// decode-time quantization pass cannot swap elements behind our back),
-    /// which makes this array the live final cache once `completion`
-    /// finishes — the post-generation leaf capture reads it directly.
-    /// Replaces the fork's `FinalizedKVCacheHandle` (ADR-0006).
+    /// The app-owned KV cache array the generation runs on: the array the
+    /// **Decode Start** handed over, after its one KV Scheme conversion, so
+    /// no decode-time pass swaps elements behind our back and this is the
+    /// live final cache once `completion` finishes — the post-generation
+    /// leaf capture reads it directly. Replaces the fork's
+    /// `FinalizedKVCacheHandle` (ADR-0006).
     let finalCacheOwner: FinalGenerationCache
     var finalCache: [any KVCache] { finalCacheOwner.cache }
     /// The iterator this request actually used. Loaded drafter capability
@@ -201,46 +201,6 @@ nonisolated enum HTTPLeafStoreMode: String, Sendable {
     case directToolLeaf
     case canonicalUserLeaf
     case directLeaf
-}
-
-/// The two decode iterators the keyed path constructs after its app-owned
-/// prefill: the ordinary state-threaded decode, or the **Speculation
-/// Plan**'s iterator over the same warmed cache (its prefill covers only the
-/// prompt tail past the app driver's checkpoint captures).
-private nonisolated enum KeyedDecodeIterator {
-    case standard(StateThreadedTokenIterator)
-    case speculative(SpeculativeDecodeIterator)
-
-    /// Start the app-owned generation stream over whichever iterator the
-    /// keyed path built — one `TokenGenerationLoop.start` per case because
-    /// the loop's entry is generic over the concrete iterator type.
-    consuming func startGeneration(
-        promptTokenCount: Int,
-        modelConfiguration: ModelConfiguration,
-        tokenizer: any MLXLMCommon.Tokenizer,
-        tools: [ToolSpec]?,
-        generatedTokens: GeneratedTokenRecorder
-    ) -> (AsyncStream<RawGeneration>, Task<Void, Never>) {
-        switch consume self {
-        case .standard(let decode):
-            TokenGenerationLoop.start(
-                promptTokenCount: promptTokenCount,
-                modelConfiguration: modelConfiguration,
-                tokenizer: tokenizer,
-                iterator: decode,
-                tools: tools,
-                generatedTokens: generatedTokens
-            )
-        case .speculative(let decode):
-            decode.startGeneration(
-                promptTokenCount: promptTokenCount,
-                modelConfiguration: modelConfiguration,
-                tokenizer: tokenizer,
-                tools: tools,
-                generatedTokens: generatedTokens
-            )
-        }
-    }
 }
 
 nonisolated enum VisionPrefixMemoryGuard {
@@ -1793,12 +1753,11 @@ nonisolated final class ServerCompletion {
 
             // 9. App-owned prefill (ADR-0006): drive chunked forward passes
             // over the suffix, capturing snapshots at the checkpoint offsets,
-            // quantize the module-owned cache once, then hand it to a
-            // TokenIterator holding only the final prompt token. Quantizing
-            // *before* the iterator (with `kvBits` stripped from its
-            // parameters) guarantees the iterator never swaps cache elements
-            // during decode, so the array this module retains stays the live
-            // final cache for the post-generation leaf capture.
+            // then hand the warmed cache to the **Decode Start**, which
+            // converts it once and builds the iterator holding only the
+            // final prompt token (or the Speculation Plan's iterator for the
+            // tail past the split), so the array this module retains stays
+            // the live final cache for the post-generation leaf capture.
             // Shared begin-prefill step. The ADR-0014 guard prices the
             // patches actually fed THIS forward: all images when cold; only
             // the newly-added images on a warm restore, since earlier images
@@ -1824,7 +1783,7 @@ nonisolated final class ServerCompletion {
                 prefillStartedAt = begin.startedAt
             }
             memory.mark(.prefilling, facts: RequestMemoryTelemetry.cacheFacts(liveCache))
-            let prefillResult: (iterator: KeyedDecodeIterator, snapshots: [HybridCacheSnapshot])
+            let prefillResult: (decode: DecodeStart, snapshots: [HybridCacheSnapshot])
             do {
                 prefillResult =
                     try MLXCheckedEvaluation.withErrors { error in
@@ -1942,19 +1901,14 @@ nonisolated final class ServerCompletion {
                                 throw AgentEngineError.generationFailed(
                                     "speculative split \(splitOffset) inside an image run")
                             }
-                            let iterator = try session.makeSpeculativeDecodeIterator(
-                                LMInput(text: fullInput.text),
-                                cache: liveCache,
-                                prefilledPrefixTokens: splitOffset,
-                                positionDelta: positionDelta,
-                                plan: speculation,
-                                parameters: facts.decodeParameters
-                            )
-                            // A KV Scheme converted the attention entries at
-                            // the end of the iterator's prefill.
-                            if let converted = iterator.cache { liveCache = converted }
+                            let decode = try DecodeStart.make(
+                                .speculative(
+                                    speculation, input: LMInput(text: fullInput.text),
+                                    prefilledPrefixTokens: splitOffset,
+                                    positionDelta: positionDelta),
+                                cache: &liveCache, session: session, parameters: genParams)
                             try error.check()
-                            return (iterator: .speculative(iterator), snapshots: snapshots)
+                            return (decode: decode, snapshots: snapshots)
                         }
 
                         // Pipeline the image-free text path for TTFT; keep the
@@ -1976,24 +1930,18 @@ nonisolated final class ServerCompletion {
                             )
                         }
                         try error.check()
-                        session.quantizeKVCache(&liveCache, parameters: genParams)
                         // The iterator seeds any configured penalty processors with
                         // the full suffix — its own input is only the final prompt
                         // token, which would otherwise be the entire
                         // repetition/presence/frequency context. It threads the last
                         // prefill chunk's state through the prime forward and every
                         // decode step (PRD #72 — upstream's iterator drops it).
-                        let iterator = session.makeDecodeIterator(
-                            remainder: warmed.remainder,
-                            fullText: inputForGeneration.text,
-                            cache: liveCache,
-                            state: warmed.state,
-                            parameters: facts.decodeParameters
-                        )
-                        return (
-                            iterator: .standard(iterator),
-                            snapshots: prefixSnapshots + warmed.snapshots
-                        )
+                        let decode = try DecodeStart.make(
+                            .standard(
+                                remainder: warmed.remainder, fullText: inputForGeneration.text,
+                                state: warmed.state),
+                            cache: &liveCache, session: session, parameters: genParams)
+                        return (decode: decode, snapshots: prefixSnapshots + warmed.snapshots)
                     }
             } catch is CancellationError {
                 // **Salvage-on-cancel** (issue #97): the client is gone and
@@ -2018,10 +1966,10 @@ nonisolated final class ServerCompletion {
                 Memory.clearCache()
                 throw CancellationError()
             }
-            // Quantization can replace attention objects. Retain the array
-            // that the iterator actually advances, after that replacement.
-            handoff?.cache.adopt(liveCache)
-            let finalCacheOwner = handoff?.cache ?? FinalGenerationCache(liveCache)
+            // A conversion can replace attention objects: the leased leaf's
+            // cache adopts the array the iterator actually advances.
+            let decode = prefillResult.decode
+            let finalCacheOwner = decode.cacheOwner(lease: handoff?.cache)
             let prefillMs = Date.timeIntervalSinceReferenceDate - prefillStartedAt
             let boundarySnapshots = prefillResult.snapshots.filter {
                 transientOffsets.contains($0.tokenOffset)
@@ -2039,21 +1987,13 @@ nonisolated final class ServerCompletion {
                     "boundaryCheckpointArrayBytes":
                         "\(boundarySnapshots.reduce(0) { $0 + $1.memoryBytes })",
                 ]) { _, new in new })
-            let iterator = prefillResult.iterator
-            if case .speculative(let decode) = iterator {
-                // The iterator exists — the request will decode speculatively.
-                // Fired before the token loop so the activity surfaces badge
-                // the arm live.
-                await progressHandler?(.speculationEngaged(decode.arm))
-            }
-            await progressHandler?(
-                .prefillFinished(
-                    .init(
-                        promptTokens: fullTokenCount,
-                        cachedTokens: skippedTokens,
-                        newTokensToPrefill: newTokensToPrefill,
-                        prefillMs: prefillMs * 1000
-                    )))
+            await decode.reportPrefillFinished(
+                .init(
+                    promptTokens: fullTokenCount,
+                    cachedTokens: skippedTokens,
+                    newTokensToPrefill: newTokensToPrefill,
+                    prefillMs: prefillMs * 1000
+                ), to: progressHandler)
 
             // Fold the observed prefill into the rolling FLOPs/s estimate
             // (slice #84) — a real measured operation on this device.
@@ -2121,19 +2061,15 @@ nonisolated final class ServerCompletion {
             try Task.checkCancellation()
             let generatedTokens = GeneratedTokenRecorder()
             memory.mark(.decoding)
-            let (stream, task) = iterator.startGeneration(
-                promptTokenCount: fullTokenCount,
-                modelConfiguration: session.configuration,
-                tokenizer: session.tokenizer,
-                tools: canonicalTools,
-                generatedTokens: generatedTokens
-            )
+            let (stream, task) = decode.startLoop(
+                promptTokenCount: fullTokenCount, session: session, tools: canonicalTools,
+                generatedTokens: generatedTokens)
 
             return HTTPPrefixCacheGeneration(
                 stream: stream,
                 completion: task,
                 finalCacheOwner: finalCacheOwner,
-                speculativeArm: speculation?.arm,
+                speculativeArm: decode.arm,
                 diagnosticsContext: diagnosticsContext,
                 lookupMs: lookupMs,
                 restoreMs: restoreMs,
@@ -2295,11 +2231,12 @@ nonisolated final class ServerCompletion {
     /// allocation (ADR-0007 phase 2). The image-free (or non-conforming)
     /// fallback runs the vendor single-shot `prepare`. Either way decode runs on
     /// the state-threaded iterator so a `.logits` prefill keeps its returned
-    /// state. `kvBits` quantization is skipped on this path — there is no
-    /// capture to protect, and the degraded corner is not worth a per-step
-    /// quantization loop. A KV Scheme is not skipped: the iterator converts
-    /// once after its prefill (ADR-0083, amended), and the arm keeps the
-    /// iterator's array as the final cache.
+    /// state: the **Decode Start**'s preparing handover. `kvBits`
+    /// quantization is skipped on this path — there is no capture to
+    /// protect, and the degraded corner is not worth a per-step quantization
+    /// loop. A KV Scheme is not skipped: the iterator converts once after its
+    /// prefill (ADR-0083, amended), and the arm keeps the iterator's array as
+    /// the final cache.
     ///
     /// Converted to the **Model Session** seam (ADR-0016): the arm consumes
     /// the port's verbs, so the sequencing suite drives it with the
@@ -2343,9 +2280,9 @@ nonisolated final class ServerCompletion {
             diagnosticsContext: diagnosticsContext,
             progressHandler: progressHandler
         )
-        let cache = begin.cache
+        var cache = begin.cache
 
-        let iterator: StateThreadedTokenIterator
+        let decode: DecodeStart
         if fullInput.image != nil,
             let anchoredPrepare = session.anchoredVisionPrepare
         {
@@ -2365,48 +2302,38 @@ nonisolated final class ServerCompletion {
                 profile: fullAttentionScratchProfile,
                 diagnosticsContext: diagnosticsContext
             )
-            iterator = try MLXCheckedEvaluation.withErrors { error in
-                let built = try session.makePreparingDecodeIterator(
-                    fullInput,
-                    cache: cache,
-                    parameters: facts.decodeParameters,
-                    prepare: { input, cache, windowSize in
-                        try anchoredPrepare(input, cache, nil, windowSize)
-                    }
-                )
+            decode = try MLXCheckedEvaluation.withErrors { error in
+                let built = try DecodeStart.make(
+                    .preparing(
+                        fullInput,
+                        prepare: { input, cache, windowSize in
+                            try anchoredPrepare(input, cache, nil, windowSize)
+                        }),
+                    cache: &cache, session: session, parameters: parameters)
                 try error.check()
                 return built
             }
         } else {
-            iterator = try session.makePreparingDecodeIterator(
-                fullInput,
-                cache: cache,
-                parameters: facts.decodeParameters,
-                prepare: nil
-            )
+            decode = try DecodeStart.make(
+                .preparing(fullInput, prepare: nil), cache: &cache, session: session,
+                parameters: parameters)
         }
         let prefillMs = Date.timeIntervalSinceReferenceDate - begin.startedAt
-        await progressHandler?(
-            .prefillFinished(
-                .init(
-                    promptTokens: fullTokenCount,
-                    cachedTokens: 0,
-                    newTokensToPrefill: fullTokenCount,
-                    prefillMs: prefillMs * 1000
-                )))
+        await decode.reportPrefillFinished(
+            .init(
+                promptTokens: fullTokenCount,
+                cachedTokens: 0,
+                newTokensToPrefill: fullTokenCount,
+                prefillMs: prefillMs * 1000
+            ), to: progressHandler)
 
         // A KV Scheme replaced the attention entries inside the iterator's
         // prefill; keep the array decode advances.
-        let finalCacheOwner = FinalGenerationCache(iterator.cache)
+        let finalCacheOwner = decode.cacheOwner(lease: nil)
         let generatedTokens = GeneratedTokenRecorder()
-        let (stream, task) = TokenGenerationLoop.start(
-            promptTokenCount: fullTokenCount,
-            modelConfiguration: session.configuration,
-            tokenizer: session.tokenizer,
-            iterator: iterator,
-            tools: toolSpecs,
-            generatedTokens: generatedTokens
-        )
+        let (stream, task) = decode.startLoop(
+            promptTokenCount: fullTokenCount, session: session, tools: toolSpecs,
+            generatedTokens: generatedTokens)
 
         return HTTPPrefixCacheGeneration(
             stream: stream,
@@ -2478,46 +2405,33 @@ nonisolated final class ServerCompletion {
             diagnosticsContext: diagnosticsContext,
             progressHandler: progressHandler
         )
-        let cache = begin.cache
+        var cache = begin.cache
 
-        let iterator = try MLXCheckedEvaluation.withErrors { error in
-            let built = try session.makeSpeculativeDecodeIterator(
-                fullInput,
-                cache: cache,
-                prefilledPrefixTokens: 0,
-                positionDelta: 0,
-                plan: plan,
-                parameters: request.facts.decodeParameters
-            )
+        let decode = try MLXCheckedEvaluation.withErrors { error in
+            let built = try DecodeStart.make(
+                .speculative(plan, input: fullInput, prefilledPrefixTokens: 0, positionDelta: 0),
+                cache: &cache, session: session, parameters: parameters)
             try error.check()
             return built
         }
         let prefillMs = Date.timeIntervalSinceReferenceDate - begin.startedAt
-        // The iterator exists — the request will decode speculatively. Fired
-        // before the token loop so the activity surfaces badge the arm live.
-        await progressHandler?(.speculationEngaged(arm))
-        await progressHandler?(
-            .prefillFinished(
-                .init(
-                    promptTokens: fullTokenCount,
-                    cachedTokens: 0,
-                    newTokensToPrefill: fullTokenCount,
-                    prefillMs: prefillMs * 1000
-                )))
+        await decode.reportPrefillFinished(
+            .init(
+                promptTokens: fullTokenCount,
+                cachedTokens: 0,
+                newTokensToPrefill: fullTokenCount,
+                prefillMs: prefillMs * 1000
+            ), to: progressHandler)
 
         let generatedTokens = GeneratedTokenRecorder()
-        let (stream, task) = iterator.startGeneration(
-            promptTokenCount: fullTokenCount,
-            modelConfiguration: session.configuration,
-            tokenizer: session.tokenizer,
-            tools: toolSpecs,
-            generatedTokens: generatedTokens
-        )
+        let (stream, task) = decode.startLoop(
+            promptTokenCount: fullTokenCount, session: session, tools: toolSpecs,
+            generatedTokens: generatedTokens)
 
         return HTTPPrefixCacheGeneration(
             stream: stream,
             completion: task,
-            finalCacheOwner: FinalGenerationCache(cache),
+            finalCacheOwner: decode.cacheOwner(lease: nil),
             speculativeArm: arm,
             diagnosticsContext: diagnosticsContext,
             lookupMs: lookupMs,

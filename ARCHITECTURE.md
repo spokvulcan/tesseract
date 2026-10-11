@@ -134,6 +134,7 @@ tesseract/
 │   │   ├── AgentFactory.swift         # Bootstrap: packages, tools, prompt
 │   │   ├── LLMActor.swift             # MLX LLM inference actor
 │   │   ├── Speculation.swift          # Speculation: resident drafters + the per-request Speculation Plan (ADR-0079)
+│   │   ├── DecodeStart.swift          # Decode Start: every path's decode start, the one KV Scheme conversion rule (ADR-0093)
 │   │   ├── LLMGate.swift              # One LLM generation at a time, FIFO (ADR-0081)
 │   │   ├── InferenceArbiter.swift     # LLM gate + model identity + residency facade
 │   │   ├── Core/                      # Agent loop, state reducer, accumulator
@@ -524,6 +525,14 @@ Qwen3.5-family checkpoint, the DFlash2 draft beside Qwen3.8-27B): `LLMActor`'s
 load attaches them, the Model Session carries them, and each request asks for a
 **Speculation Plan**. The Server Completion and the Raw Generation Start read the
 same plan, and the session builds its iterator from it (ADR-0079).
+
+**Decode Start**: every generation path — the keyed turn (standard, or
+speculative at a split), the keyed whole-prompt arm, the Unkeyed Completion and
+both Raw Generation Start arms — starts decode through `DecodeStart`
+(ADR-0093). The path names its **Decode Handover**; the Decode Start picks the
+Model Session verb, converts the KV cache once where that handover needs it,
+hands the decoded array to its owner (a leased leaf's cache adopts it), badges a
+speculative arm and starts the token loop.
 `DFlash2Support` and `MTPDrafterSupport` keep the per-family detection, pairing
 and loading. The Qwen3.5 vision class runs the text class's engine, so the
 DFlash2 draft pairs with a vision load too, and image-bearing requests speculate:

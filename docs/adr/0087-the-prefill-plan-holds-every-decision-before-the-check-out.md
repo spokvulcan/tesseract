@@ -7,6 +7,8 @@
   application inline; the inline decision itself stands), ADR-0079 (where the
   keyed path asks for its Speculation Plan, and when the MTP fold it deferred
   fits)
+- Partly built by: ADR-0093 (2026-10-11, decision 8's Decode Start; see the
+  amendment at the end)
 - Relates to: ADR-0069 and its 2026-10-03 amendment (the cold fallback after
   a failed restore, whose rule this ADR gives a home), ADR-0007 (Cache Key
   Space and Position Anchor; its rejection of app-side patch-count math
@@ -246,3 +248,17 @@ on a quiet GPU: `prefix-cache-e2e`, `hybrid-cache-correctness`, the 27B
 DFlash2 end-to-end run diffed against `main`, and the image scenario on
 `bonsai-2-27b`. MTP stays verified only by Speculation's engagement table and
 the Prefill Plan's rows, as ADR-0079 records.
+
+## Amendment (2026-10-11): the Decode Start is built first
+
+Decision 8's planned Decode Start is built ahead of the rest of this ADR, as
+ADR-0093. It consumes a Decode Handover that every generation path names
+itself: the keyed turn's standard handover or its Speculation Plan split, the
+whole-prompt arm, the Unkeyed Completion and both Raw Generation Start arms.
+It converts the KV cache once where the handover needs it, adopts the decoded
+array into its owner, badges a speculative arm and starts the token loop.
+The Prefill Plan, when it lands, carries the keyed Decode Handover; plan
+application's iterator construction is already one `DecodeStart.make` call
+per handover kind. Iterator construction, KV Scheme conversion, cache
+adoption and the penalty seed are therefore out of plan application now, as
+decision 8 intended.

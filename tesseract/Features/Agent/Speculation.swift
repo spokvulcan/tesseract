@@ -266,17 +266,11 @@ nonisolated struct SpeculationPlan: Sendable {
     }
 }
 
-/// A **Speculation Plan**'s iterator, built inside a Model Session.
+/// A **Speculation Plan**'s iterator, built inside a Model Session; the
+/// **Decode Start** starts its loop.
 nonisolated enum SpeculativeDecodeIterator {
     case mtp(MTPSpeculativeTokenIterator)
     case dflash2(DFlash2SpeculativeTokenIterator)
-
-    var arm: SpeculativeArm {
-        switch self {
-        case .mtp: .mtp
-        case .dflash2: .dflash2
-        }
-    }
 
     /// The target cache the iterator decodes into, after its prefill: a
     /// KV Scheme replaced the attention entries of the array it was given.
@@ -285,40 +279,6 @@ nonisolated enum SpeculativeDecodeIterator {
         switch self {
         case .mtp: nil
         case .dflash2(let iterator): iterator.cache
-        }
-    }
-
-    /// Start the app-owned generation stream over the iterator: one
-    /// `TokenGenerationLoop.start` per case, because the loop's entry is
-    /// generic over the concrete iterator type.
-    consuming func startGeneration(
-        promptTokenCount: Int,
-        modelConfiguration: ModelConfiguration,
-        tokenizer: any MLXLMCommon.Tokenizer,
-        tools: [ToolSpec]?,
-        generatedTokens: GeneratedTokenRecorder? = nil
-    ) -> (AsyncStream<RawGeneration>, Task<Void, Never>) {
-        switch consume self {
-        case .mtp(let iterator):
-            TokenGenerationLoop.start(
-                promptTokenCount: promptTokenCount,
-                modelConfiguration: modelConfiguration,
-                tokenizer: tokenizer,
-                iterator: iterator,
-                tools: tools,
-                generatedTokens: generatedTokens,
-                speculativeArm: .mtp
-            )
-        case .dflash2(let iterator):
-            TokenGenerationLoop.start(
-                promptTokenCount: promptTokenCount,
-                modelConfiguration: modelConfiguration,
-                tokenizer: tokenizer,
-                iterator: iterator,
-                tools: tools,
-                generatedTokens: generatedTokens,
-                speculativeArm: .dflash2
-            )
         }
     }
 }

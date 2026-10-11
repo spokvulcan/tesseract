@@ -155,7 +155,10 @@ nonisolated enum PrefillExecutor {
     /// The explicit-processor `TokenIterator` init has no in-iterator cache
     /// quantization, so that path quantizes once up front — the same boundary
     /// the per-step path would hit on its first decode step
-    /// (`quantizedKVStart` defaults to 0).
+    /// (`quantizedKVStart` defaults to 0). Without penalties the vendor
+    /// iterator converts after its prime forward instead: the Prefill
+    /// Strategy route's one difference from the Decode Start's standard
+    /// handover, kept as a named row (ADR-0093).
     static func makeIterator(
         model: any LanguageModel,
         fullText: LMInput.Text,
@@ -163,9 +166,7 @@ nonisolated enum PrefillExecutor {
         cache: inout [any KVCache],
         parameters: GenerateParameters
     ) throws -> TokenIterator {
-        guard
-            let penaltyProcessor = GenerationLogitProcessor.resolve(
-                for: parameters, pathQuantizesKVUpFront: true)
+        guard let penaltyProcessor = GenerationLogitProcessor.processor(for: parameters)
         else {
             return try TokenIterator(
                 input: LMInput(text: remainder),

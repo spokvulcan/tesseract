@@ -105,13 +105,13 @@ nonisolated enum PrefillStrategy: Equatable, Sendable {
                     input: input, model: model, cache: cache, parameters: stripped,
                     components: components)
             }
-            // The single-shot arm has no up-front quantization point, so it
-            // resolves the processor through the ``GenerationLogitProcessor``
-            // seam with `pathQuantizesKVUpFront: false`: an app processor when
-            // `kvBits` is nil (output-only presence), the vendor init otherwise
-            // (the seam's `kvBits` carve-out — theoretical, #252).
-            if let processor = GenerationLogitProcessor.resolve(
-                for: parameters, pathQuantizesKVUpFront: false)
+            // The single-shot arm has no up-front quantization point, and the
+            // explicit-processor init runs no KV plan: it takes the app
+            // processor (output-only presence) only when `kvBits` is nil.
+            // With `kvBits` the vendor init keeps its own penalties — the
+            // `kvBits` carve-out, theoretical (#252).
+            if parameters.kvBits == nil,
+                let processor = GenerationLogitProcessor.processor(for: parameters)
             {
                 return try TokenIterator(
                     input: input,

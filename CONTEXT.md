@@ -66,9 +66,9 @@ How a request holds its full-attention KV once its prompt is prefilled: full
 precision, or TurboQuant (`turbo8v4`: 8-bit affine keys, `turbo0v4`: bf16 keys,
 both with 4-bit values). The KV Cache Compression setting picks it for a model
 that supports it (Qwen3.8-27B). It is a request fact and part of cache partition
-identity (ADR-0083): the prompt prefills unquantized, the cache converts after
-prefill (inside the iterator on a DFlash2 turn and on an **Unkeyed
-Completion**, where the iterator runs the prefill), and the turn's leaf
+identity (ADR-0083): the prompt prefills unquantized, the cache converts once
+where the request's **Decode Handover** says (the **Decode Start**'s rule;
+inside the iterator when the iterator runs the prefill), and the turn's leaf
 stores compressed layers that only a request of the same scheme restores.
 _Avoid_: kvBits (the unrelated affine quantization the product never sets), KV
 quantization (ambiguous between the two).
@@ -577,7 +577,8 @@ _Avoid_: orphaned model, legacy download (both suggest the user chose it).
 
 _The Prefill Plan entry and the terms after it name the design ADR-0087
 proposes. Until it is built, plan application still derives the shape, the
-Capture Schedule, the split and the Maximum Advance inline._
+Capture Schedule, the split and the Maximum Advance inline. The Decode
+Handover and the Decode Start are built (ADR-0093)._
 
 **Prefill Plan**:
 Everything one keyed request's prefill does that is decidable before the
@@ -650,16 +651,28 @@ checkpoint (the older name in ADR-0019, ADR-0064 and ADR-0068, and today's
 local); planned checkpoint.
 
 **Decode Handover**:
-Where a prefill hands the prompt to the decode iterator: autoregressive, where
-the app prefills the whole **Text Tail** and the standard iterator decodes from
-its last token; or speculative at a split, where the app's capturing prefill
-runs to the split and the **Speculation Plan**'s iterator prefills the rest. A
-keyed split never precedes the **Minimum Warm Offset**, so the iterator takes
-text only.
-Any generation path can name its own.
+Where a generation's prefill hands the prompt to the decode iterator, and so
+where the **KV Scheme** converts: standard, where the app prefilled all but the
+last prompt token and the cache converts before the iterator's first forward;
+speculative, where the **Speculation Plan**'s iterator prefills the rest from a
+split (or the whole prompt from zero) and converts before the prompt's final
+position; preparing, where the app's iterator prefills the whole prompt and
+converts after it; or the **Prefill Strategy** route, which prefills into a
+cache of its own. A keyed split never precedes the **Minimum Warm Offset**, so
+the iterator takes text only. Every generation path names its own (ADR-0093).
 _Avoid_: decode route, speculation route (route belongs to the **Prefill
 Strategy** and the **Completion Route**); decode handoff (handoff is the
 **Leaf Handoff**'s word for moving a leaf between owners).
+
+**Decode Start**:
+The one module that starts decode for every generation path: from the **Decode
+Handover** it builds the iterator through the **Model Session**'s verbs,
+converts the KV cache once where the handover needs it, hands the array decode
+advances to its owner, badges a speculative arm and starts the token loop
+(ADR-0093).
+_Avoid_: iterator factory (it decides the conversion and the owner too);
+quantize step (the conversion is one of its decisions, not a step of its own);
+a session verb that starts decode (it sits above the seam, ADR-0016).
 
 **Maximum Advance**:
 How far one turn may grow its cache past what it restored: its new prompt
@@ -908,9 +921,8 @@ concept); widening it before a second consumer needs a member.
 The one script that starts a whole-prompt-from-zero generation over a **Model
 Session** for an agent chat turn: tokenize through the session's agent-edge verb (the **Conversation
 Render**'s agent edge when eligible, the processor otherwise), emit the lookup and prefill progress
-events, decode through the session's **Speculation Plan** when it has one, else run
-the **Prefill Strategy** route, start the token-event loop, wrap
-the handles. It is the **Model Session**'s second consumer (ADR-0016 amendment);
+events, hand the prompt to the **Decode Start** (the session's **Speculation Plan**
+when it has one, else the **Prefill Strategy** route), wrap the handles. It is the **Model Session**'s second consumer (ADR-0016 amendment);
 `LLMActor` keeps only the lifecycle around it. Never consults the prefix cache.
 _Avoid_: raw arm (the three retired `LLMActor` copies); standard path (the
 pre-cache name).

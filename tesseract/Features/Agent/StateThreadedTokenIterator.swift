@@ -33,10 +33,12 @@ nonisolated struct StateThreadedTokenIterator: TokenIteratorProtocol {
     let maxTokens: Int?
     private(set) var promptPrefillTime: TimeInterval = 0
 
-    /// Post-prefill form: the cache already covers everything but `remainder`
-    /// (the final prompt token `PrefillExecutor.run` keeps back), and `state`
-    /// is the model state the last prefill chunk returned (or a seeded
-    /// **Position Anchor** on a restored cache). The prime forward runs here.
+    /// Post-prefill form, the **Decode Start**'s standard handover: the cache
+    /// already covers everything but `remainder` (the final prompt token
+    /// `PrefillExecutor.run` keeps back) and is already converted, and
+    /// `state` is the model state the last prefill chunk returned (or a
+    /// seeded **Position Anchor** on a restored cache). The prime forward
+    /// runs here.
     ///
     /// Penalty processors are seeded with `fullText` — the iterator's own
     /// input is a single token, which would otherwise be the entire
@@ -54,8 +56,7 @@ nonisolated struct StateThreadedTokenIterator: TokenIteratorProtocol {
         self.model = model
         self.cache = cache
         self.state = state
-        self.processor = GenerationLogitProcessor.resolve(
-            for: parameters, pathQuantizesKVUpFront: true)
+        self.processor = GenerationLogitProcessor.processor(for: parameters)
         self.sampler = parameters.sampler()
         self.maxTokens = parameters.maxTokens
         self.y = remainder
@@ -66,10 +67,11 @@ nonisolated struct StateThreadedTokenIterator: TokenIteratorProtocol {
         asyncEval(y.tokens)
     }
 
-    /// Whole-prompt form for the **Unkeyed Completion**: runs the vendor
-    /// `prepare` like upstream's `TokenIterator.init`, but keeps the state a
-    /// `.logits` prepare returns instead of dropping it — so decode resumes
-    /// the prepare's positions instead of restarting at zero.
+    /// Whole-prompt form for the **Unkeyed Completion** (the **Decode
+    /// Start**'s preparing handover): runs the vendor `prepare` like
+    /// upstream's `TokenIterator.init`, but keeps the state a `.logits`
+    /// prepare returns instead of dropping it — so decode resumes the
+    /// prepare's positions instead of restarting at zero.
     ///
     /// `prepare` overrides how the prompt is prefilled (input, cache,
     /// windowSize) → `PrepareResult`. The default is the model's single-shot
@@ -92,8 +94,7 @@ nonisolated struct StateThreadedTokenIterator: TokenIteratorProtocol {
     ) throws {
         self.model = model
         self.cache = cache
-        self.processor = GenerationLogitProcessor.resolve(
-            for: parameters, pathQuantizesKVUpFront: true)
+        self.processor = GenerationLogitProcessor.processor(for: parameters)
         self.sampler = parameters.sampler()
         self.maxTokens = parameters.maxTokens
         self.y = input.text

@@ -5,6 +5,8 @@
 - Relates to: #603 (the measurement), ADR-0059 and ADR-0079 (the Speculation
   Plan and its KV gate), ADR-0064 (Leaf Handoff), ADR-0068 (Stored Form),
   ADR-0070 (Request Keying), ADR-0078 (Leaf Admission)
+- Amended by: ADR-0093 (2026-10-11: one Decode Start owns where each path
+  converts; see the amendment at the end)
 
 ## Context
 
@@ -148,3 +150,16 @@ setting promises the smaller cache on every turn.
 `ServerCompletionUnkeyedSequencingTests` drives both branches on the toy
 model in `turbo8v4` and checks that every final layer is a
 `TurboQuantKVCache` that decode advanced.
+
+## Amendment (2026-10-11): one rule for where a path converts
+
+Decision 2 and the amendment above named the conversion point per path. Since
+ADR-0093 the rule has one home, the Decode Start: a path names its Decode
+Handover, and the handover fixes where the scheme converts — before the
+iterator on the keyed standard path (the last prompt token runs over the
+converted cache), inside the DFlash2 iterator before its final position, inside
+the preparing iterator after its prefill (the Unkeyed Completion: the first
+decode step is the first forward over the compressed form), and in the Prefill
+Strategy route. The decoded array is read back and adopted into its owner in
+the same module. `DecodeStartTests` pins every handover's conversion point on
+the toy; the Unkeyed Completion's own scheme test is folded into that table.

@@ -24,6 +24,9 @@ import MLXNN
 /// payloads.
 nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensionProvider {
     let capacityRecords = ToyCacheCapacityRecords()
+    /// The attention form every forward read, in order: where a KV Scheme
+    /// or `kvBits` converted the cache, relative to the prompt's last token.
+    let forwardForms = ToyForwardForms()
     let kvHeads: [Int]
     let headDim: Int
     /// Optional microscopic whole-state layer for hybrid snapshot accounting.
@@ -125,6 +128,9 @@ nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensio
         let tokenCount = batched.dim(-1)
         let offset = cache?.first?.offset ?? 0
         onForward?(offset)
+        if let first = cache?.first {
+            forwardForms.append(offset: offset, tokens: tokenCount, layer: first)
+        }
 
         if let cache {
             // Content-derived K/V — one head, `headDim` copies of the token
@@ -864,6 +870,45 @@ extension Speculation {
         Speculation(
             mtpDrafter: InactiveMTPDrafter(),
             scratchProfile: identity?.fullAttentionScratchProfile)
+    }
+}
+
+/// The attention form of the cache each toy forward read, and the prompt
+/// positions it covered.
+nonisolated final class ToyForwardForms: @unchecked Sendable {
+    enum Form: String, Sendable {
+        case fullPrecision, turboQuant, affineQuantized, other
+    }
+
+    struct Entry: Sendable {
+        let offset: Int
+        let tokens: Int
+        let form: Form
+
+        func covers(_ position: Int) -> Bool {
+            position >= offset && position < offset + tokens
+        }
+    }
+
+    private let lock = NSLock()
+    private var entries: [Entry] = []
+    var values: [Entry] { lock.withLock { entries } }
+
+    func append(offset: Int, tokens: Int, layer: any KVCache) {
+        let form: Form =
+            switch layer {
+            case is TurboQuantKVCache: .turboQuant
+            case is any QuantizedKVCacheProtocol: .affineQuantized
+            case is KVCacheSimple: .fullPrecision
+            default: .other
+            }
+        let entry = Entry(offset: offset, tokens: tokens, form: form)
+        lock.withLock { entries.append(entry) }
+    }
+
+    /// The form the last forward over `position` read.
+    func form(at position: Int) -> Form? {
+        values.last { $0.covers(position) }?.form
     }
 }
 

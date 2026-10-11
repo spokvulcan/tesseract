@@ -33,9 +33,8 @@ struct RequestFactsTests {
         let facts = request.facts
         #expect(facts.promptTokens == request.keySpace.keyPath)
         #expect(facts.generationPrompt.thinkBlock == .opens)
-        // The one `?? 512`, and the decode parameters' one quantization reset.
+        // The one `?? 512`.
         #expect(facts.prefillStepSize == 512)
-        #expect(facts.decodeParameters.kvBits == nil)
         #expect(facts.partitionKey.kvBits == 8)
         #expect(facts.ssdEnabled)
         #expect(facts.toolsDefined)
@@ -46,9 +45,9 @@ struct RequestFactsTests {
         #expect(facts.leafStoreMode(emittedToolCalls: false) == .canonicalUserLeaf)
     }
 
-    /// A KV Scheme is partition identity and rides the decode parameters to
-    /// the iterator that converts after prefill (DFlash2's own prefill).
-    @Test func aKVSchemeKeysThePartitionAndReachesTheIterator() async throws {
+    /// A KV Scheme is partition identity; where it converts is the Decode
+    /// Start's (`DecodeStartTests`).
+    @Test func aKVSchemeKeysThePartition() async throws {
         let provider = ToyModelSessionProvider(
             model: ToyLanguageModel(script: [0]), tokenizer: FakeChatMLTokenizer())
         let conversation = HTTPPrefixCacheConversation(
@@ -67,7 +66,6 @@ struct RequestFactsTests {
         }
         #expect(request.facts.partitionKey.kvScheme == .turbo8v4)
         #expect(request.facts.partitionKey.kvBits == nil)
-        #expect(request.facts.decodeParameters.kvScheme == "turbo8v4")
     }
 
     /// Text-only means no image reached the model: a text-class instance
