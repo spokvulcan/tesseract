@@ -430,6 +430,59 @@ cmd_log_show() {
         | _format_log_lines "$color"
 }
 
+# Worktrees whose work main already holds, with the build each keeps (about
+# 3 GB). The repo squash-merges, so "merged" is read from content: merging the
+# worktree's commit into origin/main would change nothing. Never the main
+# checkout (git's first worktree), the worktree this runs in, a locked one (an
+# app session's) or one with changes. Lists them; with --yes removes each
+# worktree and its DerivedData. Branches stay.
+cmd_prune_worktrees() {
+    local remove=0
+    [ "${1:-}" = "--yes" ] && remove=1
+    git -C "$PROJECT_DIR" fetch --quiet origin main
+    local main_tree here
+    main_tree=$(git -C "$PROJECT_DIR" rev-parse 'origin/main^{tree}')
+    here=$(cd "$PROJECT_DIR" && pwd -P)
+    local path="" head="" locked=0 line main_checkout=""
+    local -a found=()
+    while IFS= read -r line; do
+        case "$line" in
+            "worktree "*)
+                path="${line#worktree }"; head=""; locked=0
+                [ -n "$main_checkout" ] || main_checkout="$path" ;;
+            "HEAD "*) head="${line#HEAD }" ;;
+            locked*) locked=1 ;;
+            "")
+                if [ -n "$path" ] && [ "$path" != "$main_checkout" ] \
+                    && [ "$(cd "$path" 2>/dev/null && pwd -P)" != "$here" ] \
+                    && [ "$locked" = 0 ] && [ -d "$path" ] \
+                    && [ -z "$(git -C "$path" status --porcelain 2>/dev/null)" ] \
+                    && [ "$(git -C "$PROJECT_DIR" merge-tree --write-tree origin/main "$head" 2>/dev/null | head -1)" = "$main_tree" ]; then
+                    found+=("$path")
+                fi
+                path="" ;;
+        esac
+    done < <(git -C "$PROJECT_DIR" worktree list --porcelain; echo)
+    if [ ${#found[@]} -eq 0 ]; then
+        echo "No worktree to prune: each holds work main doesn't, has changes, or is locked."
+        return 0
+    fi
+    local worktree derived_data
+    for worktree in "${found[@]}"; do
+        derived_data=$(checkout_derived_data "$worktree/tesseract.xcodeproj" || true)
+        echo "$worktree  $(du -sh "$worktree" 2>/dev/null | cut -f1)${derived_data:+ + build $(du -sh "$derived_data" 2>/dev/null | cut -f1)}"
+        if [ "$remove" = 1 ]; then
+            git -C "$PROJECT_DIR" worktree remove "$worktree" && [ -n "$derived_data" ] && rm -rf "$derived_data"
+        fi
+    done
+    if [ "$remove" = 1 ]; then
+        git -C "$PROJECT_DIR" worktree prune
+        echo "Removed. Their branches stay: git branch -D <name> deletes one."
+    else
+        echo "Main holds all of their work. scripts/dev.sh prune-worktrees --yes removes them and their builds."
+    fi
+}
+
 usage() {
     echo "Usage: scripts/dev.sh <command>"
     echo ""
@@ -449,6 +502,7 @@ usage() {
     echo "  archive     Create release archive for App Store submission"
     echo "  resolve     Resolve SPM package dependencies"
     echo "  clean       Clean build artifacts and derived data"
+    echo "  prune-worktrees [--yes]  List (remove) worktrees main already holds, and their builds"
     echo "  log         Tail system log filtered to tesseract"
     echo "  log-show [minutes] [pattern]  Print the last N minutes (default 10); pattern is a case-insensitive regex"
 }
@@ -468,6 +522,7 @@ case "${1:-}" in
     rotated-checkpoint-parity) shift; cmd_rotated_checkpoint_parity "$@" ;;
     trace-replay)             cmd_trace_replay ;;
     archive)     cmd_archive ;;
+    prune-worktrees) shift; cmd_prune_worktrees "$@" ;;
     resolve)     cmd_resolve ;;
     clean)       cmd_clean ;;
     log)         cmd_log ;;
