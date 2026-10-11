@@ -175,3 +175,33 @@ to 2,617; `SpeculativePrefill.swift` from 534 to 520; `ResidualPrefill.swift`
 is 193 and `TurnRestore.swift` 98. `PrefixCacheManager.swift` grew from 3,278
 to 3,387 with the planned resolution, the re-planning drop and the test
 seam's forwarders.
+
+### As built, second pass (2026-10-11)
+
+A review of the branch, and the rest of ADR-0069's Turn Restore proposal,
+added eleven commits on top of a888a3e1: the speculative pass's checked
+per-chunk evaluation and its old cancellation point (the declared change
+above now holds, and a preemption that lands while a chunk waits for its
+session runs that chunk again), one anchor-seed rule on the restore point,
+one failed-restore implementation, the handoff scope as one rule, one Turn
+Report, a trivial report for an Unkeyed Completion, the Prefill Strategy
+route's own start, and two declared one-row fixes recorded in ADR-0069
+(an MTP turn's copy reason, a rewind's wait). Same machine and method,
+against fresh references captured on a888a3e1 (the first pass's captures
+were cleaned up):
+
+- `prefix-cache-e2e` on `qwen3.5-4b-paro` after every step that could move a
+  line, eight runs: 38 of 38 each, the check lines and 32 decode lines
+  identical, 0 of 1,959 in-order diagnostics lines differing.
+- On the last code commit (0a187a0f): the 27B e2e with its DFlash2 draft, 38
+  of 38, the 32 acceptance lines identical, 0 of 2,020 in-order lines
+  differing; `hybrid-cache-correctness`, 12 of 12, bitwise, its summary
+  identical to `main`'s.
+- The other-task lines differ only by the Speculative Canonical Prefill's
+  scheduling race, 3 to 14 lines per comparison, both ways.
+
+None of the declared changes shows in the gates: no e2e turn fails a
+restore, engages MTP, or rewinds before the Leaf Store phase after a waited
+handoff. The whole target passes (3,662 tests, 7 skipped), as does
+`scripts/check.sh`. `ServerCompletion.swift` is now 2,595 lines (2,755 on
+`main`); `TurnReport.swift` is 101.
