@@ -24,13 +24,12 @@ nonisolated enum DFlash2Support {
     /// The `ModelDefinition` id of the DFlash2 draft dependency.
     static let draftModelID = "qwen3.8-27b-dflash2-draft"
 
-    /// The draft's folder name under the models directory
-    /// (`incoai/Qwen3.8-27B-DFlash2` under the `/` → `_` folder rule,
-    /// `ModelDefinition.storageSubdirectory(forRepo:)`). Spelled out here
+    /// The draft's repo, whose folder the catalog's one folder rule gives
+    /// (`ModelDefinition.directory(forRepo:pathPrefix:in:)`). Spelled out here
     /// because the catalog (`ModelDefinition.all`) is MainActor-isolated by
     /// the project's default isolation and this enum is nonisolated; the test
     /// target pins the two together.
-    static let draftCacheSubdirectory = "incoai_Qwen3.8-27B-DFlash2"
+    static let draftRepo = "incoai/Qwen3.8-27B-DFlash2"
 
     /// Tokens per verify pass (1 anchor + 7 drafts): the width the checkpoint
     /// was distilled at, and the fastest one on the bench (ADR-0058).
@@ -46,7 +45,7 @@ nonisolated enum DFlash2Support {
     static func draftDirectory(
         storageRoot: URL
     ) -> URL? {
-        let directory = storageRoot.appendingPathComponent(draftCacheSubdirectory)
+        let directory = ModelDefinition.directory(forRepo: draftRepo, in: storageRoot)
         let configPresent = FileManager.default.fileExists(
             atPath: directory.appendingPathComponent("config.json").path)
         let hasWeights =

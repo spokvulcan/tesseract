@@ -257,7 +257,7 @@ struct SpeculationResidencyTests {
 
     /// A draft folder that passes detection: config plus a weights file.
     private static func downloadDraft(into storageRoot: URL) throws {
-        let draft = storageRoot.appendingPathComponent(DFlash2Support.draftCacheSubdirectory)
+        let draft = ModelDefinition.directory(forRepo: DFlash2Support.draftRepo, in: storageRoot)
         try FileManager.default.createDirectory(at: draft, withIntermediateDirectories: true)
         try "{}".write(
             to: draft.appendingPathComponent("config.json"), atomically: true, encoding: .utf8)

@@ -139,7 +139,8 @@ the composition root.
   preserve-thinking scan. Every folder comes from one pure, nonisolated folder
   rule, `ModelDefinition.directory(forRepo:pathPrefix:in:)`, which the download
   manager's downloads, status checks and deletes, the voice engine's
-  checkpoint closure, the benchmark runner and the phone's voice apply too.
+  checkpoint closure, the benchmark runner, the DFlash2 draft's detection
+  and the phone's voice apply too.
   Whisper's dictation load keeps its own, stricter `WhisperModelContract`: the
   catalog is shared with the iPhone app and can't see it. The usable directory
   lives with the download manager rather than Model Residency: the download

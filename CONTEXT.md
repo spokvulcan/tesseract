@@ -574,7 +574,7 @@ asks (`ModelDownloadManager.usableDirectory(for:)`). Every model folder comes fr
 one pure folder rule, `ModelDefinition.directory(forRepo:pathPrefix:in:)` — the
 repo's folder under the model store, beneath the entry's path prefix — which the
 downloads, status checks and deletes, the voice engine's checkpoint closure, the
-benchmark runner and the phone's voice all apply. Whisper's dictation load keeps
+benchmark runner, the DFlash2 draft's detection and the phone's voice all apply. Whisper's dictation load keeps
 its own, stricter `WhisperModelContract`: the catalog is shared with the iPhone
 app and can't see it.
 _Avoid_: model path (the folder, complete or not), cache subdirectory (retired),

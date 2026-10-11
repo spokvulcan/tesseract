@@ -605,7 +605,8 @@ loader that needs a whole model asks one answer for its files,
 `ModelDownloadManager.usableDirectory(for:)` (the **Usable Directory**), and every
 model folder comes from one pure folder rule,
 `ModelDefinition.directory(forRepo:pathPrefix:in:)`, which the voice engine's
-off-main checkpoint closure applies too; Whisper keeps its own stricter
+off-main checkpoint closure and the DFlash2 draft's detection apply too; Whisper
+keeps its own stricter
 `WhisperModelContract`.
 Vocabulary: CONTEXT.md → LLM gate.
 
