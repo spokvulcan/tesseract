@@ -262,3 +262,13 @@ application's iterator construction is already one `DecodeStart.make` call
 per handover kind. Iterator construction, KV Scheme conversion, cache
 adoption and the penalty seed are therefore out of plan application now, as
 decision 8 intended.
+
+## Amendment (2026-10-11): the usable-restore rule is named
+
+Decision 7's usable-restore rule is built ahead of the Prefill Plan, as
+ADR-0094: `PrefillPlanner.usableRestore` returns the restore point (offset and
+anchor delta) or why the snapshot is unusable, for a residual that may carry an
+Image Span (the keyed turn) or text only (every re-prefill). The planner's
+restore decision, the Leaf Admission Builder, the Leaf Store's boundary route,
+the Speculative Canonical Prefill and salvage-on-cancel all read it, and the
+latter two producers restore and extend through one Residual Prefill.

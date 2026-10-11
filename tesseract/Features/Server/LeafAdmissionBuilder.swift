@@ -283,7 +283,19 @@ nonisolated enum LeafAdmissionBuilder {
         keySpace: CacheKeySpace,
         resolveBoundary: @Sendable ([Int]) async -> HybridCacheSnapshot?
     ) async -> LeafCapturePlan {
-        let minimumWarmOffset = keySpace.minimumWarmOffset
+        // The residual `probedTokens[boundary...]` doubles as the reprefill
+        // input, so a boundary is the usable-restore rule's with a text-only
+        // residual: inside the path, past the image prefix — where key space
+        // and real tokens agree token-for-token.
+        func usableRestore(_ boundary: HybridCacheSnapshot) -> PrefillPlanner.Unusable? {
+            switch PrefillPlanner.usableRestore(
+                offset: boundary.tokenOffset, target: probedTokens.count, keySpace: keySpace,
+                residual: .textOnly)
+            {
+            case .success: nil
+            case .failure(let unusable): unusable
+            }
+        }
         switch mode {
         case .directTool:
             // Tool-call turns are reused by the immediate tool-result
@@ -292,47 +304,36 @@ nonisolated enum LeafAdmissionBuilder {
             guard let transientBoundary else {
                 return .skip(reason: .noTransientBoundary)
             }
-            guard probedTokens.count > transientBoundary.tokenOffset else {
+            switch usableRestore(transientBoundary) {
+            case nil:
+                return .fromBoundary(boundary: transientBoundary, storedTokens: probedTokens)
+            // A transient boundary sits past the prefill base, so it never
+            // covers nothing; past the image prefix its anchor is defined.
+            case .coversNothing, .coversWholeTarget:
                 return .skip(
                     reason: .storedAtOrBeforeBoundary(
                         storedLen: probedTokens.count,
                         boundaryOffset: transientBoundary.tokenOffset
                     ))
-            }
-            // The residual `probedTokens[boundary...]` doubles as the reprefill
-            // input, so it must be image-free — past the last image run, key
-            // space and real tokens agree token-for-token.
-            guard transientBoundary.tokenOffset >= minimumWarmOffset else {
+            case .insideImagePrefix, .splitsImageRun:
                 return .skip(
                     reason: .boundaryInsideImagePrefix(
                         boundaryOffset: transientBoundary.tokenOffset,
-                        minimumWarmOffset: minimumWarmOffset
+                        minimumWarmOffset: keySpace.minimumWarmOffset
                     ))
             }
-            return .fromBoundary(boundary: transientBoundary, storedTokens: probedTokens)
 
         case .canonical:
-            // Prefer the request-local transient boundary when it sits strictly
-            // before the canonical path; otherwise fall back through the injected
-            // **Snapshot Resolution** closure-peer. Both arms require
-            // `tokenOffset < probedTokens.count`, so the chosen boundary always
-            // leaves a non-empty residual to reprefill — no separate
-            // at-or-before-boundary guard is needed. Both arms also require the
-            // boundary to sit past the image prefix (`≥ minimumWarmOffset`):
-            // the residual doubles as the reprefill input, and an image run in
-            // it cannot be reprefilled (a resolved snapshot from an older,
-            // pre-image turn can land there).
-            if let transientBoundary,
-                transientBoundary.tokenOffset < probedTokens.count,
-                transientBoundary.tokenOffset >= minimumWarmOffset
-            {
+            // Prefer the request-local transient boundary when the rule takes
+            // it; otherwise fall back through the injected **Snapshot
+            // Resolution** closure-peer. Either way the chosen boundary leaves
+            // a non-empty, image-free residual to reprefill (a resolved
+            // snapshot from an older, pre-image turn can land inside the
+            // image prefix, which the rule refuses).
+            if let transientBoundary, usableRestore(transientBoundary) == nil {
                 return .fromBoundary(boundary: transientBoundary, storedTokens: probedTokens)
             }
-            if let resolved = await resolveBoundary(probedTokens),
-                resolved.tokenOffset > 0,
-                resolved.tokenOffset < probedTokens.count,
-                resolved.tokenOffset >= minimumWarmOffset
-            {
+            if let resolved = await resolveBoundary(probedTokens), usableRestore(resolved) == nil {
                 return .fromBoundary(boundary: resolved, storedTokens: probedTokens)
             }
             return .skip(reason: .noResolvedBoundary(canonicalLen: probedTokens.count))

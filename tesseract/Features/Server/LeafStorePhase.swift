@@ -365,11 +365,8 @@ nonisolated enum LeafStorePhase {
             for: turn, inputs: inputs, canonicalLeafOffset: route.leafOffset)
         let capture = await captureStructuredLeafFromBoundary(
             sessions: inputs.sessions,
-            boundarySnapshot: route.boundary,
-            backingLeaf: route.backingLeaf,
-            positionAnchorRopeDelta: route.positionAnchorRopeDelta,
-            prefillStepSize: inputs.request.facts.prefillStepSize,
-            tokenNDim: inputs.request.facts.tokenNDim,
+            base: route.base,
+            request: inputs.request,
             context: LeafAdmissionContext(
                 storedTokens: route.storedTokens, inputs: inputs,
                 stages: leafStages(for: boundaryMode))
@@ -379,17 +376,14 @@ nonisolated enum LeafStorePhase {
     }
 
     /// The restore boundary a boundary mode's leaf is synthesized from, once
-    /// the reusable-prefix probe and the boundary plan have run.
+    /// the reusable-prefix probe and the boundary plan have run: the
+    /// **Residual Prefill**'s base. Its path is the canonical path the leaf
+    /// is admitted under — restore the boundary, re-prefill the residual past
+    /// it, capture at the path's length.
     struct BoundaryRoute {
-        let boundary: HybridCacheSnapshot
-        let backingLeaf: HybridCacheSnapshot?
-        /// The position-anchor delta the residual re-prefill is seeded with
-        /// on the vision container.
-        let positionAnchorRopeDelta: Int?
-        /// The canonical path the leaf is admitted under: restore `boundary`,
-        /// re-prefill `storedTokens[boundary.tokenOffset...]`, capture at
-        /// `storedTokens.count`.
-        let storedTokens: [Int]
+        let base: ResidualPrefill.Base
+
+        var storedTokens: [Int] { base.path }
 
         /// The leaf's offset — what the speculative seed measures from.
         var leafOffset: Int { storedTokens.count }
@@ -434,13 +428,8 @@ nonisolated enum LeafStorePhase {
         let resolveBoundary:
             @Sendable ([Int], HybridCacheSnapshot?) async -> PrefixCacheManager.LookupResult? = {
                 tokens, view in
-                let matchingView = view.flatMap { boundary in
-                    guard inputs.request.keySpace.keyPath.count >= boundary.tokenOffset,
-                        tokens.starts(
-                            with: inputs.request.keySpace.keyPath.prefix(boundary.tokenOffset))
-                    else { return Optional<HybridCacheSnapshot>.none }
-                    return boundary
-                }
+                let matchingView = ResidualPrefill.matchingView(
+                    view, for: tokens, keySpace: inputs.request.keySpace)
                 return await inputs.sessions.withSession { _ in
                     await inputs.prefixCache.resolve(
                         tokens: tokens,
@@ -474,9 +463,7 @@ nonisolated enum LeafStorePhase {
                 guard
                     let resolved = await resolveBoundary(
                         Array(tokens.prefix(boundary.tokenOffset)), boundary),
-                    let snapshot = resolved.snapshot,
-                    snapshot.tokenOffset > 0, snapshot.tokenOffset < tokens.count,
-                    snapshot.tokenOffset >= inputs.request.keySpace.minimumWarmOffset
+                    let snapshot = resolved.snapshot
                 else {
                     report.recordSkip(
                         leafSkipLog(
@@ -487,30 +474,25 @@ nonisolated enum LeafStorePhase {
                 boundary = snapshot
                 backingLeaf = resolved.backingLeaf
             }
-            // The boundary sits past the image prefix (builder guard), so the
-            // residual is real tokens in both spaces and the anchor delta is
-            // always defined; on the vision container the residual reprefill
-            // must resume with it seeded.
-            var positionAnchorRopeDelta: Int?
-            if inputs.request.seedsPositionAnchor {
-                guard
-                    let delta = inputs.request.keySpace.positionAnchorDelta(
-                        upTo: boundary.tokenOffset)
-                else {
-                    report.recordSkip(
-                        LeafSkipLog(
-                            stage: leafStages(for: mode).store,
-                            reason: "boundary-splits-image-run", level: .warning,
-                            extraFields: [("offset", "\(boundary.tokenOffset)")]),
-                        in: diagnostics)
-                    return nil
-                }
-                positionAnchorRopeDelta = delta
+            // The usable-restore rule with a text-only residual: inside the
+            // path and past the image prefix, so the residual is real tokens
+            // in both spaces and the anchor delta is defined. The builder
+            // already held the planned boundary to it; a view's resolve may
+            // land shallower, where it applies again.
+            guard
+                case .success(let point) = PrefillPlanner.usableRestore(
+                    offset: boundary.tokenOffset, target: tokens.count,
+                    keySpace: inputs.request.keySpace, residual: .textOnly)
+            else {
+                report.recordSkip(
+                    leafSkipLog(
+                        for: .noResolvedBoundary(canonicalLen: tokens.count), mode: mode),
+                    in: diagnostics)
+                return nil
             }
             return BoundaryRoute(
-                boundary: boundary, backingLeaf: backingLeaf,
-                positionAnchorRopeDelta: positionAnchorRopeDelta,
-                storedTokens: tokens)
+                base: ResidualPrefill.Base(
+                    snapshot: boundary, backingLeaf: backingLeaf, point: point, path: tokens))
         }
     }
 

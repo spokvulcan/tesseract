@@ -171,13 +171,14 @@ tesseract/
 │   │   ├── SSDSnapshotStore.swift     # SSD tier: writer queue + body I/O
 │   │   ├── SnapshotLedger.swift       # SSD tier: manifest/budget/LRU authority
 │   │   ├── SnapshotPayload.swift      # Snapshot Payload: a snapshot's SSD byte form, built by Deferred Payload Extraction
-│   │   ├── PrefillPlanner.swift       # Tokenizer-affine pre-prefill decisions
+│   │   ├── PrefillPlanner.swift       # Tokenizer-affine pre-prefill decisions; the Usable Restore rule (ADR-0094)
 │   │   ├── RequestKeyingPhase.swift   # Request Keying: a request's keys and facts, derived once (Keyed Request, ADR-0070)
 │   │   ├── ConversationRender.swift   # Conversation Render module: the one chat-template application, Emitted Path Resolve, Generation Prompt probe
 │   │   ├── LeafStorePhase.swift       # Leaf Store phase: fast path vs boundary path (+Report, +Executors)
 │   │   ├── LeafAdmission.swift        # Leaf Admission: the one way a leaf enters the prefix cache (ADR-0078)
 │   │   ├── LeafStoreCounters.swift    # Boundary-turn tally by reason, logged at unload
 │   │   ├── LeafAdmissionBuilder.swift # GPU-free leaf-snapshot routing
+│   │   ├── ResidualPrefill.swift      # Residual Prefill: restore a prefix, extend it as text; the failed-restore policy (ADR-0094)
 │   │   ├── LiveLeafCapture.swift      # Pure fast-path eligibility (live vs boundary)
 │   │   ├── EmittedPathIndex.swift     # Emitted Path Index: rendered-bytes hash → fed ids per fingerprint (ADR-0063)
 │   │   ├── EmittedPathResolve.swift   # Resolve composition + per-request Emitted Path telemetry
@@ -622,7 +623,11 @@ replay allocated multi-gigabyte synthetic arrays and blocked MainActor
 pressure response and SSD demotion remain active. Each keyed request holds one
 Cache Claim (`CacheClaim`, ADR-0069): its reserve lane, its Restore Pins and,
 after a Leaf Handoff, its Leaf Lease, concluded exactly once inside the
-request's LLM gate turn. Vocabulary: CONTEXT.md → Prefix cache snapshot
+request's LLM gate turn. Whether a snapshot can seed a prefill is one rule,
+the Usable Restore (`PrefillPlanner.usableRestore`), read by the keyed turn's
+plan and every re-prefill; the Leaf Store's boundary route and the Speculative
+Canonical Prefill restore a prefix and extend it through `ResidualPrefill`, and
+a restore that throws drops its snapshot on every path (ADR-0094). Vocabulary: CONTEXT.md → Prefix cache snapshot
 lifecycle, SSD snapshot ledger, Prefill orchestration, Eviction tuning.
 Verification gates: docs/testing.md → Loaded-model verification.
 An image request takes the same arm: `RequestKeyingPhase` prepares it (the

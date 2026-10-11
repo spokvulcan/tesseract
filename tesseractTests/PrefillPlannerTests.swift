@@ -285,6 +285,76 @@ import MLXLMCommon
         #expect(plan.transientCheckpointOffsets == [30])
     }
 
+    // MARK: - The usable-restore rule
+
+    /// One row of the usable-restore rule (ADR-0094): a snapshot offset, the
+    /// target the prefill runs toward, the key space (text, or one image run
+    /// over [10, 26) whose 16 rows span 8 positions) and the residual.
+    struct RestoreRow: Sendable, CustomTestStringConvertible {
+        let offset: Int
+        let target: Int
+        let image: Bool
+        let residual: PrefillPlanner.Residual
+        let expected: Result<PrefillPlanner.RestorePoint, PrefillPlanner.Unusable>
+
+        var testDescription: String {
+            "offset \(offset) of \(target), \(image ? "image" : "text"), \(residual)"
+        }
+    }
+
+    static let restoreRows: [RestoreRow] = [
+        // Text: inside the target, the anchor zero; at either end, unusable.
+        .init(
+            offset: 5, target: 60, image: false, residual: .textOnly,
+            expected: .success(.init(offset: 5, anchorDelta: 0))),
+        .init(
+            offset: 0, target: 60, image: false, residual: .textOnly,
+            expected: .failure(.coversNothing)),
+        .init(
+            offset: 60, target: 60, image: false, residual: .textOnly,
+            expected: .failure(.coversWholeTarget)),
+        .init(
+            offset: 61, target: 60, image: false, residual: .mayCarryImages,
+            expected: .failure(.coversWholeTarget)),
+        // Below the image: the keyed turn continues through it; a text
+        // re-prefill cannot.
+        .init(
+            offset: 5, target: 60, image: true, residual: .mayCarryImages,
+            expected: .success(.init(offset: 5, anchorDelta: 0))),
+        .init(
+            offset: 5, target: 60, image: true, residual: .textOnly,
+            expected: .failure(.insideImagePrefix)),
+        // Splitting the run: no anchor, whoever extends it.
+        .init(
+            offset: 12, target: 60, image: true, residual: .mayCarryImages,
+            expected: .failure(.splitsImageRun)),
+        .init(
+            offset: 12, target: 60, image: true, residual: .textOnly,
+            expected: .failure(.insideImagePrefix)),
+        // Past the run: both, with the run's rope delta (8 − 16).
+        .init(
+            offset: 26, target: 60, image: true, residual: .textOnly,
+            expected: .success(.init(offset: 26, anchorDelta: -8))),
+        .init(
+            offset: 40, target: 60, image: true, residual: .mayCarryImages,
+            expected: .success(.init(offset: 40, anchorDelta: -8))),
+    ]
+
+    @Test(arguments: restoreRows)
+    func theUsableRestoreRule(_ row: RestoreRow) throws {
+        let keySpace =
+            row.image
+            ? try imageKeySpace(runRange: 10..<26, positionSpan: 8, totalTokens: 60)
+            : .identity(keyPath: Array(repeating: 7, count: 60))
+        let actual = PrefillPlanner.usableRestore(
+            offset: row.offset, target: row.target, keySpace: keySpace, residual: row.residual)
+        switch (actual, row.expected) {
+        case (.success(let point), .success(let expected)): #expect(point == expected)
+        case (.failure(let reason), .failure(let expected)): #expect(reason == expected)
+        default: Issue.record("\(row.testDescription): got \(actual), expected \(row.expected)")
+        }
+    }
+
     // MARK: - plan(): transient checkpoint offsets
 
     @Test func transientOffsetsSurviveWhenPastBaseInsidePromptAndNotAlreadyPlanned() {

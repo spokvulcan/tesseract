@@ -106,7 +106,7 @@ import Testing
             transientBoundary: backingState == "planned" ? nil : view,
             ramOnlySpine: ramOnlySpine, diagnostics: diagnostics)
         await SpeculativeCanonicalPrefill.run(
-            seed: seed, container: provider.container, prefixCache: manager)
+            seed: seed, sessions: provider, prefixCache: manager)
         let unavailable = backingState == "leased" || backingState == "departed"
         let events = telemetry.drain()
         let admitted = try #require(events.last { $0.eventName == "speculativePrefill" })
@@ -220,10 +220,10 @@ import Testing
             diagnostics: diagnostics
         )
 
-        let container = provider.container
+        let sessions = provider
         let pass = Task {
             await SpeculativeCanonicalPrefill.run(
-                seed: seed, container: container, prefixCache: manager
+                seed: seed, sessions: sessions, prefixCache: manager
             )
         }
         await gate.reached()
@@ -248,5 +248,78 @@ import Testing
         #expect(extensionRecords.allSatisfy { $0.capacity >= admitPath.count })
         #expect(extensionRecords.allSatisfy { $0.capacity < admitPath.count + 256 })
         #expect(Set(extensionRecords.map(\.capacity)).count == 1)
+    }
+
+    /// The failed-restore policy covers the speculative pass too (ADR-0094's
+    /// declared change): a boundary whose restore throws is dropped through
+    /// the manager, so no later request resolves to it and pays the same
+    /// failure, and the pass logs `unrestorable-snapshot` before its own
+    /// `restore-failed`. Nothing is prefilled or admitted.
+    @Test func aBoundaryThatFailsToRestoreIsDropped() async throws {
+        let tokenizer = ToySequencingTokenizer()
+        let stored = HTTPPrefixCacheConversation(
+            systemPrompt: nil,
+            messages: [
+                HTTPPrefixCacheMessage(role: .user, content: String(repeating: "a", count: 2200)),
+                .assistant(content: "Done"),
+            ])
+        let future = try #require(
+            try LeafAdmissionBuilder.futureSharedPrefix(
+                storedConversation: stored, keySpace: .identity(keyPath: []),
+                render: ConversationRender.uncached(tokenizer: tokenizer))?.get())
+        let admitPath = try #require(
+            SpeculativeCanonicalPrefill.admitPath(
+                futureSharedPrefix: future, canonicalLeafOffset: 0))
+        let forwards = ForwardLog()
+        let fault = ToyRestoreFault()
+        let provider = ToyModelSessionProvider(
+            model: ToyLanguageModel(script: [0], onForward: forwards.onForward),
+            tokenizer: tokenizer, restoreFault: fault)
+        let partitionKey = CachePartitionKey(
+            modelID: "toy/unrestorable-\(UUID())", kvBits: nil, kvGroupSize: 64)
+        let telemetry = TelemetryCapture(modelID: partitionKey.modelID)
+        defer { telemetry.stop() }
+        let manager = PrefixCacheManager(memoryBudgetBytes: 1 << 30)
+        let diagnostics = PrefixCacheDiagnostics.Context(
+            requestID: UUID(), modelID: partitionKey.modelID, kvBits: nil, kvGroupSize: 64)
+        let boundaryTokens = Array(admitPath[0..<1024])
+        let boundary = try #require(
+            try await provider.withSession { session -> HybridCacheSnapshot? in
+                let cache = try session.newCache(parameters: GenerateParameters(temperature: 0))
+                _ = try session.prefill(
+                    text: .init(tokens: MLXArray(boundaryTokens.map(Int32.init)), mask: nil),
+                    cache: cache, checkpoints: [:], checkpointBaseOffset: 0,
+                    prefillStepSize: 1024, consumeAll: true, initialState: nil,
+                    evalPolicy: .pipelined, storedForm: nil)
+                return session.captureSnapshot(
+                    cache: cache, offset: boundaryTokens.count, type: .leaf, storedForm: nil)
+            })
+        _ = manager.admit(
+            try #require(
+                SnapshotAdmission.leaf(
+                    storedTokens: boundaryTokens, snapshot: boundary, storage: .ramOnly,
+                    partitionKey: partitionKey, requestID: UUID())))
+        let request = try await ToyRequestKeying.keyedRequest(
+            provider: provider,
+            conversation: HTTPPrefixCacheConversation(
+                systemPrompt: nil, messages: Array(stored.messages.dropLast())),
+            modelID: partitionKey.modelID, prefillStepSize: 1024)
+        let seed = SpeculativeCanonicalPrefill.makeSeed(
+            storedConversation: stored, request: request, canonicalLeafOffset: 0,
+            diagnostics: diagnostics)
+        let forwardsBefore = forwards.offsets.count
+        fault.arm()
+
+        await SpeculativeCanonicalPrefill.run(seed: seed, sessions: provider, prefixCache: manager)
+
+        #expect(fault.failedBodyIDs == [boundary.bodyID])
+        let skips = telemetry.drain().filter { $0.eventName == "skip" }
+        #expect(
+            skips.map { "\($0.field("stage") ?? "")/\($0.field("reason") ?? "")" }
+                == ["restore/unrestorable-snapshot", "speculativePrefill/restore-failed"])
+        #expect(skips.first?.field("drop") == "body")
+        #expect(skips.first?.intField("offset") == 1024)
+        #expect(forwards.offsets.count == forwardsBefore)
+        #expect(manager.lookup(tokens: admitPath, partitionKey: partitionKey).snapshot == nil)
     }
 }

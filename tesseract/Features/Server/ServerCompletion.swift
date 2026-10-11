@@ -517,7 +517,7 @@ nonisolated final class ServerCompletion {
     /// generation or a teardown always wins; this pass is strictly droppable.
     func scheduleSpeculativePrefill(
         seed: SpeculativeCanonicalPrefill.Seed,
-        container: ModelContainer,
+        sessions: any ModelSessionProviding,
         entryDrainGeneration: Int,
         on actor: isolated LLMActor
     ) async {
@@ -558,7 +558,7 @@ nonisolated final class ServerCompletion {
             await prefixCache.storageActivityGate.withPrefillMarked {
                 await SpeculativeCanonicalPrefill.run(
                     seed: seed,
-                    container: container,
+                    sessions: sessions,
                     prefixCache: prefixCache
                 )
             }
@@ -1546,38 +1546,27 @@ nonisolated final class ServerCompletion {
                 if restoredCache == nil {
                     restoreFellBack = true
                     if let restoreFailure, let failed = lookupResult.snapshot {
-                        // Drop the snapshot that threw, so no later request
-                        // pays the same failed restore, then plan checkpoints
-                        // again against the settled tree: one the drop took
-                        // is captured anew on this turn (ADR-0069 amendment).
-                        let corruptLayers = restoreFailure is HybridCacheSnapshot.RestoreError
-                        let (drop, replanned) = await MainActor.run {
-                            let drop = prefixCache.dropUnrestorableSnapshot(
-                                failed, tokens: keySpace.keyPath, partitionKey: partitionKey,
-                                corruptLayers: corruptLayers)
-                            let dropped = drop == .body || drop == .bodyAndSSDCopy
-                            let replanned =
-                                dropped
+                        // The failed-restore policy drops the snapshot that
+                        // threw, so no later request pays the same failed
+                        // restore; in the same hop, plan checkpoints again
+                        // against the settled tree: one the drop took is
+                        // captured anew on this turn (ADR-0069 amendment).
+                        let keyPath = keySpace.keyPath
+                        let stablePrefixOffset = boundaries.stablePrefixOffset
+                        let replanned = await ResidualPrefill.dropUnrestorable(
+                            failed, error: restoreFailure, tokens: keyPath,
+                            partitionKey: partitionKey, prefixCache: prefixCache,
+                            diagnostics: diagnosticsContext
+                        ) { drop in
+                            drop == .body || drop == .bodyAndSSDCopy
                                 ? prefixCache.planCheckpoints(
-                                    tokens: keySpace.keyPath,
-                                    stablePrefixOffset: boundaries.stablePrefixOffset,
+                                    tokens: keyPath,
+                                    stablePrefixOffset: stablePrefixOffset,
                                     partitionKey: partitionKey,
                                     alignTo: resolved.alignmentLookup)
                                 : nil
-                            return (drop, replanned)
-                        }
+                        }.then
                         if let replanned { checkpointPlan = replanned }
-                        diagnosticsContext.logSkip(
-                            stage: "restore",
-                            reason: "unrestorable-snapshot",
-                            level: .warning,
-                            extraFields: [
-                                ("offset", "\(failed.tokenOffset)"),
-                                ("checkpointType", failed.checkpointType.wireString),
-                                ("drop", drop.rawValue),
-                                ("error", String(describing: restoreFailure)),
-                            ]
-                        )
                     }
                     prefillPlan = PrefillPlanner.coldPlan(
                         boundaries: boundaries,
@@ -2561,22 +2550,22 @@ nonisolated final class ServerCompletion {
 
     /// The offset a cancelled foreground prefill may admit its progress
     /// at, or `nil` when the progress is below the capture threshold
-    /// (shared with speculative preempt capture), the cache reports an
-    /// offset past the key path (mid-flight inconsistency — never admit),
-    /// or the offset sits inside the image prefix (unanchorable).
-    /// Pure — unit-tested directly.
+    /// (shared with speculative preempt capture) or a later request could
+    /// not restore it and extend it as text — the usable-restore rule over
+    /// the key path and the one token past it a resend or the next turn
+    /// adds: no offset past the key path (a mid-flight inconsistency), none
+    /// inside the image prefix (unanchorable). Pure — unit-tested directly.
     static func salvageableOffset(
         cacheOffset: Int,
         restoreBaseOffset: Int,
-        keyPathCount: Int,
-        minimumWarmOffset: Int
+        keySpace: CacheKeySpace
     ) -> Int? {
         guard
             cacheOffset - restoreBaseOffset
                 >= SpeculativeCanonicalPrefill.minimumPreemptCaptureTokens,
-            cacheOffset > 0,
-            cacheOffset <= keyPathCount,
-            cacheOffset >= minimumWarmOffset
+            case .success = PrefillPlanner.usableRestore(
+                offset: cacheOffset, target: keySpace.keyPath.count + 1, keySpace: keySpace,
+                residual: .textOnly)
         else { return nil }
         return cacheOffset
     }
@@ -2608,9 +2597,7 @@ nonisolated final class ServerCompletion {
         guard
             salvageableOffset(
                 cacheOffset: reportedOffset,
-                restoreBaseOffset: restoreBaseOffset,
-                keyPathCount: keySpace.keyPath.count,
-                minimumWarmOffset: keySpace.minimumWarmOffset
+                restoreBaseOffset: restoreBaseOffset, keySpace: keySpace
             ) != nil
         else {
             diagnostics.logSkip(
@@ -2631,9 +2618,7 @@ nonisolated final class ServerCompletion {
         guard
             let offset = salvageableOffset(
                 cacheOffset: settledOffset,
-                restoreBaseOffset: restoreBaseOffset,
-                keyPathCount: keySpace.keyPath.count,
-                minimumWarmOffset: keySpace.minimumWarmOffset
+                restoreBaseOffset: restoreBaseOffset, keySpace: keySpace
             )
         else {
             diagnostics.logSkip(

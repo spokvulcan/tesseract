@@ -25,32 +25,59 @@ struct SalvageOnCancelTests {
 
     // MARK: - Pure offset gate
 
+    /// A text key path of `count` tokens.
+    private func textKeySpace(count: Int) -> CacheKeySpace {
+        .identity(keyPath: Array(repeating: 7, count: count))
+    }
+
+    /// A key path of `count` tokens whose one image run ends at `runEnd`.
+    private func imageKeySpace(count: Int, runEnd: Int) throws -> CacheKeySpace {
+        let pad = 999
+        var prepared = Array(repeating: 7, count: count)
+        for index in (runEnd - 8)..<runEnd { prepared[index] = pad }
+        return try CacheKeySpace.make(
+            preparedTokens: prepared,
+            images: [
+                CacheKeySpace.RequestImage(
+                    digest: #require(ImageDigest(rawDigest: Data(repeating: 0xAB, count: 32))),
+                    positionSpan: 4)
+            ],
+            placeholderIdentity: ImagePlaceholderIdentity(imagePadTokenId: pad)
+        ).get()
+    }
+
     @Test func offsetGateRequiresThresholdPastTheRestoreBase() {
         // At threshold: admit. One short: nothing.
         #expect(
             ServerCompletion.salvageableOffset(
                 cacheOffset: 5_000 + threshold, restoreBaseOffset: 5_000,
-                keyPathCount: 100_000, minimumWarmOffset: 0
+                keySpace: textKeySpace(count: 100_000)
             ) == 5_000 + threshold)
         #expect(
             ServerCompletion.salvageableOffset(
                 cacheOffset: 5_000 + threshold - 1, restoreBaseOffset: 5_000,
-                keyPathCount: 100_000, minimumWarmOffset: 0
+                keySpace: textKeySpace(count: 100_000)
             ) == nil)
     }
 
-    @Test func offsetGateRefusesInconsistentOrUnanchorableOffsets() {
+    @Test func offsetGateRefusesInconsistentOrUnanchorableOffsets() throws {
+        // The whole key path is a restore point a later request extends.
+        #expect(
+            ServerCompletion.salvageableOffset(
+                cacheOffset: threshold, restoreBaseOffset: 0,
+                keySpace: textKeySpace(count: threshold)
+            ) == threshold)
         // Past the key path — a mid-flight inconsistency must never admit.
         #expect(
             ServerCompletion.salvageableOffset(
                 cacheOffset: threshold, restoreBaseOffset: 0,
-                keyPathCount: threshold - 1, minimumWarmOffset: 0
+                keySpace: textKeySpace(count: threshold - 1)
             ) == nil)
         // Inside the image prefix — unanchorable on restore.
         #expect(
             ServerCompletion.salvageableOffset(
                 cacheOffset: threshold, restoreBaseOffset: 0,
-                keyPathCount: 100_000, minimumWarmOffset: threshold + 1
+                keySpace: try imageKeySpace(count: threshold + 100, runEnd: threshold + 1)
             ) == nil)
     }
 

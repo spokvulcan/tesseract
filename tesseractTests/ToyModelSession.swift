@@ -562,21 +562,32 @@ nonisolated final class ToyRestoreFault: @unchecked Sendable {
 
     private let lock = NSLock()
     private var armed: (any Error)?
+    private var skipping = 0
     private var _failedBodyIDs: [UUID] = []
 
     /// The bodies a fired fault failed to restore, in order.
     var failedBodyIDs: [UUID] { lock.withLock { _failedBodyIDs } }
 
-    /// Fail the next restore with `error`: `Injected` by default, or the
+    /// Fail a restore with `error`: `Injected` by default, or the
     /// `HybridCacheSnapshot.RestoreError` a corrupt persisted layer raises.
-    func arm(throwing error: any Error = Injected()) {
-        lock.withLock { armed = error }
+    /// The first `skipping` restores still succeed — the turn's own restore,
+    /// say, before its leaf store's.
+    func arm(throwing error: any Error = Injected(), skipping: Int = 0) {
+        lock.withLock {
+            armed = error
+            self.skipping = skipping
+        }
     }
 
     func fireIfArmed(restoring snapshot: HybridCacheSnapshot) throws {
         let error: (any Error)? = lock.withLock {
+            guard armed != nil else { return nil }
+            guard skipping == 0 else {
+                skipping -= 1
+                return nil
+            }
             defer { armed = nil }
-            if armed != nil { _failedBodyIDs.append(snapshot.bodyID) }
+            _failedBodyIDs.append(snapshot.bodyID)
             return armed
         }
         if let error { throw error }

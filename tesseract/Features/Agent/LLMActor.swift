@@ -537,7 +537,7 @@ actor LLMActor {
         }
         await serverCompletion.scheduleSpeculativePrefill(
             seed: seed,
-            container: container,
+            sessions: sessionProvider(container),
             entryDrainGeneration: entryDrainGeneration,
             on: self
         )

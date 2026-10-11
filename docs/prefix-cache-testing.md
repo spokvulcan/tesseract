@@ -389,7 +389,15 @@ into its K/V row). A resident MTP drafter that traps if engaged
 Plan. The failed snapshot is dropped: a system checkpoint that failed is gone
 after the turn, recaptured on the same turn, and restored by the next request;
 over an SSD tier a `RestoreError` also removes its old copy from the manifest,
-and any other error keeps it.
+and any other error keeps it. The same policy covers the Residual Prefill's
+two producers (ADR-0094): `ToyRestoreFault.arm(skipping:)` lets the turn's own
+restore through and fails the next, so
+`ServerCompletionKeyedSequencingTests.aBoundaryThatFailsToRestoreIsDroppedLikeTheKeyedTurns`
+fails the boundary route's restore of a planned branch view and
+`SpeculativePrefillPreemptionTests.aBoundaryThatFailsToRestoreIsDropped` the
+speculative pass's; each checks the `unrestorable-snapshot` line before the
+producer's own, and that the view or leaf is gone. The rule both read,
+`PrefillPlanner.usableRestore`, is a table in `PrefillPlannerTests`.
 
 `CacheClaimMemoryEvidenceTests` measures the MLX peak around one step at a time
 on synthetic caches: check-in before extraction, a refused check-in, the

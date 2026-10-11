@@ -316,3 +316,15 @@ of a system checkpoint checks that the body is gone, that the same turn
 captures a new one and that the next request restores it; with an SSD tier
 behind it, a `RestoreError` also removes the old copy from the manifest and
 any other error keeps it.
+
+## Amendment 2026-10-11: every producer drops a snapshot that fails to restore
+
+The amendment above left the Speculative Canonical Prefill and the Leaf
+Store's boundary route only logging a failed restore. Since ADR-0094 both
+restore through the Residual Prefill, whose restore runs the same
+failed-restore policy as the keyed turn (`ResidualPrefill.dropUnrestorable`):
+the snapshot is dropped through the manager and the one
+`restore/unrestorable-snapshot` line is logged, before the producer's own
+`prefill-threw` or `restore-failed` line. The keyed turn's checkpoint re-plan
+runs in the policy's MainActor hop, as it did in its own. A request-local view
+reports `drop=notFound`.

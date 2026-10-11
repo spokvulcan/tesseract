@@ -603,6 +603,27 @@ _Avoid_: restore mode (what the restore turned out to be, an execution
 report); opening, unqualified (the Companion's **Day Opening**); restore
 shape (the five shapes are products of the opening and the forward).
 
+**Usable Restore**:
+The one rule for whether a snapshot can seed a prefill toward a target: it
+covers some of the target but not all of it, does not split an image run (so
+its **Position Anchor** is defined), and, when the prefill extends it as text
+alone, sits at or past the **Minimum Warm Offset**. The keyed turn's plan reads
+it with a residual that may carry images; the Leaf Admission Builder, the Leaf
+Store's boundary route, the **Speculative Canonical Prefill** and
+salvage-on-cancel read it with a text-only one (ADR-0094).
+_Avoid_: restore guard, boundary guards (the five spellings it replaced);
+cache hit (a hit can still be unusable).
+
+**Residual Prefill**:
+Restoring a snapshot a **Usable Restore** took — a **Prefix-View Checkpoint**
+through its **Backing Leaf** — and prefilling the rest of a leaf's path as text,
+for a producer that then stores the leaf: the Leaf Store's boundary route and
+the **Speculative Canonical Prefill**. A restore that throws drops the snapshot
+through the manager, the keyed turn's failed-restore policy (ADR-0094).
+_Avoid_: boundary re-prefill (one of its two producers); extension (the
+**Leaf Extension Admission** is an SSD payload form); re-prefill inside the
+**Leaf Admission** (it stays outside, ADR-0078).
+
 **Minimum Warm Offset**:
 The end of a request's last image run in its **Cache Key Space**, or zero for
 a text-only request. Below it a prefill must forward an **Image Span**; at or
