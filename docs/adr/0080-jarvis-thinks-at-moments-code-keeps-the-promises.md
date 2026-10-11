@@ -724,9 +724,11 @@ occurrence. What changed (ADR-0092):
   done on a day the series has since moved past. `followDoneOccurrences` and
   `DayState.follow` are gone. The must-do, a step's run, the Day Line's row
   and Today's Chat ask the Agenda.
-- **Taken back, Reminders is as it was.** The copy is deleted, then the
-  series is put back on the occurrence's date. That holds for the tick's
-  Undo, for unticking the task (a cue's Undo, Today's ring) and for
-  unticking the copy.
+- **Taken back, Reminders is as it was.** For an occurrence the Agenda
+  ticked off itself, the copy is deleted, then the series is put back on
+  the occurrence's date, while both are as the tick left them. That holds
+  for the tick's Undo, for unticking the task (a cue's Undo, Today's ring)
+  and for unticking the copy. Any other untick opens again only the
+  reminder it names: nothing the Agenda can't be sure it made is deleted.
 - The in-memory store also names an event by its start, as EventKit does,
   so a moved event gets a new id in the tests too.

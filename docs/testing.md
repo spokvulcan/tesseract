@@ -488,8 +488,10 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # a repeating task ticked off (ADR-0092: the day keeps the series and the
 # Agenda answers for its occurrence — the must-do done, the step in its slot,
 # its pace, Today's Chat's plan; the in-memory store keeps the copy and moves
-# the series on, as Reminders does; taken back by Undo, by unticking the task
-# or its copy, Reminders is as it was), a task re-dated from
+# the series on, as Reminders does; one the Agenda ticked off, overdue ones
+# too, taken back by Undo, by unticking the task or its copy, leaves
+# Reminders as it was; a one-off of its name, a copy ticked off elsewhere and
+# a series moved since are only opened again), a task re-dated from
 # Today, by the runtime's clock and never moving a repeating reminder's series
 # by accident (Tomorrow is the Step Cue's, at its own time of day; Move to
 # Today is a one-off task's; Later on a repeating reminder is a step half an

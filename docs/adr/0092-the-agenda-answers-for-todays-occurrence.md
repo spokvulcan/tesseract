@@ -57,19 +57,31 @@ could not see what the Mac sees.
    Line's row and Today's Chat all ask it. The Timeline shows the copy in
    the task's own slot, under the task's id (`TimelineTask.id`; `reminder`
    is what it shows).
-2. **One rule matches a copy to its series**, and the Agenda holds it
-   (`AgendaReminder.isDoneOccurrence(of:calendar:)`). The copy is done and
-   doesn't repeat, is in the series' list under its title, at the series'
-   time of day when it has one, and was done on a day the series has since
-   moved past. The copy is read from the snapshot, not caught where a click
-   completed it, so a tick on the phone counts too.
-3. **Taking an occurrence back leaves Reminders as it was**
-   (`Agenda.reopenOccurrence`). The copy is deleted, and then the series is
-   put back on the occurrence's date. In that order, a failure on the way
-   leaves at most one open reminder, never two. The tick's Undo carries the
-   occurrence (`AgendaUndo.reopenOccurrence`: the series, and its date
-   before the tick). Unticking the task or its copy (a cue's Undo, Today's
-   ring, an agent's tool) does the same (`doneOccurrence(touching:)`).
+2. **One rule says what a copy of a series looks like**, and the Agenda
+   holds it (`AgendaReminder.isDoneOccurrence(of:calendar:)`): done and not
+   repeating, in the series' list under its title, at the series' time of
+   day when it has one, and due before the series' next date. Reading the
+   day goes by it, from the snapshot, so a tick on the phone counts too. A
+   copy counts for the day it was done once nothing of its series is open
+   that day: an occurrence overdue from yesterday, ticked off late, moves a
+   daily series on only to today, where today's occurrence still waits.
+3. **Only what the Agenda ticked off itself is taken back as an
+   occurrence.** Right after its own tick of a repeating reminder, the
+   Agenda reads what the tick left (`Agenda.tickedOccurrence(of:since:)`):
+   the series moved on, and the copy done since the tick and due on the
+   occurrence's day. It keeps that in memory (`occurrencesTicked`) and in
+   the tick's Undo (`AgendaUndo.reopenOccurrence`). Taking it back
+   (`Agenda.takeBack`) deletes the copy, then puts the series back on the
+   occurrence's date — in that order, so a failure on the way leaves at
+   most one open reminder — and only while both are as the tick left them:
+   the series open where the tick moved it, the copy done or gone. The
+   tick's Undo, unticking the series that day (a cue's Undo, Today's ring)
+   and unticking the copy (an agent's tool) all take it back. **Every other
+   untick opens again just the reminder it names**: a one-off of the
+   series' name, a copy ticked off on the phone or before the app last
+   started, an occurrence whose series moved since. A copy may then be
+   open beside its series; data safety comes before tidiness, and nothing
+   the Agenda can't be sure it made is deleted.
 4. **The in-memory store behaves as the Mac's stores do, where the day can
    tell**: a repeating reminder ticked off leaves a done copy with an id of
    its own and the series moved on (as it already did), and an event's id
@@ -88,10 +100,13 @@ could not see what the Mac sees.
   after its save, which puts the matching rule in both adapters. It still
   could not link a copy ticked off on the phone, which the day has to see as
   well.
-- **Keep the copy's id in the tick's Undo.** The save doesn't return the
-  copy, so the Agenda would search for it either way. Searching when the
-  tick is taken back is the same search an untick needs, and it also finds a
-  copy made on another device.
+- **Find the copy when the tick is taken back**, by what it is (as first
+  built). It also took back a copy made on another device, but it could
+  take a one-off of the series' name for a copy: unticking "Call mom" done
+  today, beside a weekly "Call mom", deleted it and moved the series, and
+  the untick's Undo ticked off the series. Matching by completion day also
+  missed an overdue occurrence ticked off late. Reading may guess; deleting
+  may not.
 - **Detach or edit one occurrence in Reminders.** EventKit has no API for a
   reminder's occurrences: only the next one can be fetched.
 
@@ -106,10 +121,16 @@ could not see what the Mac sees.
     open reminder (`takenBackTheOccurrenceLeavesRemindersAsItWas`, "undo").
     Before, it reopened the series, which was already open, and the
     occurrence stayed done.
-  - Unticking a repeating task done today, by the task (a cue's Undo,
-    Today's ring) or by its copy, does the same (the same test, "the task"
-    and "the copy"). Before, the series was left as it was, or the copy was
-    reopened beside it.
+  - Unticking a repeating task the Agenda ticked off today, by the task (a
+    cue's Undo, Today's ring) or by its copy, does the same (the same test,
+    "the task" and "the copy"), an occurrence overdue and ticked off late
+    included (`overdue: true`). Before, the series was left as it was, or
+    the copy was reopened beside it.
+  - Any other untick opens again only the reminder it names, as before: a
+    one-off of the series' name (`aOneOffOfTheSeriesNameIsOnlyEverOpenedAgain`,
+    its Undo ticking the one-off off again), a copy ticked off elsewhere
+    (`aCopyTickedOffElsewhereIsOnlyOpenedAgain`), an occurrence whose series
+    moved since (`anOccurrenceChangedSinceItsTickIsOnlyOpenedAgain`).
   - So a must-do taken back is no longer done
     (`aMustDoTakenBackIsNotDoneAfterAll`).
   - Today's Chat's Morning Plan shows a repeating task ticked off as done,
@@ -119,6 +140,10 @@ could not see what the Mac sees.
   - In the in-memory store, an event moved to another time gets a new id,
     as it does in EventKit (`AgendaToolsTests`). This is for the tests only:
     the Mac's behaviour doesn't change.
+  - Looking a reminder up for a change (`AgendaStore.reminder(id:now:)`)
+    also finds one completed this second: it searched done reminders up to
+    `now`, so one ticked off at the same instant, on a test's fixed clock,
+    was missed (`aTickOnTodayGoesThroughTheEngineToReminders`).
 - What the 2026-10-10 amendment promised still holds, pinned through the
   Agenda and from snapshots (`DayEngineRepeatingTaskTests`). The must-do
   counts as done and its step is done in its slot, and the minutes it took
@@ -126,8 +151,17 @@ could not see what the Mac sees.
   because the must-do is today's. A task moved on undone, one that doesn't
   repeat, and an occurrence done another day are left as they are.
 - **Open risks.**
-  - Two repeating reminders with one title in one list and no time of day
-    can be taken for each other, as before.
+  - Reading still goes by what a copy looks like: two repeating reminders
+    with one title in one list and no time of day can be taken for each
+    other, and a one-off of a series' name done today can make that series,
+    held by the day, read done. Nothing is changed by it.
+  - A copy the Agenda didn't make — ticked off on the phone, or before the
+    app last started, since the record of its own ticks lives in memory —
+    opens again beside its series when unticked: two open reminders, which
+    the owner tidies in Reminders.
+  - If Reminders hasn't made the copy readable by the time the Agenda looks,
+    right after its tick, the Agenda keeps the occurrence without it: taking
+    it back moves the series back and leaves the copy done.
   - A copy with no completion date is not among the done reminders (they
     are read by completion date), so the day can't see it.
   - An account might complete the item itself and make a new reminder for
@@ -137,9 +171,10 @@ could not see what the Mac sees.
 
 ## As built
 
-- `Features/Companion/Agenda/Agenda+Occurrences.swift`: the matching rule,
-  the day's occurrence, and taking an occurrence back. `Agenda.swift`: a
-  tick's Undo and an untick of a repeating task go through the occurrence.
+- `Features/Companion/Agenda/Agenda+Occurrences.swift`: what a copy looks
+  like, the day's occurrence, what the Agenda's own tick left
+  (`TickedOccurrence`) and taking it back. `Agenda.swift`: the record of its
+  ticks, the tick's Undo, and an untick of an occurrence it ticked off.
   `AgendaStore.reminder(id:now:)` also finds a reminder completed this
   second.
 - `InMemoryAgendaStore.swift`: event ids name their start.
@@ -149,4 +184,5 @@ could not see what the Mac sees.
   the day holds.
 - `DayEngineRepeatingTaskTests` runs the engine and the Timeline from
   snapshots, and the Agenda over the in-memory store: a tick, a tick taken
-  back three ways, a must-do taken back, and Today's Chat's plan.
+  back three ways (today's occurrence and an overdue one), a must-do taken
+  back, Today's Chat's plan, and the unticks that only open again.

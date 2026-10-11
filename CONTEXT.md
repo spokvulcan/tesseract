@@ -1856,9 +1856,10 @@ One day's turn of a repeating reminder. Reminders keeps a repeating reminder as
 one item for its whole series, open on its next date: ticked off, the
 occurrence stays behind as a done copy of its own, and the series moves on.
 The day holds a repeating task by its series, and the Agenda answers for that
-day's occurrence: open, or done and when. Taken back, by an undo or by
-unticking it, Reminders is as it was: the series back on that date, the copy
-gone.
+day's occurrence: open, or done and when. One Tesseract ticked off, taken
+back by an undo or by unticking it, leaves Reminders as it was: the series
+back on that date, the copy gone. Any other untick opens again only the
+reminder unticked.
 _Avoid_: instance, the copy (it is how Reminders keeps a done occurrence).
 
 **Area**:
