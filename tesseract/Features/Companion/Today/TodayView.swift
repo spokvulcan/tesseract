@@ -178,8 +178,8 @@ private struct TodayDayPage: View {
         let state = runtime.state
         let facts = DayFacts(
             snapshot: agenda.snapshot, areas: agenda.areas, inboxListID: agenda.inbox?.id,
-            now: now, mustDoID: state.mustDoID, plan: state.plan, weekFocus: state.weekFocus,
-            departures: state.departures)
+            now: now, mustDoID: state.mustDoID, plan: state.plan.map(\.slot),
+            weekFocus: state.weekFocus, departures: state.departures)
         let timeline = TimelineBuilder.build(facts: facts)
         let isEvening = NowCardBuilder.isEvening(
             now, eveningMinutes: settings.companionEveningMinutes, calendar: facts.calendar)
@@ -189,8 +189,8 @@ private struct TodayDayPage: View {
                 companionOn: settings.companionHeartbeatEnabled,
                 planned: state.morningPlanAt != nil, wrappedUp: state.eveningWrapUpAt != nil,
                 eveningMinutes: settings.companionEveningMinutes,
-                inboxCount: TodaySideColumn.inbox(agenda: agenda, plan: state.plan).count,
-                startedSteps: state.startedSteps))
+                inboxCount: TodaySideColumn.inbox(agenda: agenda, plan: facts.plan).count,
+                steps: state.plan))
         // The Inbox's offers keep clear of the card's own.
         let offerFacts = card.reserving(facts)
         let motion: Animation? = reduceMotion ? nil : .smooth(duration: 0.25)
@@ -215,7 +215,7 @@ private struct TodayDayPage: View {
             .frame(maxWidth: TodayLayout.maxWidth, alignment: .leading)
             .frame(maxWidth: .infinity)
             // Steps move when the owner acts, not as the clock ticks.
-            .animation(motion, value: state.plan)
+            .animation(motion, value: facts.plan)
             .animation(motion, value: timeline.doneCount)
         }
         .onGeometryChange(for: TodayLayout.Width.self) { proxy in

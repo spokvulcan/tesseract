@@ -468,7 +468,10 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # once, and never while away, quiet, in a call, a game or a meeting, or over a
 # panel that is up — what came due meanwhile is cued late once the owner can
 # see it; a started step's check-in at its end, which no other start
-# interrupts; and what each choice does), the wind-down (one banner as quiet
+# interrupts; and what each choice does; a step moved by a new plan keeping
+# how often it was put off, one taken off the plan and put back starting
+# afresh), the day's saved state (a day saved while each step's life lived
+# in maps beside the plan loads into its steps), the wind-down (one banner as quiet
 # hours begin with the owner at the Mac), the Jarvis Panel's content over
 # fixture cards at the height it fits them (the plan's steps, the wrap-up's
 # leftovers; TEST_RUNNER_PANEL_GALLERY_DIR=<dir> writes the PNGs), the menu

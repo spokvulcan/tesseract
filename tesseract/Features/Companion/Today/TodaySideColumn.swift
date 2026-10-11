@@ -44,7 +44,7 @@ private struct InboxSection: View {
     private static let shown = 12
 
     var body: some View {
-        let items = TodaySideColumn.inbox(agenda: agenda, plan: runtime.state.plan)
+        let items = TodaySideColumn.inbox(agenda: agenda, plan: runtime.state.plan.map(\.slot))
         let shown = Array(items.prefix(Self.shown))
         let slots = InboxSlot.suggest(for: shown.map(\.id), facts: facts, evening: isEvening)
         let actions = TodayActions(agenda: agenda, runtime: runtime)

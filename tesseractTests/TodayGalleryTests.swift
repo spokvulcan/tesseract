@@ -340,13 +340,13 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
             state.morningPlanAt = Self.at(8, 18)
             state.mustDoID = "adr"
             state.plan = [
-                Placement(reminderID: "mail", start: Self.at(8, 30), minutes: 20),
-                Placement(reminderID: "pr", start: Self.at(8, 55), minutes: 30),
-                Placement(reminderID: "adr", start: Self.at(13, 45), minutes: 75),
+                Step("mail", at: Self.at(8, 30), minutes: 20),
+                Step("pr", at: Self.at(8, 55), minutes: 30),
+                Step("adr", at: Self.at(13, 45), minutes: 75),
             ]
             // At 14:20 the must-do is under way; unstarted, its cue was closed.
             if self == .focus || self == .inCall {
-                state.startedSteps = [StepCue.key(state.plan[2])]
+                state.plan[2] = state.plan[2].started(at: Self.at(13, 45))
             }
             state.cards = [
                 DayCard(
@@ -356,7 +356,7 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
                         MorningPlanCard(
                             line:
                                 "A light morning: two quick things before standup, and the ADR gets the quiet stretch after lunch.",
-                            mustDoID: "adr", placements: state.plan,
+                            mustDoID: "adr", placements: state.plan.map(\.slot),
                             suggestions: [
                                 "Start with mail while the coffee's hot.",
                                 "Rent takes two minutes; leave it for the evening.",
@@ -366,8 +366,8 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
             state.morningPlanAt = Self.at(8, 15)
             state.mustDoID = "adr"
             state.plan = [
-                Placement(reminderID: "anna", start: Self.at(13), minutes: 30),
-                Placement(reminderID: "rent", start: Self.at(13, 30), minutes: 15),
+                Step("anna", at: Self.at(13), minutes: 30),
+                Step("rent", at: Self.at(13, 30), minutes: 15),
             ]
             state.departures = [
                 Departure(
@@ -386,7 +386,8 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
                     isFallback: false,
                     body: .morningPlan(
                         MorningPlanCard(
-                            line: "A full day.", mustDoID: "adr", placements: state.plan,
+                            line: "A full day.", mustDoID: "adr",
+                            placements: state.plan.map(\.slot),
                             suggestions: [])),
                     dismissed: true),
                 DayCard(

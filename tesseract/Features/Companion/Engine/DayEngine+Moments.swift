@@ -336,15 +336,21 @@ nonisolated extension DayEngine {
             if let mustDo = card.mustDoID { setMustDo(mustDo, state: &state) }
             if !card.placements.isEmpty {
                 // A step the owner started and is still in keeps its slot.
-                let running = state.plan.filter { slot in
-                    state.startedSteps.contains(StepCue.key(slot)) && slot.start <= snapshot.now
-                        && snapshot.now
-                            < slot.start.addingTimeInterval(TimeInterval(slot.minutes * 60))
-                }
-                state.plan =
-                    (card.placements.filter { placement in
+                let running = state.plan.filter { $0.isUnderWay(at: snapshot.now) }
+                // A task the plan held already moves to its new slot, with
+                // what it carried.
+                let placed = card.placements
+                    .filter { placement in
                         !running.contains { $0.reminderID == placement.reminderID }
-                    } + running).sorted { $0.start < $1.start }
+                    }
+                    .map { placement -> Step in
+                        guard var step = state.step(placement.reminderID) else {
+                            return Step(placement)
+                        }
+                        step.reslot(placement)
+                        return step
+                    }
+                state.plan = (placed + running).sorted { $0.start < $1.start }
             }
             // Jarvis's own plan sets the day's departures, none included (a
             // class that went online); the code card leaves them be.
@@ -701,12 +707,16 @@ nonisolated extension DayEngine {
     /// A task's slot in today's plan, in place of any it had; one from now
     /// is started, and ends before the next meeting.
     private static func place(_ slot: Placement, snapshot: DaySnapshot, state: inout DayState) {
-        state.plan.removeAll { $0.reminderID == slot.reminderID }
-        state.plan.append(slot)
+        if let index = state.plan.firstIndex(where: { $0.reminderID == slot.reminderID }) {
+            state.plan[index].reslot(slot)
+        } else {
+            state.plan.append(Step(slot))
+        }
         state.plan.sort { $0.start < $1.start }
         guard slot.start <= snapshot.now.addingTimeInterval(60) else { return }
+        // Timed against the minutes it was given, before a meeting cuts them.
+        markStartedIfNow(slot.reminderID, snapshot: snapshot, state: &state)
         keepClear(slot.reminderID, snapshot: snapshot, state: &state)
-        markStartedIfNow(slot, snapshot: snapshot, state: &state)
     }
 
     /// A reply that landed after the 04:00 rollover (the lid closed on the

@@ -103,7 +103,7 @@ struct TodayRedatingTests {
         var state = DayState(day: DayKey(rawValue: "2026-10-01"))
         state.syncedNudgeIDs = []
         state.morningPlanAt = Self.at(7, day: 1)
-        state.plan = [Placement(reminderID: "plants", start: Self.at(8, day: 1), minutes: 15)]
+        state.plan = [Step("plants", at: Self.at(8, day: 1), minutes: 15)]
         let decision = DayEngine.decide(
             .cardAction(.tomorrow(reminderID: "plants")),
             snapshot: Self.snapshot(at: Self.at(10, day: 1), open: [Self.plants]), state: state)
@@ -238,10 +238,7 @@ struct TodayRedatingTests {
     @Test func laterOnARepeatingReminderIsAStepHalfAnHourOn() throws {
         let later = Self.later("pills", at: Self.at(10, 7, day: 1))
         #expect(Self.mutations(later.effects).isEmpty)
-        #expect(
-            later.state.plan == [
-                Placement(reminderID: "pills", start: Self.at(10, 37, day: 1), minutes: 15)
-            ])
+        #expect(later.state.plan == [Step("pills", at: Self.at(10, 37, day: 1), minutes: 15)])
         let cued = DayEngine.decide(
             .tick, snapshot: Self.snapshot(at: Self.at(10, 37, day: 1)), state: later.state)
         let cue = try #require(DayEngineStepCueTests.cues(cued.effects).first)
@@ -257,10 +254,7 @@ struct TodayRedatingTests {
             hasOtherAttendees: true)
         let later = Self.later("pills", at: Self.at(10, 7, day: 1), events: [review])
         #expect(Self.mutations(later.effects).isEmpty)
-        #expect(
-            later.state.plan == [
-                Placement(reminderID: "pills", start: Self.at(11, 15, day: 1), minutes: 15)
-            ])
+        #expect(later.state.plan == [Step("pills", at: Self.at(11, 15, day: 1), minutes: 15)])
     }
 
     /// A one-off reminder is still moved half an hour on: Reminders rings it
@@ -288,9 +282,7 @@ struct TodayRedatingTests {
         #expect(kept.due == Self.at(9, day: 1))
         #expect(kept.dueHasTime)
         #expect(
-            today.runtime.state.plan == [
-                Placement(reminderID: "pills", start: Self.at(10, 37, day: 1), minutes: 15)
-            ])
+            today.runtime.state.plan == [Step("pills", at: Self.at(10, 37, day: 1), minutes: 15)])
 
         // Taken at its cue: the series goes on tomorrow at 09:00.
         today.store.now = { Self.at(10, 40, day: 1) }

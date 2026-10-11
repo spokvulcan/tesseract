@@ -107,7 +107,7 @@ struct DayEngineMomentTests {
         #expect(Self.moments(prepared.effects).first?.trigger == .prepared)
         var made = prepared.state
         made.running = nil
-        made.plan = [Placement(reminderID: "R2", start: Self.local(30, 8), minutes: 30)]
+        made.plan = [Step("R2", at: Self.local(30, 8), minutes: 30)]
         let late = DayEngine.decide(
             .presenceReturned(awayFrom: Self.local(29, 23)),
             snapshot: Self.snapshot(at: Self.local(30, 14, 43)), state: made)
@@ -235,14 +235,15 @@ struct DayEngineMomentTests {
         var state = Self.state()
         state.morningPlanAt = Self.local(30, 7)
         state.running = .triage
-        state.plan = [Placement(reminderID: "R2", start: Self.local(30, 8), minutes: 30)]
+        state.plan = [Step("R2", at: Self.local(30, 8), minutes: 30)]
         state.cards = [
             DayCard(
                 id: "morningPlan-1", kind: .morningPlan, createdAt: Self.local(30, 7),
                 isFallback: false,
                 body: .morningPlan(
                     MorningPlanCard(
-                        line: "A day.", mustDoID: nil, placements: state.plan, suggestions: [])))
+                        line: "A day.", mustDoID: nil, placements: state.plan.map(\.slot),
+                        suggestions: [])))
         ]
         let back = DayEngine.decide(
             .presenceReturned(awayFrom: Self.local(29, 23)),
@@ -254,9 +255,7 @@ struct DayEngineMomentTests {
     @Test func aReplanKeepsTheStepTheOwnerIsIn() {
         // The gym, started at 09:00 for an hour; Jarvis's plan lands at 09:10.
         var state = Self.state()
-        let gym = Placement(reminderID: "R2", start: Self.local(30, 9), minutes: 60)
-        state.plan = [gym]
-        state.startedSteps = [StepCue.key(gym)]
+        state.plan = [Step("R2", at: Self.local(30, 9), minutes: 60).started(at: Self.local(30, 9))]
         let card = MorningPlanCard(
             line: "Review first.", mustDoID: "R1",
             placements: [Placement(reminderID: "R1", start: Self.local(30, 10, 30), minutes: 30)],
@@ -509,7 +508,7 @@ struct DayEngineMomentTests {
         let reply =
             #"{"line": "Good day: the PR is reviewed.", "leftovers": [{"id": "R1", "suggest": "drop"}]}"#
         var state = running(.eveningWrapUp)
-        state.plan = [Placement(reminderID: "R2", start: Self.local(30, 18), minutes: 45)]
+        state.plan = [Step("R2", at: Self.local(30, 18), minutes: 45)]
         let decided = DayEngine.decide(
             .momentOutcome(
                 MomentRequest(kind: .eveningWrapUp, trigger: .eveningTime, text: "x"),
@@ -580,9 +579,7 @@ struct DayEngineMomentTests {
             .cardAction(.place(reminderID: "R2", start: Self.local(30, 16), minutes: 30)),
             snapshot: Self.snapshot(at: Self.local(30, 11)), state: Self.state())
         #expect(
-            placed.state.plan == [
-                Placement(reminderID: "R2", start: Self.local(30, 16), minutes: 30)
-            ])
+            placed.state.plan == [Step("R2", at: Self.local(30, 16), minutes: 30)])
         let mustDo = DayEngine.decide(
             .cardAction(.setMustDo(reminderID: "R2")),
             snapshot: Self.snapshot(at: Self.local(30, 11)),
@@ -594,7 +591,7 @@ struct DayEngineMomentTests {
         var yesterday = Self.state(29)
         yesterday.carryOverForNextDay = "Pick up the spec where you left it."
         yesterday.mustDoID = "R1"
-        yesterday.plan = [Placement(reminderID: "R2", start: Self.local(29, 16), minutes: 30)]
+        yesterday.plan = [Step("R2", at: Self.local(29, 16), minutes: 30)]
         yesterday.lastPresentAt = Self.local(29, 23)
         let decision = DayEngine.decide(
             .tick, snapshot: Self.snapshot(at: Self.local(30, 6)), state: yesterday)
@@ -831,5 +828,64 @@ struct DayStateStoreTests {
         let old = try #require(store.load())
         #expect(old.mustDoID == "R2")
         #expect(old.agents.isEmpty)
+    }
+
+    /// A day saved while each step's life lived in maps beside the plan —
+    /// its start's marks by `id@epoch`, its end's by `id@epoch+minutes`,
+    /// put off and cut short by task, the cue on the panel by its key —
+    /// loads into the steps, once, and saves as steps.
+    @Test @MainActor func aDaySavedWithItsStepsInMapsLoadsThemIntoTheSteps() throws {
+        let url = makeTempDir("day-state").appendingPathComponent("day-state.json")
+        let earlier = """
+            {"day": "2026-09-30",
+             "plan": [
+               {"reminderID": "letter", "start": "2026-09-30T09:12:00Z", "minutes": 20},
+               {"reminderID": "deck", "start": "2026-09-30T09:35:00Z", "minutes": 50},
+               {"reminderID": "dentist", "start": "2026-09-30T14:30:00Z", "minutes": 15}],
+             "cuedSteps": {"letter@1790758200": "2026-09-30T08:50:00Z",
+                           "letter@1790759520": "2026-09-30T09:12:00Z",
+                           "letter@1790759520+20": "2026-09-30T09:32:00Z"},
+             "startedSteps": ["letter@1790759520"],
+             "startedMinutes": {"letter@1790759520": 20},
+             "smallStarts": [],
+             "putOff": {"deck": 2, "gym": 1},
+             "cutShort": {"deck": 15},
+             "cueOnPanel": "letter@1790759520+20"}
+            """
+        try Data(earlier.utf8).write(to: url)
+        let store = DayStateStore(url: url)
+        let state = try #require(store.load())
+        func at(_ stamp: String) -> Date? { ISO8601DateFormatter().date(from: stamp) }
+
+        // Started on its cue at 09:12, timed, its end checked in at 09:32.
+        let letter = try #require(state.step("letter"))
+        #expect(letter.cuedAt == at("2026-09-30T09:12:00Z"))
+        #expect(letter.isStarted)
+        #expect(letter.timedMinutes == 20)
+        #expect(letter.checkedInAt == at("2026-09-30T09:32:00Z"))
+        #expect(!letter.isSmall)
+        // Put off twice and cut short, by task.
+        let deck = try #require(state.step("deck"))
+        #expect(deck.putOff == 2)
+        #expect(deck.cutMinutes == 15)
+        #expect(deck.cuedAt == nil)
+        // Nothing yet for the dentist; the gym, put off but no longer
+        // planned, and the letter's earlier slot are let go.
+        let dentist = try #require(state.step("dentist"))
+        #expect(dentist == Step(dentist.slot))
+        #expect(state.plan.map(\.reminderID) == ["letter", "deck", "dentist"])
+        // The check-in on the panel, by its end's key.
+        #expect(state.cueOnPanel == CueOnPanel(reminderID: "letter", phase: .end))
+
+        // Saved again, it is steps alone, and loads the same.
+        store.save(state)
+        let saved = try #require(
+            JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        for key in [
+            "cuedSteps", "startedSteps", "startedMinutes", "smallStarts", "putOff", "cutShort",
+        ] {
+            #expect(saved[key] == nil, "\(key) is written no more")
+        }
+        #expect(store.load() == state)
     }
 }

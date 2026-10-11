@@ -101,10 +101,7 @@ nonisolated enum DayEngine {
             }
             // The panel closes with the Companion: its cue comes back by its
             // rules once the Companion is on again.
-            if let key = state.cueOnPanel {
-                state.cuedSteps[key] = nil
-                state.cueOnPanel = nil
-            }
+            state.uncuePanel()
             state.breakCuedAt = nil
 
         case .presenceReturned(let awayFrom):

@@ -56,12 +56,9 @@ struct DayEngineRepeatingTaskTests {
         state.syncedNudgeIDs = []
         state.morningPlanAt = at(8)
         state.mustDoID = "daily"
-        state.plan = [slot]
-        let key = StepCue.key(slot)
-        state.cuedSteps[key] = at(10)
-        state.startedSteps = [key]
-        state.startedMinutes[key] = 90
-        state.putOff["daily"] = 1
+        var step = Step(slot).started(at: at(10))
+        step.putOff = 1
+        state.plan = [step]
         return state
     }
 
@@ -72,12 +69,13 @@ struct DayEngineRepeatingTaskTests {
         let followed = Placement(reminderID: "daily-0930", start: Self.at(10), minutes: 90)
         #expect(state.mustDoID == "daily-0930")
         #expect(state.mustDoDoneAt == Self.at(11, 16))
-        #expect(state.plan == [followed])
-        #expect(state.startedSteps == [StepCue.key(followed)])
-        #expect(state.cuedSteps == [StepCue.key(followed): Self.at(10)])
-        #expect(state.putOff == ["daily-0930": 1])
+        let step = state.step("daily-0930")
+        #expect(state.plan.map(\.slot) == [followed])
+        #expect(step?.isStarted == true)
+        #expect(step?.cuedAt == Self.at(10))
+        #expect(step?.putOff == 1)
         // Started at 10:00 with 90 minutes, done at 11:15: the pace hears it.
-        #expect(state.startedMinutes.isEmpty)
+        #expect(step?.timedMinutes == nil)
         #expect(state.stepRuns.map(\.planned) == [90])
         #expect(state.stepRuns.map(\.actual) == [75])
         // The week's look-back counts the day's must-do done.
@@ -133,7 +131,7 @@ struct DayEngineRepeatingTaskTests {
             state: Self.state()
         ).state
         #expect(state.mustDoID == "daily")
-        #expect(state.plan == [Self.slot])
+        #expect(state.plan.map(\.slot) == [Self.slot])
         #expect(state.mustDoDoneAt == nil)
     }
 

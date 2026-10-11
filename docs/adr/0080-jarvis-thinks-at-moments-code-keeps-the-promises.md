@@ -10,7 +10,8 @@
   runs never reach the owner's data), ADR-0047 (the non-sandboxed agent),
   ADR-0031 (the trace vocabulary pattern)
 - Amended by: ADR-0090 (2026-10-10: the owner shows Jarvis pictures; the Day
-  Thread sees each in the turn it's shown)
+  Thread sees each in the turn it's shown); ADR-0091 (2026-10-11: a step is
+  one value in the day's state)
 
 ## Context
 

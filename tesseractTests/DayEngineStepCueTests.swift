@@ -67,9 +67,9 @@ struct DayEngineStepCueTests {
         state.lastPresentAt = local(11, 9)
         state.lastTickAt = local(11, 9)
         state.plan = [
-            Placement(reminderID: "letter", start: local(11, 10), minutes: 20),
-            Placement(reminderID: "deck", start: local(11, 35), minutes: 50),
-            Placement(reminderID: "dentist", start: local(16, 30), minutes: 15),
+            Step("letter", at: local(11, 10), minutes: 20),
+            Step("deck", at: local(11, 35), minutes: 50),
+            Step("dentist", at: local(16, 30), minutes: 15),
         ]
         return state
     }
@@ -104,7 +104,7 @@ struct DayEngineStepCueTests {
         let fields = try #require(Self.traced(.cuePresented, in: decision.effects))
         #expect(fields["late"] == .int(0))
         #expect(fields["minutes"] == .int(20))
-        #expect(decision.state.cuedSteps.count == 1)
+        #expect(decision.state.plan.filter { $0.cuedAt != nil }.map(\.reminderID) == ["letter"])
     }
 
     @Test func theMustDoSaysSo() throws {
@@ -336,17 +336,17 @@ struct DayEngineStepCueTests {
         let decision = DayEngine.decide(
             .tick, snapshot: Self.snapshot(at: Self.local(16, 30)), state: state)
         #expect(Self.cues(decision.effects).isEmpty)
-        #expect(decision.state.cuedSteps[StepCue.key(state.plan[2])] != nil)
+        #expect(decision.state.step("dentist")?.cuedAt == Self.local(16, 30))
     }
 
     @Test func aNewDayForgetsYesterdaysCues() {
         let cued = DayEngine.decide(
             .tick, snapshot: Self.snapshot(at: Self.local(11, 10)), state: Self.state())
-        #expect(!cued.state.cuedSteps.isEmpty)
+        #expect(cued.state.step("letter")?.cuedAt != nil)
         let morning = DayEngine.decide(
             .tick, snapshot: Self.snapshot(at: Self.local(9, day: 31), present: false),
             state: cued.state)
-        #expect(morning.state.cuedSteps.isEmpty)
+        #expect(morning.state.plan.isEmpty)
     }
 
     // MARK: The owner's choice
@@ -410,7 +410,7 @@ struct DayEngineStepCueTests {
             .cardAction(.step(reminderID: "letter", .undo)),
             snapshot: Self.snapshot(at: Self.local(11, 11), panelUp: true), state: done.state)
         #expect(undone.effects.contains(.mutateAgenda(.reopen(reminderID: "letter"))))
-        #expect(undone.state.cueOnPanel == StepCue.key(Self.state().plan[0]))
+        #expect(undone.state.cueOnPanel == CueOnPanel(reminderID: "letter", phase: .start))
         #expect(Self.traced(.cueReaction, in: undone.effects)?["action"] == .string("undo"))
         // Chosen again: Start starts it.
         let started = DayEngine.decide(
@@ -418,7 +418,7 @@ struct DayEngineStepCueTests {
             snapshot: Self.snapshot(at: Self.local(11, 12), panelUp: true), state: undone.state)
         #expect(started.state.cueOnPanel == nil)
         let slot = try #require(started.state.plan.first { $0.reminderID == "letter" })
-        #expect(started.state.startedSteps.contains(StepCue.key(slot)))
+        #expect(slot.isStarted)
     }
 
     @Test func aMustDoOpenAgainIsNotDoneAfterAll() {
@@ -631,7 +631,7 @@ struct DayEngineStepCueTests {
         let slot = try #require(state.plan.first { $0.reminderID == "deck" })
         #expect(slot.start == Self.local(11, 35))
         #expect(slot.minutes == 20)
-        #expect(state.cutShort["deck"] == 30)
+        #expect(slot.cutMinutes == 30)
     }
 
     @Test func itsCheckInComesBeforeTheMeetingAndGoesOnAfterIt() throws {
@@ -647,9 +647,9 @@ struct DayEngineStepCueTests {
         // started, and not put off.
         #expect(slot.start == Self.local(13))
         #expect(slot.minutes == 30)
-        #expect(!resumed.state.startedSteps.contains(StepCue.key(slot)))
-        #expect(resumed.state.cutShort["deck"] == nil)
-        #expect(resumed.state.putOff["deck"] == nil)
+        #expect(!slot.isStarted)
+        #expect(slot.cutMinutes == 0)
+        #expect(slot.putOff == 0)
         #expect(Self.traced(.cueReaction, in: resumed.effects)?["action"] == .string("resume"))
         // Nothing during the review; its start is cued once it is over.
         #expect(
@@ -667,7 +667,7 @@ struct DayEngineStepCueTests {
         let slot = try #require(moved.state.plan.first { $0.reminderID == "deck" })
         #expect(slot.start == Self.local(13))
         #expect(slot.minutes == 50)
-        #expect(moved.state.putOff["deck"] == nil)
+        #expect(slot.putOff == 0)
     }
 
     @Test func aMeetingThatMovedMeanwhileMakesItAQuarterHourMore() throws {
@@ -839,7 +839,7 @@ struct DayEngineStepCueTests {
         // Quiet until 08:00; the owner sat down at 06:12 and the plan put the
         // letter at 06:30.
         var state = Self.state()
-        state.plan = [Placement(reminderID: "letter", start: Self.local(6, 30), minutes: 20)]
+        state.plan = [Step("letter", at: Self.local(6, 30), minutes: 20)]
         state.lastTickAt = Self.local(6, 29)
         let asleep = DayEngine.decide(
             .tick, snapshot: Self.snapshot(at: Self.local(6, 30), quiet: (23 * 60, 8 * 60)),
@@ -851,13 +851,13 @@ struct DayEngineStepCueTests {
             state: state)
         #expect(try #require(Self.cues(up.effects).first).reminderID == "letter")
         // A daytime quiet window holds, sit-down or not.
-        state.plan = [Placement(reminderID: "letter", start: Self.local(13, 30), minutes: 20)]
+        state.plan = [Step("letter", at: Self.local(13, 30), minutes: 20)]
         let daytime = DayEngine.decide(
             .tick, snapshot: Self.snapshot(at: Self.local(13, 30), quiet: (13 * 60, 15 * 60)),
             state: state)
         #expect(Self.cues(daytime.effects).isEmpty)
         // The evening's quiet hours still hold.
-        state.plan = [Placement(reminderID: "letter", start: Self.local(23, 30), minutes: 20)]
+        state.plan = [Step("letter", at: Self.local(23, 30), minutes: 20)]
         let night = DayEngine.decide(
             .tick, snapshot: Self.snapshot(at: Self.local(23, 30), quiet: (23 * 60, 8 * 60)),
             state: state)
@@ -969,7 +969,7 @@ struct DayEngineStepCueTests {
         let deck = try #require(changed.state.plan.first { $0.reminderID == "deck" })
         #expect(deck.start == Self.local(11, 35))
         #expect(deck.minutes == 20)
-        #expect(changed.state.cutShort["deck"] == 30)
+        #expect(deck.cutMinutes == 30)
     }
 
     // MARK: Put off
@@ -977,7 +977,7 @@ struct DayEngineStepCueTests {
     /// The letter alone in the plan, its slot at 11:10.
     static func letterOnly() -> DayState {
         var state = state()
-        state.plan = [Placement(reminderID: "letter", start: local(11, 10), minutes: 20)]
+        state.plan = [Step("letter", at: local(11, 10), minutes: 20)]
         return state
     }
 
@@ -1003,12 +1003,66 @@ struct DayEngineStepCueTests {
         let tomorrow = DayEngine.decide(
             .tick, snapshot: Self.snapshot(at: Self.local(9, day: 31), present: false),
             state: state)
-        #expect(tomorrow.state.putOff.isEmpty)
+        #expect(tomorrow.state.plan.isEmpty)
+    }
+
+    /// The letter put off twice, by its cue.
+    static func putOffTwice() -> DayState {
+        var state = letterOnly()
+        var at = local(11, 10)
+        for _ in 0..<2 {
+            let up = tick(state, at: at)
+            #expect(cues(up.effects).first?.reminderID == "letter")
+            state =
+                DayEngine.decide(
+                    .cardAction(.step(reminderID: "letter", .later)), snapshot: snapshot(at: at),
+                    state: up.state
+                ).state
+            at = at.addingTimeInterval(15 * 60)
+        }
+        #expect(state.step("letter")?.putOff == 2)
+        return state
+    }
+
+    @Test func aPlanThatMovesAStepKeepsHowOftenItWasPutOff() throws {
+        // Jarvis's new plan moves the letter to 12:30: what its old start
+        // held goes, how often it was put off stays.
+        var state = Self.putOffTwice()
+        let card = MorningPlanCard(
+            line: "After lunch.", mustDoID: nil,
+            placements: [Placement(reminderID: "letter", start: Self.local(12, 30), minutes: 20)],
+            suggestions: [])
+        _ = DayEngine.accept(
+            .morningPlan(card), kind: .morningPlan, fallback: false,
+            snapshot: Self.snapshot(at: Self.local(11, 45)), state: &state)
+        let step = try #require(state.step("letter"))
+        #expect(step.start == Self.local(12, 30))
+        #expect(step.cuedAt == nil)
+        #expect(step.putOff == 2)
+        let cue = try #require(Self.cues(Self.tick(state, at: Self.local(12, 30)).effects).first)
+        #expect(cue.offersSmallStart)
+    }
+
+    /// A step lives in the plan: one taken off it and put back is a fresh
+    /// step, its put-off count begun again.
+    @Test func aStepTakenOffThePlanAndPutBackStartsAfresh() throws {
+        let off = DayEngine.decide(
+            .cardAction(.removeFromPlan(reminderID: "letter")),
+            snapshot: Self.snapshot(at: Self.local(11, 45)), state: Self.putOffTwice())
+        #expect(off.state.step("letter") == nil)
+        let back = DayEngine.decide(
+            .cardAction(.place(reminderID: "letter", start: Self.local(12, 30), minutes: 20)),
+            snapshot: Self.snapshot(at: Self.local(11, 46)), state: off.state)
+        #expect(back.state.step("letter") == Step("letter", at: Self.local(12, 30), minutes: 20))
+        let cue = try #require(
+            Self.cues(Self.tick(back.state, at: Self.local(12, 30)).effects).first)
+        #expect(cue.putOff == 0)
+        #expect(!cue.offersSmallStart)
     }
 
     @Test func fiveMinutesStartsTheStepAndThenAsksToKeepGoing() throws {
         var state = Self.letterOnly()
-        state.putOff = ["letter": 2]
+        state.plan[0].putOff = 2
         let up = Self.tick(state, at: Self.local(11, 10))
         #expect(try #require(Self.cues(up.effects).first).offersSmallStart)
         let small = DayEngine.decide(
@@ -1064,9 +1118,10 @@ struct DayEngineStepCueTests {
     @Test func theEveningWrapUpWaitsForAStepTheOwnerStarted() throws {
         // The letter, started at 20:50 for twenty minutes, runs over 21:00.
         var state = Self.letterOnly()
-        state.plan = [Placement(reminderID: "letter", start: Self.local(20, 50), minutes: 20)]
-        state.startedSteps = [StepCue.key(state.plan[0])]
-        state.cuedSteps = [StepCue.key(state.plan[0]): Self.local(20, 50)]
+        state.plan = [
+            Step("letter", at: Self.local(20, 50), minutes: 20)
+                .started(at: Self.local(20, 50), timed: false)
+        ]
         state.lastTickAt = Self.local(20, 59)
         let nine = Self.tick(state, at: Self.local(21))
         #expect(!nine.effects.contains { if case .runMoment = $0 { true } else { false } })
@@ -1116,7 +1171,7 @@ struct DayEngineStepCueTests {
                 done: [Self.done(Self.letter, at: Self.local(11, 38))]),
             state: Self.started())
         #expect(seen.state.stepRuns == [StepRun(planned: 20, actual: 26, at: Self.local(11, 38))])
-        #expect(seen.state.startedMinutes.isEmpty)
+        #expect(seen.state.step("letter")?.timedMinutes == nil)
         let fields = Self.traced(.cueTimed, in: seen.effects)
         #expect(fields?["planned"] == .int(20))
         #expect(fields?["actual"] == .int(26))
@@ -1131,14 +1186,14 @@ struct DayEngineStepCueTests {
                 done: [Self.done(Self.letter, at: Self.local(12, 30))]),
             state: Self.started())
         #expect(seen.state.stepRuns.isEmpty)
-        #expect(seen.state.startedMinutes.isEmpty)
+        #expect(seen.state.step("letter")?.timedMinutes == nil)
     }
 
     @Test func fiveMinutesStartedIsNotTimed() {
         let small = DayEngine.decide(
             .cardAction(.step(reminderID: "letter", .startSmall)),
             snapshot: Self.snapshot(at: Self.local(11, 11)), state: Self.cued())
-        #expect(small.state.startedMinutes.isEmpty)
+        #expect(small.state.step("letter")?.timedMinutes == nil)
     }
 
     @Test func runsAreKeptTwoWeeks() {
@@ -1156,8 +1211,8 @@ struct DayEngineStepCueTests {
     @Test func aStateSavedBeforeCuesStillLoads() throws {
         let json = #"{"day": "2026-09-30", "plan": []}"#
         let state = try JSONDecoder().decode(DayState.self, from: Data(json.utf8))
-        #expect(state.cuedSteps.isEmpty)
-        #expect(state.startedSteps.isEmpty)
+        #expect(state.plan.isEmpty)
+        #expect(state.cueOnPanel == nil)
         #expect(state.stepRuns.isEmpty)
     }
 }

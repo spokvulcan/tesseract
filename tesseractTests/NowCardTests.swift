@@ -23,11 +23,11 @@ struct NowCardTests {
 
     static func context(
         companionOn: Bool = true, planned: Bool = true, wrappedUp: Bool = false, inbox: Int = 0,
-        started: Set<String> = []
+        steps: [Step] = []
     ) -> NowCardBuilder.Context {
         NowCardBuilder.Context(
             companionOn: companionOn, planned: planned, wrappedUp: wrappedUp,
-            eveningMinutes: 21 * 60, inboxCount: inbox, startedSteps: started)
+            eveningMinutes: 21 * 60, inboxCount: inbox, steps: steps)
     }
 
     static func card(_ facts: DayFacts, _ context: NowCardBuilder.Context = context()) -> NowCard {
@@ -48,10 +48,10 @@ struct NowCardTests {
     }
 
     @Test func aStartedStepSaysHowMuchIsLeftAndIsOneClickFromDone() {
-        let started = StepCue.key(
-            Placement(reminderID: "dentist", start: Self.local(30, 11), minutes: 15))
+        let started = Step("dentist", at: Self.local(30, 11), minutes: 15)
+            .started(at: Self.local(30, 11))
         let card = Self.card(
-            Self.day(now: Self.local(30, 11, 5)), Self.context(started: [started]))
+            Self.day(now: Self.local(30, 11, 5)), Self.context(steps: [started]))
         #expect(card.headline == "Call the dentist")
         #expect(card.detail == "10 min left, until 11:15 · then 1:1 at 13:00")
         #expect(card.actions.map(\.kind) == [.complete(reminderID: "dentist")])
@@ -364,7 +364,7 @@ struct NowCardTests {
             ])
         // One yes puts them all in the plan, traced as one decision.
         var state = DayState(day: DayKey(rawValue: "2026-09-30"))
-        state.plan = facts.plan
+        state.plan = facts.plan.map(Step.init)
         let fitted = DayEngine.decide(
             .cardAction(.placeAll(card.offeredPlacements)),
             snapshot: DaySnapshot(
@@ -375,7 +375,7 @@ struct NowCardTests {
         #expect(
             fitted.effects.contains(.trace(.cardReaction, ["action": "fitted", "count": .int(3)])))
         // Rent's slot starts now: it is under way.
-        #expect(fitted.state.startedSteps.contains(StepCue.key(fitted.state.plan[0])))
+        #expect(fitted.state.plan[0].isStarted)
     }
 
     @Test func aPlansLineGoesStaleButTheEveningsHolds() {

@@ -152,7 +152,7 @@ nonisolated enum StepChoice: String, Sendable, Equatable {
 /// A planned step at its start or, once the owner started it, at its end,
 /// as the Jarvis Panel shows it.
 nonisolated struct StepCue: Sendable, Equatable {
-    enum Phase: String, Sendable, Equatable {
+    enum Phase: String, Sendable, Equatable, Codable {
         /// Its slot starts now.
         case start
         /// The slot the owner started is over: done, longer, or another day?
@@ -188,16 +188,6 @@ nonisolated struct StepCue: Sendable, Equatable {
     var offersSmallStart: Bool { phase == .start && putOff >= 2 }
 
     var end: Date { start.addingTimeInterval(TimeInterval(minutes * 60)) }
-
-    /// One slot, one cue: a task moved to another time is a new slot.
-    static func key(_ placement: Placement) -> String {
-        "\(placement.reminderID)@\(Int(placement.start.timeIntervalSince1970))"
-    }
-
-    /// One end, one check-in: a slot made longer has a new end.
-    static func endKey(_ placement: Placement) -> String {
-        "\(key(placement))+\(placement.minutes)"
-    }
 }
 
 /// A step the owner started whole and saw done in time: the minutes it
@@ -360,7 +350,7 @@ nonisolated struct DaySnapshot: Sendable, Equatable {
     func facts(state: DayState) -> DayFacts {
         var facts = DayFacts(
             snapshot: agenda, areas: areas, inboxListID: inboxListID, now: now,
-            calendar: calendar, mustDoID: state.mustDoID, plan: state.plan,
+            calendar: calendar, mustDoID: state.mustDoID, plan: state.plan.map(\.slot),
             weekFocus: state.weekFocus)
         facts.mustDoDays = state.mustDoDays
         facts.departures = state.departures
@@ -434,7 +424,8 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     var running: MomentKind?
     var cards: [DayCard] = []
     var mustDoID: String?
-    var plan: [Placement] = []
+    /// Today's plan: a step per task, in time order, each with its life.
+    var plan: [Step] = []
     /// When to leave for the day's events in person, from the plan.
     var departures: [Departure] = []
     /// Last night's carry-over note, for this day's opening.
@@ -463,25 +454,12 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     /// Event nudges already recorded as delivered (carried: a nudge stays in
     /// Notification Center past midnight).
     var firedNudgeIDs: Set<String> = []
-    /// Planned slots whose start was cued, by `StepCue.key`, and whose end
-    /// was checked in, by `StepCue.endKey`, with when.
-    var cuedSteps: [String: Date] = [:]
-    /// Slots the owner started (Start on a cue, Start now on Today), by
-    /// `StepCue.key`: their end checks in.
-    var startedSteps: Set<String> = []
-    /// How often today each task was put off on its cue ("In 15 min").
-    var putOff: [String: Int] = [:]
-    /// Five-minute starts, by `StepCue.key`: their end asks to keep going.
-    var smallStarts: Set<String> = []
-    /// Minutes taken off a step so it ends before the next meeting, by task:
-    /// going on after the meeting gives them back.
-    var cutShort: [String: Int] = [:]
     /// The moment running, as asked, and since when: one that stays quiet
     /// is given up on, and a reply to one given up on doesn't end another.
     var runningRequest: MomentRequest?
     var runningSince: Date?
-    /// The cue on the panel now, by its key, until the owner answers it.
-    var cueOnPanel: String?
+    /// The Step Cue on the panel now, until the owner answers it.
+    var cueOnPanel: CueOnPanel?
     /// Tasks the Night Reflection proposed, until the owner decides (kept
     /// that night and the next day).
     var taskProposals: [TaskProposal] = []
@@ -521,9 +499,6 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     var breakCuedAt: Date?
     /// Break Cues shown today: each says something different.
     var breakCues = 0
-    /// Steps started whole (Start, Start now), by `StepCue.key`, with their
-    /// minutes then: once seen done, how long they took joins `stepRuns`.
-    var startedMinutes: [String: Int] = [:]
     /// Planned against actual minutes of the steps the owner started and saw
     /// done in time (carried two weeks, the last 30): the Morning Plan sizes
     /// slots by them.
@@ -538,12 +513,19 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         case day, syncedNudgeIDs, lastPresentAt, morningPlanAt, eveningWrapUpAt, nightReflectionAt
         case running, cards, mustDoID, plan, carryOver, carryOverForNextDay, ledger, agents
         case agentSpokenAt, lastTickAt, lastTriageAt, whereYouWere, deferred, firedNudgeIDs
-        case cuedSteps, startedSteps, interrupted, morningPlanResumed, windDownAt
+        case interrupted, morningPlanResumed, windDownAt
         case draft, draftForNextDay, departures, satDownAt, weekFocus
         case weekFocusSetAt, mustDoDoneAt, mustDoDays, cueOnPanel, taskProposals
-        case putOff, smallStarts, lastActiveAt, nightMeasured, morningPlanWaiting, cutShort
+        case lastActiveAt, nightMeasured, morningPlanWaiting
         case runningRequest, runningSince, sittingSince, breakNotBefore, breakCuedAt, breakCues
-        case startedMinutes, stepRuns
+        case stepRuns
+    }
+
+    /// Where a state saved before steps held their life kept it: in maps
+    /// beside the plan, by task or by slot (`id@epoch`; an end's check-in
+    /// `id@epoch+minutes`). Read once, into the steps; never written.
+    private enum EarlierStepKeys: String, CodingKey {
+        case cuedSteps, startedSteps, putOff, smallStarts, cutShort, startedMinutes
     }
 
     /// Every field but the day is optional on disk, so a state saved by an
@@ -559,7 +541,7 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         running = try c.decodeIfPresent(MomentKind.self, forKey: .running)
         cards = (try? c.decodeIfPresent([DayCard].self, forKey: .cards)) ?? []
         mustDoID = try c.decodeIfPresent(String.self, forKey: .mustDoID)
-        plan = (try? c.decodeIfPresent([Placement].self, forKey: .plan)) ?? []
+        plan = Self.oneStepPerTask((try? c.decodeIfPresent([Step].self, forKey: .plan)) ?? [])
         carryOver = try c.decodeIfPresent(String.self, forKey: .carryOver)
         carryOverForNextDay = try c.decodeIfPresent(String.self, forKey: .carryOverForNextDay)
         ledger = (try? c.decodeIfPresent(SeenLedger.self, forKey: .ledger)) ?? SeenLedger()
@@ -570,8 +552,6 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         whereYouWere = try c.decodeIfPresent(String.self, forKey: .whereYouWere)
         deferred = (try? c.decodeIfPresent(Set<MomentKind>.self, forKey: .deferred)) ?? []
         firedNudgeIDs = (try? c.decodeIfPresent(Set<String>.self, forKey: .firedNudgeIDs)) ?? []
-        cuedSteps = (try? c.decodeIfPresent([String: Date].self, forKey: .cuedSteps)) ?? [:]
-        startedSteps = (try? c.decodeIfPresent(Set<String>.self, forKey: .startedSteps)) ?? []
         interrupted = try? c.decodeIfPresent(MomentKind.self, forKey: .interrupted)
         morningPlanResumed =
             (try? c.decodeIfPresent(Bool.self, forKey: .morningPlanResumed)) ?? false
@@ -584,12 +564,9 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         weekFocusSetAt = try? c.decodeIfPresent(Date.self, forKey: .weekFocusSetAt)
         mustDoDoneAt = try? c.decodeIfPresent(Date.self, forKey: .mustDoDoneAt)
         mustDoDays = (try? c.decodeIfPresent([String: Bool].self, forKey: .mustDoDays)) ?? [:]
-        cueOnPanel = try? c.decodeIfPresent(String.self, forKey: .cueOnPanel)
+        cueOnPanel = try? c.decodeIfPresent(CueOnPanel.self, forKey: .cueOnPanel)
         taskProposals =
             (try? c.decodeIfPresent([TaskProposal].self, forKey: .taskProposals)) ?? []
-        putOff = (try? c.decodeIfPresent([String: Int].self, forKey: .putOff)) ?? [:]
-        smallStarts = (try? c.decodeIfPresent(Set<String>.self, forKey: .smallStarts)) ?? []
-        cutShort = (try? c.decodeIfPresent([String: Int].self, forKey: .cutShort)) ?? [:]
         runningRequest = try? c.decodeIfPresent(MomentRequest.self, forKey: .runningRequest)
         runningSince = try? c.decodeIfPresent(Date.self, forKey: .runningSince)
         lastActiveAt = try? c.decodeIfPresent(Date.self, forKey: .lastActiveAt)
@@ -600,9 +577,53 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         breakNotBefore = try? c.decodeIfPresent(Date.self, forKey: .breakNotBefore)
         breakCuedAt = try? c.decodeIfPresent(Date.self, forKey: .breakCuedAt)
         breakCues = (try? c.decodeIfPresent(Int.self, forKey: .breakCues)) ?? 0
-        startedMinutes =
-            (try? c.decodeIfPresent([String: Int].self, forKey: .startedMinutes)) ?? [:]
         stepRuns = (try? c.decodeIfPresent([StepRun].self, forKey: .stepRuns)) ?? []
+        let earlier = try decoder.container(keyedBy: EarlierStepKeys.self)
+        readEarlierSteps(
+            earlier, cueOnPanel: try? c.decodeIfPresent(String.self, forKey: .cueOnPanel))
+    }
+
+    /// The plan holds at most one step per task: of two saved for one, the
+    /// first, as every reader took it.
+    private static func oneStepPerTask(_ steps: [Step]) -> [Step] {
+        var seen = Set<String>()
+        return steps.filter { seen.insert($0.reminderID).inserted }
+    }
+
+    /// A state saved before steps held their life: what its maps knew of
+    /// each slot still in the plan goes into its step — the start's marks
+    /// by `id@epoch`, the end's check-in by `id@epoch+minutes`, what was put
+    /// off or cut by task — and the cue on the panel, saved by its key,
+    /// becomes the step's start or end. Marks of slots no longer planned
+    /// are let go: nothing read them but the cue's reaction time.
+    private mutating func readEarlierSteps(
+        _ earlier: KeyedDecodingContainer<EarlierStepKeys>, cueOnPanel cueKey: String?
+    ) {
+        func read<T: Decodable>(_ type: T.Type, _ key: EarlierStepKeys) -> T? {
+            try? earlier.decodeIfPresent(type, forKey: key)
+        }
+        let cued = read([String: Date].self, .cuedSteps) ?? [:]
+        let started = read(Set<String>.self, .startedSteps) ?? []
+        let small = read(Set<String>.self, .smallStarts) ?? []
+        let putOff = read([String: Int].self, .putOff) ?? [:]
+        let cut = read([String: Int].self, .cutShort) ?? [:]
+        let timed = read([String: Int].self, .startedMinutes) ?? [:]
+        for index in plan.indices {
+            let step = plan[index]
+            let key = "\(step.reminderID)@\(Int(step.start.timeIntervalSince1970))"
+            let endKey = "\(key)+\(step.minutes)"
+            if let at = cued[key] { plan[index].cuedAt = at }
+            if started.contains(key) { plan[index].isStarted = true }
+            if small.contains(key) { plan[index].isSmall = true }
+            if let minutes = timed[key] { plan[index].timedMinutes = minutes }
+            if let at = cued[endKey] { plan[index].checkedInAt = at }
+            if let count = putOff[step.reminderID] { plan[index].putOff = count }
+            if let minutes = cut[step.reminderID] { plan[index].cutMinutes = minutes }
+            if cueKey == key { cueOnPanel = CueOnPanel(reminderID: step.reminderID, phase: .start) }
+            if cueKey == endKey {
+                cueOnPanel = CueOnPanel(reminderID: step.reminderID, phase: .end)
+            }
+        }
     }
 
     /// The day as a relaunch finds it: the moment in flight never finished,
@@ -618,12 +639,26 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         state.runningSince = nil
         for index in state.cards.indices { state.cards[index].isRefining = false }
         // The cue on the panel went with the app: it comes back by its rules.
-        if let key = state.cueOnPanel {
-            state.cuedSteps[key] = nil
-            state.cueOnPanel = nil
-        }
+        state.uncuePanel()
         state.breakCuedAt = nil
         return state
+    }
+
+    /// The step `reminderID` names in today's plan.
+    func step(_ reminderID: String) -> Step? {
+        plan.first { $0.reminderID == reminderID }
+    }
+
+    /// The Step Cue on the panel came off it unanswered (a card took the
+    /// panel, the app quit, the Companion went off): its step is cued again
+    /// by its rules.
+    mutating func uncuePanel() {
+        if let cue = cueOnPanel,
+            let index = plan.firstIndex(where: { $0.reminderID == cue.reminderID })
+        {
+            plan[index].uncue(cue.phase)
+        }
+        cueOnPanel = nil
     }
 
     /// The next day's state: what must survive the rollover survives.
@@ -678,30 +713,13 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
 
     /// What the day holds of a repeating task, moved from its series to the
     /// occurrence ticked off today (`DayEngine.followDoneOccurrences`): the
-    /// must-do, the plan's slots, and the steps cued, started, put off, made
-    /// small or cut short, by task or by `StepCue.key`.
+    /// must-do, its step with all its life, and its cue on the panel.
     mutating func follow(series: String, to occurrence: String) {
         if mustDoID == series { mustDoID = occurrence }
         for index in plan.indices where plan[index].reminderID == series {
-            plan[index].reminderID = occurrence
+            plan[index].follow(to: occurrence)
         }
-        let prefix = "\(series)@"
-        func moved(_ key: String) -> String {
-            key.hasPrefix(prefix) ? "\(occurrence)@\(key.dropFirst(prefix.count))" : key
-        }
-        cuedSteps = Dictionary(
-            cuedSteps.map { (moved($0.key), $0.value) }, uniquingKeysWith: { max($0, $1) })
-        startedSteps = Set(startedSteps.map(moved))
-        smallStarts = Set(smallStarts.map(moved))
-        startedMinutes = Dictionary(
-            startedMinutes.map { (moved($0.key), $0.value) }, uniquingKeysWith: { max($0, $1) })
-        cueOnPanel = cueOnPanel.map(moved)
-        if let count = putOff.removeValue(forKey: series) {
-            putOff[occurrence, default: 0] += count
-        }
-        if let minutes = cutShort.removeValue(forKey: series) {
-            cutShort[occurrence, default: 0] += minutes
-        }
+        if cueOnPanel?.reminderID == series { cueOnPanel?.reminderID = occurrence }
     }
 
     /// The day key a week before `day`: older must-dos leave the record.

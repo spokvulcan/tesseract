@@ -63,9 +63,9 @@ nonisolated enum NowCardBuilder {
         var wrappedUp: Bool
         var eveningMinutes: Int
         var inboxCount: Int = 0
-        /// The slots the owner started, by `StepCue.key`: one whose time
-        /// is now is under way; one not started is offered to start.
-        var startedSteps: Set<String> = []
+        /// The day's steps: one the owner started whose time is now is
+        /// under way; one not started is offered to start.
+        var steps: [Step] = []
     }
 
     static let maxActions = 3
@@ -166,8 +166,10 @@ nonisolated enum NowCardBuilder {
             return start <= now && end(of: task) > now
         }) {
             let start = task.start ?? now
-            let slot = Placement(reminderID: task.id, start: start, minutes: task.minutes)
-            guard context.startedSteps.contains(StepCue.key(slot)) else {
+            let started = context.steps.contains {
+                $0.reminderID == task.id && $0.start == start && $0.isStarted
+            }
+            guard started else {
                 return NowCard(
                     headline: task.reminder.title,
                     detail: joined(

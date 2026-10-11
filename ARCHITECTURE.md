@@ -145,7 +145,7 @@ tesseract/
 │   ├── Companion/                     # Jarvis: the owner's day (ADR-0080)
 │   │   ├── Agenda/                    # Reminders + Calendar port (EventKit, in-memory), facade, tools, Areas
 │   │   ├── Capture/                   # Capture parser, capture door, hotkey panel
-│   │   ├── Engine/                    # Day Engine (pure decider), Delivery Ladder, governor, nudges
+│   │   ├── Engine/                    # Day Engine (pure decider), the Step, Delivery Ladder, governor, nudges
 │   │   ├── Moments/                   # Moments, cards, prompts, card parsing, fallbacks
 │   │   ├── Thread/                    # Day Thread: one conversation per day on its own agent; pictures seen in their turn; moments read back
 │   │   ├── Loop/                      # Companion runtime: gather → decide → perform, day state
@@ -660,7 +660,11 @@ Cards reach the owner through the **Delivery Ladder**: the glyph, the **Jarvis
 Panel** (`Platform/GlassPanel.swift`, a borderless non-activating panel over
 `NSGlassEffectView`), a banner, or voice. The day's plan keeps its own time:
 when a planned slot starts and the owner is at the Mac, the engine puts it on
-the panel as a **Step Cue** (`DayEngine+Steps`), built by code. The system prompt carries no time;
+the panel as a **Step Cue** (`DayEngine+Steps`), built by code. The plan is a
+list of **Steps** (`Step`, ADR-0091): a task's slot and its life that day —
+cued, started, checked in, put off, cut short — each part bound to the
+step's start, its end or its task, so moving a step is one operation that
+keeps what goes with it. The system prompt carries no time;
 every user message carries a stored **Now Tag**. Other apps' banners are sorted
 by code on arrival (`NotificationSources`: a person, an app's news, or noise —
 the system's banners and games, recognised by `AppIdentityResolver`), so only

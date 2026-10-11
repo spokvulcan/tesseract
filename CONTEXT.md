@@ -1869,6 +1869,17 @@ joining is one click. Reminders with a due time need none: they carry their own
 alarm, delivered by Reminders on every device.
 _Avoid_: wake (retired), alert (unqualified).
 
+**Step**:
+One task's slot in today's plan, and what became of it that day: cued at its
+start, started, checked in at its end, put off, cut short before a meeting. The
+plan holds one step per task. A step moved to a new start is cued anew, as if
+just planned there; one made longer or shorter checks in again at its new end;
+how often it was put off, and the minutes a meeting cut from it, go with it
+wherever it moves that day. A task taken off the plan and put back is a fresh
+step.
+_Avoid_: slot (a step's time alone), placement (a slot a plan or an offer
+proposes), task (the reminder itself).
+
 **Step Cue**:
 A planned step put on the Jarvis Panel when its slot starts and the owner is at
 the Mac: the task, until when and what follows, with Start (the slot starts

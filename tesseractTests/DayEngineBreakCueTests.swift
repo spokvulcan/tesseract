@@ -177,10 +177,10 @@ struct DayEngineBreakCueTests {
     /// later.
     static func onAStep(minutes: Int = 30) -> DayState {
         var state = state()
-        let slot = Placement(reminderID: "letter", start: local(10, 45), minutes: minutes)
-        state.plan = [slot]
-        state.startedSteps = [StepCue.key(slot)]
-        state.cuedSteps[StepCue.key(slot)] = local(10, 45)
+        state.plan = [
+            Step("letter", at: local(10, 45), minutes: minutes)
+                .started(at: local(10, 45), timed: false)
+        ]
         return state
     }
 
@@ -207,7 +207,6 @@ struct DayEngineBreakCueTests {
         #expect(Self.steps(midway.effects).isEmpty)
         let taken = Self.answer(.taking, midway.state, at: Self.local(11, 1))
         #expect(taken.state.plan == Self.onAStep(minutes: 150).plan)
-        #expect(taken.state.startedSteps == Self.onAStep(minutes: 150).startedSteps)
         // The step still checks in at its end.
         let end = Self.tick(taken.state, at: Self.local(13, 15))
         #expect(Self.steps(end.effects).first?.phase == .end)
@@ -216,7 +215,7 @@ struct DayEngineBreakCueTests {
 
     @Test func aBreakComesBeforeTheNextStepStarts() throws {
         var state = Self.state()
-        state.plan = [Placement(reminderID: "letter", start: Self.local(11), minutes: 30)]
+        state.plan = [Step("letter", at: Self.local(11), minutes: 30)]
         let first = Self.tick(state, at: Self.local(11))
         #expect(Self.breaks(first.effects).count == 1)
         #expect(Self.steps(first.effects).isEmpty)
