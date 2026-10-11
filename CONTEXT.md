@@ -599,8 +599,8 @@ cache; restore, where the **Cache Claim** is asked for the resolved snapshot
 and a restore that yields no cache falls back to the planner's cold prefill
 (ADR-0069 amendment); or whole prompt, where the Speculation Plan's iterator
 prefills the whole prompt into a fresh cache.
-_Avoid_: restore mode (what the restore turned out to be, an execution
-report); opening, unqualified (the Companion's **Day Opening**); restore
+_Avoid_: restore mode (what the restore turned out to be: the **Turn
+Restore**); opening, unqualified (the Companion's **Day Opening**); restore
 shape (the five shapes are products of the opening and the forward).
 
 **Usable Restore**:
@@ -908,6 +908,19 @@ keys (ADR-0070).
 _Avoid_: request context, keyed turn; a fact re-derived at a call site (the
 defect class the value exists to end); the request's own image list as
 "text-only" (request intent, not instance truth).
+
+**Turn Restore**:
+How one keyed turn's cache actually opened, as plan application carried out
+its **Cache Opening**: cold; by **Leaf Handoff**, holding the lease; by copy,
+with the **Cache Claim**'s reason for not handing the leaf over and what a
+**Pending-Payload Wait** cost; or failed then cold, a planned restore that
+yielded no cache, so the turn re-planned cold. The one value every report of
+the turn reads: the `lookup` line, the `restored` phase of `requestMemory`,
+the `leafStore` report, and the stored leaf's source, which the
+**Active-Inference Reserve** prices a lane by (ADR-0069 amendment).
+_Avoid_: restore mode (its wire string, which reads `failedCopy` for the
+last); restore outcome (the claim's check-out answer, one input to it);
+**Cache Opening** (the plan's intent, decided before the check-out).
 
 **Completion Trace Accumulator**:
 The fold of one cache-aware **Server Completion**'s trace facts into the terminal

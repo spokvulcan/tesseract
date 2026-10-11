@@ -397,7 +397,11 @@ fails the boundary route's restore of a planned branch view and
 `SpeculativePrefillPreemptionTests.aBoundaryThatFailsToRestoreIsDropped` the
 speculative pass's; each checks the `unrestorable-snapshot` line before the
 producer's own, and that the view or leaf is gone. The rule both read,
-`PrefillPlanner.usableRestore`, is a table in `PrefillPlannerTests`.
+`PrefillPlanner.usableRestore`, is a table in `PrefillPlannerTests`. What a
+turn's restore turned out to be is one `TurnRestore` (ADR-0069's 2026-10-11
+amendment); `TurnRestoreTests` tables every outcome's projections (the wire
+mode, the `restored` phase's facts, the `leafStore` fields, and the stored
+leaf's source on every path) without running a completion.
 
 `CacheClaimMemoryEvidenceTests` measures the MLX peak around one step at a time
 on synthetic caches: check-in before extraction, a refused check-in, the

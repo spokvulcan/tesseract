@@ -328,3 +328,49 @@ the snapshot is dropped through the manager and the one
 `prefill-threw` or `restore-failed` line. The keyed turn's checkpoint re-plan
 runs in the policy's MainActor hop, as it did in its own. A request-local view
 reports `drop=notFound`.
+
+## Amendment 2026-10-11: one Turn Restore feeds every report of the turn
+
+Decision 2's typed outcome stopped at plan application. There it was
+flattened into the `restoreMode` wire string and four loose values (the copy,
+the wait, the handoff and a fallback flag), and those were projected again,
+each its own way, into the `restored` memory phase, the `lookup` event, the
+generation value, the Leaf Store's context and the `leafStore` report, which
+the drive patched afterwards. The stored leaf's source matched the string.
+
+1. **One value.** Plan application turns the check-out answer and what the
+   restore yielded into one **Turn Restore** (`TurnRestore`): cold; handoff,
+   with the lease, the rewind backup's bytes and the wait; copy, with the
+   claim's `Copy` (none when the claim had nothing to check out); or failed
+   then cold, with the claim's copy answer from before the restore failed.
+   What the failed restore threw and dropped stays the failed-restore
+   policy's own line; nothing else reads it, so the value does not carry it.
+2. **Every report reads it.** Its `mode` is the `restoreMode` wire string,
+   `failedCopy` included (decision 8). Its `memoryFacts` are the `restored`
+   phase's restore facts. The `lookup` event's restore fields, the
+   `leafStore` report's `restoreMode`, `copyReason`, `copyRefusal` and
+   `copyWaitMs`, the trace record's emitted-path `restoreMode`, and the
+   stored leaf's source (`LeafStorePhase.Report.Source.stored`), which the
+   **Active-Inference Reserve** prices a lane by, all take it in place of the
+   string. The generation value and the Leaf Store's context carry it. The
+   claim's own rewind report says `handoff` through it.
+3. **Byte-identical.** No line changes with this step. The two projections
+   that had drifted are fixed in their own declared steps below.
+
+`TurnRestoreTests` is the projection table: every outcome against its wire
+mode, its memory facts, its fallback flag and its `leafStore` fields, and the
+stored leaf's source for every path. The whole-completion suites
+(`ServerCompletionRestoreFallbackTests`, `CacheClaimTests`) still check that
+plan application produces the outcome.
+
+Not built from the proposal this step came from: one per-turn report, grown
+from the **Completion Trace Accumulator**, that renders the `lookup` line, the
+memory phases, the one `leafStore` event, the reserve source and the trace
+record in one place; the claim reporting its rewinds into that report rather
+than building its own `leafStore`; a trivial report for an **Unkeyed
+Completion** in place of its stand-in `lookupReason: .missNoEntries`; and one
+home for the handoff scope, which the check-out, the Leaf Admission's move
+and the Leaf Store's copy reason each spell (an MTP turn's copied leaf has no
+copy reason). Each moves where lines are written, which the byte-identical
+bar pins line by line; they were left for a change that can run the
+before-and-after diagnostics diff on them alone.

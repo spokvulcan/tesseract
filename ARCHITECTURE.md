@@ -166,6 +166,7 @@ tesseract/
 │   │   ├── CompletionRoute.swift      # Pure cache-aware vs standard decision
 │   │   ├── ServerCompletion.swift     # Actor-confined cache-aware execution module
 │   │   ├── CacheClaim.swift          # Cache Claim: a request's lane, pins and Leaf Lease; check-out, check-in, rewind; one conclusion (ADR-0069)
+│   │   ├── TurnRestore.swift         # Turn Restore: how a keyed turn's cache opened; every report of the turn reads it (ADR-0069)
 │   │   ├── LeafLease.swift           # Scalar lease identity, shared tree/writer exclusion, exact recurrent rewind
 │   │   ├── PrefixCacheManager.swift   # Radix-tree KV snapshot cache (RAM tier)
 │   │   ├── SSDSnapshotStore.swift     # SSD tier: writer queue + body I/O
@@ -623,7 +624,10 @@ replay allocated multi-gigabyte synthetic arrays and blocked MainActor
 pressure response and SSD demotion remain active. Each keyed request holds one
 Cache Claim (`CacheClaim`, ADR-0069): its reserve lane, its Restore Pins and,
 after a Leaf Handoff, its Leaf Lease, concluded exactly once inside the
-request's LLM gate turn. Whether a snapshot can seed a prefill is one rule,
+request's LLM gate turn. Its check-out answer and what the restore yielded
+are the turn's one Turn Restore (`TurnRestore`), which the `lookup` line, the
+memory phases, the `leafStore` report and the leaf's reserve source all read.
+Whether a snapshot can seed a prefill is one rule,
 the Usable Restore (`PrefillPlanner.usableRestore`), read by the keyed turn's
 plan and every re-prefill; the Leaf Store's boundary route and the Speculative
 Canonical Prefill restore a prefix and extend it through `ResidualPrefill`, and

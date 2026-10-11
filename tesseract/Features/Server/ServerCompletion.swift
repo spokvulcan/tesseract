@@ -124,16 +124,11 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     /// once `completion` has finished — the tail of the turn's **Emitted
     /// Path**, which the live leaf is keyed on and the index registers.
     let generatedTokens: GeneratedTokenRecorder
-    /// How the request restored (`cold`, `copy`, `failedCopy`, `handoff`),
-    /// as the claim's check-out decided it — one input to the stored
-    /// leaf's source.
-    var restoreMode = "cold"
-    /// Why a copy restore did not take the leaf; `nil` unless the check-out
-    /// answered copy.
-    var restoreCopy: CacheClaim.Copy?
-    /// Seconds a Pending-Payload Wait cost, whether it ended in a copy or
-    /// a handoff (#523).
-    var restoreWaitSeconds: TimeInterval = 0
+    /// How the request's cache opened (**Turn Restore**): the claim's
+    /// check-out and what the restore yielded — what the `leafStore` report
+    /// says, and one input to the stored leaf's source. `.cold` for a turn
+    /// that planned no restore, an Unkeyed Completion included.
+    var restore = TurnRestore.cold
 }
 
 /// All copies of the generation handle share this one reference. Handoff
@@ -1047,10 +1042,7 @@ nonisolated final class ServerCompletion {
                 await prefixCache.persistViewCheckpoints(
                     partitionKey: mlxStart.facts.partitionKey, sessions: sessions)
             }
-            leafResult.report.restoreMode = mlxStart.restoreMode
-            leafResult.report.restoreCopyReason = mlxStart.restoreCopy?.reason
-            leafResult.report.restoreCopyRefusal = mlxStart.restoreCopy?.refusal
-            leafResult.report.restoreCopyWaitSeconds = mlxStart.restoreWaitSeconds
+            leafResult.report.restore = mlxStart.restore
             leafResult.report.leafStoreSeconds =
                 Date.timeIntervalSinceReferenceDate - leafStoreStart
             let leafStoreForTuner = leafResult.leafStore
@@ -1063,7 +1055,7 @@ nonisolated final class ServerCompletion {
                 facts: [
                     "leafSource": leafResult.report.source?.rawValue ?? "skipped",
                     "leafCopyReason":
-                        (leafResult.report.restoreCopyReason ?? leafResult.report.copyReason)?
+                        (leafResult.report.restore?.copy?.reason ?? leafResult.report.copyReason)?
                         .rawValue ?? "none",
                 ])
             // Record the request lifecycle for the alpha tuner. Fires
@@ -1492,13 +1484,10 @@ nonisolated final class ServerCompletion {
                 ])
             // The claim's typed restore outcome: a handoff holds the lease
             // and the leaf's own cache; a copy says why the leaf was not
-            // taken.
+            // taken. With what the restore itself yielded it is the turn's
+            // one **Turn Restore**, which every report of the turn reads.
             var handoff: CacheClaim.Handoff?
-            var restoreCopy: CacheClaim.Copy?
-            var restoreMode = "cold"
-            // The bounded wait for a pending full payload (#523): what it
-            // cost, whether it ended in a copy or a handoff.
-            var restoreWaitSeconds: TimeInterval = 0
+            var restore = TurnRestore.cold
             // The turn's maximum advance: judged at check-out, priced by
             // the Active-Inference Reserve at the leaf store (#522).
             var maximumAdvance = CacheClaim.maximumAdvance(
@@ -1508,20 +1497,18 @@ nonisolated final class ServerCompletion {
             var restoredCache: [any KVCache]?
             var restoreFailure: (any Error)?
             var restoreMs: TimeInterval = 0
-            var restoreFellBack = false
             if prefillPlan.restore.restoresPrefix {
                 let restoreStarted = Date.timeIntervalSinceReferenceDate
+                var copy: CacheClaim.Copy?
                 switch await claim.checkOut(
                     resolved, tokens: keySpace.keyPath, maximumAdvance: maximumAdvance,
                     identityKeySpace: facts.isTextOnly, in: session)
                 {
                 case .handoff(let taken):
                     handoff = taken
-                    restoreWaitSeconds = taken.waitSeconds
                     restoredCache = taken.cache.cache
-                case .copy(let copy):
-                    restoreCopy = copy
-                    restoreWaitSeconds = copy.waitSeconds
+                case .copy(let refused):
+                    copy = refused
                     (restoredCache, restoreFailure) = Self.restoreCache(
                         lookupResult, session: session)
                 case .cold:
@@ -1529,9 +1516,14 @@ nonisolated final class ServerCompletion {
                         lookupResult, session: session)
                 }
                 restoreMs = Date.timeIntervalSinceReferenceDate - restoreStarted
-                restoreMode =
-                    handoff != nil
-                    ? "handoff" : restoredCache == nil ? "failedCopy" : "copy"
+                if let handoff {
+                    restore = .handoff(
+                        .init(
+                            leaseID: handoff.leaseID, rewindStateBytes: handoff.rewindStateBytes,
+                            waitSeconds: handoff.waitSeconds))
+                } else if restoredCache != nil {
+                    restore = .copy(copy)
+                }
                 // A planned restore that yields no cache (its snapshot's
                 // layers failed to restore, which the restore verb treats as
                 // a miss) is a miss for the whole turn: re-plan it cold, so
@@ -1544,7 +1536,7 @@ nonisolated final class ServerCompletion {
                 // engage MTP, whose whole-prompt prefill captures none of the
                 // checkpoints this turn has to rebuild.
                 if restoredCache == nil {
-                    restoreFellBack = true
+                    restore = .failedThenCold(copy)
                     if let restoreFailure, let failed = lookupResult.snapshot {
                         // The failed-restore policy drops the snapshot that
                         // threw, so no later request pays the same failed
@@ -1580,19 +1572,10 @@ nonisolated final class ServerCompletion {
                         outputCeiling: parameters.maxTokens,
                         speculativeAllowance: speculation?.advanceAllowance ?? 0)
                 }
-                var restoredFacts = RequestMemoryTelemetry.cacheFacts(restoredCache ?? [])
-                    .merging([
-                        "restoreMode": restoreMode,
-                        "restoreCopyReason": restoreCopy?.reason.rawValue ?? "none",
-                        "restoreCopyRefusal": restoreCopy?.refusal.rawValue ?? "none",
-                        "restoreCopyWaitMs": PrefixCacheDiagnostics.milliseconds(
-                            restoreWaitSeconds),
-                        "recurrentRewindStateBytes": "\(handoff?.rewindStateBytes ?? 0)",
-                        "leafLeaseActive": "\(handoff != nil)",
-                        "leafLeaseID": handoff?.leaseID.uuidString ?? "none",
-                    ]) { _, new in new }
-                if restoreFellBack { restoredFacts["restoreFallback"] = "cold" }
-                memory.mark(.restored, facts: restoredFacts)
+                memory.mark(
+                    .restored,
+                    facts: RequestMemoryTelemetry.cacheFacts(restoredCache ?? [])
+                        .merging(restore.memoryFacts) { _, new in new })
             }
             switch prefillPlan.restore {
             case .restore(let cacheOffset, let anchorDelta):
@@ -1698,9 +1681,9 @@ nonisolated final class ServerCompletion {
                     hydratedFromSSD: resolved.hydratedFromSSD,
                     chainPrefixRestore: resolved.wasChainPrefixRestore,
                     divergence: lookupResult.divergence,
-                    restoreMode: restoreMode, restoreFellBack: restoreFellBack,
-                    copyReason: restoreCopy?.reason, copyRefusal: restoreCopy?.refusal,
-                    copyWaitSeconds: restoreWaitSeconds,
+                    restoreMode: restore.mode, restoreFellBack: restore.fellBack,
+                    copyReason: restore.copy?.reason, copyRefusal: restore.copy?.refusal,
+                    copyWaitSeconds: restore.waitSeconds,
                     backingLeafOffset: lookupResult.backingLeaf?.tokenOffset,
                     warmBody: lookupResult.snapshot?.isWarm == true,
                     backingLeafWarm: lookupResult.backingLeaf?.isWarm == true
@@ -2074,9 +2057,7 @@ nonisolated final class ServerCompletion {
                 transientLastMessageBoundarySnapshot: transientLastMessageBoundarySnapshot,
                 transientLastUserBoundarySnapshot: transientLastUserBoundarySnapshot,
                 generatedTokens: generatedTokens,
-                restoreMode: restoreMode,
-                restoreCopy: restoreCopy,
-                restoreWaitSeconds: restoreWaitSeconds
+                restore: restore
             )
         }
     }

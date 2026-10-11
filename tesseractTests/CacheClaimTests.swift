@@ -397,9 +397,7 @@ struct CacheClaimTests {
         #expect((Double(lookupFields["copyWaitMs"] ?? "") ?? 0) >= 80)
 
         var report = LeafStorePhase.Report()
-        report.restoreCopyReason = copy.reason
-        report.restoreCopyRefusal = copy.refusal
-        report.restoreCopyWaitSeconds = copy.waitSeconds
+        report.restore = .copy(copy)
         let reportFields = Dictionary(uniqueKeysWithValues: report.fields)
         #expect(reportFields["copyReason"] == "pendingFullPayload")
         #expect(reportFields["copyRefusal"] == "pendingFullPayload")

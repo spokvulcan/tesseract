@@ -60,10 +60,9 @@ nonisolated extension LeafStorePhase {
         /// Whether no image reached the model (instance truth, ADR-0070): one
         /// of the facts a finished turn's leaf moves on.
         let isTextOnly: Bool
-        /// The request's restore mode (`cold`, `copy`, `failedCopy`,
-        /// `handoff`), as its check-out decided it — one input to the stored
-        /// leaf's source.
-        let restoreMode: String
+        /// The request's **Turn Restore**, as its check-out and restore
+        /// left it — one input to the stored leaf's source.
+        let restore: TurnRestore
         /// The turn's maximum advance, for the **Active-Inference
         /// Reserve**'s growth allowance (#522).
         let maximumAdvance: Int
@@ -80,7 +79,7 @@ nonisolated extension LeafStorePhase {
             memory = inputs.memory
             claim = inputs.claim
             isTextOnly = inputs.request.facts.isTextOnly
-            restoreMode = mlxStart.restoreMode
+            restore = mlxStart.restore
             maximumAdvance = mlxStart.maximumAdvance
             copyReason =
                 !inputs.request.facts.isTextOnly
@@ -356,8 +355,7 @@ nonisolated extension LeafStorePhase {
             in: session,
             labels: context.stages.admissionLabels,
             turn: LeafAdmission.Turn(
-                path: path, restoreMode: context.restoreMode,
-                maximumAdvance: context.maximumAdvance),
+                path: path, restore: context.restore, maximumAdvance: context.maximumAdvance),
             memory: context.memory
         )
         switch outcome {
