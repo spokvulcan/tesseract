@@ -36,7 +36,9 @@ repos:
         exclude: '^(Vendor/|benchmarks/gather-sweep/|.*/\.build/)'
         require_serial: true
 
-      # Whole-tree scan, about a second: app code that only tests use.
+      # Whole-tree scan: app code that only tests use. The name pass takes a
+      # second; the index pass adds about two when this checkout's build index
+      # is fresh (after scripts/test.sh), and is skipped otherwise.
       - id: test-only-code
         name: App code only tests use
         entry: python3 -I scripts/check-test-only-code.py
