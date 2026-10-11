@@ -1621,10 +1621,13 @@ The sub-controllers that own their own state but never subscribe to agent events
 **Agent Run**.
 
 **Voice Input**:
-The agent chat composer's push-to-talk capture→transcribe→emit module: it composes
-the shared **Voice Capture Session**, hands transcribed text to the composer rather
-than sending, and keeps its errors local instead of on the shared banner. Distinct
-from the spine — it touches no `Agent` and no arbiter.
+A field's push-to-talk capture→transcribe→emit module — the agent composer's,
+Today's, the capture and Jarvis panels', the Onboarding Tour's: it presents a **Voice
+Capture Session** from **Voice Capture**, hands transcribed text to its surface rather
+than sending, and keeps its errors local instead of on the shared banner. Spoken words
+join the words already typed by one rule (after them, with one space), and one
+hold-to-talk gesture drives it. Distinct from the spine — it touches no `Agent` and no
+arbiter.
 _Avoid_: dictation (the separate global system-wide overlay — say "agent voice
 input"), mic controller, voice state machine.
 
@@ -2138,21 +2141,35 @@ The epoch snapshot a coordinator captures when it enters async work; its `isCurr
 check, after each `await` resume, decides whether still-running work may commit.
 _Avoid_: operation ID, token (unqualified), snapshot (the prefix-cache concept).
 
+**Voice Capture**:
+The one module every push-to-talk surface takes its takes from — dictation, the
+composers, the capture and Jarvis panels, the **Voice Session**, the Onboarding
+Tour. Built once from the shared microphone and recognizer, the **Capture Dump**
+and its switch, the **Learned Words**, the **Proofread Pass** and the dictation
+language, every one required, it hands each surface its own **Voice Capture
+Session**, so no surface can build a take that skips a stage (ADR-0096). It also
+answers whether a take is open anywhere — listening, transcribing, proofreading —
+which the **Models section** reads.
+_Avoid_: voice service, capture factory, push-to-talk registry, the list of voice
+inputs (the hand-kept list it replaced).
+
 **Voice Capture Session**:
-The one concrete module that owns the push-to-talk capture→transcribe→commit
-lifecycle — the **Operation Guard** ticket discipline, the microphone-busy guard, the
-minimum-duration and empty-text guards, the silent-capture skip (a capture whose level
-never rose above silence is not transcribed), post-processing, the **Learned Words**
-(applied after the regex cleanup and before the **Proofread Pass**), the in-flight
-transcription `Task`, and cancellation — behind a small value-returning interface
-(`start`/`stop`/`transcribeAndCommit`/`cancel`), delivering clean text to a
-caller-injected commit closure. The microphone and the recognizer are shared, so
-`cancel` stops only the capture and the take this session started: a panel closing
-never cuts off dictation's. Composed *directly* by both `DictationCoordinator` and
-**Voice Input**, which keep only their own state, errors, sounds, and commit. Distinct
-from **Voice Input** (one caller, agent-composer presentation) and from the **Operation
-Guard** it composes (the epoch protocol alone).
-_Avoid_: coordinator (it is composed by the coordinators, not one), capture engine
+One surface's takes, from **Voice Capture**: the push-to-talk
+capture→transcribe→commit lifecycle — the **Operation Guard** ticket discipline, the
+microphone-busy guard, the minimum-duration and empty-text guards, the silent-capture
+skip (a capture whose level never rose above silence is not transcribed), the take's
+one text pipeline (the regex cleanup, then the **Learned Words**) for both the **Live
+Preview** and the final pass, the **Proofread Pass** as the take's proofreading
+phase, "Insert anyway" for a take the pass rejected, the in-flight transcription
+`Task`, and cancellation — behind a small value-returning interface
+(`start`/`stop`/`transcribeAndCommit`/`commitRejectedTake`/`cancel`), delivering the
+take's words to the surface's commit. Its phase says whether its take is open. The
+microphone and the recognizer are shared, so `cancel` stops only the capture and the
+take this session started: a panel closing never cuts off dictation's. Surfaces
+(`DictationCoordinator`, **Voice Input**, the voice session) keep only their commit,
+presentation, sounds and errors. Distinct from the **Operation Guard** it composes
+(the epoch protocol alone).
+_Avoid_: coordinator (surfaces present it; it is not one), capture engine
 (`AudioCaptureEngine`, the mic port below it), voice controller, session (unqualified).
 
 **Proofread Pass**:
@@ -2163,9 +2180,10 @@ Off by default and opt-in (ADR-0085): **Learned Words** are the corrector, and w
 on, the pass reads the text after them. Strictly fail-open: disabled, model not
 downloaded, the LLM generating (skip-when-busy — it *reads* whether the **LLM Gate**
 is held, never waits on it), budget overrun, or any error all commit the raw text
-unchanged. Runs inside the **Voice Capture Session**, so dictation and
-**Voice Input** both gain it; its word-level edits ride the commit, and a rejected
-take's raw text stays available for the **Lens**'s "Insert anyway".
+unchanged. Runs inside every **Voice Capture Session**, as the take's proofreading
+phase, so every surface gains it; its word-level edits ride the commit, and the
+session keeps a rejected take for the **Lens**'s "Insert anyway", which commits it
+like any take.
 _Avoid_: post-processing (the regex cleanup that always runs, pass or no pass),
 autocorrect, grammar check, second agent (it is a fixed-prompt pass, not an agent).
 

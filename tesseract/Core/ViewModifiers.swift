@@ -86,11 +86,13 @@ extension View {
     }
 
     /// Dictation feature: coordinator, transcription engine/history, audio
-    /// capture, and the **Lens** for fixing a take from the Dictation page.
+    /// capture, **Voice Capture** (a surface's own takes, the Onboarding
+    /// Tour's), and the **Lens** for fixing a take from the Dictation page.
     @MainActor
     func injectDictationDependencies(from container: DependencyContainer) -> some View {
         self
             .environment(container.dictationCoordinator)
+            .environment(container.voiceCapture)
             .environment(container.transcriptionEngine)
             .environment(container.transcriptionHistory)
             .environment(container.correctionPairStore)

@@ -85,6 +85,7 @@ tesseract/
 │   ├── SettledWidth.swift       # Settled Width policy + modifier (pure value, unit-tested)
 │   ├── LaunchMode.swift         # Launch Mode: owner, scratch, test host or harness, and what each may do (ADR-0095)
 │   ├── StorageEnvironment.swift # Storage roots: the owner's, or per-process scratch under tests and in a scratch launch (ADR-0073)
+│   ├── VoiceCaptureSession.swift # Voice Capture: every surface's push-to-talk session, with every stage (ADR-0096)
 │   ├── ViewModifiers.swift      # Scoped dependency injection
 │   └── Logging.swift            # Unified logging (Log enum)
 │
@@ -102,7 +103,7 @@ tesseract/
 │
 ├── Features/                    # Feature modules
 │   ├── Dictation/
-│   │   ├── DictationCoordinator.swift # Thin composer over Voice Capture Session
+│   │   ├── DictationCoordinator.swift # Thin presenter over its Voice Capture Session: feed, commit, sounds
 │   │   ├── DictationFeed.swift        # Overlay Feed: phases, beats, Live Preview, hold, meter
 │   │   ├── Proofread/                 # Proofread Pass (ADR-0034): policy, verdicts, MLX adapter
 │   │   ├── Corrections/               # Correction Pair flywheel (#289): value + bounded store
@@ -439,7 +440,7 @@ playback**):
   clock; pacing reads the head itself.
 
 ```
-DictationCoordinator ─(Transcribing)→ TranscriptionEngine ─(SpeechRecognizer)→ adapter
+VoiceCaptureSession ──(Transcribing)→ TranscriptionEngine ─(SpeechRecognizer)→ adapter
 SpeechCoordinator   ───────────────→  SpeechEngine (pkg)  ─(SpeechSynthesizing)→ adapter
 SpeechCoordinator   ──(AudioPlayback)────────────────────────────────────────→ adapter
                        engine/coordinator-facing        actor engine          model-facing port
@@ -758,26 +759,31 @@ the retired pill (`requestFocus(pairID:)` and `focusEntryID` on
 
 ```
 1. User presses hotkey (Option+Space)
-   └─► HotkeyManager.onHotkeyDown()
+   └─► HotkeyManager → the Hotkey Table's dictation row
        └─► DictationCoordinator.startRecording()
-           ├─► AudioCaptureEngine.startCapture()
-           └─► Live Preview pump (ADR-0086), 300 ms after each decode lands
-               ├─► LivePreviewAssembler: the audio since the last confirmed segment
-               ├─► TranscriptionEngine.transcribePartial → TranscriptionResult
-               ├─► all but the last two segments confirmed; the rest is the tail
-               └─► regex cleanup + Learned Words → DictationFeed → Lens (listening)
+           └─► VoiceCaptureSession.start(preview:)
+               ├─► AudioCaptureEngine.startCapture()
+               └─► Live Preview pump (ADR-0086), 300 ms after each decode lands
+                   ├─► LivePreviewAssembler: the audio since the last confirmed segment
+                   ├─► TranscriptionEngine.transcribePartial → TranscriptionResult
+                   ├─► all but the last two segments confirmed; the rest is the tail
+                   └─► the take's text pipeline (regex cleanup + Learned Words)
+                       → DictationFeed → Lens (listening)
    Shift tapped while the key is held
-   └─► HotkeyManager onShiftTap → DictationCoordinator.shiftTapped(): the take will wait
+   └─► the dictation row's ⇧ → DictationCoordinator.shiftTapped(): the take will wait
 
 2. User releases hotkey
    └─► DictationCoordinator.stopRecordingAndProcess()
-       ├─► the preview pump and its decode in flight are cancelled
-       ├─► AudioCaptureEngine.stopCapture() → AudioData
-       └─► TranscriptionEngine.transcribe(audioData): the full pass over the whole take
-           └─► SpeechRecognizer port → WhisperKit inference → TranscriptionResult
+       └─► VoiceCaptureSession.stop()
+           ├─► the preview pump and its decode in flight are cancelled
+           ├─► AudioCaptureEngine.stopCapture() → AudioData
+           └─► transcribeAndCommit: TranscriptionEngine.transcribe(audioData), the
+               full pass over the whole take
+               └─► SpeechRecognizer port → WhisperKit inference → TranscriptionResult
 
-3. Post-processing
-   └─► TranscriptionPostProcessor → Learned Words → Proofread Pass (opt-in)
+3. Post-processing, in the session, then dictation's commit
+   └─► the take's text pipeline (TranscriptionPostProcessor → Learned Words)
+       → Proofread Pass (opt-in; the take's proofreading phase)
        ├─► TranscriptionHistory.add: the text, its catches and the app
        ├─► TextInjector.inject() (not for a held take)
        │   ├─► Copy to clipboard
@@ -806,9 +812,12 @@ the retired pill (`requestFocus(pairID:)` and `focusEntryID` on
                    reopens, the reopen starts from the fixed text
 ```
 
-A silent capture stops before step 2's transcription. Learned Words apply inside
-the Voice Capture Session, so Voice Input and the Companion's captures gain them
-too.
+A silent capture stops before step 2's transcription. Every push-to-talk surface
+takes its session from **Voice Capture** (ADR-0096), built once with every stage, so
+Voice Input, the voice session's captures and the Onboarding Tour gain the Learned
+Words, the Capture Dump and the Proofread Pass too. "Insert anyway" on a take the
+Proofread Pass rejected is the session's: it commits the take through dictation's
+own commit, like a take that landed.
 
 ### Audio Format Pipeline
 

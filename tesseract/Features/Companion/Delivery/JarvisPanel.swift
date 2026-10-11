@@ -239,22 +239,17 @@ final class JarvisPanelController {
             guard let self else { return }
             self.model.listening = false
             let typed = self.model.draft.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard typed.isEmpty else {
-                // Words were in the field: the spoken ones join them, for
-                // the owner to send or add.
-                self.model.draft = typed + " " + text
-                return
-            }
-            self.model.draft = text
-            self.send()
+            // Words were in the field: the spoken ones join them, for the
+            // owner to send or add. Alone, they go to Jarvis.
+            self.model.draft = AgentVoiceInputController.joining(text, to: typed)
+            if typed.isEmpty { self.send() }
         }
         // Not sure what was said: in the field to look over, never sent as
         // heard.
         voice.onVoiceRejected = { [weak self] raw in
             guard let self else { return }
             self.model.listening = false
-            let typed = self.model.draft.trimmingCharacters(in: .whitespacesAndNewlines)
-            self.model.draft = typed.isEmpty ? raw : typed + " " + raw
+            self.model.draft = AgentVoiceInputController.joining(raw, to: self.model.draft)
             self.showNotice(.failed("Not sure I heard that right. Check the words, then send."))
         }
         // A take with no words (too short, no speech), or a microphone that

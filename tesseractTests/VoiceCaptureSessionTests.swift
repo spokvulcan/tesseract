@@ -2,17 +2,20 @@
 //  VoiceCaptureSessionTests.swift
 //  tesseractTests
 //
-//  Drives the **Voice Capture Session** through its own interface
-//  (`start`/`stop`/`transcribeAndCommit`/`cancel`) — the seam where the shared
-//  capture→transcribe→commit lifecycle now lives. Uses the fakes that already sit
-//  *below* the session (`FakeAudioCapture` for `AudioCapturing`,
-//  `ControllableTranscribing` for `Transcribing`) plus a recorder commit closure
-//  standing in for whatever a caller injects. The deep staleness/supersede races —
-//  late-success-after-cancel, cancel-during-commit suppression — are asserted here
-//  once, instead of being duplicated across the two coordinator suites.
+//  Drives **Voice Capture** and its **Voice Capture Session** through their
+//  interface (`makeSession`, then `start`/`stop`/`transcribeAndCommit`/
+//  `commitRejectedTake`/`cancel`, and the open-take facts) — the seam where
+//  the shared capture→transcribe→commit lifecycle lives, for every surface.
+//  Uses the peers below the module (`FakeAudioCapture` for `AudioCapturing`,
+//  `ControllableTranscribing` and the recognizer peers under a real
+//  `TranscriptionEngine` for `Transcribing`, `VoiceCapturePeers.swift`) plus a
+//  recorder commit closure standing in for whatever a surface injects. The deep
+//  staleness/supersede races — late-success-after-cancel, cancel-during-commit
+//  suppression — are asserted here once.
 //
 
 import Foundation
+import Observation
 import Testing
 
 @testable import Tesseract_Agent
@@ -23,24 +26,24 @@ struct VoiceCaptureSessionTests {
 
     // MARK: - A commit closure that records and can suspend
 
-    /// Stands in for a caller's injected `commit`. When `gated`, `commit` suspends
+    /// Stands in for a surface's injected `commit`. When `gated`, `commit` suspends
     /// until `releaseGate()` — so a test can hold the success path *inside* the
     /// commit and race a `cancel()` against it (the injection-suspension window).
     /// Mirrors the real commit's cancellation-awareness: a cancelled in-flight task
     /// aborts the side effect rather than recording it.
-    @MainActor
+    @MainActor @Observable
     final class CommitRecorder {
-        private(set) var commits: [(text: String, duration: TimeInterval)] = []
+        private(set) var commits: [VoiceCaptureSession.Commit] = []
         var gated = false
         private var gate: CheckedContinuation<Void, Never>?
         var isAwaitingGate: Bool { gate != nil }
 
-        func commit(_ text: String, _ duration: TimeInterval) async throws {
+        func commit(_ take: VoiceCaptureSession.Commit) async throws {
             if gated {
                 await withCheckedContinuation { gate = $0 }
             }
             try Task.checkCancellation()
-            commits.append((text, duration))
+            commits.append(take)
         }
 
         func releaseGate() {
@@ -49,18 +52,28 @@ struct VoiceCaptureSessionTests {
         }
     }
 
-    /// Records what the session hands to the **Capture Dump** seam.
+    /// A gate-able stand-in for the Proofread Pass stage, so a test can hold
+    /// the operation *inside* the pass and race a `cancel()` against it.
     @MainActor
-    final class FakeCaptureDump: CaptureDumpStoring {
-        private(set) var saved: [RawCapture] = []
-        private(set) var deleteAllCount = 0
+    final class ProofreadStub {
+        var verdict: ProofreadVerdict?
+        var gated = false
+        private var gate: CheckedContinuation<Void, Never>?
+        var isAwaitingGate: Bool { gate != nil }
+        private(set) var seenTexts: [String] = []
 
-        @discardableResult
-        func save(_ capture: RawCapture) -> String? {
-            saved.append(capture)
-            return "capture-\(saved.count).wav"
+        func proofread(_ text: String) async -> ProofreadVerdict? {
+            seenTexts.append(text)
+            if gated {
+                await withCheckedContinuation { gate = $0 }
+            }
+            return verdict
         }
-        func deleteAll() { deleteAllCount += 1 }
+
+        func releaseGate() {
+            gate?.resume()
+            gate = nil
+        }
     }
 
     private func makeAudio(
@@ -74,12 +87,23 @@ struct VoiceCaptureSessionTests {
             samples: [0.3, 0.4, 0.5], sampleRate: 48_000, voiceProcessed: voiceProcessed)
     }
 
+    /// A session over `engine`, whose microphone hands back `makeAudio()`.
+    private func makeSession(
+        engine: ControllableTranscribing, stub: ProofreadStub? = nil
+    ) -> VoiceCaptureSession {
+        makeVoiceCapture(
+            microphone: FakeAudioCapture(cannedAudio: makeAudio()), recognizer: engine,
+            proofread: { text in await stub?.proofread(text) }
+        ).makeSession()
+    }
+
     // MARK: - start()
 
     @Test func startBeginsCaptureAndReportsStarted() {
         let capture = FakeAudioCapture(cannedAudio: makeAudio())
-        let session = VoiceCaptureSession(
-            audioCapture: capture, transcriptionEngine: ControllableTranscribing())
+        let session = makeVoiceCapture(
+            microphone: capture, recognizer: ControllableTranscribing()
+        ).makeSession()
 
         let result = session.start()
 
@@ -89,13 +113,15 @@ struct VoiceCaptureSessionTests {
         }
         #expect(capture.isCapturing)
         #expect(capture.startCount == 1)
+        #expect(session.phase == .listening)
     }
 
     @Test func startWhileMicrophoneBusyReportsMicBusyWithoutStarting() {
         let capture = FakeAudioCapture(cannedAudio: makeAudio())
         capture.isCapturing = true  // shared engine already capturing
-        let session = VoiceCaptureSession(
-            audioCapture: capture, transcriptionEngine: ControllableTranscribing())
+        let session = makeVoiceCapture(
+            microphone: capture, recognizer: ControllableTranscribing()
+        ).makeSession()
 
         let result = session.start()
 
@@ -104,14 +130,16 @@ struct VoiceCaptureSessionTests {
             return
         }
         #expect(capture.startCount == 0)
+        #expect(session.phase == .idle)
     }
 
     @Test func startSurfacesCaptureFailure() {
         struct Boom: Error {}
         let capture = FakeAudioCapture(cannedAudio: makeAudio())
         capture.startError = Boom()
-        let session = VoiceCaptureSession(
-            audioCapture: capture, transcriptionEngine: ControllableTranscribing())
+        let session = makeVoiceCapture(
+            microphone: capture, recognizer: ControllableTranscribing()
+        ).makeSession()
 
         let result = session.start()
 
@@ -126,8 +154,9 @@ struct VoiceCaptureSessionTests {
 
     @Test func stopReturnsCapturedAudioAtOrAboveMinimum() {
         let capture = FakeAudioCapture(cannedAudio: makeAudio(duration: 2.0))
-        let session = VoiceCaptureSession(
-            audioCapture: capture, transcriptionEngine: ControllableTranscribing())
+        let session = makeVoiceCapture(
+            microphone: capture, recognizer: ControllableTranscribing()
+        ).makeSession()
         _ = session.start()
 
         let result = session.stop()
@@ -137,12 +166,15 @@ struct VoiceCaptureSessionTests {
             return
         }
         #expect(audio.duration == 2.0)
+        // The take is open until it is transcribed.
+        #expect(session.phase == .transcribing)
     }
 
     @Test func stopRejectsRecordingShorterThanMinimum() {
         let capture = FakeAudioCapture(cannedAudio: makeAudio(duration: 0.2))
-        let session = VoiceCaptureSession(
-            audioCapture: capture, transcriptionEngine: ControllableTranscribing())
+        let session = makeVoiceCapture(
+            microphone: capture, recognizer: ControllableTranscribing()
+        ).makeSession()
         _ = session.start()
 
         let result = session.stop()
@@ -151,12 +183,14 @@ struct VoiceCaptureSessionTests {
             Issue.record("expected .tooShort, got \(result)")
             return
         }
+        #expect(session.phase == .idle)
     }
 
     @Test func stopReportsNoAudioWhenEngineReturnsNothing() {
         let capture = FakeAudioCapture(cannedAudio: nil)
-        let session = VoiceCaptureSession(
-            audioCapture: capture, transcriptionEngine: ControllableTranscribing())
+        let session = makeVoiceCapture(
+            microphone: capture, recognizer: ControllableTranscribing()
+        ).makeSession()
         _ = session.start()
 
         let result = session.stop()
@@ -176,12 +210,9 @@ struct VoiceCaptureSessionTests {
         let raw = makeRaw(voiceProcessed: true)
         let capture = FakeAudioCapture(cannedAudio: makeAudio(duration: 2.0, raw: raw))
         let dump = FakeCaptureDump()
-        let session = VoiceCaptureSession(
-            audioCapture: capture,
-            transcriptionEngine: ControllableTranscribing(),
-            captureDump: dump,
-            isCaptureDumpEnabled: { true }
-        )
+        let session = makeVoiceCapture(
+            microphone: capture, recognizer: ControllableTranscribing(), captureDump: dump
+        ).makeSession()
         _ = session.start()
 
         let result = session.stop()
@@ -201,12 +232,9 @@ struct VoiceCaptureSessionTests {
         let capture = FakeAudioCapture(
             cannedAudio: makeAudio(duration: 0.2, raw: makeRaw()))
         let dump = FakeCaptureDump()
-        let session = VoiceCaptureSession(
-            audioCapture: capture,
-            transcriptionEngine: ControllableTranscribing(),
-            captureDump: dump,
-            isCaptureDumpEnabled: { true }
-        )
+        let session = makeVoiceCapture(
+            microphone: capture, recognizer: ControllableTranscribing(), captureDump: dump
+        ).makeSession()
         _ = session.start()
 
         _ = session.stop()
@@ -219,12 +247,10 @@ struct VoiceCaptureSessionTests {
         let capture = FakeAudioCapture(
             cannedAudio: makeAudio(duration: 2.0, raw: makeRaw()))
         let dump = FakeCaptureDump()
-        let session = VoiceCaptureSession(
-            audioCapture: capture,
-            transcriptionEngine: ControllableTranscribing(),
-            captureDump: dump,
+        let session = makeVoiceCapture(
+            microphone: capture, recognizer: ControllableTranscribing(), captureDump: dump,
             isCaptureDumpEnabled: { false }
-        )
+        ).makeSession()
         _ = session.start()
 
         _ = session.stop()
@@ -235,12 +261,9 @@ struct VoiceCaptureSessionTests {
     @Test func stopDoesNotDumpWhenTheCaptureCarriesNoRawAudio() {
         let capture = FakeAudioCapture(cannedAudio: makeAudio(duration: 2.0, raw: nil))
         let dump = FakeCaptureDump()
-        let session = VoiceCaptureSession(
-            audioCapture: capture,
-            transcriptionEngine: ControllableTranscribing(),
-            captureDump: dump,
-            isCaptureDumpEnabled: { true }
-        )
+        let session = makeVoiceCapture(
+            microphone: capture, recognizer: ControllableTranscribing(), captureDump: dump
+        ).makeSession()
         _ = session.start()
 
         _ = session.stop()
@@ -254,17 +277,15 @@ struct VoiceCaptureSessionTests {
         let capture = FakeAudioCapture(
             cannedAudio: makeAudio(duration: 2.0, raw: makeRaw()))
         let dump = FakeCaptureDump()
-        let session = VoiceCaptureSession(
-            audioCapture: capture,
-            transcriptionEngine: ControllableTranscribing(),
-            captureDump: dump,
-            isCaptureDumpEnabled: { true }
-        )
+        let session = makeVoiceCapture(
+            microphone: capture, recognizer: ControllableTranscribing(), captureDump: dump
+        ).makeSession()
         _ = session.start()
 
         session.cancel()
 
         #expect(dump.saved.isEmpty)
+        #expect(session.phase == .idle)
     }
 
     /// The microphone and the recognizer are shared: a session that started
@@ -273,8 +294,9 @@ struct VoiceCaptureSessionTests {
     @Test func cancelLeavesAnotherSessionsCaptureAndTake() async throws {
         let capture = FakeAudioCapture(cannedAudio: makeAudio())
         let engine = ControllableTranscribing()
-        let dictation = VoiceCaptureSession(audioCapture: capture, transcriptionEngine: engine)
-        let panel = VoiceCaptureSession(audioCapture: capture, transcriptionEngine: engine)
+        let voiceCapture = makeVoiceCapture(microphone: capture, recognizer: engine)
+        let dictation = voiceCapture.makeSession()
+        let panel = voiceCapture.makeSession()
         guard case .started = dictation.start() else {
             Issue.record("expected dictation to start")
             return
@@ -290,9 +312,7 @@ struct VoiceCaptureSessionTests {
         }
         let recorder = CommitRecorder()
         let take = Task {
-            await dictation.transcribeAndCommit(audio, language: "en") { text, duration in
-                try await recorder.commit(text, duration)
-            }
+            await dictation.transcribeAndCommit(audio) { try await recorder.commit($0) }
         }
         while !engine.isAwaiting { await Task.yield() }
         panel.cancel()
@@ -317,15 +337,12 @@ struct VoiceCaptureSessionTests {
         let engine = ControllableTranscribing(
             result: TranscriptionResult(
                 text: "hello world", segments: [], language: "en", processingTime: 0))
-        let session = VoiceCaptureSession(
-            audioCapture: FakeAudioCapture(cannedAudio: makeAudio()), transcriptionEngine: engine)
+        let session = makeSession(engine: engine)
         let recorder = CommitRecorder()
 
         let audio = makeAudio()
         let task = Task {
-            await session.transcribeAndCommit(audio, language: "en") { text, duration in
-                try await recorder.commit(text, duration)
-            }
+            await session.transcribeAndCommit(audio) { try await recorder.commit($0) }
         }
         while !engine.isAwaiting { await Task.yield() }
         engine.completeWithSuccess()
@@ -339,20 +356,18 @@ struct VoiceCaptureSessionTests {
         #expect(recorder.commits.count == 1)
         #expect(recorder.commits.first?.text == expected)
         #expect(recorder.commits.first?.duration == audio.duration)
+        #expect(session.phase == .idle)
     }
 
     @Test func transcribeAndCommitReportsEmptyWhenPostProcessingYieldsNothing() async throws {
         let engine = ControllableTranscribing(
             result: TranscriptionResult(
                 text: "   ", segments: [], language: "en", processingTime: 0))
-        let session = VoiceCaptureSession(
-            audioCapture: FakeAudioCapture(cannedAudio: makeAudio()), transcriptionEngine: engine)
+        let session = makeSession(engine: engine)
         let recorder = CommitRecorder()
 
         let task = Task {
-            await session.transcribeAndCommit(makeAudio(), language: "en") { text, duration in
-                try await recorder.commit(text, duration)
-            }
+            await session.transcribeAndCommit(makeAudio()) { try await recorder.commit($0) }
         }
         while !engine.isAwaiting { await Task.yield() }
         engine.completeWithSuccess()
@@ -368,14 +383,11 @@ struct VoiceCaptureSessionTests {
     @Test func transcribeAndCommitReportsFailureOnTranscriptionError() async throws {
         struct Boom: Error {}
         let engine = ControllableTranscribing()
-        let session = VoiceCaptureSession(
-            audioCapture: FakeAudioCapture(cannedAudio: makeAudio()), transcriptionEngine: engine)
+        let session = makeSession(engine: engine)
         let recorder = CommitRecorder()
 
         let task = Task {
-            await session.transcribeAndCommit(makeAudio(), language: "en") { text, duration in
-                try await recorder.commit(text, duration)
-            }
+            await session.transcribeAndCommit(makeAudio()) { try await recorder.commit($0) }
         }
         while !engine.isAwaiting { await Task.yield() }
         engine.completeWithFailure(Boom())
@@ -393,14 +405,11 @@ struct VoiceCaptureSessionTests {
     /// `.cancelled` (not `.superseded`) and commits nothing.
     @Test func transcribeAndCommitReportsCancelledOnCancellationWhileCurrent() async throws {
         let engine = ControllableTranscribing()
-        let session = VoiceCaptureSession(
-            audioCapture: FakeAudioCapture(cannedAudio: makeAudio()), transcriptionEngine: engine)
+        let session = makeSession(engine: engine)
         let recorder = CommitRecorder()
 
         let task = Task {
-            await session.transcribeAndCommit(makeAudio(), language: "en") { text, duration in
-                try await recorder.commit(text, duration)
-            }
+            await session.transcribeAndCommit(makeAudio()) { try await recorder.commit($0) }
         }
         while !engine.isAwaiting { await Task.yield() }
         engine.completeWithCancellation()
@@ -421,14 +430,11 @@ struct VoiceCaptureSessionTests {
         let engine = ControllableTranscribing(
             result: TranscriptionResult(
                 text: "late success", segments: [], language: "en", processingTime: 0))
-        let session = VoiceCaptureSession(
-            audioCapture: FakeAudioCapture(cannedAudio: makeAudio()), transcriptionEngine: engine)
+        let session = makeSession(engine: engine)
         let recorder = CommitRecorder()
 
         let task = Task {
-            await session.transcribeAndCommit(makeAudio(), language: "en") { text, duration in
-                try await recorder.commit(text, duration)
-            }
+            await session.transcribeAndCommit(makeAudio()) { try await recorder.commit($0) }
         }
         while !engine.isAwaiting { await Task.yield() }
 
@@ -445,31 +451,7 @@ struct VoiceCaptureSessionTests {
         #expect(recorder.commits.isEmpty)
     }
 
-    // MARK: - The Proofread Pass arm
-
-    /// A gate-able stand-in for the caller's proofread closure, so a test can
-    /// hold the operation *inside* the pass and race a `cancel()` against it.
-    @MainActor
-    final class ProofreadStub {
-        var verdict: ProofreadVerdict?
-        var gated = false
-        private var gate: CheckedContinuation<Void, Never>?
-        var isAwaitingGate: Bool { gate != nil }
-        private(set) var seenTexts: [String] = []
-
-        func proofread(_ text: String) async -> ProofreadVerdict? {
-            seenTexts.append(text)
-            if gated {
-                await withCheckedContinuation { gate = $0 }
-            }
-            return verdict
-        }
-
-        func releaseGate() {
-            gate?.resume()
-            gate = nil
-        }
-    }
+    // MARK: - The Proofread Pass stage
 
     private func runThroughSession(
         engineText: String,
@@ -479,15 +461,9 @@ struct VoiceCaptureSessionTests {
         let engine = ControllableTranscribing(
             result: TranscriptionResult(
                 text: engineText, segments: [], language: "en", processingTime: 0))
-        let session = VoiceCaptureSession(
-            audioCapture: FakeAudioCapture(cannedAudio: makeAudio()), transcriptionEngine: engine)
+        let session = makeSession(engine: engine, stub: stub)
         let task = Task {
-            await session.transcribeAndCommit(
-                makeAudio(), language: "en",
-                proofread: { await stub.proofread($0) }
-            ) { text, duration in
-                try await recorder.commit(text, duration)
-            }
+            await session.transcribeAndCommit(makeAudio()) { try await recorder.commit($0) }
         }
         while !engine.isAwaiting { await Task.yield() }
         engine.completeWithSuccess()
@@ -515,14 +491,14 @@ struct VoiceCaptureSessionTests {
         #expect(stub.seenTexts == [TranscriptionPostProcessor().process("peace of cake")])
     }
 
-    /// `.rejected` commits nothing; the raw text rides the outcome for
-    /// "insert raw anyway".
+    /// `.rejected` commits nothing; the raw text rides the outcome, and the
+    /// session keeps the take for "insert anyway".
     @Test func proofreadRejectedCommitsNothingAndCarriesTheRaw() async throws {
         let stub = ProofreadStub()
         stub.verdict = .rejected(reason: "unintelligible mumbling")
         let recorder = CommitRecorder()
 
-        let (outcome, _) = await runThroughSession(
+        let (outcome, session) = await runThroughSession(
             engineText: "asdf ghjk", stub: stub, recorder: recorder)
 
         guard case .rejected(let raw, let reason) = outcome else {
@@ -532,6 +508,7 @@ struct VoiceCaptureSessionTests {
         #expect(raw == TranscriptionPostProcessor().process("asdf ghjk"))
         #expect(reason == "unintelligible mumbling")
         #expect(recorder.commits.isEmpty)
+        #expect(session.hasRejectedTake)
     }
 
     /// A skipped pass (`nil`) is fail-open: the raw text commits, no edits.
@@ -563,22 +540,18 @@ struct VoiceCaptureSessionTests {
         let engine = ControllableTranscribing(
             result: TranscriptionResult(
                 text: "  peace of cake  ", segments: [], language: "en", processingTime: 0))
-        let session = VoiceCaptureSession(
-            audioCapture: FakeAudioCapture(cannedAudio: makeAudio()), transcriptionEngine: engine)
+        let session = makeSession(engine: engine, stub: stub)
 
         var takes: [VoiceCaptureSession.Take] = []
         var commitCountAtTake = -1
         let task = Task {
             await session.transcribeAndCommit(
-                makeAudio(), language: "en",
-                proofread: { await stub.proofread($0) },
+                makeAudio(),
                 onTake: { take in
                     takes.append(take)
                     commitCountAtTake = recorder.commits.count
                 }
-            ) { text, duration in
-                try await recorder.commit(text, duration)
-            }
+            ) { try await recorder.commit($0) }
         }
         while !engine.isAwaiting { await Task.yield() }
         engine.completeWithSuccess()
@@ -606,15 +579,10 @@ struct VoiceCaptureSessionTests {
         let engine = ControllableTranscribing(
             result: TranscriptionResult(
                 text: "asdf ghjk", segments: [], language: "en", processingTime: 0))
-        let session = VoiceCaptureSession(
-            audioCapture: FakeAudioCapture(cannedAudio: makeAudio()), transcriptionEngine: engine)
+        let session = makeSession(engine: engine, stub: stub)
         let task = Task {
-            await session.transcribeAndCommit(
-                makeAudio(), language: "en",
-                proofread: { await stub.proofread($0) },
-                onTake: { takes.append($0) }
-            ) { text, duration in
-                try await recorder.commit(text, duration)
+            await session.transcribeAndCommit(makeAudio(), onTake: { takes.append($0) }) {
+                try await recorder.commit($0)
             }
         }
         while !engine.isAwaiting { await Task.yield() }
@@ -637,20 +605,14 @@ struct VoiceCaptureSessionTests {
         let engine = ControllableTranscribing(
             result: TranscriptionResult(
                 text: "hello world", segments: [], language: "en", processingTime: 0))
-        let session = VoiceCaptureSession(
-            audioCapture: FakeAudioCapture(cannedAudio: makeAudio()), transcriptionEngine: engine)
         let stub = ProofreadStub()
         stub.gated = true
         stub.verdict = .corrected(text: "hello walrus", edits: [])
+        let session = makeSession(engine: engine, stub: stub)
         let recorder = CommitRecorder()
 
         let task = Task {
-            await session.transcribeAndCommit(
-                makeAudio(), language: "en",
-                proofread: { await stub.proofread($0) }
-            ) { text, duration in
-                try await recorder.commit(text, duration)
-            }
+            await session.transcribeAndCommit(makeAudio()) { try await recorder.commit($0) }
         }
         while !engine.isAwaiting { await Task.yield() }
         engine.completeWithSuccess()
@@ -675,15 +637,12 @@ struct VoiceCaptureSessionTests {
         let engine = ControllableTranscribing(
             result: TranscriptionResult(
                 text: "done", segments: [], language: "en", processingTime: 0))
-        let session = VoiceCaptureSession(
-            audioCapture: FakeAudioCapture(cannedAudio: makeAudio()), transcriptionEngine: engine)
+        let session = makeSession(engine: engine)
         let recorder = CommitRecorder()
         recorder.gated = true
 
         let task = Task {
-            await session.transcribeAndCommit(makeAudio(), language: "en") { text, duration in
-                try await recorder.commit(text, duration)
-            }
+            await session.transcribeAndCommit(makeAudio()) { try await recorder.commit($0) }
         }
         while !engine.isAwaiting { await Task.yield() }
         engine.completeWithSuccess()
@@ -715,33 +674,30 @@ struct VoiceCaptureSessionTests {
     private func runLearned(
         engineText: String, words: LearnedWordStore, proofread: ProofreadStub? = nil,
         app: TargetApp? = notes
-    ) async -> (VoiceCaptureSession.Outcome, [VoiceCaptureSession.Take], CommitRecorder) {
+    ) async -> (
+        VoiceCaptureSession.Outcome, [VoiceCaptureSession.Take], CommitRecorder,
+        VoiceCaptureSession
+    ) {
         let engine = ControllableTranscribing(
             result: TranscriptionResult(
                 text: engineText, segments: [], language: "en", processingTime: 0))
-        let session = VoiceCaptureSession(
-            audioCapture: FakeAudioCapture(cannedAudio: makeAudio()), transcriptionEngine: engine,
-            learnedWords: words, frontmostApp: { app })
+        let session = makeVoiceCapture(
+            microphone: FakeAudioCapture(cannedAudio: makeAudio()), recognizer: engine,
+            learnedWords: words, proofread: { text in await proofread?.proofread(text) },
+            frontmostApp: { app }
+        ).makeSession()
         _ = session.start()
         _ = session.stop()
         let recorder = CommitRecorder()
         var takes: [VoiceCaptureSession.Take] = []
-        var pass: (@MainActor (String) async -> ProofreadVerdict?)?
-        if let proofread {
-            pass = { await proofread.proofread($0) }
-        }
         let task = Task {
-            await session.transcribeAndCommit(
-                makeAudio(), language: "en",
-                proofread: pass,
-                onTake: { takes.append($0) }
-            ) { text, duration in
-                try await recorder.commit(text, duration)
+            await session.transcribeAndCommit(makeAudio(), onTake: { takes.append($0) }) {
+                try await recorder.commit($0)
             }
         }
         while !engine.isAwaiting { await Task.yield() }
         engine.completeWithSuccess()
-        return (await task.value, takes, recorder)
+        return (await task.value, takes, recorder, session)
     }
 
     /// Learned Words apply after the regex cleanup, so the take commits the
@@ -749,7 +705,7 @@ struct VoiceCaptureSessionTests {
     @Test func learnedWordsApplyAfterTheCleanupAndBeforeTheCommit() async throws {
         let words = makeLearnedWords()
         words.learn(heard: "sract", meant: "Tesseract")
-        let (outcome, takes, recorder) = await runLearned(
+        let (outcome, takes, recorder, _) = await runLearned(
             engineText: "run the  SRACT tests", words: words)
 
         guard case .committed = outcome else {
@@ -757,6 +713,8 @@ struct VoiceCaptureSessionTests {
             return
         }
         #expect(recorder.commits.first?.text == "Run the Tesseract tests")
+        #expect(recorder.commits.first?.catches.map(\.meant) == ["Tesseract"])
+        #expect(recorder.commits.first?.app == Self.notes)
         let take = try #require(takes.first)
         #expect(take.cleaned == "Run the SRACT tests")
         #expect(take.learned == "Run the Tesseract tests")
@@ -793,19 +751,81 @@ struct VoiceCaptureSessionTests {
         let id = try #require(words.learn(heard: "cloud", meant: "Claude")?.wordID)
         words.leaveAlone(id, in: LearnedWord.App(bundleID: "com.apple.Notes", name: "Notes"))
 
-        let (_, takes, recorder) = await runLearned(engineText: "the cloud lifts", words: words)
+        let (_, takes, recorder, _) = await runLearned(
+            engineText: "the cloud lifts", words: words)
         #expect(recorder.commits.first?.text == "The cloud lifts")
         #expect(takes.first?.catches.isEmpty == true)
     }
 
     /// The take's app is the one in front when it started.
     @Test func startRemembersTheAppInFront() {
-        let session = VoiceCaptureSession(
-            audioCapture: FakeAudioCapture(cannedAudio: makeAudio()),
-            transcriptionEngine: ControllableTranscribing(), frontmostApp: { Self.notes })
+        let session = makeVoiceCapture(
+            microphone: FakeAudioCapture(cannedAudio: makeAudio()),
+            recognizer: ControllableTranscribing(), frontmostApp: { Self.notes }
+        ).makeSession()
         #expect(session.targetApp == nil)
         _ = session.start()
         #expect(session.targetApp == Self.notes)
+    }
+
+    // MARK: - Insert anyway (ADR-0034, ADR-0086)
+
+    /// "Insert anyway" commits the rejected take through the surface's commit
+    /// like any take: its text as the Learned Words left it, its catches where
+    /// they stand, its length and app — and counts the catches once it is in.
+    /// The take is spent: a second press inserts nothing.
+    @Test func aRejectedTakeCommitsAnywayLikeAnyTake() async throws {
+        let words = makeLearnedWords()
+        let id = try #require(words.learn(heard: "sract", meant: "Tesseract")?.wordID)
+        let stub = ProofreadStub()
+        stub.verdict = .rejected(reason: "mumbling")
+        let (outcome, _, _, session) = await runLearned(
+            engineText: "open the SRACT repo", words: words, proofread: stub)
+        guard case .rejected = outcome else {
+            Issue.record("expected .rejected, got \(outcome)")
+            return
+        }
+        #expect(words.word(withID: id)?.totalCatches == 0)
+
+        let recorder = CommitRecorder()
+        let inserted = await session.commitRejectedTake { try await recorder.commit($0) }
+
+        guard case .committed = inserted else {
+            Issue.record("expected the rejected take to commit")
+            return
+        }
+        let take = try #require(recorder.commits.first)
+        #expect(take.text == "Open the Tesseract repo")
+        #expect(take.catches.map(\.meant) == ["Tesseract"])
+        #expect(take.catches.first?.tokenStart == 2)
+        #expect(take.duration == makeAudio().duration)
+        #expect(take.app == Self.notes)
+        #expect(words.word(withID: id)?.totalCatches == 1)
+        #expect(!session.hasRejectedTake)
+        let again = await session.commitRejectedTake { try await recorder.commit($0) }
+        #expect(again == nil)
+        #expect(recorder.commits.count == 1)
+    }
+
+    /// A take that commits leaves no rejected take behind to insert.
+    @Test func aCommittedTakeLeavesNothingToInsertAnyway() async throws {
+        let stub = ProofreadStub()
+        let engine = ControllableTranscribing(
+            result: TranscriptionResult(
+                text: "asdf", segments: [], language: "en", processingTime: 0))
+        let session = makeSession(engine: engine, stub: stub)
+        let recorder = CommitRecorder()
+        for verdict in [ProofreadVerdict.rejected(reason: "mumbling"), .unchanged] {
+            stub.verdict = verdict
+            let task = Task {
+                await session.transcribeAndCommit(makeAudio()) { try await recorder.commit($0) }
+            }
+            while !engine.isAwaiting { await Task.yield() }
+            engine.completeWithSuccess()
+            _ = await task.value
+        }
+        #expect(!session.hasRejectedTake)
+        #expect(recorder.commits.count == 1)
     }
 
     // MARK: - Silent captures (PRD #612)
@@ -818,9 +838,9 @@ struct VoiceCaptureSessionTests {
             raw: makeRaw())
         let capture = FakeAudioCapture(cannedAudio: silence)
         let dump = FakeCaptureDump()
-        let session = VoiceCaptureSession(
-            audioCapture: capture, transcriptionEngine: ControllableTranscribing(),
-            captureDump: dump)
+        let session = makeVoiceCapture(
+            microphone: capture, recognizer: ControllableTranscribing(), captureDump: dump
+        ).makeSession()
         _ = session.start()
 
         let result = session.stop()
@@ -830,5 +850,114 @@ struct VoiceCaptureSessionTests {
             return
         }
         #expect(dump.saved.isEmpty)
+    }
+
+    // MARK: - An open take is one fact (the Models section)
+
+    /// Whether a take is open — listening, transcribing, proofreading — is
+    /// one fact across every surface's session: the Models section's
+    /// Dictation and Proofreader rows read it, whatever surface took the take.
+    @Test func aTakeOnAnySurfaceIsOneOpenTake() async throws {
+        let engine = ControllableTranscribing()
+        let stub = ProofreadStub()
+        stub.gated = true
+        let voiceCapture = makeVoiceCapture(
+            microphone: FakeAudioCapture(cannedAudio: makeAudio()), recognizer: engine,
+            proofread: { await stub.proofread($0) })
+        let dictation = voiceCapture.makeSession()
+        let today = voiceCapture.makeSession()
+        #expect(!voiceCapture.isListening && !voiceCapture.isTranscribing)
+
+        _ = today.start()
+        #expect(voiceCapture.isListening)
+        #expect(dictation.phase == .idle)
+
+        guard case .audio(let audio, _) = today.stop() else {
+            Issue.record("expected audio")
+            return
+        }
+        #expect(!voiceCapture.isListening)
+        #expect(voiceCapture.isTranscribing)
+
+        let recorder = CommitRecorder()
+        let task = Task {
+            await today.transcribeAndCommit(audio) { try await recorder.commit($0) }
+        }
+        while !engine.isAwaiting { await Task.yield() }
+        engine.completeWithSuccess()
+        while !stub.isAwaitingGate { await Task.yield() }
+        #expect(voiceCapture.isProofreading)
+        #expect(!voiceCapture.isTranscribing)
+
+        stub.releaseGate()
+        _ = await task.value
+        #expect(!voiceCapture.isListening && !voiceCapture.isTranscribing)
+        #expect(!voiceCapture.isProofreading)
+    }
+
+    // MARK: - The Live Preview reads like the take (ADR-0086)
+
+    @MainActor @Observable
+    final class PreviewRecorder {
+        private(set) var shown: [LivePreview?] = []
+        func show(_ preview: LivePreview?) { shown.append(preview) }
+        var last: LivePreview? { shown.last ?? nil }
+    }
+
+    private func makeFakeModelBundle() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("session-preview-\(UUID().uuidString)", isDirectory: true)
+        for model in ["AudioEncoder.mlmodelc", "TextDecoder.mlmodelc"] {
+            try FileManager.default.createDirectory(
+                at: directory.appendingPathComponent(model), withIntermediateDirectories: true)
+        }
+        return directory
+    }
+
+    /// The same take, heard the same way, reads the same in the preview as it
+    /// commits: one text pipeline (the regex cleanup, then the Learned Words
+    /// for the take's app) serves both. Catches show in the preview and count
+    /// only once the take commits; the preview clears at release.
+    @Test func thePreviewAndTheTakeReadTheSame() async throws {
+        let bundle = try makeFakeModelBundle()
+        defer { try? FileManager.default.removeItem(at: bundle) }
+        let recognizer = InMemorySpeechRecognizer(
+            result: TranscriptionResult(
+                text: "ask  cloud about it",
+                segments: [
+                    TranscriptionSegment(text: " ask  cloud about it", startTime: 0, endTime: 0.9)
+                ],
+                language: "en", processingTime: 0))
+        let engine = TranscriptionEngine(makeRecognizer: { recognizer })
+        try await engine.loadModel(from: bundle)
+        let words = makeLearnedWords()
+        let id = try #require(words.learn(heard: "cloud", meant: "Claude")?.wordID)
+        let microphone = FakeAudioCapture(cannedAudio: makeAudio())
+        microphone.cannedSnapshot = AudioData(
+            samples: [Float](repeating: 0.1, count: 16_000), sampleRate: 16_000, duration: 1.0)
+        let session = makeVoiceCapture(
+            microphone: microphone, recognizer: engine, learnedWords: words,
+            frontmostApp: { Self.notes }
+        ).makeSession()
+        let previews = PreviewRecorder()
+
+        _ = session.start(preview: { previews.show($0) })
+        #expect(await observe(until: { previews.last != nil }))
+        let preview = try #require(previews.last)
+        #expect(words.word(withID: id)?.totalCatches == 0)
+
+        guard case .audio(let audio, _) = session.stop() else {
+            Issue.record("expected audio")
+            return
+        }
+        #expect(previews.last == nil)
+        let recorder = CommitRecorder()
+        _ = await session.transcribeAndCommit(audio) { try await recorder.commit($0) }
+
+        let take = try #require(recorder.commits.first)
+        #expect(preview.text == take.text)
+        #expect(preview.text == "Ask Claude about it")
+        #expect(preview.catches == take.catches)
+        #expect(words.word(withID: id)?.totalCatches == 1)
     }
 }

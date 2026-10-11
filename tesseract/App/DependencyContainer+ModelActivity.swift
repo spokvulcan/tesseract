@@ -53,14 +53,11 @@ extension DependencyContainer {
                 bytes: speechEnginePresenter.isModelLoaded
                     ? weightBytes(of: ModelDefinition.defaultTextToSpeechModelID) : nil))
 
-        // Dictation: listening while any microphone take records,
-        // transcribing while Whisper decodes.
-        let listening =
-            dictationFeed.phase == .recording
-            || voiceInputs.contains { $0.voiceState == .recording }
-        let transcribing =
-            transcriptionEngine.isTranscribing || dictationFeed.phase == .processing
-            || voiceInputs.contains { $0.voiceState == .transcribing }
+        // Dictation: listening while a take records on any surface,
+        // transcribing while Whisper decodes (a Live Preview's decode too) or
+        // a take is written down.
+        let listening = voiceCapture.isListening
+        let transcribing = transcriptionEngine.isTranscribing || voiceCapture.isTranscribing
         let speechToTextID = settingsManager.selectedSpeechToTextModelID
         rows.append(
             ModelActivityRow(
@@ -80,7 +77,7 @@ extension DependencyContainer {
                 id: "proofread", role: "Proofreader", name: displayName(of: proofreadID),
                 state: !proofreadPass.isModelLoaded
                     ? .notLoaded
-                    : dictationFeed.phase == .proofreading ? .working("Proofreading") : .loaded,
+                    : voiceCapture.isProofreading ? .working("Proofreading") : .loaded,
                 bytes: proofreadPass.isModelLoaded ? weightBytes(of: proofreadID) : nil))
         let embedderID = ModelDefinition.defaultEmbeddingModelID
         rows.append(

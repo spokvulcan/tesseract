@@ -82,24 +82,23 @@ final class DependencyContainer: ObservableObject {
         )
     }
 
-    /// Every push-to-talk made so far, one per surface: the Models section's
-    /// Dictation row reads their takes from here, so a surface built with
-    /// `makeVoiceInput()` is never left out of it.
-    private(set) var voiceInputs: [AgentVoiceInputController] = []
+    /// **Voice Capture** (ADR-0096): every push-to-talk surface's takes, with
+    /// every stage — the shared mic and Whisper, the Capture Dump, the
+    /// Learned Words, the Proofread Pass and the dictation language — and
+    /// whether any take is open, for the Models section.
+    lazy var voiceCapture: VoiceCapture = makeVoiceCapture()
 
-    /// A surface's own push-to-talk on the shared mic, Whisper and Proofread
-    /// Pass, registered in `voiceInputs`.
-    private func makeVoiceInput() -> AgentVoiceInputController {
-        let voiceInput = AgentVoiceInputController(
-            audioCapture: audioCaptureEngine,
-            transcriptionEngine: transcriptionEngine,
-            settings: settingsManager,
-            proofreadPass: proofreadPass,
+    private func makeVoiceCapture() -> VoiceCapture {
+        let settings = settingsManager
+        let pass = proofreadPass
+        return VoiceCapture(
+            microphone: audioCaptureEngine,
+            recognizer: transcriptionEngine,
             captureDump: captureDumpStore,
-            learnedWords: learnedWordStore
-        )
-        voiceInputs.append(voiceInput)
-        return voiceInput
+            isCaptureDumpEnabled: { settings.captureDumpEnabled },
+            learnedWords: learnedWordStore,
+            proofread: { await pass.proofread($0) },
+            language: { settings.language })
     }
 
     /// The only thing in the app that watches for the *absence* of a person:
@@ -176,7 +175,7 @@ final class DependencyContainer: ObservableObject {
         trace: companionTrace)
     lazy var captureService = CaptureService(agenda: agenda)
     /// The capture panel's own push-to-talk, separate from the composer's.
-    lazy var captureVoiceInput = makeVoiceInput()
+    lazy var captureVoiceInput = AgentVoiceInputController(session: voiceCapture.makeSession())
     lazy var capturePanel = CapturePanelController(
         capture: captureService, voice: captureVoiceInput)
     lazy var companionNotifier: CompanionNotifier = {
@@ -264,9 +263,9 @@ final class DependencyContainer: ObservableObject {
     lazy var frontmostApp = FrontmostAppTracker()
     lazy var powerMonitor = PowerMonitor()
     /// The Jarvis panel's own push-to-talk.
-    lazy var panelVoiceInput = makeVoiceInput()
+    lazy var panelVoiceInput = AgentVoiceInputController(session: voiceCapture.makeSession())
     /// Today's composer's own push-to-talk.
-    lazy var todayVoiceInput = makeVoiceInput()
+    lazy var todayVoiceInput = AgentVoiceInputController(session: voiceCapture.makeSession())
     /// The floating card rung: the Breakpoint card in a Siri-style glass panel.
     lazy var jarvisPanel: JarvisPanelController = JarvisPanelController(
         thread: dayThread, voice: panelVoiceInput, agenda: agenda,
@@ -407,7 +406,7 @@ final class DependencyContainer: ObservableObject {
     // derived from agent events. Constructed here — not in the views — because
     // cross-cutting surfaces need them too (Appshot stages into the Composer
     // Draft; the push-to-talk hotkey drives voice input).
-    lazy var agentVoiceInput = makeVoiceInput()
+    lazy var agentVoiceInput = AgentVoiceInputController(session: voiceCapture.makeSession())
     lazy var composerDraft = ComposerDraftController(conversationImages: { [agent] in
         agent.state.messages.flatMap { $0.transcriptImages }
     })
@@ -502,15 +501,7 @@ final class DependencyContainer: ObservableObject {
     // speaks; a key press or a click interrupts him.
     lazy var companionVoiceSession: CompanionVoiceSessionController = {
         let controller = CompanionVoiceSessionController(
-            capture: VoiceCaptureSession(
-                audioCapture: audioCaptureEngine,
-                transcriptionEngine: transcriptionEngine,
-                captureDump: captureDumpStore,
-                isCaptureDumpEnabled: { [settingsManager] in
-                    settingsManager.captureDumpEnabled
-                },
-                learnedWords: learnedWordStore
-            ),
+            capture: voiceCapture.makeSession(),
             meterLevel: { [dictationFeed] in dictationFeed.level },
             meterSpectrum: { [dictationFeed] in dictationFeed.spectrum },
             inputDead: { [audioCaptureEngine] in audioCaptureEngine.isInputDead },
@@ -530,8 +521,7 @@ final class DependencyContainer: ObservableObject {
             },
             overlay: companionVoicePrototype,
             recorder: companionTrace,
-            settings: settingsManager,
-            proofreadPass: proofreadPass
+            settings: settingsManager
         )
         // The reply hook: while a session is live it owns the spoken reply
         // and the auto-listen loop; autoSpeak stays the chat-only path.
@@ -711,16 +701,12 @@ final class DependencyContainer: ObservableObject {
     // Coordinator
     lazy var dictationCoordinator: DictationCoordinator = {
         let coordinator = DictationCoordinator(
-            audioCapture: audioCaptureEngine,
-            transcriptionEngine: transcriptionEngine,
+            session: voiceCapture.makeSession(),
             textInjector: textInjector,
             history: transcriptionHistory,
             settings: settingsManager,
             feed: dictationFeed,
-            proofreadPass: proofreadPass,
-            captureDump: captureDumpStore,
-            pairs: correctionPairStore,
-            learnedWords: learnedWordStore
+            pairs: correctionPairStore
         )
         // Every committed take is the one ⌃⌥Space reopens in the Lens.
         coordinator.onTakeCommitted = { [weak self] take in
