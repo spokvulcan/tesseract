@@ -37,8 +37,9 @@ ADR-0069's amendment admits.
 ## Decision
 
 1. **One named rule.** `PrefillPlanner.usableRestore(offset:target:keySpace:residual:)`
-   returns the restore point (the offset and its anchor delta) or why it is
-   unusable (`coversNothing`, `coversWholeTarget`, `insideImagePrefix`,
+   returns the restore point (the offset and its anchor delta, which seeds
+   the Position Anchor through its one `initialState(seedsPositionAnchor:)`;
+   the keyed plan carries the point whole) or why it is unusable (`coversNothing`, `coversWholeTarget`, `insideImagePrefix`,
    `splitsImageRun`, in that order). The residual says what the prefill past
    it forwards: `mayCarryImages` for the keyed turn, which continues through
    an Image Span (ADR-0007 phase 2), `textOnly` for every re-prefill. All five

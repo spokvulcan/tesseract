@@ -251,14 +251,16 @@ import MLXLMCommon
 
         let failed = try #require(planned.resolved.lookup.snapshot)
         let dropped = manager.dropUnrestorableSnapshot(
-            failed, corruptLayers: false, replanning: planned)
+            failed, tokens: request, partitionKey: key, corruptLayers: false,
+            replanning: planned)
         #expect(dropped.drop == .body)
         let replanned = try #require(dropped.replanned)
         #expect(replanned.contains { $0.offset == 100 && $0.type == .system })
         #expect(replanned.contains { $0.offset == 500 && $0.type == .branchPoint })
 
         let again = manager.dropUnrestorableSnapshot(
-            failed, corruptLayers: false, replanning: planned)
+            failed, tokens: request, partitionKey: key, corruptLayers: false,
+            replanning: planned)
         #expect(again.drop == .notFound)
         #expect(again.replanned == nil)
         await handOver.withClaim { _ in }

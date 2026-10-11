@@ -1528,9 +1528,9 @@ nonisolated final class ServerCompletion {
                         // one the drop took is captured anew on this turn
                         // (ADR-0069 amendment).
                         let replanned = await ResidualPrefill.dropUnrestorable(
-                            failed, error: restoreFailure, replanning: planned,
-                            prefixCache: prefixCache, diagnostics: diagnosticsContext
-                        ).replanned
+                            failed, error: restoreFailure, tokens: keySpace.keyPath,
+                            partitionKey: partitionKey, replanning: planned,
+                            prefixCache: prefixCache, diagnostics: diagnosticsContext)
                         if let replanned { checkpointPlan = replanned }
                     }
                     prefillPlan = PrefillPlanner.coldPlan(
@@ -1552,7 +1552,8 @@ nonisolated final class ServerCompletion {
                         .merging(restore.memoryFacts) { _, new in new })
             }
             switch prefillPlan.restore {
-            case .restore(let cacheOffset, let anchorDelta):
+            case .restore(let point):
+                let cacheOffset = point.offset
                 cacheToUse = restoredCache
                 if !keySpace.isIdentity,
                     cacheOffset < keySpace.minimumWarmOffset,
@@ -1567,10 +1568,8 @@ nonisolated final class ServerCompletion {
                         text: LMInput.Text(
                             tokens: fullInput.text.tokens[0..., prefixEnd...], mask: nil))
                     executionBaseOffset = prefixEnd
-                    if seedsPositionAnchor {
-                        imageContinuationAnchor = PositionAnchor.seededState(
-                            ropeDelta: anchorDelta)
-                    }
+                    imageContinuationAnchor = point.initialState(
+                        seedsPositionAnchor: seedsPositionAnchor)
                 } else {
                     // Image-free remainder: suffix-only prefill. Layers restore
                     // with their absolute logical offset intact, and each
@@ -1582,10 +1581,8 @@ nonisolated final class ServerCompletion {
                     inputForGeneration = LMInput(
                         text: LMInput.Text(tokens: slicedTokens, mask: nil))
                     executionBaseOffset = cacheOffset
-                    if seedsPositionAnchor {
-                        executorInitialState = PositionAnchor.seededState(
-                            ropeDelta: anchorDelta)
-                    }
+                    executorInitialState = point.initialState(
+                        seedsPositionAnchor: seedsPositionAnchor)
                 }
             case .cold where !keySpace.isIdentity:
                 // No valid restore: cold image prefill, but driven through the

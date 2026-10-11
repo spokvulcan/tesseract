@@ -344,7 +344,7 @@ nonisolated enum SpeculativeCanonicalPrefill {
                         warm.cache, path: admitPath,
                         range: (point.offset + range.lowerBound)..<(point.offset + range.upperBound),
                         state: warm.consumed == 0
-                            ? base.initialState(seedsPositionAnchor: seedsPositionAnchor)
+                            ? point.initialState(seedsPositionAnchor: seedsPositionAnchor)
                             : warm.chunkState,
                         prefillStepSize: stepSize, tokenNDim: tokenNDim,
                         evalPolicy: .checkedSynchronous, storedForm: storedForm, in: session)

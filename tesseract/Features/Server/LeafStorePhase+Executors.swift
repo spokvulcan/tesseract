@@ -284,7 +284,8 @@ nonisolated extension LeafStorePhase {
                     try ResidualPrefill.prefill(
                         restoredCache, path: storedTokens,
                         range: boundaryOffset..<storedTokens.count,
-                        state: base.initialState(seedsPositionAnchor: request.seedsPositionAnchor),
+                        state: base.point.initialState(
+                            seedsPositionAnchor: request.seedsPositionAnchor),
                         prefillStepSize: request.facts.prefillStepSize,
                         tokenNDim: request.facts.tokenNDim, evalPolicy: .pipelined,
                         storedForm: context.partitionKey.kvScheme, in: session)
