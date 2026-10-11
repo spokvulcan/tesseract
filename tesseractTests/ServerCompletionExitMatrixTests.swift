@@ -91,7 +91,7 @@ struct ServerCompletionExitMatrixTests {
 
     /// A cancel that lands in the warm prefill, by the caller or by the
     /// unload drain: the start throws, and the leaf it took goes back.
-    @Test(arguments: [false, true])
+    @Test(.parksPoolThreads, arguments: [false, true])
     func aStartupCancelRewindsTheLeaf(drain: Bool) async throws {
         let gate = ForwardGate(threshold: 0, armed: false)
         let session = Replay.Session(onForward: gate.onForward)
@@ -133,7 +133,7 @@ struct ServerCompletionExitMatrixTests {
         #expect(resend.leafStore["restoreMode"] == "handoff", resend.account)
     }
 
-    @Test func aDecodeCancelRewindsTheLeaf() async throws {
+    @Test(.parksPoolThreads) func aDecodeCancelRewindsTheLeaf() async throws {
         let prompt = try EmittedPathToyTokenizer().applyChatTemplate(
             messages: Self.warmRequest.promptMessages, tools: nil,
             additionalContext: Replay.preserving.additionalContext())
@@ -200,7 +200,7 @@ struct ServerCompletionExitMatrixTests {
     /// The tree refuses the check-in when another body already sits where
     /// the turn's leaf would go. The request keeps no leaf of its own and
     /// gives the one it took back.
-    @Test func aRefusedCheckInRewindsTheLeaf() async throws {
+    @Test(.parksPoolThreads) func aRefusedCheckInRewindsTheLeaf() async throws {
         let prompt = try EmittedPathToyTokenizer().applyChatTemplate(
             messages: Self.warmRequest.promptMessages, tools: nil,
             additionalContext: Replay.preserving.additionalContext())

@@ -46,6 +46,27 @@ in a dozen suites, and every one of them passed serially.
   suites held every pool thread for about 40 s. Everything else waited for a
   thread, including `Task.sleep` wake-ups, which resume through the global
   executor even in main-actor code.
+- **A test that parks a pool thread takes `@Test(.parksPoolThreads)`**
+  (`tesseractTests/ParkingGate.swift`). Synchronous code can only be held on a
+  semaphore: a toy model's forward (`ForwardGate`), the SSD writer's
+  materialize step (`BlockingMaterializer`). The thread it holds is a pool
+  thread, and the test needs the pool to reach its `open()`: an actor hop, a
+  `Task.sleep` wake-up. Once as many gates park as the pool has threads,
+  nothing can open them. On CI's three-thread runner every whole-target run
+  hung until the job's two-hour timeout.
+  - Park on a `ParkingGate`. At most a quarter of the cores run parking cases
+    at once, a gate a case leaves shut opens when the case ends, and a park
+    still waiting after `waitBackstop` fails its test. A gate made outside the
+    trait records an issue.
+  - Hold async code with `await` instead (`DrainGate`): it holds no thread.
+  - SwiftLint's `test_thread_park` rejects a semaphore, group or condition
+    anywhere else in `tesseractTests/`.
+  - To find a park these rules miss, run the target on a one-thread pool:
+    `TEST_RUNNER_LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 scripts/test.sh` (about
+    a minute). The trait cancels its cases there, and any other park hangs the
+    run within seconds; `sample <test host pid>` shows the parked stack. In CI,
+    `scripts/test-hang-watchdog.sh` samples a run still going after 20
+    minutes, prints the parked threads and stops it.
 - **Wait for the state change, not the clock.** Every `@MainActor` suite
   queues on the one main actor, and one hop onto it can take seconds. A poll
   against a 3 s deadline then fails a test whose code is fine. The waits live

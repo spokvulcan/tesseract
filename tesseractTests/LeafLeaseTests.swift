@@ -562,7 +562,8 @@ struct LeafLeaseTests {
         #expect(pending.payload.isMaterialized)
     }
 
-    @Test func writerReadInProgressRefusesAcquisitionUntilMaterialized() async throws {
+    @Test(.parksPoolThreads)
+    func writerReadInProgressRefusesAcquisitionUntilMaterialized() async throws {
         let (manager, store, root) = PrefixCacheTestFixtures.makeSSDBackedManager(
             label: "lease-reader-wins", ramBudgetBytes: 1_000_000)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -594,7 +595,7 @@ struct LeafLeaseTests {
             tree.endLeafLease(lease, on: node, returning: body, tokens: tokens, reason: .rewind))
     }
 
-    @Test func growthReturnWaitsForATombstonedDestinationReader() async throws {
+    @Test(.parksPoolThreads) func growthReturnWaitsForATombstonedDestinationReader() async throws {
         let (manager, store, root) = PrefixCacheTestFixtures.makeSSDBackedManager(
             label: "lease-destination-reader", ramBudgetBytes: 1_000_000)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -739,14 +740,17 @@ struct LeafLeaseTests {
 
 private nonisolated final class LeafWriterBarrier: @unchecked Sendable {
     private let lock = NSLock()
-    private let semaphore = DispatchSemaphore(value: 0)
+    private let gate: ParkingGate
     private var entered = false
+    init(sourceLocation: SourceLocation = #_sourceLocation) {
+        gate = ParkingGate(sourceLocation: sourceLocation)
+    }
     var started: Bool { lock.withLock { entered } }
     func wait() {
         lock.withLock { entered = true }
-        _ = semaphore.wait(timeout: .now() + 5)
+        gate.park()
     }
-    func open() { semaphore.signal() }
+    func open() { gate.open() }
 }
 
 private nonisolated final class LeafLeaseLineSink: @unchecked Sendable {

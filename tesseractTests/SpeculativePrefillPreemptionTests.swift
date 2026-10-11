@@ -133,7 +133,8 @@ import Testing
         #expect(manager.totalSnapshotBytes == 0)
     }
 
-    @Test func preemptedPassSettlesPartialLeafThatResolutionThenSurfaces() async throws {
+    @Test(.parksPoolThreads)
+    func preemptedPassSettlesPartialLeafThatResolutionThenSurfaces() async throws {
         let tokenizer = ToySequencingTokenizer()
         let stored = HTTPPrefixCacheConversation(
             systemPrompt: nil,
@@ -441,7 +442,8 @@ import Testing
     /// pass's chunks always have (ADR-0009's one-chunk bound), and the settle
     /// admits it. The test holds the session while the pass's third chunk
     /// waits for it, cancels the pass, then lets the chunk in.
-    @Test func aPreemptionWhileAChunkWaitsForItsSessionStillRunsThatChunk() async throws {
+    @Test(.parksPoolThreads)
+    func aPreemptionWhileAChunkWaitsForItsSessionStillRunsThatChunk() async throws {
         let gate = ForwardGate(threshold: 2048)
         let requests = SessionRequestLog()
         let pass = try await ChunkedPass(onForward: gate.onForward, sessionRequests: requests)
@@ -457,9 +459,9 @@ import Testing
         // The pass is inside its second chunk's session.
         await gate.reached()
         let inside = requests.requests
-        let release = DispatchSemaphore(value: 0)
+        let release = DrainGate()
         let holder = Task.detached {
-            await provider.withSession { _ in Self.hold(release) }
+            await provider.withSession { _ in await release.wait() }
         }
         await requests.reached(inside + 1)
         gate.open()
@@ -467,15 +469,10 @@ import Testing
         // waits for the third chunk's.
         await requests.reached(inside + 2)
         task.cancel()
-        release.signal()
+        await release.open()
         await holder.value
         await task.value
 
         #expect(pass.deepest() == min(4096, pass.admitPath.count))
-    }
-
-    /// Hold the session a caller is in until `release` is signalled.
-    nonisolated private static func hold(_ release: DispatchSemaphore) {
-        release.wait()
     }
 }

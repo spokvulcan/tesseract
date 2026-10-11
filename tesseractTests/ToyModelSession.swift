@@ -2,6 +2,7 @@ import Foundation
 import MLX
 import MLXLMCommon
 import MLXNN
+import Testing
 
 @testable import Tesseract_Agent
 
@@ -387,18 +388,21 @@ nonisolated struct PlaceholderCountMismatch: Error {
 /// the first time a forward starts at or past `threshold`, so a test can
 /// land a deterministic cancel at a chunk boundary, then releases it.
 /// Construct with `armed: false` and call `arm()` when a setup phase must
-/// run over the same offsets without tripping the gate.
+/// run over the same offsets without tripping the gate. The model thread is
+/// a pool thread, parked on a ``ParkingGate``: the test takes
+/// `@Test(.parksPoolThreads)`.
 nonisolated final class ForwardGate: @unchecked Sendable {
     private let lock = NSLock()
     private var armed: Bool
     private let threshold: Int
-    private let release = DispatchSemaphore(value: 0)
+    private let release: ParkingGate
     private let reachedStream: AsyncStream<Void>
     private let reachedContinuation: AsyncStream<Void>.Continuation
 
-    init(threshold: Int, armed: Bool = true) {
+    init(threshold: Int, armed: Bool = true, sourceLocation: SourceLocation = #_sourceLocation) {
         self.threshold = threshold
         self.armed = armed
+        release = ParkingGate(sourceLocation: sourceLocation)
         (reachedStream, reachedContinuation) = AsyncStream.makeStream()
     }
 
@@ -414,7 +418,7 @@ nonisolated final class ForwardGate: @unchecked Sendable {
         }
         guard shouldBlock else { return }
         reachedContinuation.yield()
-        release.wait()
+        release.park()
     }
 
     /// Awaits the gate being reached (async-safe for the test's isolation).
@@ -423,7 +427,7 @@ nonisolated final class ForwardGate: @unchecked Sendable {
     }
 
     func open() {
-        release.signal()
+        release.open()
     }
 }
 

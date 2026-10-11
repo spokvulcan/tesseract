@@ -140,7 +140,7 @@ jobs:
       github.event_name != 'pull_request' ||
       (github.event.action == 'labeled' && github.event.label.name == 'run-build')
     runs-on: xcode-27
-    timeout-minutes: 120
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
         with:
@@ -164,11 +164,32 @@ jobs:
       # @testable imports. They run in parallel, as the scheme and every local
       # run do, so a race that shows only in parallel fails here too
       # (docs/testing.md → Parallel runs share one test host).
+      - name: Build for testing (Debug)
+        run: |
+          set -o pipefail
+          FILTER="cat"; command -v xcbeautify >/dev/null && FILTER="xcbeautify"
+          xcodebuild build-for-testing \
+            -project tesseract.xcodeproj \
+            -scheme tesseract \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -derivedDataPath DerivedData \
+            -skipPackagePluginValidation \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY=- \
+            2>&1 | "$FILTER"
+
+      # One test at a time, the whole target took under 2 minutes on this
+      # runner. A run still going after 20 is a hang: the watchdog samples the
+      # test host into TestHang/, prints the threads parked in test code and
+      # stops the run.
       - name: Test (Debug)
         run: |
           set -o pipefail
           FILTER="cat"; command -v xcbeautify >/dev/null && FILTER="xcbeautify"
-          xcodebuild test \
+          sysctl hw.activecpu # the test host's pool has a thread per core
+          scripts/test-hang-watchdog.sh 20 TestHang &
+          xcodebuild test-without-building \
             -project tesseract.xcodeproj \
             -scheme tesseract \
             -configuration Debug \
@@ -176,8 +197,6 @@ jobs:
             -derivedDataPath DerivedData \
             -resultBundlePath TestResults.xcresult \
             -skipPackagePluginValidation \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY=- \
             2>&1 | "$FILTER"
 
       # The test build's index sees every reference by symbol, so a shared
@@ -190,7 +209,10 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: test-results
-          path: TestResults.xcresult
+          path: |
+            TestResults.xcresult
+            TestHang
+          if-no-files-found: ignore
           retention-days: 7
 
   # The fork's carry branches have no CI of their own, so a PR that moves the

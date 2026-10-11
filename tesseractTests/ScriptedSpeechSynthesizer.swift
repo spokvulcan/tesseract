@@ -37,8 +37,10 @@ actor ScriptedSpeechSynthesizer: SpeechSynthesizing {
     private(set) var sawCancellation = false
     /// Signalled as each utterance ends. The engine trims caches after its
     /// stream's last event, so a test holding the main actor on this knows
-    /// the whole stream is waiting to be drained.
-    nonisolated let utteranceEnds = DispatchSemaphore(value: 0)
+    /// the whole stream is waiting to be drained. The thread it parks is the
+    /// main thread, and this actor signals it from the pool, so it is not a
+    /// ``ParkingGate``.
+    nonisolated let utteranceEnds = DispatchSemaphore(value: 0)  // swiftlint:disable:this test_thread_park
     /// Runs once, the next time the engine asks for the audio format. It
     /// asks while it admits an utterance, so a test acts in the middle of
     /// the next admission.

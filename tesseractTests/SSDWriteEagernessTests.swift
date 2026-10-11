@@ -189,7 +189,7 @@ struct SSDWriteEagernessTests {
         #expect(rows == owned.layers[0].state[0].asArray(Float.self))
     }
 
-    @Test(arguments: ["cancel", "replace"])
+    @Test(.parksPoolThreads, arguments: ["cancel", "replace"])
     func viewExtractionThatNeverEnqueuesPreservesItsSSDIntent(interruption: String) async throws {
         let (manager, store, root) = PrefixCacheTestFixtures.makeSSDBackedManager(
             label: "view-retry", ramBudgetBytes: 100_000_000)

@@ -155,7 +155,7 @@ struct RequestMemoryTelemetryTests {
         #expect(terminals.last?.field("ssdPendingPayloadBytes") != nil)
     }
 
-    @Test func cancelledDecodeStillEmitsTerminalMemory() async throws {
+    @Test(.parksPoolThreads) func cancelledDecodeStillEmitsTerminalMemory() async throws {
         let modelID = "memory-cancel-\(UUID())"
         let capture = TelemetryCapture(modelID: modelID)
         defer { capture.stop() }

@@ -183,7 +183,7 @@ struct SSDSnapshotStoreTests {
     /// reads before it decides whether a `pendingFullPayload` refusal is
     /// worth a bounded wait: queued behind other writes, in the writer's
     /// hands right now, or gone.
-    @Test
+    @Test(.parksPoolThreads)
     func writerSeparatesAQueuedPendingPayloadFromTheOneItIsWriting() async {
         let (config, root) = makeConfig()
         defer { cleanup(root) }

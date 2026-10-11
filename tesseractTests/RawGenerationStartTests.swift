@@ -179,7 +179,7 @@ struct RawGenerationStartTests {
         #expect(prefill.prefillMs != nil)
     }
 
-    @Test func cancelStopsGenerationAndCompletionSettles() async throws {
+    @Test(.parksPoolThreads) func cancelStopsGenerationAndCompletionSettles() async throws {
         let render = try Self.render()
         let scripted = String(repeating: "x", count: 64)
         let gate = ForwardGate(threshold: render.count + 8)

@@ -113,6 +113,14 @@ custom_rules:
     excluded_match_kinds: [comment, doccomment, string]
     message: "A count of yields can run out before the thread pool runs the work: use observe(until:) or waitUntil (tesseractTests/Waiting.swift)"
     severity: error
+  test_thread_park:
+    name: "Parked test thread"
+    included: "tesseractTests/.*\\.swift$"
+    excluded: "tesseractTests/ParkingGate\\.swift$"
+    regex: '\b(DispatchSemaphore|DispatchGroup|NSCondition|NSConditionLock)\('
+    excluded_match_kinds: [comment, doccomment, string]
+    message: "A thread parked until the test lets it go holds a pool thread: wait with await (DrainGate), or park on a ParkingGate in a @Test(.parksPoolThreads) case (tesseractTests/ParkingGate.swift)"
+    severity: error
   agent_message_cast:
     name: "Agent message cast"
     # App code only; the accessors' home and the codec, which unwraps
