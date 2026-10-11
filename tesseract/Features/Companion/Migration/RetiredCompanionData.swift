@@ -74,8 +74,10 @@ nonisolated enum RetiredCompanionData {
         return report
     }
 
-    /// The launch step: clean the owner's data and record what happened.
+    /// The launch step: clean the owner's data and record what happened,
+    /// only where the Launch Mode migrates the owner's data.
     static func cleanAtLaunch(trace: CompanionTrace) {
+        guard LaunchMode.current.migratesOwnersData else { return }
         let report = clean(.production)
         guard report.didAnything else { return }
         trace.record(

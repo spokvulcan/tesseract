@@ -13,18 +13,11 @@ import os
 @MainActor
 final class DependencyContainer: ObservableObject {
     // Core Services
-    /// Under a test runner, or in a scratch launch, the settings live in
-    /// memory, so neither reads or changes the owner's (ADR-0073).
-    let settingsManager: SettingsManager = {
-        guard ProcessEnvironment.usesScratchData else {
-            return SettingsManager(store: UserDefaultsSettingsStore())
-        }
-        let settings = SettingsManager(store: InMemorySettingsStore())
-        // A scratch launch opens the main window, not the first-launch tour,
-        // which would start model downloads.
-        if ProcessEnvironment.isScratchLaunch { settings.hasCompletedOnboarding = true }
-        return settings
-    }()
+    /// Where the Launch Mode keeps off the owner's data (a test host, a
+    /// scratch launch), the settings live in memory (ADR-0073).
+    let settingsManager = SettingsManager(
+        store: LaunchMode.current.keepsOffOwnersData
+            ? InMemorySettingsStore() : UserDefaultsSettingsStore())
     lazy var permissionsManager = PermissionsManager()
     lazy var audioDeviceManager = AudioDeviceManager()
 
@@ -171,11 +164,11 @@ final class DependencyContainer: ObservableObject {
     // MARK: - The Companion's day
 
     /// Apple Reminders and Calendar, the single source of truth for the
-    /// owner's tasks and plans. The test host and a scratch launch get the
-    /// in-memory store, so neither asks for or touches the owner's real data
-    /// (ADR-0073).
+    /// owner's tasks and plans. Where the Launch Mode keeps off the owner's
+    /// data (a test host, a scratch launch), the in-memory store, so neither
+    /// asks for or touches the owner's real data (ADR-0073).
     lazy var agendaStore: any AgendaStore =
-        ProcessEnvironment.usesScratchData ? InMemoryAgendaStore() : EventKitAgendaStore()
+        LaunchMode.current.keepsOffOwnersData ? InMemoryAgendaStore() : EventKitAgendaStore()
     lazy var agenda = Agenda(
         store: agendaStore,
         areaMapJSON: { [settingsManager] in settingsManager.companionAreasJSON },
@@ -187,7 +180,7 @@ final class DependencyContainer: ObservableObject {
     lazy var capturePanel = CapturePanelController(
         capture: captureService, voice: captureVoiceInput)
     lazy var companionNotifier: CompanionNotifier = {
-        let notifier = CompanionNotifier(usesOS: !ProcessEnvironment.usesScratchData)
+        let notifier = CompanionNotifier(usesOS: LaunchMode.current.postsNotifications)
         notifier.onOpen = { (NSApp.delegate as? AppDelegate)?.navigateToToday() }
         return notifier
     }()
@@ -240,7 +233,7 @@ final class DependencyContainer: ObservableObject {
     lazy var triageRuleStore = TriageRuleStore(settings: settingsManager)
     /// The owner's Profile: facts they approved, and Jarvis's proposals.
     lazy var profileStore = ProfileStore(
-        url: ProcessEnvironment.usesScratchData ? nil : ProfileStore.productionURL,
+        url: LaunchMode.current.keepsOffOwnersData ? nil : ProfileStore.productionURL,
         trace: companionTrace)
     /// Full-text search over saved conversations, for `recall`.
     lazy var recallIndex = RecallIndex(
@@ -292,7 +285,7 @@ final class DependencyContainer: ObservableObject {
         settings: settingsManager, agenda: agenda, notifier: companionNotifier,
         trace: companionTrace, idleMonitor: idleMonitor, presence: companionPresence,
         thread: dayThread,
-        stateStore: ProcessEnvironment.usesScratchData ? DayStateStore(url: nil) : .production,
+        stateStore: LaunchMode.current.keepsOffOwnersData ? DayStateStore(url: nil) : .production,
         frontmost: frontmostApp, power: powerMonitor,
         delivery: CompanionDelivery(
             showPanel: { [weak self] card in self?.jarvisPanel.show(card) },
@@ -787,18 +780,13 @@ final class DependencyContainer: ObservableObject {
     }
 
     func setup() async {
-        // The app is also the unit-test host. Never start model prewarms,
-        // inference reloads, or the owner's background services from tests.
-        guard !ProcessEnvironment.isRunningTests else { return }
-        // The SSD read experiment owns its single target model and scratch tier.
-        guard !CommandLine.arguments.contains("--ssd-read-bench") else { return }
-        // The TurboQuant bench reads the process-wide MLX memory counters; the
-        // Companion and the prewarms must not load a model beside it.
-        guard !CommandLine.arguments.contains("--turboquant-bench") else { return }
-        // The DFlash2 bench and its speed ruler own their model too: a
-        // Companion moment that loaded a second copy beside a ruler run
-        // deadlocked both in MLX's compile.
-        guard !CommandLine.arguments.contains("--dflash2-bench") else { return }
+        // The owner's background work — prewarms, model loads, the Companion,
+        // the server, the hotkeys — runs only where the Launch Mode runs it
+        // (ADR-0095): never in the unit tests' host, and never beside a
+        // harness, which owns its model (a Companion moment that loaded a
+        // second copy beside a DFlash2 ruler run deadlocked both in MLX's
+        // compile).
+        guard LaunchMode.current.runsOwnersBackgroundWork else { return }
         // Prevent duplicate setup from multiple window instances
         guard !hasSetup else { return }
         hasSetup = true

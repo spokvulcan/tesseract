@@ -561,11 +561,17 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # Every main-window page opens with the app's own wiring, and test runs stay
 # off the owner's data (ADR-0073). A page missing an environment dependency
 # crashes the host: the result shows "Crash" on that page's case.
+# LaunchModeTests pins the Launch Mode (ADR-0095): the mode the arguments and
+# environment decide (the environment first), what each mode may do (every
+# harness skips the owner's background work and opens no window), and the
+# harness table (unique flags, the harnesses bench.sh starts winning over
+# --benchmark, which alone exits 0 on failure):
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
   -skipPackagePluginValidation \
   -only-testing:tesseractTests/MainWindowPageTests \
   -only-testing:tesseractTests/StorageEnvironmentTests \
-  -only-testing:tesseractTests/TelemetryEnvironmentTests
+  -only-testing:tesseractTests/TelemetryEnvironmentTests \
+  -only-testing:tesseractTests/LaunchModeTests
 
 # Run all tests:
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
@@ -591,9 +597,10 @@ Agenda, and no OS notifications (`CompanionNotifierTests`). Each launch starts
 empty.
 
 For a validation run that must not load models, prefix the command with
-`TEST_RUNNER_XCTestSessionIdentifier=prefix-cache-unit-tests`. The existing
-test-host detector makes `DependencyContainer.setup()` return before app
-bootstrap, including Whisper and proofreader prewarms. Use an explicit suite
+`TEST_RUNNER_XCTestSessionIdentifier=prefix-cache-unit-tests`. That variable
+makes the process a test host (the Launch Mode, ADR-0095), so
+`DependencyContainer.setup()` returns before app bootstrap, including Whisper
+and proofreader prewarms. Use an explicit suite
 allowlist (the prefix-cache block above plus touched suites) after checking its
 fixtures, rather than the broad target. The prefix block's `Real` suites load
 tokenizer files, not model weights. Leave corpus and allocation opt-ins unset.

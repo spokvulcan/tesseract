@@ -596,9 +596,10 @@ final class DictationCoordinator {
     /// Preloaded once: `NSSound(named:)` loads from disk on first use, and the
     /// start-recording play sits on the same main-actor job that precedes the
     /// Lens's state emission — a per-press load would delay the Lens. None
-    /// under a test runner: the tests drive hundreds of takes and nobody listens.
+    /// where the Launch Mode plays no sounds: the test host drives hundreds of
+    /// takes and nobody listens.
     private let sounds: [SystemSound: NSSound] =
-        ProcessEnvironment.isRunningTests
+        !LaunchMode.current.playsSounds
         ? [:]
         : [
             SystemSound.startRecording: NSSound(named: "Tink"),

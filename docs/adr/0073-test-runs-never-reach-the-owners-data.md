@@ -5,7 +5,8 @@
 - Extends: #159 (telemetry written to a scratch folder under a test runner)
 - Relates to: ADR-0035 (the memory evals read a copy of the owner's store)
 - Amended: 2026-10-10 (a scratch launch keeps the running app off the owner's
-  data the same way)
+  data the same way); 2026-10-11 by ADR-0095 (the Launch Mode decides, once,
+  what the process may do)
 
 ## Context
 
@@ -114,3 +115,16 @@ doesn't list, so a scratch launch's notifier keeps its nudges in memory and
 posts nothing. The model folder stays the owner's, as for tests. Each launch
 starts empty, and a later test run or scratch launch removes its folder once
 it has exited.
+
+## Amendment (2026-10-11): the Launch Mode
+
+The detection stays process-level, but it now lives in one module with every
+other "what kind of process is this?" answer (ADR-0095): the **Launch Mode**
+(`tesseract/Core/LaunchMode.swift`) decides once whether the process is the
+owner's launch, a scratch launch, the test host or a harness, and callers ask
+its answers. `ProcessEnvironment.usesScratchData` is the Launch Mode's
+`keepsOffOwnersData`; `StorageEnvironment.keepsOffOwnersData` asks it from the
+environment alone. The test host's windows follow its `launchWindow(onboarded:)`
+(none, and none restored), and a scratch launch no longer marks onboarding done
+in its settings to keep the Welcome window shut: the Launch Mode opens the main
+window for it.

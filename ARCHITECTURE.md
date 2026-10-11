@@ -70,6 +70,7 @@ tesseract/
 │   ├── AppDelegate.swift        # macOS lifecycle, single instance, window management
 │   ├── AppBindings.swift        # App Bindings: launch sequence + subscription rules
 │   ├── AppTerminationCoordinator.swift # Teardown ordering (closure-struct steps)
+│   ├── Harness.swift            # The harness table: every headless bench and parity run, by flag (ADR-0095)
 │   └── DependencyContainer.swift# Composition root, pure wiring
 │
 ├── Core/                        # Shared services
@@ -81,6 +82,7 @@ tesseract/
 │   ├── Permissions/
 │   │   └── PermissionsManager.swift   # Mic & Accessibility checks
 │   ├── SettledWidth.swift       # Settled Width policy + modifier (pure value, unit-tested)
+│   ├── LaunchMode.swift         # Launch Mode: owner, scratch, test host or harness, and what each may do (ADR-0095)
 │   ├── StorageEnvironment.swift # Storage roots: the owner's, or per-process scratch under tests and in a scratch launch (ADR-0073)
 │   ├── ViewModifiers.swift      # Scoped dependency injection
 │   └── Logging.swift            # Unified logging (Log enum)
@@ -474,7 +476,7 @@ The main window's `ContentView` applies the core scope at its root and each page
 
 AppKit consumers (MenuBarManager, panel controllers) receive dependencies via constructor injection — they cannot use `@Environment`.
 
-Under a test runner (the app is the unit-test host) the container keeps everything it stores in a scratch directory per test process, through `StorageEnvironment`, and its settings in memory, and the host opens no windows (ADR-0073). The model folder is the one location left in place.
+The container picks its adapters from the **Launch Mode** (`Core/LaunchMode.swift`, ADR-0095), decided once per process: the owner's launch, a scratch launch, the unit-test host, or a harness from the table in `App/Harness.swift`. Under a test runner (the app is the unit-test host) and in a scratch launch, everything it stores goes to a scratch directory per process, through `StorageEnvironment`, and its settings, Agenda, Profile and day state stay in memory (ADR-0073). The model folder is the one location left in place. The test host and a harness open no windows and run none of the owner's background work: `setup()` returns before the bootstrap.
 
 ---
 

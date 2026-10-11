@@ -82,7 +82,7 @@ struct RotatingJSONLWriterTests {
 struct TelemetryEnvironmentTests {
 
     @Test func testProcessIsDetected() {
-        #expect(ProcessEnvironment.isRunningTests)
+        #expect(LaunchMode.current == .testHost)
     }
 
     @Test func durableDirectoriesDivertAwayFromApplicationSupport() throws {

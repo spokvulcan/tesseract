@@ -3,11 +3,11 @@
 //  tesseract
 //
 //  Where the app keeps what it stores (ADR-0073). In production these are the
-//  owner's Application Support and Caches folders. Under a test runner, or in a
-//  scratch launch, they are folders inside one scratch directory per process,
-//  so neither reads or changes the owner's data. Per process, like the telemetry
-//  homes (#159): the scheme runs suites in parallel processes against the same
-//  app host.
+//  owner's Application Support and Caches folders. In a process whose **Launch
+//  Mode** keeps off the owner's data (a test host, a scratch launch), they are
+//  folders inside one scratch directory per process. Per process, like the
+//  telemetry homes (#159): the scheme runs suites in parallel processes against
+//  the same app host.
 //
 //  Every default storage location resolves through here, except the model
 //  folder (`ModelDownloadManager.modelStorageURL`): suites load installed
@@ -17,6 +17,13 @@
 import Foundation
 
 nonisolated enum StorageEnvironment {
+    /// The Launch Mode's answer for this process (ADR-0095). Its environment
+    /// alone decides it — a harness keeps the owner's data, as the owner's
+    /// launch does — so shared code asks it without the Mac's harness table.
+    static let keepsOffOwnersData: Bool = LaunchMode.decide(
+        arguments: [], environment: ProcessInfo.processInfo.environment, harnessFlags: []
+    ).keepsOffOwnersData
+
     /// The Application Support root: the owner's in production, this
     /// process's scratch copy under a test runner or in a scratch launch.
     static let applicationSupport: URL = root(
@@ -29,7 +36,7 @@ nonisolated enum StorageEnvironment {
     /// request (Claude Code's `~/.claude/settings.json`); a scratch folder
     /// under a test runner or in a scratch launch.
     static let home: URL =
-        ProcessEnvironment.usesScratchData
+        keepsOffOwnersData
         ? scratchRoot.appendingPathComponent("Home", isDirectory: true)
         : URL.homeDirectory
 
@@ -41,7 +48,7 @@ nonisolated enum StorageEnvironment {
     static let scratchRoot: URL = {
         let temporary = FileManager.default.temporaryDirectory
         let pid = ProcessInfo.processInfo.processIdentifier
-        if ProcessEnvironment.usesScratchData {
+        if keepsOffOwnersData {
             removeExitedScratchRoots(in: temporary, ownPID: pid, isAlive: isProcessAlive)
         }
         return temporary.appendingPathComponent("\(scratchPrefix)\(pid)", isDirectory: true)
@@ -73,7 +80,7 @@ nonisolated enum StorageEnvironment {
     private static func root(
         _ directory: FileManager.SearchPathDirectory, scratchName: String
     ) -> URL {
-        guard !ProcessEnvironment.usesScratchData else {
+        guard !keepsOffOwnersData else {
             return scratchRoot.appendingPathComponent(scratchName, isDirectory: true)
         }
         return FileManager.default.urls(for: directory, in: .userDomainMask).first

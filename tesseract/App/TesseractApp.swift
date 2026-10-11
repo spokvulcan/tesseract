@@ -48,22 +48,6 @@ struct TesseractApp: App {
     @StateObject private var container = DependencyContainer()
     @State private var selectedNavigation: NavigationItem? = .today
 
-    /// Launch arguments that select a headless harness run (dispatched in
-    /// `init`). Harness instances are exempt from the single-instance guard
-    /// so a bench can run while an interactive instance is open.
-    static let harnessFlags: Set<String> = [
-        "--paro-parity-bench", "--snapshot-bench", "--ssd-read-bench", "--warm-parity-bench",
-        "--prefix-detect-bench",
-        "--tokenize-cache-bench", "--agent-cpu-bench", "--dflash2-bench",
-        "--prefix-cache-e2e", "--benchmark", "--hybrid-cache-correctness",
-        "--prefill-step-benchmark", "--paroquant-vlm-smoke",
-        "--prepared-checkpoint-parity", "--trace-replay",
-        "--rotated-checkpoint-parity", "--turboquant-bench",
-    ]
-    static var isHarnessLaunch: Bool {
-        CommandLine.arguments.contains { harnessFlags.contains($0) }
-    }
-
     init() {
         // In-place dynamic slice updates (mlx fork C9): DFlash2 writes its
         // verify rows and the drafter's block K/V into cache slack rows whose
@@ -71,128 +55,9 @@ struct TesseractApp: App {
         // such write copies the whole store. The bench sets the same flag;
         // overwrite 0 keeps an explicit environment override.
         setenv("MLX_DYNSLICE_INPLACE", "1", 0)
-        let args = CommandLine.arguments
-        // `--paro-parity-bench` precedes `--benchmark`: scripts/bench.sh always
-        // passes `--benchmark`, so the perf-ruler/gate harness is opt-in via
-        // extra args forwarded by bench.sh (`bench.sh quick --model X
-        // --paro-parity-bench`). Plain `--benchmark` runs are unaffected.
-        if args.contains("--paro-parity-bench") {
-            Self.runHarness("PARO parity bench", logSubdirectory: "paro-parity-bench") {
-                try await ParoParityBenchRunner(runner: BenchmarkRunner()).run()
-            }
-        } else if args.contains("--turboquant-bench") {
-            Self.runHarness("TurboQuant bench", logSubdirectory: "turboquant-bench") {
-                try await TurboQuantBenchRunner(runner: BenchmarkRunner()).run()
-            }
-        } else if args.contains("--ssd-read-bench") {
-            Self.runHarness("SSD read bench", logSubdirectory: nil) {
-                try await SSDReadBenchRunner(runner: BenchmarkRunner()).run()
-            }
-        } else if args.contains("--warm-parity-bench") {
-            Self.runHarness("Warm Body parity bench", logSubdirectory: nil) {
-                try await WarmBodyParityBenchRunner(runner: BenchmarkRunner()).run()
-            }
-        } else if args.contains("--snapshot-bench") {
-            Self.runHarness("Snapshot bench", logSubdirectory: "snapshot-bench") {
-                try await SnapshotBenchRunner(runner: BenchmarkRunner()).run()
-            }
-        } else if args.contains("--prefix-detect-bench") {
-            Self.runHarness("Prefix detect bench", logSubdirectory: "prefix-detect-bench") {
-                try await PrefixDetectBenchRunner(runner: BenchmarkRunner()).run()
-            }
-        } else if args.contains("--tokenize-cache-bench") {
-            Self.runHarness("Tokenize cache bench", logSubdirectory: "tokenize-cache-bench") {
-                try await TokenizeCacheBenchRunner(runner: BenchmarkRunner()).run()
-            }
-        } else if args.contains("--agent-cpu-bench") {
-            Self.runHarness("Agent CPU bench", logSubdirectory: "agent-cpu-bench") {
-                try await AgentCpuBenchRunner(runner: BenchmarkRunner()).run()
-            }
-        } else if args.contains("--dflash2-bench") {
-            Self.runHarness("DFlash2 bench", logSubdirectory: nil) {
-                try await DFlash2BenchRunner(runner: BenchmarkRunner()).run()
-            }
-        } else if args.contains("--prefix-cache-e2e") {
-            Self.runHarness("Prefix cache E2E", logSubdirectory: "prefix-cache-e2e") {
-                try await PrefixCacheE2ERunner(runner: BenchmarkRunner()).run()
-            }
-        } else if args.contains("--benchmark") {
-            Task { @MainActor in
-                do { try await BenchmarkRunner().run() } catch {
-                    Self.logHarnessFailure("Benchmark failed: \(error)", logSubdirectory: nil)
-                }
-                exit(0)
-            }
-        } else if args.contains("--hybrid-cache-correctness") {
-            Self.runHarness(
-                "Hybrid cache correctness", logSubdirectory: "hybrid-cache-correctness"
-            ) {
-                try await HybridCacheCorrectnessRunner(runner: BenchmarkRunner()).run()
-            }
-        } else if args.contains("--prefill-step-benchmark") {
-            Self.runHarness("Prefill step benchmark", logSubdirectory: "prefill-step-benchmark") {
-                try await PrefillStepBenchmarkRunner(runner: BenchmarkRunner()).run()
-            }
-        } else if args.contains("--paroquant-vlm-smoke") {
-            Self.runHarness("ParoQuant VLM smoke", logSubdirectory: "paroquant-vlm-smoke") {
-                try await ParoQuantVLMSmokeRunner(runner: BenchmarkRunner()).run()
-            }
-        } else if args.contains("--prepared-checkpoint-parity") {
-            Self.runHarness(
-                "Prepared Checkpoint parity", logSubdirectory: "prepared-checkpoint-parity"
-            ) {
-                try await PreparedCheckpointParityRunner(runner: BenchmarkRunner()).run()
-            }
-        } else if args.contains("--rotated-checkpoint-parity") {
-            Self.runHarness(
-                "Rotated Ternary Checkpoint parity", logSubdirectory: "rotated-checkpoint-parity"
-            ) {
-                try await RotatedCheckpointParityRunner(runner: BenchmarkRunner()).run()
-            }
-        } else if args.contains("--trace-replay") {
-            Self.runHarness("Trace replay", logSubdirectory: "trace-replay") {
-                try await TraceReplayRunner(arguments: args).run()
-            }
-        }
-    }
-
-    /// Spawn a `@MainActor` task that runs a loaded-model verification
-    /// harness, exits 0 on success, exits 1 on failure (after logging).
-    /// `logSubdirectory` is where the harness keeps its `latest.log` under
-    /// the benchmark output directory (`nil`: the directory itself).
-    @MainActor
-    private static func runHarness(
-        _ label: String,
-        logSubdirectory: String?,
-        run: @MainActor @escaping () async throws -> Void
-    ) {
-        Task { @MainActor in
-            do {
-                try await run()
-                exit(0)
-            } catch {
-                logHarnessFailure("\(label) failed: \(error)", logSubdirectory: logSubdirectory)
-                exit(1)
-            }
-        }
-    }
-
-    /// Log a harness failure and append it to the harness's `latest.log`,
-    /// the file the scripts tail; a harness that failed before opening its
-    /// log gets one.
-    private static func logHarnessFailure(_ message: String, logSubdirectory: String?) {
-        Log.agent.error("\(message)")
-        var directory = BenchmarkConfig.fromCommandLine().outputDir
-        if let logSubdirectory { directory.append(path: logSubdirectory) }
-        let url = directory.appending(path: "latest.log")
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        if !FileManager.default.fileExists(atPath: url.path) {
-            FileManager.default.createFile(atPath: url.path, contents: nil)
-        }
-        guard let handle = try? FileHandle(forWritingTo: url) else { return }
-        defer { try? handle.close() }
-        _ = try? handle.seekToEnd()
-        try? handle.write(contentsOf: Data("[harness] \(message)\n".utf8))
+        // A harness launch runs its harness and exits; it opens no window
+        // and runs none of the owner's background work (ADR-0095).
+        LaunchMode.current.harness?.start()
     }
 
     var body: some Scene {
@@ -226,13 +91,12 @@ struct TesseractApp: App {
         }
         .windowResizability(.contentMinSize)
         .defaultSize(width: 800, height: 700)
-        // First launch belongs to the Welcome Window; the main window arrives
-        // at the Handoff (or via the menu bar). Every later launch is normal.
-        // The test host opens no window at all, restored or not (ADR-0073).
-        .defaultLaunchBehavior(
-            isFirstLaunch || ProcessEnvironment.isRunningTests ? .suppressed : .automatic
-        )
-        .restorationBehavior(ProcessEnvironment.isRunningTests ? .disabled : .automatic)
+        // The Launch Mode picks the window a launch opens: the owner's first
+        // launch belongs to the Welcome Window (the main window arrives at the
+        // Handoff, or via the menu bar), every later one opens this. A test
+        // host and a harness open none, restored or not (ADR-0073, ADR-0095).
+        .defaultLaunchBehavior(launchWindow == .main ? .automatic : .suppressed)
+        .restorationBehavior(launchWindow == nil ? .disabled : .automatic)
         .commands {
             DictationCommands()
         }
@@ -264,11 +128,7 @@ struct TesseractApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
         .restorationBehavior(.disabled)
-        // The test host's settings are in memory, so it always reads as a
-        // first launch; the tour would start model downloads (ADR-0073).
-        .defaultLaunchBehavior(
-            isFirstLaunch && !ProcessEnvironment.isRunningTests ? .presented : .suppressed
-        )
+        .defaultLaunchBehavior(launchWindow == .welcome ? .presented : .suppressed)
 
         // The Markdown Gallery: on-demand singleton, never presented at
         // launch; the system Window menu lists it automatically.
@@ -290,9 +150,10 @@ struct TesseractApp: App {
     }
 
     /// Read once per scene evaluation; only the value at launch matters for
-    /// the two `defaultLaunchBehavior`s above.
-    private var isFirstLaunch: Bool {
-        !container.settingsManager.hasCompletedOnboarding
+    /// the `defaultLaunchBehavior`s above.
+    private var launchWindow: LaunchMode.LaunchWindow? {
+        LaunchMode.current.launchWindow(
+            onboarded: container.settingsManager.hasCompletedOnboarding)
     }
 }
 

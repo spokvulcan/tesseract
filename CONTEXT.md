@@ -2861,6 +2861,28 @@ composition root, which stays pure wiring with no behaviour.
 _Avoid_: app glue (pre-carve working name), setup() behaviour, launch coordinator,
 app services, a SwiftUI `Binding` (view data flow, unrelated).
 
+**Launch Mode**:
+What this process is, decided once from its arguments and environment: the
+owner's launch, a scratch launch, the unit tests' host, or a **Harness** — and
+the one module that answers what such a process may do: keep off the owner's
+data, run the owner's background work, which window to open at launch, post
+OS notifications, enforce a single instance, migrate the owner's data, play
+sounds. The environment decides first (a test host, then a scratch launch);
+only then do the arguments name a harness. Callers ask an answer, never the
+arguments, the environment or the mode's name (ADR-0095, extending ADR-0073).
+_Avoid_: process environment (the retired predicates it replaced), test mode,
+debug mode, run mode, "is running tests" (ask the answer the call site needs).
+
+**Harness**:
+A headless run the app makes instead of the owner's launch — a loaded-model
+bench, a parity check, a trace replay — selected by a launch flag and listed
+once in the harness table, with its label, where it keeps its `latest.log`,
+and how it runs. The table's order is precedence. A harness never runs the
+owner's background work and opens no window: it owns the GPU and the model it
+loads.
+_Avoid_: bench (one kind of harness), benchmark mode, test runner (the
+unit-test host is its own Launch Mode).
+
 **Settled Width**:
 The width a page lays out against — the detail column's width once the column
 has stopped moving. While the sidebar slides, every page keeps its previous
