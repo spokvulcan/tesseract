@@ -733,10 +733,10 @@ struct PrefixCacheManagerTests {
 
         let r1 = mgr.lookup(tokens: tokens, partitionKey: defaultKey)
         let r2 = mgr.lookup(tokens: tokens, partitionKey: defaultKey)
-        #expect(r1.restoreCache() != nil)
-        #expect(r2.restoreCache() != nil)
+        #expect(r1.restoredCache() != nil)
+        #expect(r2.restoredCache() != nil)
         // Different object references — independent copies
-        #expect(r1.restoreCache()!.count == r2.restoreCache()!.count)
+        #expect(r1.restoredCache()!.count == r2.restoredCache()!.count)
     }
 
     // MARK: - 6. mutatingRestoredCacheDoesNotAffectSnapshot
@@ -749,13 +749,13 @@ struct PrefixCacheManagerTests {
             SnapshotAdmission.leaf(
                 storedTokens: tokens, snapshot: snap, storage: .ramOnly, partitionKey: defaultKey)!)
 
-        var restored = mgr.lookup(tokens: tokens, partitionKey: defaultKey).restoreCache()!
+        var restored = mgr.lookup(tokens: tokens, partitionKey: defaultKey).restoredCache()!
         // Mutate restored cache
         restored[0].state = [MLXArray.zeros([1, 1, 99, 64]), MLXArray.zeros([1, 1, 99, 64])]
 
         // Second lookup still returns original state
         let r2 = mgr.lookup(tokens: tokens, partitionKey: defaultKey)
-        #expect(r2.restoreCache()![0].state[0].dim(2) == 50)
+        #expect(r2.restoredCache()![0].state[0].dim(2) == 50)
     }
 
     /// With the default `alpha = 0`, utility scoring collapses to pure
@@ -1075,7 +1075,7 @@ struct PrefixCacheManagerTests {
         let mgr = makeManager()
         let tokens = Array(1...1000)
 
-        let plan = mgr.planCheckpoints(
+        let plan = mgr.testSeam().planCheckpoints(
             tokens: tokens, stablePrefixOffset: 500, partitionKey: defaultKey
         )
         #expect(plan.count == 1)
@@ -1097,7 +1097,7 @@ struct PrefixCacheManagerTests {
         )
 
         // Planning with same stablePrefixOffset — should not re-plan
-        let plan = mgr.planCheckpoints(
+        let plan = mgr.testSeam().planCheckpoints(
             tokens: tokens, stablePrefixOffset: 500, partitionKey: defaultKey
         )
         #expect(plan.isEmpty)
@@ -1109,7 +1109,7 @@ struct PrefixCacheManagerTests {
         let mgr = makeManager()
         let tokens = Array(1...1000)
 
-        let plan = mgr.planCheckpoints(
+        let plan = mgr.testSeam().planCheckpoints(
             tokens: tokens, stablePrefixOffset: 500, partitionKey: defaultKey
         )
         // Only .system checkpoints planned; leaf is never mid-prefill
@@ -1367,7 +1367,7 @@ struct PrefixCacheManagerTests {
 
         // planCheckpoints walks pathA looking for an existing system
         // snapshot at offset 10 — must NOT refresh A's access time.
-        _ = mgr.planCheckpoints(
+        _ = mgr.testSeam().planCheckpoints(
             tokens: pathA + [99], stablePrefixOffset: 10, partitionKey: defaultKey
         )
 
@@ -1469,7 +1469,7 @@ struct PrefixCacheManagerTests {
             )!)
 
         // Planning should still request .system at 500 — the leaf doesn't count
-        let plan = mgr.planCheckpoints(
+        let plan = mgr.testSeam().planCheckpoints(
             tokens: tokens, stablePrefixOffset: 500, partitionKey: defaultKey)
         #expect(plan.count == 1)
         #expect(plan[0].type == .system)
@@ -1488,7 +1488,7 @@ struct PrefixCacheManagerTests {
                 partitionKey: defaultKey
             )!)
 
-        let plan = mgr.planCheckpoints(
+        let plan = mgr.testSeam().planCheckpoints(
             tokens: [1, 2, 5, 6],
             stablePrefixOffset: nil,
             partitionKey: defaultKey
@@ -1511,7 +1511,7 @@ struct PrefixCacheManagerTests {
                 partitionKey: defaultKey
             )!)
 
-        let plan = mgr.planCheckpoints(
+        let plan = mgr.testSeam().planCheckpoints(
             tokens: [1, 2, 3, 4, 5],
             stablePrefixOffset: nil,
             partitionKey: defaultKey
@@ -1540,7 +1540,7 @@ struct PrefixCacheManagerTests {
                 partitionKey: defaultKey
             )!)
 
-        let plan = mgr.planCheckpoints(
+        let plan = mgr.testSeam().planCheckpoints(
             tokens: [1, 2, 9, 10],
             stablePrefixOffset: nil,
             partitionKey: defaultKey
@@ -1551,7 +1551,7 @@ struct PrefixCacheManagerTests {
 
     @Test func coldTreeNoSpeculativeCandidates() {
         let mgr = makeManager()
-        let plan = mgr.planCheckpoints(
+        let plan = mgr.testSeam().planCheckpoints(
             tokens: Array(1...10),
             stablePrefixOffset: nil,
             partitionKey: defaultKey
@@ -1571,7 +1571,7 @@ struct PrefixCacheManagerTests {
                 partitionKey: defaultKey
             )!)
 
-        let plan = mgr.planCheckpoints(
+        let plan = mgr.testSeam().planCheckpoints(
             tokens: [1, 2, 5, 6],
             stablePrefixOffset: nil,
             partitionKey: defaultKey
@@ -1602,7 +1602,7 @@ struct PrefixCacheManagerTests {
 
         // Tree: root -> [1,2] -> {[3,4,5], [8,9,10]}. [1,2,3,7,11] descends
         // through [1,2] then diverges mid-edge of [3,4,5] at offset 3.
-        let plan = mgr.planCheckpoints(
+        let plan = mgr.testSeam().planCheckpoints(
             tokens: [1, 2, 3, 7, 11],
             stablePrefixOffset: nil,
             partitionKey: defaultKey
@@ -1624,7 +1624,7 @@ struct PrefixCacheManagerTests {
             )!)
 
         let request = Array(1...30) + [999, 1000]
-        let plan = mgr.planCheckpoints(
+        let plan = mgr.testSeam().planCheckpoints(
             tokens: request,
             stablePrefixOffset: 10,
             partitionKey: defaultKey
@@ -1645,7 +1645,7 @@ struct PrefixCacheManagerTests {
             )!)
 
         let request = Array(1...10) + [999, 1000]
-        let plan = mgr.planCheckpoints(
+        let plan = mgr.testSeam().planCheckpoints(
             tokens: request,
             stablePrefixOffset: 10,
             partitionKey: defaultKey
@@ -1673,7 +1673,7 @@ struct PrefixCacheManagerTests {
         #expect(exactLookup.snapshotTokenOffset == 200)
         #expect(exactLookup.sharedPrefixLength == 200)
         #expect(
-            mgr.alignmentCheckpointOffset(
+            mgr.testSeam().alignmentCheckpointOffset(
                 lookupResult: exactLookup,
                 totalTokenCount: exactPath.count + 1,
                 plannedCheckpoints: []
@@ -1692,7 +1692,7 @@ struct PrefixCacheManagerTests {
         #expect(plannedLookup.snapshotTokenOffset == 200)
         #expect(plannedLookup.sharedPrefixLength == 500)
         #expect(
-            mgr.alignmentCheckpointOffset(
+            mgr.testSeam().alignmentCheckpointOffset(
                 lookupResult: plannedLookup,
                 totalTokenCount: longPath.count + 1,
                 plannedCheckpoints: [(offset: 500, type: .system)]
@@ -1714,7 +1714,7 @@ struct PrefixCacheManagerTests {
         #expect(lookup.snapshotTokenOffset == 100)
         #expect(lookup.sharedPrefixLength == 500)
 
-        let alignmentOffset = mgr.alignmentCheckpointOffset(
+        let alignmentOffset = mgr.testSeam().alignmentCheckpointOffset(
             lookupResult: lookup,
             totalTokenCount: matchedPath.count + 1,
             plannedCheckpoints: []
@@ -1736,42 +1736,12 @@ struct PrefixCacheManagerTests {
         #expect(lookup.snapshotTokenOffset == 300)
         #expect(lookup.sharedPrefixLength == 450)
 
-        let alignmentOffset = mgr.alignmentCheckpointOffset(
+        let alignmentOffset = mgr.testSeam().alignmentCheckpointOffset(
             lookupResult: lookup,
             totalTokenCount: matchedPath.count + 1,
             plannedCheckpoints: []
         )
         #expect(alignmentOffset == nil)
-    }
-
-    @Test func planCheckpointsWithAlignToIncludesAlignmentCheckpoint() {
-        let mgr = makeManager()
-        let matchedPath = Array(1...500)
-        mgr.admit(
-            SnapshotAdmission.checkpoints(
-                fullPromptTokens: matchedPath,
-                candidates: [.ramOnly(makeSnapshot(offset: 100, type: .system))],
-                partitionKey: defaultKey
-            )!)
-
-        let request = matchedPath + [999]
-        // Drive the live prefill path: resolve first (Snapshot Resolution does
-        // the lookup), then plan against the settled tree aligned to that hit.
-        let lookup = mgr.lookup(tokens: request, partitionKey: defaultKey)
-        #expect(lookup.snapshotTokenOffset == 100)
-        #expect(lookup.sharedPrefixLength == 500)
-
-        let plan = mgr.planCheckpoints(
-            tokens: request,
-            stablePrefixOffset: nil,
-            partitionKey: defaultKey,
-            alignTo: lookup
-        )
-
-        #expect(plan.contains { $0.offset == 500 && $0.type == .branchPoint })
-
-        let suffixPlan = plan.filter { $0.offset > lookup.snapshotTokenOffset }
-        #expect(suffixPlan.contains { $0.offset == 500 && $0.type == .branchPoint })
     }
 
     // MARK: - Global partitioning
@@ -2215,7 +2185,7 @@ struct PrefixCacheManagerTests {
         )
 
         let hydrated = makeUniformSnapshot(offset: tokens.count, type: .leaf)
-        mgr.promote(node: node, snapshot: hydrated, partitionKey: defaultKey)
+        mgr.testSeam().promote(node: node, snapshot: hydrated, partitionKey: defaultKey)
 
         #expect(node.state.body != nil)
         #expect(node.state.ref != nil)  // ref preserved
@@ -2321,7 +2291,7 @@ struct PrefixCacheManagerTests {
         #expect(node.state.body == nil)
         #expect(node.state.label == "ssdOnly")
 
-        let plan = mgr.planCheckpoints(
+        let plan = mgr.testSeam().planCheckpoints(
             tokens: tokens,
             stablePrefixOffset: stableOffset,
             partitionKey: defaultKey
@@ -2355,7 +2325,7 @@ struct PrefixCacheManagerTests {
 
         // While the ssdOnly node is present, the system checkpoint is
         // treated as already stored and suppressed.
-        let planBefore = mgr.planCheckpoints(
+        let planBefore = mgr.testSeam().planCheckpoints(
             tokens: tokens, stablePrefixOffset: stableOffset, partitionKey: defaultKey
         )
         #expect(!planBefore.contains { $0.offset == stableOffset && $0.type == .system })
@@ -2365,7 +2335,7 @@ struct PrefixCacheManagerTests {
         mgr.clearCommittedSnapshotRefAfterHydrationFailure(node: node, partitionKey: defaultKey)
 
         // The lost checkpoint is now re-planned.
-        let planAfter = mgr.planCheckpoints(
+        let planAfter = mgr.testSeam().planCheckpoints(
             tokens: tokens, stablePrefixOffset: stableOffset, partitionKey: defaultKey
         )
         #expect(planAfter.contains { $0.offset == stableOffset && $0.type == .system })
@@ -2564,13 +2534,13 @@ struct PrefixCacheManagerTests {
         #expect(ssdStore.residency().bytes == 1024 + 2048)
 
         let now: ContinuousClock.Instant = .now
-        mgr.restoreSnapshotRef(
+        mgr.testSeam().restoreSnapshotRef(
             path: path, snapshotRef: first,
             partitionKey: defaultKey, lastAccessTime: now
         )
         // Second call resolves to the same node via `insertPath`'s edge
         // walk: first-wins, and the loser's backing is reclaimed.
-        mgr.restoreSnapshotRef(
+        mgr.testSeam().restoreSnapshotRef(
             path: path, snapshotRef: second,
             partitionKey: defaultKey, lastAccessTime: now
         )

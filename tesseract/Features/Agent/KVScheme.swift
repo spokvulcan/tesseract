@@ -15,6 +15,15 @@ nonisolated enum KVScheme: String, Sendable, Equatable, CaseIterable, Codable {
     /// bf16 keys, 4-bit values: 41,216 bytes per token on Qwen3.8-27B.
     case turbo0v4
 
+    /// The scheme a request's generation parameters carry. The vendor's
+    /// parameters hold it as its raw string, and this is the one place a
+    /// path reads it back: the Request Keying phase for the partition key,
+    /// the Raw Generation Start for its Speculation Plan.
+    init?(_ parameters: GenerateParameters) {
+        guard let raw = parameters.kvScheme else { return nil }
+        self.init(rawValue: raw)
+    }
+
     /// Key bits as the vendor counts them: 8 is affine, 0 is unquantized.
     var keyBits: Int {
         switch self {

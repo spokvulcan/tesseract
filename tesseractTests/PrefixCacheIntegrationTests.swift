@@ -127,7 +127,7 @@ struct PrefixCacheIntegrationTests {
         #expect(result.snapshot == nil)
 
         // Plan should include stable prefix checkpoint
-        let plan = mgr.planCheckpoints(
+        let plan = mgr.testSeam().planCheckpoints(
             tokens: tokens,
             stablePrefixOffset: stableOffset,
             partitionKey: defaultKey
@@ -149,7 +149,7 @@ struct PrefixCacheIntegrationTests {
                 storedTokens: tokens, snapshot: snap, storage: .ramOnly, partitionKey: defaultKey)!)
 
         let result = mgr.lookup(tokens: tokens, partitionKey: defaultKey)
-        let restored = result.restoreCache()
+        let restored = result.restoredCache()
         #expect(restored != nil)
         #expect(restored?.count == 8)
 
@@ -175,7 +175,7 @@ struct PrefixCacheIntegrationTests {
                 storedTokens: tokens, snapshot: snap, storage: .ramOnly, partitionKey: defaultKey)!)
 
         let result = mgr.lookup(tokens: tokens, partitionKey: defaultKey)
-        let restored = result.restoreCache()!
+        let restored = result.restoredCache()!
         let snapshotOffset = result.snapshotTokenOffset
         #expect(snapshotOffset == 200)
 
@@ -232,7 +232,7 @@ struct PrefixCacheIntegrationTests {
         // Lookup full → hits leaf (QuantizedKVCache)
         let fullResult = mgr.lookup(tokens: fullTokens, partitionKey: defaultKey)
         #expect(fullResult.snapshot?.checkpointType == .leaf)
-        let restoredLeaf = fullResult.restoreCache()
+        let restoredLeaf = fullResult.restoredCache()
         #expect(restoredLeaf != nil)
         #expect(restoredLeaf![0] is QuantizedKVCache)
 
@@ -240,7 +240,7 @@ struct PrefixCacheIntegrationTests {
         let partialTokens = sysTokens + Array(500...600)
         let partialResult = mgr.lookup(tokens: partialTokens, partitionKey: defaultKey)
         #expect(partialResult.snapshot?.checkpointType == .system)
-        let restoredSys = partialResult.restoreCache()
+        let restoredSys = partialResult.restoredCache()
         #expect(restoredSys != nil)
         #expect(restoredSys![0] is KVCacheSimple)
     }
@@ -255,7 +255,7 @@ struct PrefixCacheIntegrationTests {
         let tokens = Array(1...1000)
         let stableOffset = 300
 
-        let plan = mgr.planCheckpoints(
+        let plan = mgr.testSeam().planCheckpoints(
             tokens: tokens,
             stablePrefixOffset: stableOffset,
             partitionKey: defaultKey
@@ -327,7 +327,7 @@ struct PrefixCacheIntegrationTests {
         let fullTokens = Array(1...500)
         let systemPlusToolOffset = 200  // As if StablePrefixDetector returned this
 
-        let plan = mgr.planCheckpoints(
+        let plan = mgr.testSeam().planCheckpoints(
             tokens: fullTokens,
             stablePrefixOffset: systemPlusToolOffset,
             partitionKey: defaultKey
@@ -357,7 +357,7 @@ struct PrefixCacheIntegrationTests {
         #expect(result.snapshotTokenOffset == 3000)
 
         // Plan checkpoints for a stable prefix at 4000
-        var plan = mgr.planCheckpoints(
+        var plan = mgr.testSeam().planCheckpoints(
             tokens: tokens,
             stablePrefixOffset: 4000,
             partitionKey: defaultKey
@@ -398,14 +398,14 @@ struct PrefixCacheIntegrationTests {
         #expect(firstLookup.snapshotTokenOffset == 200)
         #expect(firstLookup.sharedPrefixLength == 600)
 
-        let planned = mgr.planCheckpoints(
+        let planned = mgr.testSeam().planCheckpoints(
             tokens: firstRequest,
             stablePrefixOffset: nil,
             partitionKey: defaultKey
         )
         #expect(!planned.contains(where: { $0.offset == 600 }))
 
-        let alignmentOffset = mgr.alignmentCheckpointOffset(
+        let alignmentOffset = mgr.testSeam().alignmentCheckpointOffset(
             lookupResult: firstLookup,
             totalTokenCount: firstRequest.count,
             plannedCheckpoints: planned

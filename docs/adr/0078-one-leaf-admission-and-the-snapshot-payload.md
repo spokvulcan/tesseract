@@ -256,3 +256,11 @@ and 48 GB, macOS 27.0:
   machine had 19 GiB available at the start, and the archived pass peaked
   at a 23.5 GiB footprint. It needs a rerun with more memory free before
   this is accepted.
+
+## Amendment (2026-10-11): follow-up 4 is closed
+
+The Speculative Canonical Prefill enters the Model Session (ADR-0094): it
+takes a session provider instead of the raw `ModelContainer`, restores through
+the Residual Prefill, and prefills each chunk through the session's `prefill`
+verb, with one session for the resolve, the restore, each chunk and the
+capture, as many entries as before.

@@ -66,9 +66,9 @@ How a request holds its full-attention KV once its prompt is prefilled: full
 precision, or TurboQuant (`turbo8v4`: 8-bit affine keys, `turbo0v4`: bf16 keys,
 both with 4-bit values). The KV Cache Compression setting picks it for a model
 that supports it (Qwen3.8-27B). It is a request fact and part of cache partition
-identity (ADR-0083): the prompt prefills unquantized, the cache converts after
-prefill (inside the iterator on a DFlash2 turn and on an **Unkeyed
-Completion**, where the iterator runs the prefill), and the turn's leaf
+identity (ADR-0083): the prompt prefills unquantized, the cache converts once
+where the request's **Decode Handover** says (the **Decode Start**'s rule;
+inside the iterator when the iterator runs the prefill), and the turn's leaf
 stores compressed layers that only a request of the same scheme restores.
 _Avoid_: kvBits (the unrelated affine quantization the product never sets), KV
 quantization (ambiguous between the two).
@@ -167,11 +167,14 @@ Admission carries out); admission tail (the retired hand-sequenced shape).
 **Snapshot Resolution**:
 The read side of the prefix cache: resolve a token path to the best usable
 snapshot, returning a hit or a miss. The read-side counterpart to **Snapshot
-Admission**; distinct from `restoreCache`, the later model-affine step that applies
-a resolved snapshot into a live cache (resolution picks *which*, restore
-*applies* it). Owned by the **Prefix Cache Manager** as its single read-side
-entry, never a free-standing module reaching back across the manager's mutation
-seam. The lookup-then-hydrate *choosing* — the Hydration Gate outcome, the
+Admission**; distinct from restore, the later model-affine step (the **Model
+Session**'s `restore` verb) that applies a resolved snapshot into a live cache
+(resolution picks *which*, restore *applies* it). Owned by the **Prefix Cache
+Manager** as its single read-side entry, never a free-standing module reaching
+back across the manager's mutation seam. A keyed turn's resolution returns its
+checkpoint plan too, made in its own hop against the settled tree and aligned
+to the hit, so no caller plans before resolution or without its alignment
+(`PlannedResolution`, ADR-0087 decision 6). The lookup-then-hydrate *choosing* — the Hydration Gate outcome, the
 promote-on-success vs typed-cleanup-on-failure fork, the gate-fallback shapes —
 now lives in a pure decision ladder (`SnapshotResolutionLadder`) the manager
 consults; ownership is unmoved, the manager still performs every effect (the
@@ -181,8 +184,8 @@ _Avoid_: a standalone "hydrator" module (the retired shape that reached back int
 the manager — resolution is manager-owned); a ladder holding references to the
 manager/tree/ledger/hydrating handle (the retired hydrator's shape again — the
 ladder takes plain facts, returns decision values); **Snapshot Hydrating** (a
-different concept: the off-main handle, not the choose step); restore/restoreCache
-(the apply step, not the choose step).
+different concept: the off-main handle, not the choose step); restore (the
+apply step, not the choose step).
 
 **Snapshot Hydrating**:
 The narrow off-main handle that **Snapshot Resolution** depends on to materialize
@@ -577,7 +580,8 @@ _Avoid_: orphaned model, legacy download (both suggest the user chose it).
 
 _The Prefill Plan entry and the terms after it name the design ADR-0087
 proposes. Until it is built, plan application still derives the shape, the
-Capture Schedule, the split and the Maximum Advance inline._
+Capture Schedule, the split and the Maximum Advance inline. The Decode
+Handover and the Decode Start are built (ADR-0093)._
 
 **Prefill Plan**:
 Everything one keyed request's prefill does that is decidable before the
@@ -598,9 +602,30 @@ cache; restore, where the **Cache Claim** is asked for the resolved snapshot
 and a restore that yields no cache falls back to the planner's cold prefill
 (ADR-0069 amendment); or whole prompt, where the Speculation Plan's iterator
 prefills the whole prompt into a fresh cache.
-_Avoid_: restore mode (what the restore turned out to be, an execution
-report); opening, unqualified (the Companion's **Day Opening**); restore
+_Avoid_: restore mode (what the restore turned out to be: the **Turn
+Restore**); opening, unqualified (the Companion's **Day Opening**); restore
 shape (the five shapes are products of the opening and the forward).
+
+**Usable Restore**:
+The one rule for whether a snapshot can seed a prefill toward a target: it
+covers some of the target but not all of it, does not split an image run (so
+its **Position Anchor** is defined), and, when the prefill extends it as text
+alone, sits at or past the **Minimum Warm Offset**. The keyed turn's plan reads
+it with a residual that may carry images; the Leaf Admission Builder, the Leaf
+Store's boundary route, the **Speculative Canonical Prefill** and
+salvage-on-cancel read it with a text-only one (ADR-0094).
+_Avoid_: restore guard, boundary guards (the five spellings it replaced);
+cache hit (a hit can still be unusable).
+
+**Residual Prefill**:
+Restoring a snapshot a **Usable Restore** took — a **Prefix-View Checkpoint**
+through its **Backing Leaf** — and prefilling the rest of a leaf's path as text,
+for a producer that then stores the leaf: the Leaf Store's boundary route and
+the **Speculative Canonical Prefill**. A restore that throws drops the snapshot
+through the manager, the keyed turn's failed-restore policy (ADR-0094).
+_Avoid_: boundary re-prefill (one of its two producers); extension (the
+**Leaf Extension Admission** is an SSD payload form); re-prefill inside the
+**Leaf Admission** (it stays outside, ADR-0078).
 
 **Minimum Warm Offset**:
 The end of a request's last image run in its **Cache Key Space**, or zero for
@@ -650,16 +675,28 @@ checkpoint (the older name in ADR-0019, ADR-0064 and ADR-0068, and today's
 local); planned checkpoint.
 
 **Decode Handover**:
-Where a prefill hands the prompt to the decode iterator: autoregressive, where
-the app prefills the whole **Text Tail** and the standard iterator decodes from
-its last token; or speculative at a split, where the app's capturing prefill
-runs to the split and the **Speculation Plan**'s iterator prefills the rest. A
-keyed split never precedes the **Minimum Warm Offset**, so the iterator takes
-text only.
-Any generation path can name its own.
+Where a generation's prefill hands the prompt to the decode iterator, and so
+where the **KV Scheme** converts: standard, where the app prefilled all but the
+last prompt token and the cache converts before the iterator's first forward;
+speculative, where the **Speculation Plan**'s iterator prefills the rest from a
+split (or the whole prompt from zero) and converts before the prompt's final
+position; preparing, where the app's iterator prefills the whole prompt and
+converts after it; or the **Prefill Strategy** route, which prefills into a
+cache of its own. A keyed split never precedes the **Minimum Warm Offset**, so
+the iterator takes text only. Every generation path names its own (ADR-0093).
 _Avoid_: decode route, speculation route (route belongs to the **Prefill
 Strategy** and the **Completion Route**); decode handoff (handoff is the
 **Leaf Handoff**'s word for moving a leaf between owners).
+
+**Decode Start**:
+The one module that starts decode for every generation path: from the **Decode
+Handover** it builds the iterator through the **Model Session**'s verbs,
+converts the KV cache once where the handover needs it, hands the array decode
+advances to its owner, badges a speculative arm and starts the token loop
+(ADR-0093).
+_Avoid_: iterator factory (it decides the conversion and the owner too);
+quantize step (the conversion is one of its decisions, not a step of its own);
+a session verb that starts decode (it sits above the seam, ADR-0016).
 
 **Maximum Advance**:
 How far one turn may grow its cache past what it restored: its new prompt
@@ -875,11 +912,25 @@ _Avoid_: request context, keyed turn; a fact re-derived at a call site (the
 defect class the value exists to end); the request's own image list as
 "text-only" (request intent, not instance truth).
 
+**Turn Restore**:
+How one keyed turn's cache actually opened, as plan application carried out
+its **Cache Opening**: cold; by **Leaf Handoff**, holding the lease; by copy,
+with the **Cache Claim**'s reason for not handing the leaf over and what a
+**Pending-Payload Wait** cost; or failed then cold, a planned restore that
+yielded no cache, so the turn re-planned cold. The one value every report of
+the turn reads: the `lookup` line, the `restored` phase of `requestMemory`,
+the `leafStore` report, and the stored leaf's source, which the
+**Active-Inference Reserve** prices a lane by (ADR-0069 amendment).
+_Avoid_: restore mode (its wire string, which reads `failedCopy` for the
+last); restore outcome (the claim's check-out answer, one input to it);
+**Cache Opening** (the plan's intent, decided before the check-out).
+
 **Completion Trace Accumulator**:
 The fold of one cache-aware **Server Completion**'s trace facts into the terminal
 trace record — the terminal-vs-recovered eviction tally paired with its correlated
 diagnostics emission (so tally and log lines cannot drift), the restored-offset
-rule, and the admitted-snapshot projections. The drive feeds facts; the value
+rule (the offset the **Turn Restore** restored, 0 when it restored nothing),
+and the admitted-snapshot projections. The drive feeds facts; the value
 decides what the record contains.
 _Avoid_: telemetry store (the window-scoped event buffer); trace logger (it
 derives, the diagnostics context logs).
@@ -908,9 +959,8 @@ concept); widening it before a second consumer needs a member.
 The one script that starts a whole-prompt-from-zero generation over a **Model
 Session** for an agent chat turn: tokenize through the session's agent-edge verb (the **Conversation
 Render**'s agent edge when eligible, the processor otherwise), emit the lookup and prefill progress
-events, decode through the session's **Speculation Plan** when it has one, else run
-the **Prefill Strategy** route, start the token-event loop, wrap
-the handles. It is the **Model Session**'s second consumer (ADR-0016 amendment);
+events, hand the prompt to the **Decode Start** (the session's **Speculation Plan**
+when it has one, else the **Prefill Strategy** route), wrap the handles. It is the **Model Session**'s second consumer (ADR-0016 amendment);
 `LLMActor` keeps only the lifecycle around it. Never consults the prefix cache.
 _Avoid_: raw arm (the three retired `LLMActor` copies); standard path (the
 pre-cache name).

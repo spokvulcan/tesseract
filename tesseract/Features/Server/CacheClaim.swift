@@ -504,7 +504,9 @@ nonisolated final class CacheClaim: @unchecked Sendable {
             var report = LeafStorePhase.Report()
             report.mode = "keyed"
             report.path = .rewind
-            report.restoreMode = "handoff"
+            report.restore = .handoff(
+                .init(
+                    leaseID: lease.id, rewindStateBytes: held.rewind.stateBytes, waitSeconds: 0))
             report.leafOffset = lease.offset
             lease.context.log(report, level: .notice)
         }

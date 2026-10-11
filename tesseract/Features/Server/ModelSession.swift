@@ -151,7 +151,8 @@ nonisolated protocol ModelSession {
 
     /// Quantize the cache in place per the parameters' `kvBits`/`kvGroupSize`
     /// or KV Scheme (no-op when unset) — once, before the iterator, so the
-    /// array the module retains stays the live final cache.
+    /// array the module retains stays the live final cache. The **Decode
+    /// Start**'s standard handover is its one caller.
     func quantizeKVCache(_ cache: inout [any KVCache], parameters: GenerateParameters)
 
     /// Capture a `HybridCacheSnapshot` of `cache` at `offset`, in the

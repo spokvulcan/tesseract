@@ -139,6 +139,7 @@ tesseract/
 │   │   ├── AgentFactory.swift         # Bootstrap: packages, tools, prompt
 │   │   ├── LLMActor.swift             # MLX LLM inference actor
 │   │   ├── Speculation.swift          # Speculation: resident drafters + the per-request Speculation Plan (ADR-0079)
+│   │   ├── DecodeStart.swift          # Decode Start: every path's decode start, the one KV Scheme conversion rule (ADR-0093)
 │   │   ├── LLMGate.swift              # One LLM generation at a time, FIFO (ADR-0081)
 │   │   ├── InferenceArbiter.swift     # LLM gate + model identity; the language model's holder for Model Residency
 │   │   ├── Core/                      # Agent loop, state reducer, accumulator
@@ -171,18 +172,20 @@ tesseract/
 │   │   ├── CompletionRoute.swift      # Pure cache-aware vs standard decision
 │   │   ├── ServerCompletion.swift     # Actor-confined cache-aware execution module
 │   │   ├── CacheClaim.swift          # Cache Claim: a request's lane, pins and Leaf Lease; check-out, check-in, rewind; one conclusion (ADR-0069)
+│   │   ├── TurnRestore.swift         # Turn Restore: how a keyed turn's cache opened; every report of the turn reads it (ADR-0069)
 │   │   ├── LeafLease.swift           # Scalar lease identity, shared tree/writer exclusion, exact recurrent rewind
 │   │   ├── PrefixCacheManager.swift   # Radix-tree KV snapshot cache (RAM tier)
 │   │   ├── SSDSnapshotStore.swift     # SSD tier: writer queue + body I/O
 │   │   ├── SnapshotLedger.swift       # SSD tier: manifest/budget/LRU authority
 │   │   ├── SnapshotPayload.swift      # Snapshot Payload: a snapshot's SSD byte form, built by Deferred Payload Extraction
-│   │   ├── PrefillPlanner.swift       # Tokenizer-affine pre-prefill decisions
+│   │   ├── PrefillPlanner.swift       # Tokenizer-affine pre-prefill decisions; the Usable Restore rule (ADR-0094)
 │   │   ├── RequestKeyingPhase.swift   # Request Keying: a request's keys and facts, derived once (Keyed Request, ADR-0070)
 │   │   ├── ConversationRender.swift   # Conversation Render module: the one chat-template application, Emitted Path Resolve, Generation Prompt probe
 │   │   ├── LeafStorePhase.swift       # Leaf Store phase: fast path vs boundary path (+Report, +Executors)
 │   │   ├── LeafAdmission.swift        # Leaf Admission: the one way a leaf enters the prefix cache (ADR-0078)
 │   │   ├── LeafStoreCounters.swift    # Boundary-turn tally by reason, logged at unload
 │   │   ├── LeafAdmissionBuilder.swift # GPU-free leaf-snapshot routing
+│   │   ├── ResidualPrefill.swift      # Residual Prefill: restore a prefix, extend it as text; the failed-restore policy (ADR-0094)
 │   │   ├── LiveLeafCapture.swift      # Pure fast-path eligibility (live vs boundary)
 │   │   ├── EmittedPathIndex.swift     # Emitted Path Index: rendered-bytes hash → fed ids per fingerprint (ADR-0063)
 │   │   ├── EmittedPathResolve.swift   # Resolve composition + per-request Emitted Path telemetry
@@ -533,6 +536,14 @@ Qwen3.5-family checkpoint, the DFlash2 draft beside Qwen3.8-27B): `LLMActor`'s
 load attaches them, the Model Session carries them, and each request asks for a
 **Speculation Plan**. The Server Completion and the Raw Generation Start read the
 same plan, and the session builds its iterator from it (ADR-0079).
+
+**Decode Start**: every generation path — the keyed turn (standard, or
+speculative at a split), the keyed whole-prompt arm, the Unkeyed Completion and
+both Raw Generation Start arms — starts decode through `DecodeStart`
+(ADR-0093). The path names its **Decode Handover**; the Decode Start picks the
+Model Session verb, converts the KV cache once where that handover needs it,
+hands the decoded array to its owner (a leased leaf's cache adopts it), badges a
+speculative arm and starts the token loop.
 `DFlash2Support` and `MTPDrafterSupport` keep the per-family detection, pairing
 and loading. The Qwen3.5 vision class runs the text class's engine, so the
 DFlash2 draft pairs with a vision load too, and image-bearing requests speculate:
@@ -632,7 +643,17 @@ replay allocated multi-gigabyte synthetic arrays and blocked MainActor
 pressure response and SSD demotion remain active. Each keyed request holds one
 Cache Claim (`CacheClaim`, ADR-0069): its reserve lane, its Restore Pins and,
 after a Leaf Handoff, its Leaf Lease, concluded exactly once inside the
-request's LLM gate turn. Vocabulary: CONTEXT.md → Prefix cache snapshot
+request's LLM gate turn. A keyed turn's resolution returns its checkpoint
+plan (`PlannedResolution`), and dropping a snapshot that failed to restore
+returns the re-plan, so the manager keeps that order rather than plan
+application (ADR-0087 amendment). Its check-out answer and what the restore yielded
+are the turn's one Turn Restore (`TurnRestore`), which the `lookup` line, the
+memory phases, the `leafStore` report and the leaf's reserve source all read.
+Whether a snapshot can seed a prefill is one rule,
+the Usable Restore (`PrefillPlanner.usableRestore`), read by the keyed turn's
+plan and every re-prefill; the Leaf Store's boundary route and the Speculative
+Canonical Prefill restore a prefix and extend it through `ResidualPrefill`, and
+a restore that throws drops its snapshot on every path (ADR-0094). Vocabulary: CONTEXT.md → Prefix cache snapshot
 lifecycle, SSD snapshot ledger, Prefill orchestration, Eviction tuning.
 Verification gates: docs/testing.md → Loaded-model verification.
 An image request takes the same arm: `RequestKeyingPhase` prepares it (the

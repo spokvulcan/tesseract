@@ -686,7 +686,7 @@ struct ChainPrefixRestorePolicyTests {
         )
         tree.attachChainPrefixRestorePoint(node: node, point: point)
 
-        manager.promoteChainPrefix(
+        manager.testSeam().promoteChainPrefix(
             node: node,
             snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(offset: 5, type: .leaf),
             partitionKey: key

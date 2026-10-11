@@ -54,12 +54,12 @@ nonisolated struct LeafAdmission: Sendable {
     }
 
     /// What the **Active-Inference Reserve** observes of a leaf stored inside
-    /// a turn (#522): the report path and restore mode its source is made
+    /// a turn (#522): the report path and **Turn Restore** its source is made
     /// from, once the capture says whether the leaf moved, and the turn's
     /// maximum advance. A leaf stored outside a turn passes none.
     struct Turn: Sendable {
         let path: LeafStorePhase.Report.Path
-        let restoreMode: String
+        let restore: TurnRestore
         let maximumAdvance: Int
     }
 
@@ -233,7 +233,7 @@ nonisolated struct LeafAdmission: Sendable {
             labels: labels,
             source: turn.flatMap {
                 LeafStorePhase.Report.Source.stored(
-                    path: $0.path, restoreMode: $0.restoreMode, handedOff: moving != nil)
+                    path: $0.path, restore: $0.restore, handedOff: moving != nil)
             },
             maximumAdvance: turn?.maximumAdvance ?? .max)
         let admitSeconds = Date.timeIntervalSinceReferenceDate - admitStart

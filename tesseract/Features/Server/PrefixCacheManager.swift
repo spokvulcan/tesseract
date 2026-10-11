@@ -421,22 +421,6 @@ final class PrefixCacheManager {
             self.recordedHitSnapshotID = recordedHitSnapshotID
             self.divergence = divergence
         }
-
-        /// Restore the cached KV/Mamba state. Each call produces an independent deep copy.
-        /// Nonisolated because it operates only on the snapshot's deep-copy data.
-        /// A snapshot whose persisted layers fail restoration degrades to a
-        /// miss (`nil`) — corrupt warm-start data must never crash a request.
-        nonisolated func restoreCache() -> [any KVCache]? {
-            guard let snapshot, partitionKey != nil else { return nil }
-            do {
-                return try snapshot.restore(backingLeaf: backingLeaf)
-            } catch {
-                Log.server.error(
-                    "snapshot restore failed — treating as cache miss: \(error)"
-                )
-                return nil
-            }
-        }
     }
 
     /// A Leaf Lease the tree granted: the tree, the node whose body was
@@ -807,6 +791,52 @@ final class PrefixCacheManager {
             modelFingerprint: modelFingerprint, diagnostics: diagnostics,
             transientBoundary: transientBoundary, holder: claim.resolutionEntry(),
             interruption: interruption)
+    }
+
+    /// A keyed turn's checkpoint plan: the offsets prefill captures and the
+    /// type each is stored as.
+    typealias CheckpointPlan = [(offset: Int, type: HybridCacheSnapshot.CheckpointType)]
+
+    /// A keyed turn's **Snapshot Resolution** with the checkpoint plan made
+    /// right after it, against the settled tree (ADR-0087 decision 6): any
+    /// promote or forgiving clear has happened, so a post-hydration-failure
+    /// re-plan is the ordinary single plan, and the plan aligns to the hit
+    /// the way `Resolved.alignmentLookup` says. The order plan application
+    /// used to hold by comment is the manager's. It also carries what the plan
+    /// was made from, so a dropped snapshot's re-plan is the same plan again
+    /// (`dropUnrestorableSnapshot(_:corruptLayers:replanning:)`).
+    struct PlannedResolution: Sendable {
+        let resolved: Resolved
+        let checkpointPlan: CheckpointPlan
+        fileprivate let tokens: [Int]
+        fileprivate let stablePrefixOffset: Int?
+        fileprivate let partitionKey: CachePartitionKey
+    }
+
+    /// Snapshot Resolution for a keyed turn's **Cache Claim**, then, in its
+    /// own MainActor hop, the turn's checkpoint plan from its stable-prefix
+    /// offset: the system checkpoint, the speculative branch point and the
+    /// alignment branch point for the hit.
+    nonisolated func resolve(
+        tokens: [Int],
+        promptTokenCount: Int,
+        partitionKey: CachePartitionKey,
+        modelFingerprint: String?,
+        diagnostics: PrefixCacheDiagnostics.Context,
+        planningFrom stablePrefixOffset: Int?,
+        for claim: CacheClaim
+    ) async -> PlannedResolution {
+        let resolved = await resolve(
+            tokens: tokens, promptTokenCount: promptTokenCount, partitionKey: partitionKey,
+            modelFingerprint: modelFingerprint, diagnostics: diagnostics, for: claim)
+        let checkpointPlan = await MainActor.run {
+            planCheckpoints(
+                tokens: tokens, stablePrefixOffset: stablePrefixOffset,
+                partitionKey: partitionKey, alignTo: resolved.alignmentLookup)
+        }
+        return PlannedResolution(
+            resolved: resolved, checkpointPlan: checkpointPlan, tokens: tokens,
+            stablePrefixOffset: stablePrefixOffset, partitionKey: partitionKey)
     }
 
     /// Snapshot Resolution for a Speculative Canonical Prefill pass.
@@ -1229,7 +1259,7 @@ final class PrefixCacheManager {
     /// The planner returns an offset, not a state. The captured
     /// `.branchPoint` snapshot at `M` is produced by the prefill loop, so the
     /// alignment checkpoint stays consistent with the request's cache type.
-    func alignmentCheckpointOffset(
+    private func alignmentCheckpointOffset(
         lookupResult: LookupResult,
         totalTokenCount: Int,
         plannedCheckpoints: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)]
@@ -1274,11 +1304,11 @@ final class PrefixCacheManager {
     /// Leaf checkpoint is NOT planned; leaf Snapshot Admission is captured
     /// post-generation by the extraction edge.
     /// Existing snapshots at the same offset are skipped.
-    func planCheckpoints(
+    private func planCheckpoints(
         tokens: [Int],
         stablePrefixOffset: Int?,
         partitionKey: CachePartitionKey
-    ) -> [(offset: Int, type: HybridCacheSnapshot.CheckpointType)] {
+    ) -> CheckpointPlan {
         var plan: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)] = []
         let tree = store.tree(for: partitionKey)
 
@@ -1323,19 +1353,19 @@ final class PrefixCacheManager {
 
     /// Plan checkpoints against the settled tree *after* **Snapshot Resolution**,
     /// merging the Phase 3.1 alignment branch-point for `alignTo` when present.
-    /// The actor resolves first via **Snapshot Resolution** (which may promote or
-    /// clear a node), then plans here, so the post-hydration-failure replan
-    /// becomes the ordinary single plan.
+    /// Only a keyed turn's `resolve(planningFrom:)` and its dropped snapshot's
+    /// re-plan call it, after resolution (which may promote or clear a node),
+    /// so the post-hydration-failure replan is the ordinary single plan.
     ///
-    /// Pass `alignTo: nil` to skip the alignment merge — the pre-resolution
+    /// `alignTo: nil` skips the alignment merge — the pre-resolution
     /// ordering planned against the unhydrated `.ssdHit`, which never aligned,
     /// so an SSD-hydrated hit passes `nil` to preserve that exact behavior.
-    func planCheckpoints(
+    private func planCheckpoints(
         tokens: [Int],
         stablePrefixOffset: Int?,
         partitionKey: CachePartitionKey,
         alignTo lookupResult: LookupResult?
-    ) -> [(offset: Int, type: HybridCacheSnapshot.CheckpointType)] {
+    ) -> CheckpointPlan {
         let basePlan = planCheckpoints(
             tokens: tokens,
             stablePrefixOffset: stablePrefixOffset,
@@ -1822,7 +1852,7 @@ final class PrefixCacheManager {
     /// caller must not build anything else on it (issue #99: no restore
     /// points for a dropped owner).
     @discardableResult
-    func restoreSnapshotRef(
+    private func restoreSnapshotRef(
         path: [Int],
         snapshotRef: SnapshotRef,
         partitionKey: CachePartitionKey,
@@ -1911,7 +1941,7 @@ final class PrefixCacheManager {
     /// node has `lastAccessTime = .now` and is the least likely
     /// victim under α=0, so the budget stays above the hard cap
     /// for at most one request cycle.
-    func promote(
+    private func promote(
         node: RadixTreeNode,
         snapshot: HybridCacheSnapshot,
         partitionKey: CachePartitionKey
@@ -2019,6 +2049,28 @@ final class PrefixCacheManager {
         return drop
     }
 
+    /// Drop the snapshot a keyed turn's restore threw on, as above, and plan
+    /// the turn's checkpoints again against the settled tree in the same
+    /// hop: a checkpoint the drop took is captured anew on the same turn
+    /// (ADR-0069 amendment). The re-plan is `nil` unless a body went, since
+    /// only then can a checkpoint the plan counted as stored be gone.
+    func dropUnrestorableSnapshot(
+        _ snapshot: HybridCacheSnapshot, corruptLayers: Bool,
+        replanning planned: PlannedResolution
+    ) -> (drop: UnrestorableSnapshotDrop, replanned: CheckpointPlan?) {
+        let drop = dropUnrestorableSnapshot(
+            snapshot, tokens: planned.tokens, partitionKey: planned.partitionKey,
+            corruptLayers: corruptLayers)
+        guard drop == .body || drop == .bodyAndSSDCopy else { return (drop, nil) }
+        return (
+            drop,
+            planCheckpoints(
+                tokens: planned.tokens, stablePrefixOffset: planned.stablePrefixOffset,
+                partitionKey: planned.partitionKey,
+                alignTo: planned.resolved.alignmentLookup)
+        )
+    }
+
     /// Attach a freshly composed chain-prefix body (ADR-0012) to the
     /// pointed node. The chain-side sibling of `promote`: the node holds
     /// no own ref (its backing is borrowed from the owner chain's leading
@@ -2026,7 +2078,7 @@ final class PrefixCacheManager {
     /// than the `hydrate` transition, and the restore point stays — still
     /// valid for re-hydration after the next body eviction. Forgiving: a
     /// body that appeared in the off-main window wins.
-    func promoteChainPrefix(
+    private func promoteChainPrefix(
         node: RadixTreeNode,
         snapshot: HybridCacheSnapshot,
         partitionKey: CachePartitionKey
@@ -2333,7 +2385,7 @@ final class PrefixCacheManager {
     /// admissions. Invoked by the injected `MemoryPressureSource`;
     /// callable directly by tests through the in-memory peer or
     /// as-is.
-    func applyMemoryPressure(_ level: MemoryPressureLevel) {
+    private func applyMemoryPressure(_ level: MemoryPressureLevel) {
         let floor = floorContents().bytes
         let previous = budgetBand.currentBytes
         budgetBand = budgetBand.folding(level, floorBytes: floor)
@@ -2355,7 +2407,7 @@ final class PrefixCacheManager {
     /// The **Budget Floor** in bytes: what it costs to keep the floor
     /// contents resident right now. Content-defined and recomputed per
     /// pressure event, never a stored constant.
-    func budgetFloorBytes() -> Int {
+    private func budgetFloorBytes() -> Int {
         floorContents().bytes
     }
 
@@ -2671,7 +2723,7 @@ final class PrefixCacheManager {
     /// against its request, the manager's own drains through
     /// `drainAndLogEvictions`.
     @discardableResult
-    func evictToFitBudget(
+    private func evictToFitBudget(
         requestID: UUID? = nil,
         preferredPartitionKey: CachePartitionKey? = nil
     ) -> [EvictionEvent] {
@@ -3114,6 +3166,63 @@ final class PrefixCacheManager {
             estimates: evictionConfig.estimates,
             trees: trees
         )
+    }
+
+    /// The manager's test seam: steps of its own call order that the suites
+    /// drive one at a time. Each is private to the manager, which runs it
+    /// inside its own sequence — Snapshot Resolution promotes a hydrated
+    /// body and plans a keyed turn's checkpoints, the warm start seeds
+    /// restored refs and composes chain-prefix bodies, planning aligns to a
+    /// hit, the reserve and the telemetry read the Budget Floor. App code
+    /// reaches none of them by name (scripts/test-only-code.allow lists the
+    /// seam).
+    func testSeam() -> TestSeam { TestSeam(manager: self) }
+
+    @MainActor
+    struct TestSeam {
+        fileprivate let manager: PrefixCacheManager
+
+        func promote(
+            node: RadixTreeNode, snapshot: HybridCacheSnapshot, partitionKey: CachePartitionKey
+        ) {
+            manager.promote(node: node, snapshot: snapshot, partitionKey: partitionKey)
+        }
+
+        @discardableResult
+        func restoreSnapshotRef(
+            path: [Int], snapshotRef: SnapshotRef, partitionKey: CachePartitionKey,
+            lastAccessTime: ContinuousClock.Instant
+        ) -> Bool {
+            manager.restoreSnapshotRef(
+                path: path, snapshotRef: snapshotRef, partitionKey: partitionKey,
+                lastAccessTime: lastAccessTime)
+        }
+
+        func promoteChainPrefix(
+            node: RadixTreeNode, snapshot: HybridCacheSnapshot, partitionKey: CachePartitionKey
+        ) {
+            manager.promoteChainPrefix(node: node, snapshot: snapshot, partitionKey: partitionKey)
+        }
+
+        func alignmentCheckpointOffset(
+            lookupResult: LookupResult, totalTokenCount: Int, plannedCheckpoints: CheckpointPlan
+        ) -> Int? {
+            manager.alignmentCheckpointOffset(
+                lookupResult: lookupResult, totalTokenCount: totalTokenCount,
+                plannedCheckpoints: plannedCheckpoints)
+        }
+
+        func budgetFloorBytes() -> Int { manager.budgetFloorBytes() }
+
+        /// The plan before the alignment merge, which only a keyed turn's
+        /// planned resolution adds.
+        func planCheckpoints(
+            tokens: [Int], stablePrefixOffset: Int?, partitionKey: CachePartitionKey
+        ) -> CheckpointPlan {
+            manager.planCheckpoints(
+                tokens: tokens, stablePrefixOffset: stablePrefixOffset,
+                partitionKey: partitionKey)
+        }
     }
 
     /// Test-only: zero the lifetime counters so a scenario can assert

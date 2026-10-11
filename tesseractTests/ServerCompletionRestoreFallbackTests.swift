@@ -63,6 +63,8 @@ struct ServerCompletionRestoreFallbackTests {
         #expect(turn.fedPrompt == turn.render, turn.account)
         Self.expectFreshCache(verbs)
         Self.expectRestoredPhaseFellBack(turn)
+        // A text-only cold turn's leaf takes the generation's objects.
+        Self.expectLeafSource(turn, "handoff")
         if stripsThinking { #expect(!captures.isEmpty, turn.account) }
         Self.expectTrueOffsets(captures)
         try Self.expectResidentBodiesHoldTheirPaths(session)
@@ -133,6 +135,8 @@ struct ServerCompletionRestoreFallbackTests {
         Self.expectFreshCache(verbs)
         #expect(verbs.contains(.visionContinuationQuery))
         Self.expectRestoredPhaseFellBack(turn)
+        // An image turn's leaf deep-copies the cold turn's live cache.
+        Self.expectLeafSource(turn, "live")
         #expect(!captures.isEmpty, turn.account)
         Self.expectTrueOffsets(captures)
         try Self.expectResidentBodiesHoldTheirPaths(session, imagePadID: imagePadID)
@@ -336,6 +340,22 @@ struct ServerCompletionRestoreFallbackTests {
             sourceLocation: sourceLocation)
         #expect(
             restored?.field("restoreFallback") == "cold", turn.account,
+            sourceLocation: sourceLocation)
+    }
+
+    /// The fallback turn's leaf reports what its capture did, as a cold
+    /// turn's does, never `copy`: no body the tree counts was copied into it
+    /// (ADR-0069's 2026-10-11 amendment). The `leafStore` event and the
+    /// `recordingRequest` phase say the same.
+    private static func expectLeafSource(
+        _ turn: Replay.Turn, _ source: String, sourceLocation: SourceLocation = #_sourceLocation
+    ) {
+        #expect(turn.leafStore["source"] == source, turn.account, sourceLocation: sourceLocation)
+        let recording = turn.events.first {
+            $0.eventName == "requestMemory" && $0.field("phase") == "recordingRequest"
+        }
+        #expect(
+            recording?.field("leafSource") == source, turn.account,
             sourceLocation: sourceLocation)
     }
 

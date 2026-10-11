@@ -17,6 +17,7 @@ promptTokenCounts         # PrefillStepBenchmarkRunner fixture: measures both pr
 convertMessages           # MessageConverter: wrapper over the live normalizeRequest that the converter tests drive
 normalizeConversation     # MessageConverter: same
 encodePlaceholderContainer # PlaceholderContainer: contiguous form for fixtures; the writer streams withChunks
+testSeam                  # PrefixCacheManager: the steps of its own call order tests drive one at a time (promote, restored refs, chain-prefix bodies, the alignment rule, the Budget Floor); private to the manager
 
 # Test doubles that live in the app target.
 NoOpBrowserPresenter      # headless presenter for the browser core
