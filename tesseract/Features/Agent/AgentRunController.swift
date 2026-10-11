@@ -51,6 +51,13 @@ final class AgentRunController {
     /// `cancel()` to abort both queued waits and active runs.
     @ObservationIgnored private var sendTask: Task<Void, Never>?
 
+    /// The newest run's number. `.agentEnd` lowers the flag before a run's
+    /// body returns, so the owner can send again while the older run still
+    /// holds the gate: only the newest run's task clears the flag, settles
+    /// and drops the handle, or the older one would lower the newer run's
+    /// flag and hand its queued message back to the composer.
+    @ObservationIgnored private var runNumber = 0
+
     // MARK: - Init
 
     init(
@@ -73,11 +80,12 @@ final class AgentRunController {
         reportError = handler
     }
 
-    /// Wire the run-settled sink: called exactly once per `runUnderGate` task,
-    /// after `isGenerating` clears, on every exit — completion, cancellation
+    /// Wire the run-settled sink: called once per `runUnderGate` task, after
+    /// `isGenerating` clears, on every exit — completion, cancellation
     /// (including a cancel while still *queued* at the gate, which emits
-    /// no agent events at all), and error. The Chat Session uses it to settle
-    /// a Pending Row whose message never reached the agent.
+    /// no agent events at all), and error — unless a newer run started
+    /// before it settled, which then settles for both. The Chat Session uses
+    /// it to settle a Pending Row whose message never reached the agent.
     func setOnRunSettled(_ handler: @escaping @MainActor () -> Void) {
         onRunSettled = handler
     }
@@ -102,9 +110,13 @@ final class AgentRunController {
     /// cancel/error), so a body that awaits its work to completion — a `send`
     /// turn *or* a `/compact` — owns the whole busy-flag lifecycle through one
     /// rule. (A `send` body also sees `.agentEnd` clear the flag via the event
-    /// spine; the completion clear is idempotent with it.)
+    /// spine; the completion clear is idempotent with it.) A run that a newer
+    /// one followed before it settled leaves the flag, the settle and the
+    /// handle to the newer run (`runNumber`).
     func runUnderGate(_ body: @escaping @MainActor () async -> Void) {
         isGenerating = true
+        runNumber += 1
+        let number = runNumber
 
         // ADR-0013: when "Use vision models when available" is on (the default),
         // the chat send path demands the vision container for any vision-capable
@@ -120,15 +132,15 @@ final class AgentRunController {
                 try await arbiter.withLLM(modelIDOverride: nil, vision: visionReq) {
                     await body()
                 }
-                // Body ran to completion at the gate — clear the busy flag.
-                self.isGenerating = false
+                // Body ran to completion at the gate.
             } catch is CancellationError {
-                // Cancelled while queued or during run — clean up.
-                self.isGenerating = false
+                // Cancelled while queued or during run.
             } catch {
                 self.reportError(error.localizedDescription)
-                self.isGenerating = false
             }
+            // A newer run owns the flag, the settle and the handle.
+            guard number == self.runNumber else { return }
+            self.isGenerating = false
             // After the flag clears, synchronously in the same job — a poll
             // that observes `isGenerating == false` also observes the settle.
             self.onRunSettled()
