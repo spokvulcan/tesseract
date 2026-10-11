@@ -238,21 +238,6 @@ nonisolated enum VisionPrefixMemoryGuard {
         return String(format: "%.2f GiB", gib)
     }
 
-    static func rejection(
-        prefixTokens: Int,
-        profile: ModelIdentity.FullAttentionScratchProfile?,
-        maxBufferBytes: UInt64
-    ) -> Rejection? {
-        guard let profile else { return nil }
-        let estimatedBytes = profile.scoreMatrixBytes(sequenceLength: prefixTokens) ?? UInt64.max
-        guard estimatedBytes > maxBufferBytes else { return nil }
-        return Rejection(
-            prefixTokens: prefixTokens,
-            estimatedBytes: estimatedBytes,
-            maxBufferBytes: maxBufferBytes
-        )
-    }
-
     /// The windowed-continuation backstop (ADR-0007 phase 2). The chunked
     /// forward's peak full-attention scratch is `[heads, windowSize,
     /// contextTokens]` — one query window over the whole `[0, contextTokens)`

@@ -82,13 +82,6 @@ final class ImagePreviewFileCache {
         return url
     }
 
-    /// Materialize a whole preview set in order, returning the file URLs. Bytes
-    /// that fail to write are dropped rather than aborting the set.
-    @discardableResult
-    func materialize(_ attachments: [ImageAttachment]) -> [URL] {
-        attachments.compactMap { try? url(for: $0) }
-    }
-
     /// Pre-warm a single image (fire-and-forget from the transcript decode path)
     /// so its file already exists by the time it's clicked.
     func prewarm(_ attachment: ImageAttachment) {

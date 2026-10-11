@@ -14,6 +14,10 @@ final class AppTerminationCoordinator {
         /// active utterance, frees weights/KV/caches, syncs the GPU stream.
         let unloadSpeech: @MainActor () async -> Void
         let synchronizeGPU: @MainActor () -> Void
+        /// Writes the telemetry kept behind a debounce (the SSD endurance
+        /// ledger) now, once nothing more can write to the cache: a quit
+        /// inside the debounce window loses nothing.
+        let persistTelemetry: @MainActor () -> Void
 
         init(
             stopHotkeys: @escaping @MainActor () -> Void,
@@ -24,7 +28,8 @@ final class AppTerminationCoordinator {
             unloadLLM: @escaping @MainActor () -> Void,
             awaitLLMUnload: @escaping @MainActor () async -> Void,
             unloadSpeech: @escaping @MainActor () async -> Void,
-            synchronizeGPU: @escaping @MainActor () -> Void
+            synchronizeGPU: @escaping @MainActor () -> Void,
+            persistTelemetry: @escaping @MainActor () -> Void
         ) {
             self.stopHotkeys = stopHotkeys
             self.cancelForegroundGenerationAndWait = cancelForegroundGenerationAndWait
@@ -35,6 +40,7 @@ final class AppTerminationCoordinator {
             self.awaitLLMUnload = awaitLLMUnload
             self.unloadSpeech = unloadSpeech
             self.synchronizeGPU = synchronizeGPU
+            self.persistTelemetry = persistTelemetry
         }
     }
 
@@ -61,5 +67,6 @@ final class AppTerminationCoordinator {
         await steps.awaitLLMUnload()
         await steps.unloadSpeech()
         steps.synchronizeGPU()
+        steps.persistTelemetry()
     }
 }

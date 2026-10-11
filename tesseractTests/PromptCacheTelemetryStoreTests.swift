@@ -197,7 +197,6 @@ struct PromptCacheTelemetryStoreTests {
                 ("freedBytes", "1048576")
             ])
 
-        #expect(PromptCacheEventDisplay.symbol(for: lookup.eventName) == "magnifyingglass")
         #expect(PromptCacheEventDisplay.reason(for: lookup) == "ssdHit")
         #expect(PromptCacheEventDisplay.tokenSummary(lookup) == "96/128")
         #expect(PromptCacheEventDisplay.bytesSummary(eviction) == "1 MB")

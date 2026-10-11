@@ -773,6 +773,9 @@ final class DependencyContainer: ObservableObject {
                 },
                 synchronizeGPU: {
                     Stream.gpu.synchronize()
+                },
+                persistTelemetry: { [ssdEnduranceAccumulator] in
+                    ssdEnduranceAccumulator.persistNow()
                 }
             ))
     }

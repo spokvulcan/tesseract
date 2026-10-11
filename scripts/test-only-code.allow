@@ -37,6 +37,7 @@ PrefixCacheDiagnostics.addTestSink # attaches a test's event sink, removeTestSin
 TokenRadixTree.endLeafLease # beginLeafLease's pair, for the lease suites
 CompanionTrace.records    # reads the trace back, for the Companion suites
 SSDResidency.lastAccessAt # a descriptor's recency stamp, for the ledger suites
+EmittedPathIndex.lookup   # reads one registered entry by its hash, for the index's suites; the app resolves by walking markers
 
 # Test doubles that live in the app target.
 NoOpBrowserPresenter      # headless presenter for the browser core
@@ -47,18 +48,9 @@ resetWriteRecording       # InMemorySettingsStore, the settings test double
 # Planned or in progress.
 deserialize               # HybridCacheSnapshot: the safetensors reader the SSD writer is to switch to (SSDSnapshotStore header)
 HybridCacheSnapshot.serialize # its writer, deserialize's pair, for the same switch
+AgentSystemPromptInspector.fetchRawSystemPrompt # the System Prompt Inspector, kept for a future settings surface (#184)
 applyAgain                # LearnedWordStore: Catch slice 1 (#615), not yet called by the app
 takeWaits                 # CheckBeforePasting: Catch slice 2 (#616), not yet called by the app
 
 # Called by a framework, not by name.
 menuNeedsUpdate           # NSMenuDelegate: AppKit calls it
-
-# Found by the index pass when it came in (2026-10-11): each is to be deleted
-# with its tests, or kept here with the reason it stays.
-AgentSystemPromptInspector.fetchRawSystemPrompt # to triage
-ImagePreviewFileCache.materialize # to triage
-EmittedPathIndex.lookup   # to triage
-VisionPrefixMemoryGuard.rejection # to triage
-SSDEnduranceAccumulator.persistNow # to triage: its doc says shutdown calls it, and nothing does
-PromptCacheEventDisplay.symbol # to triage
-MenuBarClockText.spoken   # to triage

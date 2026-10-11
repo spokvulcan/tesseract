@@ -748,10 +748,6 @@ nonisolated enum MenuBarClockText {
         return minutes % 60 == 0 ? "\(minutes / 60)h" : "\(minutes / 60)h \(minutes % 60)m"
     }
 
-    static func spoken(until end: Date, now: Date) -> String {
-        "\(MomentPrompts.minutesText(minutesLeft(until: end, now: now))) left"
-    }
-
     private static func minutesLeft(until end: Date, now: Date) -> Int {
         max(1, Int((end.timeIntervalSince(now) / 60).rounded(.up)))
     }
