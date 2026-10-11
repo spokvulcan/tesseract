@@ -409,6 +409,39 @@ struct CacheClaimTests {
 
     // MARK: - The refusal ladder
 
+    nonisolated struct ScopeRow: Sendable, CustomTestStringConvertible {
+        let textOnly: Bool
+        let kvBits: Int?
+        let arm: SpeculativeArm?
+        let exclusion: CacheClaim.HandoffExclusion?
+        let copyReason: LeafStorePhase.Report.CopyReason?
+        var testDescription: String {
+            "textOnly=\(textOnly) kvBits=\(kvBits ?? 0) arm=\(arm?.rawValue ?? "none")"
+        }
+    }
+
+    /// The Leaf Handoff's scope is one rule (ADR-0064 decision 7) that the
+    /// check-out, the Leaf Admission's move and the Leaf Store's copy reason
+    /// read: a text-only key space over unquantized KV that MTP did not
+    /// decode may move; the first reason outside it wins, in this order.
+    @Test(arguments: [
+        ScopeRow(textOnly: true, kvBits: nil, arm: nil, exclusion: nil, copyReason: nil),
+        ScopeRow(textOnly: true, kvBits: nil, arm: .dflash2, exclusion: nil, copyReason: nil),
+        ScopeRow(textOnly: true, kvBits: nil, arm: .mtp, exclusion: .mtpArm, copyReason: nil),
+        ScopeRow(
+            textOnly: true, kvBits: 8, arm: .mtp, exclusion: .quantizedPartition,
+            copyReason: .quantized),
+        ScopeRow(
+            textOnly: false, kvBits: 8, arm: .mtp, exclusion: .imageKeySpace,
+            copyReason: .imageKeySpace),
+    ])
+    func theHandoffScopeIsOneRule(_ row: ScopeRow) {
+        let exclusion = CacheClaim.HandoffExclusion.of(
+            textOnly: row.textOnly, kvBits: row.kvBits, arm: row.arm)
+        #expect(exclusion == row.exclusion)
+        #expect(exclusion?.copyReason == row.copyReason)
+    }
+
     @Test(arguments: [
         "system", "branch", "immutable", "rotating", "window", "untrimmable", "quantized", "image",
     ])

@@ -52,6 +52,8 @@ nonisolated extension LeafStorePhase {
         let prefixCache: PrefixCacheManager
         let diagnosticsContext: PrefixCacheDiagnostics.Context
         let stages: LeafStages
+        /// Why the turn's leaf is copied rather than moved, by the handoff
+        /// scope (`CacheClaim.HandoffExclusion`); `nil` inside it.
         let copyReason: Report.CopyReason?
         let memory: RequestMemoryTelemetry?
         /// The request's **Cache Claim**: a leaf captured by move from the
@@ -82,9 +84,10 @@ nonisolated extension LeafStorePhase {
             restore = mlxStart.restore
             maximumAdvance = mlxStart.maximumAdvance
             copyReason =
-                !inputs.request.facts.isTextOnly
-                ? .imageKeySpace
-                : inputs.request.facts.partitionKey.kvBits != nil ? .quantized : nil
+                CacheClaim.HandoffExclusion.of(
+                    textOnly: inputs.request.facts.isTextOnly,
+                    kvBits: inputs.request.facts.partitionKey.kvBits
+                )?.copyReason
         }
 
         /// Prepare this leaf's **Leaf Admission** before the session is

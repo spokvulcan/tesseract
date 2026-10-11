@@ -104,6 +104,40 @@ nonisolated final class CacheClaim: @unchecked Sendable {
         let waitSeconds: TimeInterval
     }
 
+    /// The **Leaf Handoff**'s scope (ADR-0064 decision 7): a cache moves
+    /// between the radix tree and a generation, instead of being copied, only
+    /// for a text-only key space over unquantized KV that the MTP drafter did
+    /// not decode. The one rule the check-out, the Leaf Admission's move and
+    /// the Leaf Store's copy reason read, each with the facts it holds: the
+    /// check-out knows no arm, since MTP engages only on a turn that restores
+    /// nothing.
+    enum HandoffExclusion: Sendable, Equatable {
+        /// An image reached the model: the key space is not the token path.
+        case imageKeySpace
+        /// The partition stores quantized KV.
+        case quantizedPartition
+        /// The MTP drafter decoded the turn.
+        case mtpArm
+
+        /// Why a turn with these facts is outside the scope, the first reason
+        /// in this order; `nil` when its cache may move.
+        static func of(textOnly: Bool, kvBits: Int?, arm: SpeculativeArm? = nil) -> Self? {
+            if !textOnly { return .imageKeySpace }
+            if kvBits != nil { return .quantizedPartition }
+            return arm == .mtp ? .mtpArm : nil
+        }
+
+        /// The `copyReason` a leaf copied for this reason reports; an MTP
+        /// turn's copied leaf reports none.
+        var copyReason: LeafStorePhase.Report.CopyReason? {
+            switch self {
+            case .imageKeySpace: .imageKeySpace
+            case .quantizedPartition: .quantized
+            case .mtpArm: nil
+            }
+        }
+    }
+
     /// Why a copy restore did not take the leaf: the precise rung of the
     /// check-out that refused, reported as `copyRefusal` beside `copyReason`.
     /// Several refusals share one `copyReason` — every lease refusal reads
@@ -309,8 +343,11 @@ nonisolated final class CacheClaim: @unchecked Sendable {
         }
         guard !snapshot.isPrefixView else { return copy(.prefixView) }
         guard !snapshot.isWarm else { return copy(.warmBody) }
-        guard identityKeySpace else { return copy(.imageKeySpace) }
-        guard key.kvBits == nil else { return copy(.quantizedPartition) }
+        switch HandoffExclusion.of(textOnly: identityKeySpace, kvBits: key.kvBits) {
+        case .imageKeySpace?: return copy(.imageKeySpace)
+        case .quantizedPartition?: return copy(.quantizedPartition)
+        case .mtpArm?, nil: break
+        }
         guard !resolved.wasChainPrefixRestore else { return copy(.chainPrefixRestore) }
         guard resolved.lookup.snapshotTokenOffset == snapshot.tokenOffset else {
             return copy(.offsetMismatch)

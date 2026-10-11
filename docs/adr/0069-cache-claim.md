@@ -364,17 +364,15 @@ stored leaf's source for every path. The whole-completion suites
 (`ServerCompletionRestoreFallbackTests`, `CacheClaimTests`) still check that
 plan application produces the outcome.
 
-Not built from the proposal this step came from: one per-turn report, grown
-from the **Completion Trace Accumulator**, that renders the `lookup` line, the
-memory phases, the one `leafStore` event, the reserve source and the trace
-record in one place; the claim reporting its rewinds into that report rather
-than building its own `leafStore`; a trivial report for an **Unkeyed
-Completion** in place of its stand-in `lookupReason: .missNoEntries`; and one
-home for the handoff scope, which the check-out, the Leaf Admission's move
-and the Leaf Store's copy reason each spell (an MTP turn's copied leaf has no
-copy reason). Each moves where lines are written, which the byte-identical
-bar pins line by line; they were left for a change that can run the
-before-and-after diagnostics diff on them alone.
+Not built in this step, and taken up below: one home for the handoff scope,
+which the check-out, the Leaf Admission's move and the Leaf Store's copy
+reason each spelled; one per-turn report, grown from the **Completion Trace
+Accumulator**, that renders every output from the Turn Restore; the claim
+reporting its rewinds into that report rather than building its own
+`leafStore`; and a trivial report for an **Unkeyed Completion** in place of
+its stand-in `lookupReason: .missNoEntries`. Each moves where a rule or a line
+lives, so each was left for a step that runs the before-and-after diagnostics
+diff on it alone.
 
 ### Declared: a fallback turn's leaf reads its source like a cold turn's
 
@@ -418,3 +416,17 @@ corpus, which counts a record as a hit when either offset is positive, counts
 it as the miss it was. No diagnostics line changes. Pinned by
 `CompletionTraceAccumulatorTests.restoredOffsetIsWhatTheTurnRestored` (hit and
 miss reasons against every outcome) and `aFallbackTurnsRecordRestoredNothing`.
+
+### One home for the handoff scope
+
+ADR-0064 decision 7 scopes the Leaf Handoff to text-only key spaces over
+unquantized KV, off the MTP path. Three places spelled it: the check-out's
+`imageKeySpace` and `quantizedPartition` rungs, the Leaf Admission's move of
+a finished turn, and the Leaf Store's copy reason. `CacheClaim.HandoffExclusion.of(textOnly:kvBits:arm:)`
+is now the one rule: it answers why a turn is outside the scope, the first
+reason in that order, or `nil` when its cache may move. The check-out asks it
+without an arm (MTP engages only on a turn that restores nothing), the Leaf
+Admission asks it with the decoding arm, and the Leaf Store's copy reason is
+its `copyReason`. No line changes. `CacheClaimTests.theHandoffScopeIsOneRule`
+tables the rule; the claim's refusal ladder and the Leaf Admission's move
+cases keep their rows.

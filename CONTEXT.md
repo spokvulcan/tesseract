@@ -205,9 +205,11 @@ the request that extends that leaf takes the objects back as its live cache.
 A boundary turn's re-prefilled cache moves in the same way: it is the
 request's own by construction, so the capture takes it rather than copying it.
 Only at quiescent points; only for a leaf hit at its full offset that every
-layer can return from (**Leaf Rewind**); anything else restores by copy as
-before — except a check-out refused only for a pending full payload, which is
-worth the **Pending-Payload Wait** first.
+layer can return from (**Leaf Rewind**); only inside its scope, a text-only key
+space over unquantized KV that the MTP drafter did not decode, one rule the
+check-out and the leaf's capture both read (`CacheClaim.HandoffExclusion`);
+anything else restores by copy as before — except a check-out refused only for
+a pending full payload, which is worth the **Pending-Payload Wait** first.
 _Avoid_: copy-on-write restore (the alias ADR-0023 rejected — a handoff shares
 nothing between two owners); zero-copy (the SSD write still copies); cache
 sharing (one owner at a time, never two).
