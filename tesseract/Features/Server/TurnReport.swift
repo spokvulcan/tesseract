@@ -49,17 +49,17 @@ nonisolated final class TurnReport: @unchecked Sendable {
         lock.withLock { phaseBegan = true }
     }
 
-    /// The claim rewound the leaf it leased, back to `offset`. Before the
-    /// phase that is all that became of the turn's leaf, so the rewind is the
-    /// turn's one `leafStore` event (`path=rewind restoreMode=handoff`, no
-    /// wait); from the phase on, the phase's report says it.
-    func leafRewound(leaseID: UUID, rewindStateBytes: Int, offset: Int) {
+    /// The claim rewound the leaf its `handoff` leased, back to `offset`.
+    /// Before the phase that is all that became of the turn's leaf, so the
+    /// rewind is the turn's one `leafStore` event (`path=rewind
+    /// restoreMode=handoff`, with the wait the handoff cost); from the phase
+    /// on, the phase's report says it.
+    func leafRewound(_ handoff: TurnRestore.Handoff, offset: Int) {
         guard !lock.withLock({ phaseBegan }) else { return }
         var report = LeafStorePhase.Report()
         report.mode = "keyed"
         report.path = .rewind
-        report.restore = .handoff(
-            .init(leaseID: leaseID, rewindStateBytes: rewindStateBytes, waitSeconds: 0))
+        report.restore = .handoff(handoff)
         report.leafOffset = offset
         diagnostics.log(report, level: .notice)
     }

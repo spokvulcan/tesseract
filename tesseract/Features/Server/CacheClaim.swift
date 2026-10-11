@@ -238,6 +238,9 @@ nonisolated final class CacheClaim: @unchecked Sendable {
     private let lock = NSLock()
     private var owner: Owner
     private var held: CheckedOutLeaf?
+    /// The handoff the check-out reported for `held`, which its rewind
+    /// reports again.
+    private var heldHandoff: TurnRestore.Handoff?
     private var checkedOut = false
 
     private init(
@@ -371,13 +374,14 @@ nonisolated final class CacheClaim: @unchecked Sendable {
             return copy(refusal, waited: waited)
         case .leased(let grant):
             let taken = CheckedOutLeaf.take(snapshot, under: grant)
-            lock.withLock { held = taken }
-            return .handoff(
-                Handoff(
-                    cache: taken.live,
-                    lease: .init(
-                        leaseID: grant.lease.id, rewindStateBytes: taken.rewind.stateBytes,
-                        waitSeconds: waited)))
+            let lease = TurnRestore.Handoff(
+                leaseID: grant.lease.id, rewindStateBytes: taken.rewind.stateBytes,
+                waitSeconds: waited)
+            lock.withLock {
+                held = taken
+                heldHandoff = lease
+            }
+            return .handoff(Handoff(cache: taken.live, lease: lease))
         }
     }
 
@@ -405,7 +409,10 @@ nonisolated final class CacheClaim: @unchecked Sendable {
             return .rewound(.refused(refusal))
         }
         // Frees the recurrent backup.
-        lock.withLock { self.held = nil }
+        lock.withLock {
+            self.held = nil
+            heldHandoff = nil
+        }
         return .committed
     }
 
@@ -510,9 +517,13 @@ nonisolated final class CacheClaim: @unchecked Sendable {
     @discardableResult
     private func rewindHeld() async -> Int? {
         guard
-            let held = lock.withLock({ () -> CheckedOutLeaf? in
-                defer { self.held = nil }
-                return self.held
+            let (held, handoff) = lock.withLock({ () -> (CheckedOutLeaf, TurnRestore.Handoff)? in
+                defer {
+                    self.held = nil
+                    heldHandoff = nil
+                }
+                guard let held = self.held, let handoff = heldHandoff else { return nil }
+                return (held, handoff)
             })
         else { return nil }
         let lease = held.grant.lease
@@ -530,8 +541,7 @@ nonisolated final class CacheClaim: @unchecked Sendable {
             level: .notice)
         // What became of the turn's leaf: the report logs it as the turn's
         // one `leafStore` event unless the Leaf Store phase reports it.
-        report.leafRewound(
-            leaseID: lease.id, rewindStateBytes: held.rewind.stateBytes, offset: lease.offset)
+        report.leafRewound(handoff, offset: lease.offset)
         memory?.markCacheReleased(
             .rewoundLeaf,
             facts: [

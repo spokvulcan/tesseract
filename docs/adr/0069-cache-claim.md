@@ -476,3 +476,14 @@ No line changes: each line is written at the step it was, through the same
 request context. `TurnReportTests` drives the report's interface (the
 rewind before and after the phase, the filed restore); the cancelled-turn
 replay cases and the keyed sequencing suite check it through a real turn.
+
+### Declared: a rewind reports the wait its handoff cost
+
+The claim's rewind report said `restoreMode=handoff` and made up a wait of
+zero, since the claim's report was built from the lease alone. The claim now
+keeps the handoff it reported at check-out with the leased leaf and reports
+that to the Turn Report, so the rewind renders the turn's real handoff. On a
+turn that ends before the Leaf Store phase after a Pending-Payload Wait that
+ended in a handoff, and on no other, the `leafStore path=rewind` event gains
+`copyWaitMs`, as the same turn's `lookup` line and any phase report already
+carry. Pinned by `TurnReportTests.aRewindAfterAWaitedHandoffReportsTheWait`.

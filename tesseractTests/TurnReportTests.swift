@@ -27,9 +27,9 @@ struct TurnReportTests {
         let capture = TelemetryCapture(modelID: modelID)
         defer { capture.stop() }
         let report = Self.report(modelID)
-        let lease = UUID()
 
-        report.leafRewound(leaseID: lease, rewindStateBytes: 64, offset: 12)
+        report.leafRewound(
+            .init(leaseID: UUID(), rewindStateBytes: 64, waitSeconds: 0), offset: 12)
 
         let stores = Self.leafStores(capture.drain())
         #expect(stores.count == 1)
@@ -38,6 +38,24 @@ struct TurnReportTests {
         #expect(stores.first?["restoreMode"] == "handoff")
         #expect(stores.first?["leafOffset"] == "12")
         #expect(stores.first?["copyWaitMs"] == nil)
+    }
+
+    /// The declared fix (ADR-0069's 2026-10-11 amendment): the rewind says
+    /// what the handoff cost, the check-out's own facts, where it used to
+    /// make up a wait of zero.
+    @Test func aRewindAfterAWaitedHandoffReportsTheWait() {
+        let modelID = "turn-report-waited-\(UUID().uuidString)"
+        let capture = TelemetryCapture(modelID: modelID)
+        defer { capture.stop() }
+        let report = Self.report(modelID)
+
+        report.leafRewound(
+            .init(leaseID: UUID(), rewindStateBytes: 64, waitSeconds: 0.25), offset: 12)
+
+        let stores = Self.leafStores(capture.drain())
+        #expect(stores.count == 1)
+        #expect(stores.first?["restoreMode"] == "handoff")
+        #expect(stores.first?["copyWaitMs"] == "250.000")
     }
 
     /// Once the phase has begun its report says what became of the leaf, so
@@ -51,7 +69,8 @@ struct TurnReportTests {
         report.file(.handoff(.init(leaseID: UUID(), rewindStateBytes: 64, waitSeconds: 0.5)))
 
         report.beginLeafStorePhase()
-        report.leafRewound(leaseID: UUID(), rewindStateBytes: 64, offset: 12)
+        report.leafRewound(
+            .init(leaseID: UUID(), rewindStateBytes: 64, waitSeconds: 0.5), offset: 12)
         var phase = LeafStorePhase.Report()
         phase.mode = "keyed"
         phase.path = .rewind
