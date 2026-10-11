@@ -480,7 +480,12 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # a repeating task ticked off (the day follows its done occurrence: the
 # must-do done, the step in its slot, its pace; the in-memory store keeps the
 # copy and moves the series on, as Reminders does),
-# cards and prompts, the Day Thread's store, Shown Pictures (ADR-0090:
+# cards and prompts, the Day Thread's store, a moment's turn read back for
+# Today's Chat (ThreadMomentTests: every request names its moment, the line
+# from its card, the card it made found in the day's state, the Day Opening
+# read back), Today's Chat over a full day's thread (TodayChatGalleryTests:
+# the opening, every moment's card with its choices live, the day settled;
+# its PNGs go to TEST_RUNNER_TODAY_GALLERY_DIR too), Shown Pictures (ADR-0090:
 # DayThreadPicturesTests — the model sees a picture in the turn it's shown and
 # a line in its place after, a tool's images too, an earlier turn reading the
 # same as the thread grows; a real Day Thread over the in-memory arbiter whose
@@ -519,9 +524,11 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/NowCardTests \
   -only-testing:tesseractTests/LinkedTitleTests \
   -only-testing:tesseractTests/TodayGalleryTests \
+  -only-testing:tesseractTests/TodayChatGalleryTests \
   -only-testing:tesseractTests/CardParserTests \
   -only-testing:tesseractTests/MomentPromptsTests \
   -only-testing:tesseractTests/DayThreadTests \
+  -only-testing:tesseractTests/ThreadMomentTests \
   -only-testing:tesseractTests/DayThreadPicturesTests \
   -only-testing:tesseractTests/SeenLedgerTests \
   -only-testing:tesseractTests/DeliveryLadderTests \

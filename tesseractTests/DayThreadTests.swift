@@ -5,7 +5,7 @@
 //  The Day Thread's store over a scratch conversation store: one
 //  conversation per day under an id derived from the day, saved through the
 //  shared store's index, never where the Agent page opens at launch. And the
-//  Today chat shows a moment turn as one quiet line.
+//  Today chat shows a moment turn, request and reply, as one row.
 //
 
 import Foundation
@@ -52,24 +52,24 @@ struct DayThreadTests {
         #expect(backing.currentConversation?.isDayThread != true)
     }
 
-    @Test func aMomentTurnReadsAsOneLineInTheTodayChat() {
+    @Test func aMomentTurnIsOneRowInTheTodayChat() {
         let session = ChatSession(
             agent: makeNoOpAgent(modelID: "day-thread-test"),
             conversationStore: InMemoryAgentConversationStore(),
             arbiter: InMemoryInferenceArbiter(),
-            momentSummary: { request, reply in
-                MomentTranscript.summary(request: request, reply: reply)
-            },
+            foldsMoments: true,
             liveMarkdownThrottle: .zero)
         let request = UserMessage(content: "[Morning Plan]\nPlan the day.", turnOrigin: .moment)
         let reply = AssistantMessage.create(content: #"{"line": "A calm start."}"#)
         #expect(session.appendCommitted([request, reply]))
         #expect(session.items.count == 1)
-        guard case .system(_, let text) = session.items.first else {
-            Issue.record("a moment turn must render as one line")
+        guard case .moment(let shown, let answer) = session.items.first else {
+            Issue.record("a moment turn must fold into one row")
             return
         }
-        #expect(text == "Morning Plan · A calm start.")
+        let moment = ThreadMoment(request: shown, reply: answer)
+        #expect(moment.kind == .moment(.morningPlan))
+        #expect(moment.line == "A calm start.")
 
         #expect(session.appendCommitted([UserMessage(content: "move the gym to 20:00")]))
         #expect(session.items.count == 2)

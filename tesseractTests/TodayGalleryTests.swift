@@ -8,8 +8,9 @@
 //  drains on the Now Card; not started: one click from starting), a busy
 //  midday with two slid steps and things waiting, an evening whose wrap-up
 //  was closed on the panel (its leftovers wait in Today), an evening
-//  with the day done, and the same night past midnight, still that day until
-//  04:00. Each renders at a wide, a regular and a phone width, so every
+//  with the day done, the same night past midnight, still that day until
+//  04:00, and a full day with every moment's card still in it (whose Day
+//  Thread Today's Chat gallery draws). Each renders at a wide, a regular and a phone width, so every
 //  layout's body runs; the morning also renders with two pictures waiting in
 //  the composer, for Jarvis. With TODAY_GALLERY_DIR set (TEST_RUNNER_TODAY_GALLERY_DIR
 //  through xcodebuild), each render is also written there as a PNG, in dark
@@ -136,6 +137,11 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
     case wrapUpClosed
     case evening
     case night
+    /// The whole day at 22:20, every moment's card in the state: the plan,
+    /// a welcome back with someone still waiting, the wrap-up with two
+    /// leftovers to settle, the reflection with a task and a fact to decide.
+    /// Today's Chat gallery draws its Day Thread.
+    case fullDay
 
     var testDescription: String { rawValue }
 
@@ -153,6 +159,7 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
         case .wrapUpClosed: Self.at(21, 10)
         case .evening: Self.at(22, 1)
         case .night: Self.at(0, 40, day: 5)
+        case .fullDay: Self.at(22, 20)
         }
     }
 
@@ -234,6 +241,26 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
                     "aurora", "https://en.vedur.is/weather/forecasts/aurora/ tonight?",
                     list: "inbox"),
             ]
+        case .fullDay:
+            return [
+                Self.reminder(
+                    "mail", "Answer mail", list: "work", due: today, doneAt: Self.at(8, 45)),
+                Self.reminder(
+                    "pr", "Review PR #612", list: "work", due: today, doneAt: Self.at(9, 20)),
+                Self.reminder("adr", "Write the cache ADR", list: "work", due: today),
+                Self.reminder("rent", "Pay rent", list: "life", due: today),
+                Self.reminder(
+                    "companion", "Implement the Companion with a cloud model, to make it useful",
+                    list: "daily", due: today, doneAt: Self.at(19, 10)),
+                Self.reminder(
+                    "duolingo", "Пройти урок у Duolingo 💚", list: "duolingo",
+                    due: Self.at(21, 30), timed: true, doneAt: Self.at(21, 44)),
+                Self.reminder("izaro", "Izaro voice lines (PoE)", list: "inbox"),
+                Self.reminder(
+                    "bins", "Put the bins out", list: "life", due: Self.at(7, 30, day: 5),
+                    timed: true),
+                Self.reminder("invoice", "Send the invoice", list: "work", due: Self.at(0, day: 5)),
+            ]
         case .evening, .night, .wrapUpClosed:
             let leftovers =
                 self == .wrapUpClosed
@@ -279,7 +306,7 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
                 calendarTitle: "sam.owner@gmail.com", colorHex: "#30D158"),
         ]
         switch self {
-        case .morning, .focus, .unstarted, .inCall:
+        case .morning, .focus, .unstarted, .inCall, .fullDay:
             var review = Self.event(
                 "d", "Design review", Self.at(15), Self.at(16), location: "Room 4",
                 meeting: true)
@@ -385,6 +412,8 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
                                     app: "Mail", lines: ["Your order shipped", "Weekly digest"])
                             ]))),
             ]
+        case .fullDay:
+            state = Self.fullDayState(state)
         case .evening, .night, .wrapUpClosed:
             state.morningPlanAt = Self.at(9)
             state.eveningWrapUpAt = Self.at(21)
@@ -458,6 +487,10 @@ enum TodayFixture: String, CaseIterable, CustomTestStringConvertible {
             thread: container.dayThread, stateStore: DayStateStore(url: stateURL),
             frontmost: container.frontmostApp, power: container.powerMonitor,
             delivery: CompanionDelivery(), profile: container.profileStore, now: { now })
+        if self == .fullDay {
+            container.profileStore.propose(
+                Self.fullDayReflection.proposals, source: "night-reflection")
+        }
         if self == .evening {
             container.profileStore.propose(
                 [

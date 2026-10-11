@@ -1778,7 +1778,10 @@ phone-width one draws the steps as a list. The **Today composer** at the bottom 
 simplified) asks Jarvis (with any **Shown Pictures** pasted, dropped on Today or
 picked), adds a task through Capture or takes a held-to-talk question, and its
 notice slot shows the latest agenda change with an undo.
-Its Chat mode shows the Day Thread.
+Its Chat mode shows the Day Thread: the Day Opening heads it as the day's
+date, with what Jarvis started the day with one click away, and each moment
+reads as its card (its line, what it holds, its choices live while the day
+still holds the card), never as a system note.
 _Avoid_: dashboard, Mission Control (retired), home screen (unqualified).
 
 **Now Card**:
