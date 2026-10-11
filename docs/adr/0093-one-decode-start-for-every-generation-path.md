@@ -47,19 +47,21 @@ Seven commits had to touch both `ServerCompletion` and `RawGenerationStart`.
    loop once. Every path calls it, through the Model Session's existing verbs:
    no verb was added (ADR-0016), and engagement stays in `Speculation.plan`
    (ADR-0079).
-2. **The Decode Handover names who prefills what is left.** Four cases:
+2. **The Decode Handover names who prefills what is left.** Three cases:
    `standard` (the app prefilled all but the last prompt token), `speculative`
-   (the Speculation Plan's iterator prefills from a split, or from zero),
-   `preparing` (the app's state-threaded iterator prefills the whole prompt)
-   and `prefillStrategy` (the Prefill Strategy route prefills into a cache of
-   its own). The case fixes the verb and the conversion point, in one switch:
+   (the Speculation Plan's iterator prefills from a split, or from zero) and
+   `preparing` (the app's state-threaded iterator prefills the whole prompt).
+   The Prefill Strategy route prefills into a cache of its own and starts
+   through `PrefillStrategyDecodeStart`, which has no owner, conversion or
+   recorder to refuse (review found the shared type trapping on all three).
+   The case fixes the verb and the conversion point, in one switch:
 
    | Handover | Verb | The scheme converts | The prompt's last token runs over |
    |---|---|---|---|
    | standard | `quantizeKVCache`, then `makeDecodeIterator` | in the Decode Start, before the iterator | the converted cache |
    | speculative | `makeSpeculativeDecodeIterator` | in the DFlash2 iterator, before its final position; read back | the converted cache |
    | preparing | `makePreparingDecodeIterator` | in the iterator, after its prefill; read back | full precision |
-   | prefillStrategy | `makeRawDecodeIterator` | in the route (ADR-0044) | full precision, or converted when the chunked arm has penalties |
+   | (Prefill Strategy route, its own start) | `makeRawDecodeIterator` | in the route (ADR-0044) | full precision, or converted when the chunked arm has penalties |
 
    Each verb gets the request's parameters minus what is no longer its to
    apply: the standard iterator gets no KV plan at all (the cache is

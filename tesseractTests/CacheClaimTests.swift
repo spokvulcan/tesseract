@@ -313,7 +313,7 @@ struct CacheClaimTests {
 
         let handoff = try #require(
             outcome.handoff, "the wait should have turned the copy into a move")
-        #expect(handoff.waitSeconds > 0)
+        #expect(handoff.lease.waitSeconds > 0)
         // The move is the real thing: the request holds the leaf's own
         // cache objects, not a restored copy of them.
         #expect(handoff.cache.cache[0] as AnyObject === scene.kv)
@@ -389,8 +389,7 @@ struct CacheClaimTests {
             reason: .hit(snapshotOffset: 8, totalTokens: 9, type: .leaf),
             promptTokens: 9, sharedPrefixLength: 9, skippedPrefillTokens: 8,
             newTokensToPrefill: 1, lookupMs: 0, restoreMs: 0, plannedCheckpoints: [],
-            restoreMode: "copy", copyReason: copy.reason, copyRefusal: copy.refusal,
-            copyWaitSeconds: copy.waitSeconds)
+            restore: .copy(copy))
         let lookupFields = Dictionary(uniqueKeysWithValues: lookup.fields)
         #expect(lookupFields["copyReason"] == "pendingFullPayload")
         #expect(lookupFields["copyRefusal"] == "pendingFullPayload")
@@ -408,6 +407,39 @@ struct CacheClaimTests {
     }
 
     // MARK: - The refusal ladder
+
+    nonisolated struct ScopeRow: Sendable, CustomTestStringConvertible {
+        let textOnly: Bool
+        let kvBits: Int?
+        let arm: SpeculativeArm?
+        let exclusion: CacheClaim.HandoffExclusion?
+        let copyReason: LeafStorePhase.Report.CopyReason?
+        var testDescription: String {
+            "textOnly=\(textOnly) kvBits=\(kvBits ?? 0) arm=\(arm?.rawValue ?? "none")"
+        }
+    }
+
+    /// The Leaf Handoff's scope is one rule (ADR-0064 decision 7) that the
+    /// check-out, the Leaf Admission's move and the Leaf Store's copy reason
+    /// read: a text-only key space over unquantized KV that MTP did not
+    /// decode may move; the first reason outside it wins, in this order.
+    @Test(arguments: [
+        ScopeRow(textOnly: true, kvBits: nil, arm: nil, exclusion: nil, copyReason: nil),
+        ScopeRow(textOnly: true, kvBits: nil, arm: .dflash2, exclusion: nil, copyReason: nil),
+        ScopeRow(textOnly: true, kvBits: nil, arm: .mtp, exclusion: .mtpArm, copyReason: .mtp),
+        ScopeRow(
+            textOnly: true, kvBits: 8, arm: .mtp, exclusion: .quantizedPartition,
+            copyReason: .quantized),
+        ScopeRow(
+            textOnly: false, kvBits: 8, arm: .mtp, exclusion: .imageKeySpace,
+            copyReason: .imageKeySpace),
+    ])
+    func theHandoffScopeIsOneRule(_ row: ScopeRow) {
+        let exclusion = CacheClaim.HandoffExclusion.of(
+            textOnly: row.textOnly, kvBits: row.kvBits, arm: row.arm)
+        #expect(exclusion == row.exclusion)
+        #expect(exclusion?.copyReason == row.copyReason)
+    }
 
     @Test(arguments: [
         "system", "branch", "immutable", "rotating", "window", "untrimmable", "quantized", "image",
@@ -517,7 +549,7 @@ struct CacheClaimTests {
             resolved(manager, tokens + [9]), tokens: tokens + [9], maximumAdvance: 20,
             manager: manager)
         let handoff = try #require(outcome.handoff)
-        #expect(handoff.rewindStateBytes == 8)
+        #expect(handoff.lease.rewindStateBytes == 8)
         _ = kv.update(
             keys: MLXArray.zeros([1, 1, 10, 64]), values: MLXArray.zeros([1, 1, 10, 64]))
         recurrent[1] = MLXArray([Float(99), 100])
@@ -944,7 +976,7 @@ struct CacheClaimTests {
             let (outcome, _) = await checkOut(
                 resolved, tokens: Array(1...9), manager: manager,
                 context: context(modelID: modelID), tripwire: .reporting)
-            return outcome.handoff?.leaseID
+            return outcome.handoff?.lease.leaseID
         }
         let leaseID = await checkOutAndDropTheHandOver()
         let event = try #require(await Self.tripwireEvent(capture))

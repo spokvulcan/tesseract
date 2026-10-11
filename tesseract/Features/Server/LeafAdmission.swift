@@ -30,10 +30,10 @@ nonisolated struct LeafAdmission: Sendable {
     /// Whose cache the producer hands over, which decides how it is captured.
     enum Cache {
         /// The finished turn's live cache. Its objects may be the ones the
-        /// request's Cache Claim leased by Leaf Handoff. They move only for a
-        /// text-only turn with unquantized KV whose MTP drafter did not run,
-        /// and a moved leaf is checked in through `claim` before anything is
-        /// extracted; otherwise the cache is copied.
+        /// request's Cache Claim leased by Leaf Handoff. They move only inside
+        /// the handoff scope (`CacheClaim.HandoffExclusion`), and a moved leaf
+        /// is checked in through `claim` before anything is extracted;
+        /// otherwise the cache is copied.
         case finishedTurn(
             FinalGenerationCache, claim: CacheClaim, textOnly: Bool, arm: SpeculativeArm?)
         /// A cache the producer owns outright, such as a boundary re-prefill's
@@ -154,7 +154,9 @@ nonisolated struct LeafAdmission: Sendable {
         let copied: [any KVCache]
         switch cache {
         case .finishedTurn(let live, _, let textOnly, let arm):
-            let moves = textOnly && partitionKey.kvBits == nil && arm != .mtp
+            let moves =
+                CacheClaim.HandoffExclusion.of(
+                    textOnly: textOnly, kvBits: partitionKey.kvBits, arm: arm) == nil
             if moves, let scheme = partitionKey.kvScheme { live.storeInForm(scheme) }
             moving = moves ? live : nil
             copied = moves ? [] : live.cache

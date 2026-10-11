@@ -4,7 +4,7 @@ import Testing
 @testable import Tesseract_Agent
 
 /// The **Turn Restore** (ADR-0069's 2026-10-11 amendment): one keyed turn's
-/// restore outcome, and the wire projections every report of the turn reads
+/// Turn Restore, and the wire projections every report of the turn reads
 /// from it — the `restoreMode`, the copy reason, refusal and wait, the
 /// fallback flag, the `restored` memory phase's facts, and the stored leaf's
 /// source. Pure rows, no completion: the whole-completion suites check that

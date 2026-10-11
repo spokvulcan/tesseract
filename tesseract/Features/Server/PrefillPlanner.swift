@@ -48,13 +48,13 @@ nonisolated struct PrefillBoundaries: Sendable, Equatable {
 /// orchestrator executes (slice + restore + iterate), where Snapshot Admission
 /// is the write-side value it commits afterward.
 nonisolated struct PrefillPlan: Sendable {
-    /// The restore-vs-cold decision. `.restore` carries the offset its KV
-    /// state covers (the prefill base) and the **Position Anchor** rope delta
-    /// for that offset (zero for image-free prefixes) — a cold plan cannot
-    /// carry a delta at all.
+    /// The restore-vs-cold decision. `.restore` carries the usable restore's
+    /// point: the offset its KV state covers (the prefill base) and the
+    /// **Position Anchor** rope delta for that offset (zero for image-free
+    /// prefixes) — a cold plan cannot carry a delta at all.
     enum Restore: Sendable {
         case cold
-        case restore(cacheOffset: Int, anchorDelta: Int)
+        case restore(PrefillPlanner.RestorePoint)
 
         /// Whether the turn starts from a cached prefix.
         var restoresPrefix: Bool {
@@ -96,7 +96,7 @@ nonisolated struct PrefillPlan: Sendable {
     /// zero on a cold prefill. Single source for what were two values that
     /// could drift (`skippedTokens` and `checkpointBaseOffset`).
     var prefillBaseOffset: Int {
-        if case .restore(let cacheOffset, _) = restore { return cacheOffset }
+        if case .restore(let point) = restore { return point.offset }
         return 0
     }
 
@@ -133,6 +133,14 @@ nonisolated enum PrefillPlanner {
     struct RestorePoint: Sendable, Equatable {
         let offset: Int
         let anchorDelta: Int
+
+        /// The model state the prefill past this point forwards with first:
+        /// the **Position Anchor** seeded with its rope delta on a container
+        /// that anchors warm continuations, nothing otherwise. The one
+        /// anchor-seed rule every restore-and-extend reads.
+        func initialState(seedsPositionAnchor: Bool) -> LMOutput.State? {
+            seedsPositionAnchor ? PositionAnchor.seededState(ropeDelta: anchorDelta) : nil
+        }
     }
 
     /// What the prefill past a restore point may forward.
@@ -293,7 +301,7 @@ nonisolated enum PrefillPlanner {
     ///   snapshot is restored and the remainder is continued *through* the
     ///   image, chunked. The `minimumWarmOffset` clamp survives only as the
     ///   no-valid-restore fallback (the cold `else`);
-    /// - the restore guard is the usable-restore rule with a residual that
+    /// - whether the hit restores is the usable-restore rule with a residual that
     ///   may carry images, which rejects an offset that splits a placeholder
     ///   run (a corrupt boundary);
     /// - a usable restore carries its **Position Anchor** rope delta;
@@ -321,7 +329,7 @@ nonisolated enum PrefillPlanner {
         }
         let cacheOffset = point.offset
         return PrefillPlan(
-            restore: .restore(cacheOffset: cacheOffset, anchorDelta: point.anchorDelta),
+            restore: .restore(point),
             // Capture in the suffix the snapshot doesn't cover, minus the
             // continued image span: `> cacheOffset` (past the restore) and
             // `>= minimumWarmOffset` (past the atomically-forwarded image).

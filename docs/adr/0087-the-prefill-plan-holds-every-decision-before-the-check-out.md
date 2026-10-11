@@ -286,20 +286,23 @@ the rest of this ADR:
    `resolve(…, planningFrom: stablePrefixOffset, for: claim)`. It resolves,
    then plans the checkpoints against the settled tree in its own MainActor
    hop, aligned to the hit, and returns a `PlannedResolution`: the resolution,
-   the plan and what the plan was made from. The hops and their order are the
-   ones plan application made.
-2. **The drop returns the re-plan.** `dropUnrestorableSnapshot(_:corruptLayers:replanning:)`
-   drops the snapshot the keyed turn failed to restore and, when a body went,
-   plans the turn's checkpoints again in the same hop. The failed-restore
-   policy (`ResidualPrefill.dropUnrestorable`) returns that re-plan to plan
-   application, which only takes it; the policy's generic follow-up closure is
-   gone.
+   the plan and the stable-prefix offset it was made from. The hops and their
+   order are the ones plan application made.
+2. **The drop returns the re-plan.** `dropUnrestorableSnapshot(_:tokens:partitionKey:corruptLayers:replanning:)`
+   drops the snapshot a restore threw on and, for a keyed turn's
+   `PlannedResolution` when a body went, plans the turn's checkpoints again
+   in the same hop. The one failed-restore policy
+   (`ResidualPrefill.dropUnrestorable`, one implementation for every caller)
+   returns that re-plan to plan application, which only takes it; the
+   policy's generic follow-up closure is gone.
 3. **The manager's own steps are private.** Both `planCheckpoints` overloads,
    `alignmentCheckpointOffset`, `promote`, `promoteChainPrefix`,
    `restoreSnapshotRef`, `evictToFitBudget`, `applyMemoryPressure` and
    `budgetFloorBytes` run only inside the manager's sequences. The suites
    reach the ones they drive through `testSeam()`, which
-   scripts/test-only-code.allow lists with its reason. `LookupResult.restoreCache()`,
+   scripts/test-only-code.allow lists with its reason; the counter reset and
+   the Snapshot Hydrating override, once `ForTesting` methods on the manager,
+   are on the seam too. `LookupResult.restoreCache()`,
    dead in production since every restore goes through the Model Session's
    `restore` verb, is deleted; the suites restore through the snapshot.
 

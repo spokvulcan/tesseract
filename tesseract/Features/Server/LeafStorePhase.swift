@@ -98,10 +98,13 @@ nonisolated enum LeafStorePhase {
         assistantReasoning: String?,
         toolCalls: [HTTPPrefixCacheToolCall],
         diagnosticsContext: PrefixCacheDiagnostics.Context,
-        trace: inout CompletionTraceAccumulator,
         memory: RequestMemoryTelemetry? = nil
     ) async -> Result {
         // swiftlint:enable function_parameter_count
+        // From here the phase's report is the turn's one `leafStore` event,
+        // a rewind in the phase included.
+        let turnReport = claim.report
+        turnReport.beginLeafStorePhase()
         let mlxStart = mlxStartBox.value
         var result = Result()
         result.report.generationPrompt = mlxStart.facts.generationPrompt.traceValue
@@ -195,7 +198,7 @@ nonisolated enum LeafStorePhase {
                             capture: "boundaryBackingLeafCapture",
                             admission: "boundaryBackingLeafAdmission",
                             source: "boundaryBackingLeaf"), ssdEnabled: false), path: .live)
-                if let tally = backer.evictionTally { trace.merge(tally) }
+                if let tally = backer.evictionTally { turnReport.merge(tally) }
                 if backer.leafStore != nil { boundaryBackingLeafPath = path }
             }
             // A boundary or intervened turn must return the original leaf
@@ -222,13 +225,13 @@ nonisolated enum LeafStorePhase {
             }
         }
 
-        if let tally = result.evictionTally { trace.merge(tally) }
+        if let tally = result.evictionTally { turnReport.merge(tally) }
         if let boundaryBackingLeafPath, let canonical = result.leafStore?.storedTokens {
             if let released = await inputs.prefixCache.releaseBoundaryBackingLeaf(
                 path: boundaryBackingLeafPath, sparing: canonical,
                 partitionKey: inputs.request.facts.partitionKey)
             {
-                trace.logSupersessions([released], diagnostics: diagnosticsContext)
+                turnReport.logSupersessions([released])
             } else {
                 result.report.recordSkip(
                     LeafSkipLog(

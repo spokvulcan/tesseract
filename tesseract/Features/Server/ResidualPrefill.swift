@@ -26,13 +26,6 @@ nonisolated enum ResidualPrefill {
         let backingLeaf: HybridCacheSnapshot?
         let point: PrefillPlanner.RestorePoint
         let path: [Int]
-
-        /// The model state the residual's first chunk forwards with: the
-        /// **Position Anchor** seeded at the restore point on a container
-        /// that anchors warm continuations, nothing otherwise.
-        func initialState(seedsPositionAnchor: Bool) -> LMOutput.State? {
-            seedsPositionAnchor ? PositionAnchor.seededState(ropeDelta: point.anchorDelta) : nil
-        }
     }
 
     /// A request-local **Prefix-View Checkpoint** (a transient boundary) as
@@ -54,13 +47,13 @@ nonisolated enum ResidualPrefill {
     /// Why a restore produced no cache.
     enum Failure: Error {
         /// The snapshot's restore threw, and the failed-restore policy
-        /// dropped it as `drop` says.
-        case unrestorable(drop: PrefixCacheManager.UnrestorableSnapshotDrop, error: any Error)
+        /// dropped it.
+        case unrestorable(any Error)
 
         /// What the restore threw.
         var underlying: any Error {
             switch self {
-            case .unrestorable(_, let error): error
+            case .unrestorable(let error): error
             }
         }
     }
@@ -80,10 +73,10 @@ nonisolated enum ResidualPrefill {
         do {
             cache = try session.restore(base.snapshot, backingLeaf: base.backingLeaf)
         } catch {
-            let drop = await dropUnrestorable(
+            await dropUnrestorable(
                 base.snapshot, error: error, tokens: base.path, partitionKey: partitionKey,
                 prefixCache: prefixCache, diagnostics: diagnostics)
-            throw .unrestorable(drop: drop, error: error)
+            throw .unrestorable(error)
         }
         for layer in cache { layer.reserveCapacity(base.path.count) }
         return cache
@@ -93,8 +86,9 @@ nonisolated enum ResidualPrefill {
     /// `prefill` verb: every token consumed, the tokens at the processor's
     /// rank (`tokenNDim`), forwarded from `state` (the base's initial state
     /// for the residual's first tokens). Returns the state the next range
-    /// continues from. Cancellation is checked before every chunk, and a
-    /// chunk's MLX failure throws.
+    /// continues from. Cancellation is checked before every chunk. Under
+    /// `.checkedSynchronous` a chunk's MLX failure throws; under `.pipelined`
+    /// only the closing flush's does (`PrefillExecutor.EvalPolicy`).
     // Mirrors the prefill verb's own parameters.
     // swiftlint:disable:next function_parameter_count
     static func prefill(
@@ -104,6 +98,7 @@ nonisolated enum ResidualPrefill {
         state: LMOutput.State?,
         prefillStepSize: Int,
         tokenNDim: Int,
+        evalPolicy: PrefillExecutor.EvalPolicy,
         storedForm: KVScheme?,
         in session: any ModelSession
     ) throws -> LMOutput.State? {
@@ -122,7 +117,7 @@ nonisolated enum ResidualPrefill {
             prefillStepSize: prefillStepSize,
             consumeAll: true,
             initialState: state,
-            evalPolicy: .pipelined,
+            evalPolicy: evalPolicy,
             storedForm: storedForm
         ).state
     }
@@ -131,53 +126,27 @@ nonisolated enum ResidualPrefill {
     /// restore threw is dropped through the manager, in one MainActor hop, so
     /// no later request resolves to it and pays the same failed restore; and
     /// one skip line says what went. A `HybridCacheSnapshot.RestoreError`
-    /// means the layers themselves are corrupt, so the SSD copy goes too.
+    /// means the layers themselves are corrupt, so the SSD copy goes too. A
+    /// keyed turn passes its `PlannedResolution`: when a body went, its
+    /// checkpoint plan is made again against the settled tree in the same
+    /// hop and returned (`nil` otherwise).
+    @discardableResult
     static func dropUnrestorable(
         _ snapshot: HybridCacheSnapshot,
         error: any Error,
         tokens: [Int],
         partitionKey: CachePartitionKey,
+        replanning planned: PrefixCacheManager.PlannedResolution? = nil,
         prefixCache: PrefixCacheManager,
         diagnostics: PrefixCacheDiagnostics.Context
-    ) async -> PrefixCacheManager.UnrestorableSnapshotDrop {
-        let corruptLayers = error is HybridCacheSnapshot.RestoreError
-        let drop = await MainActor.run {
-            prefixCache.dropUnrestorableSnapshot(
-                snapshot, tokens: tokens, partitionKey: partitionKey,
-                corruptLayers: corruptLayers)
-        }
-        logDropped(snapshot, drop: drop, error: error, diagnostics: diagnostics)
-        return drop
-    }
-
-    /// The same policy for a keyed turn's own restore, whose drop also
-    /// returns the turn's checkpoint plan made again against the settled tree
-    /// in the same hop (`nil` unless a body went).
-    static func dropUnrestorable(
-        _ snapshot: HybridCacheSnapshot,
-        error: any Error,
-        replanning planned: PrefixCacheManager.PlannedResolution,
-        prefixCache: PrefixCacheManager,
-        diagnostics: PrefixCacheDiagnostics.Context
-    ) async -> (
-        drop: PrefixCacheManager.UnrestorableSnapshotDrop,
-        replanned: PrefixCacheManager.CheckpointPlan?
-    ) {
+    ) async -> PrefixCacheManager.CheckpointPlan? {
         let corruptLayers = error is HybridCacheSnapshot.RestoreError
         let outcome = await MainActor.run {
             prefixCache.dropUnrestorableSnapshot(
-                snapshot, corruptLayers: corruptLayers, replanning: planned)
+                snapshot, tokens: tokens, partitionKey: partitionKey,
+                corruptLayers: corruptLayers, replanning: planned)
         }
-        logDropped(snapshot, drop: outcome.drop, error: error, diagnostics: diagnostics)
-        return outcome
-    }
-
-    private static func logDropped(
-        _ snapshot: HybridCacheSnapshot,
-        drop: PrefixCacheManager.UnrestorableSnapshotDrop,
-        error: any Error,
-        diagnostics: PrefixCacheDiagnostics.Context
-    ) {
+        let (drop, replanned) = (outcome.drop, outcome.replanned)
         diagnostics.logSkip(
             stage: "restore",
             reason: "unrestorable-snapshot",
@@ -189,5 +158,6 @@ nonisolated enum ResidualPrefill {
                 ("error", String(describing: error)),
             ]
         )
+        return replanned
     }
 }

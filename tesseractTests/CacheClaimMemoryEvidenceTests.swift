@@ -246,7 +246,7 @@ struct CacheClaimMemoryEvidenceTests {
         let held = Memory.activeMemory - start
         let peak = Memory.peakMemory - start
         let handoff = try #require(outcome.handoff)
-        #expect(handoff.rewindStateBytes == Self.recurrentBytes)
+        #expect(handoff.lease.rewindStateBytes == Self.recurrentBytes)
         #expect(await handOver.rewindAndConclude(sessions: sessions) == Self.rows)
         Stream().synchronize()
         let afterRewind = Memory.activeMemory - start

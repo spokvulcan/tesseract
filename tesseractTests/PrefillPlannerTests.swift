@@ -124,10 +124,10 @@ import MLXLMCommon
             promptTokenCount: 40,
             keySpace: .identity()
         )
-        guard case .restore(let cacheOffset, _) = plan.restore else {
+        guard case .restore(let point) = plan.restore else {
             Issue.record("expected restore"); return
         }
-        #expect(cacheOffset == 12)
+        #expect(point.offset == 12)
         // prefillBaseOffset collapses the old skippedTokens / checkpointBaseOffset pair.
         #expect(plan.prefillBaseOffset == 12)
     }
@@ -241,11 +241,10 @@ import MLXLMCommon
             promptTokenCount: 60,
             keySpace: keySpace
         )
-        guard case .restore(let cacheOffset, let anchorDelta) = plan.restore else {
+        guard case .restore(let point) = plan.restore else {
             Issue.record("expected restore below the image run"); return
         }
-        #expect(cacheOffset == 8)
-        #expect(anchorDelta == 0)
+        #expect(point == .init(offset: 8, anchorDelta: 0))
         // Checkpoints inside the continued image span [8, 26) are uncapturable
         // (8 is the restore base, 20 is mid-span); only the text tail past
         // minimumWarmOffset survives.
@@ -263,11 +262,10 @@ import MLXLMCommon
             promptTokenCount: 60,
             keySpace: keySpace
         )
-        guard case .restore(let cacheOffset, let anchorDelta) = plan.restore else {
+        guard case .restore(let point) = plan.restore else {
             Issue.record("expected restore"); return
         }
-        #expect(cacheOffset == 30)
-        #expect(anchorDelta == -8)
+        #expect(point == .init(offset: 30, anchorDelta: -8))
     }
 
     @Test func transientOffsetsInsideTheImagePrefixAreDropped() throws {

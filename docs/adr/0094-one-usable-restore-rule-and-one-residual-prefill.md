@@ -37,8 +37,9 @@ ADR-0069's amendment admits.
 ## Decision
 
 1. **One named rule.** `PrefillPlanner.usableRestore(offset:target:keySpace:residual:)`
-   returns the restore point (the offset and its anchor delta) or why it is
-   unusable (`coversNothing`, `coversWholeTarget`, `insideImagePrefix`,
+   returns the restore point (the offset and its anchor delta, which seeds
+   the Position Anchor through its one `initialState(seedsPositionAnchor:)`;
+   the keyed plan carries the point whole) or why it is unusable (`coversNothing`, `coversWholeTarget`, `insideImagePrefix`,
    `splitsImageRun`, in that order). The residual says what the prefill past
    it forwards: `mayCarryImages` for the keyed turn, which continues through
    an Image Span (ADR-0007 phase 2), `textOnly` for every re-prefill. All five
@@ -49,8 +50,9 @@ ADR-0069's amendment admits.
    does everything after the rule, for the boundary route and the speculative
    pass: `restore` brings a snapshot back through its Backing Leaf and
    reserves the whole path's rows; `prefill` runs a range of the path as text
-   through the session's `prefill` verb, at the processor's token rank, from
-   the base's seeded Position Anchor or the previous range's state;
+   through the session's `prefill` verb, at the processor's token rank and
+   under the caller's eval policy, from the base's seeded Position Anchor or
+   the previous range's state;
    `matchingView` is the one request-local view rule. The producers hand the
    resulting cache to their Leaf Admission; ADR-0078 kept re-prefill out of
    the admission, and it stays out. Plan application keeps its shape switch
@@ -82,12 +84,26 @@ Each is pinned by a test; nothing else changes.
   (`<mode>LeafStore prefill-threw`, `speculativePrefill restore-failed`), and
   the `leafStore` report still reads `skip=prefill-threw`. A request-local
   view reports `drop=notFound`: there is nothing in the tree to drop.
-- **The speculative pass's chunks run through `session.prefill`.** A chunk's
-  MLX failure now throws and logs `skip stage=speculativePrefill
-  reason=prefill-threw level=warning error=…` instead of ending the process;
-  each chunk's prefill ends, as every `PrefillExecutor.run` does, with a
-  checked evaluation and `Memory.clearCache()`, so the pool is returned
-  between chunks; and the pass's verbs are recorded on the toy session.
+- **The speculative pass's chunks run through `session.prefill`, each
+  evaluated checked** (`.checkedSynchronous`; the pass forwards one chunk
+  per call, so it gives up no pipelining). A chunk's MLX failure now throws
+  inside the checked evaluation and logs `skip stage=speculativePrefill
+  reason=prefill-threw level=warning error=…` instead of ending the process
+  (`SpeculativePrefillPreemptionTests.aChunkThatThrowsEndsThePassWithNothingAdmitted`).
+  Each chunk is one `prefill` verb, which ends, as every `PrefillExecutor.run`
+  does, with a checked flush and `Memory.clearCache()`, so the pool is
+  returned between chunks (`eachChunkIsOneCheckedPrefill` counts one checked
+  verb per chunk). The pass's verbs are recorded on the toy session. The
+  boundary route keeps the `.pipelined` evaluation it had: one call over
+  the whole residual, whose closing flush is checked.
+- Not changed: when a preemption lands. A chunk that passed the loop's check
+  runs to its end even if the cancel lands while it waits for its session,
+  as the pass's chunks did on `container.perform`; it runs in a detached task
+  (the claim's conclusion's way), so the pass's cancellation does not reach
+  the prefill's own per-chunk check, and the next check stops the pass
+  (`aPreemptionWhileAChunkWaitsForItsSessionStillRunsThatChunk`). An earlier
+  build of this ADR broke there and settled one chunk short; review caught
+  it before any gate could, since no e2e request preempts at that moment.
 - Not observable: the `boundary-splits-image-run` skips of the boundary route
   and the speculative pass are gone. A text-only residual sits at or past the
   Minimum Warm Offset, where the anchor is always defined, so neither could
@@ -159,3 +175,36 @@ to 2,617; `SpeculativePrefill.swift` from 534 to 520; `ResidualPrefill.swift`
 is 193 and `TurnRestore.swift` 98. `PrefixCacheManager.swift` grew from 3,278
 to 3,387 with the planned resolution, the re-planning drop and the test
 seam's forwarders.
+
+### As built, second pass (2026-10-11)
+
+A review of the branch, and the rest of ADR-0069's Turn Restore proposal,
+added eleven commits on top of a888a3e1: the speculative pass's checked
+per-chunk evaluation and its old cancellation point (the declared change
+above now holds, and a preemption that lands while a chunk waits for its
+session runs that chunk again), one anchor-seed rule on the restore point,
+one failed-restore implementation, the handoff scope as one rule, one Turn
+Report, a trivial report for an Unkeyed Completion, the Prefill Strategy
+route's own start, and two declared one-row fixes recorded in ADR-0069
+(an MTP turn's copy reason, a rewind's wait). Same machine and method,
+against fresh references captured on a888a3e1 (the first pass's captures
+were cleaned up):
+
+- `prefix-cache-e2e` on `qwen3.5-4b-paro` after every step that could move a
+  line, eight runs: 38 of 38 each, the check lines and 32 decode lines
+  identical, 0 of 1,959 in-order diagnostics lines differing.
+- On the last code commit (0a187a0f): the 27B e2e with its DFlash2 draft, 38
+  of 38, the 32 acceptance lines identical, 0 of 2,020 in-order lines
+  differing; `hybrid-cache-correctness`, 12 of 12, bitwise, its summary
+  identical to `main`'s; and the 27B e2e under `turbo8v4`, 37 of 38 with
+  `main`'s own `requestP3` failure, its check and acceptance lines identical
+  to `main`'s run (its diagnostics are not diffed: no reference capture was
+  kept for that configuration).
+- The other-task lines differ only by the Speculative Canonical Prefill's
+  scheduling race, 3 to 14 lines per comparison, both ways.
+
+None of the declared changes shows in the gates: no e2e turn fails a
+restore, engages MTP, or rewinds before the Leaf Store phase after a waited
+handoff. The whole target passes (3,662 tests, 7 skipped), as does
+`scripts/check.sh`. `ServerCompletion.swift` is now 2,595 lines (2,755 on
+`main`); `TurnReport.swift` is 101.

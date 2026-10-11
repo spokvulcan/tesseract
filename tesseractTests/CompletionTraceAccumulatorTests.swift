@@ -41,7 +41,7 @@ struct CompletionTraceAccumulatorTests {
 
     private func makeStartFacts(
         unkeyedReason: CacheKeySpace.UnkeyedReason? = nil,
-        lookupReason: PrefixCacheManager.LookupReason = .missNoEntries,
+        lookupReason: PrefixCacheManager.LookupReason? = .missNoEntries,
         restore: TurnRestore = .cold,
         sharedPrefixLength: Int = 0
     ) -> CompletionTraceAccumulator.StartFacts {
@@ -96,16 +96,19 @@ struct CompletionTraceAccumulatorTests {
     /// 2026-10-11 amendment): a restore that fell back cold, and a hit the
     /// plan ran cold (one covering the whole prompt), used to record the
     /// hit's offset beside `hitTokens=0`.
-    @Test(arguments: [
-        (hit, handoff, 342),
-        (hit, TurnRestore.copy(nil), 342),
-        (hit, TurnRestore.failedThenCold(nil), 0),
-        (hit, TurnRestore.cold, 0),
-        (PrefixCacheManager.LookupReason.missNoEntries, TurnRestore.cold, 0),
-        (PrefixCacheManager.LookupReason.missNoSnapshotInPrefix, TurnRestore.cold, 0),
-    ])
+    @Test(
+        arguments: [
+            (hit, handoff, 342),
+            (hit, TurnRestore.copy(nil), 342),
+            (hit, TurnRestore.failedThenCold(nil), 0),
+            (hit, TurnRestore.cold, 0),
+            (PrefixCacheManager.LookupReason.missNoEntries, TurnRestore.cold, 0),
+            (PrefixCacheManager.LookupReason.missNoSnapshotInPrefix, TurnRestore.cold, 0),
+            // An Unkeyed Completion never looked up.
+            (nil, TurnRestore.cold, 0),
+        ] as [(PrefixCacheManager.LookupReason?, TurnRestore, Int)])
     func restoredOffsetIsWhatTheTurnRestored(
-        _ reason: PrefixCacheManager.LookupReason, _ restore: TurnRestore, _ offset: Int
+        _ reason: PrefixCacheManager.LookupReason?, _ restore: TurnRestore, _ offset: Int
     ) {
         #expect(
             CompletionTraceAccumulator.restoredOffset(for: reason, restore: restore) == offset)
@@ -142,7 +145,7 @@ struct CompletionTraceAccumulatorTests {
             timestamp: 1_000,
             requestID: UUID(),
             modelID: "test-model",
-            start: makeStartFacts(unkeyedReason: .placeholderRunCountMismatch),
+            start: makeStartFacts(unkeyedReason: .placeholderRunCountMismatch, lookupReason: nil),
             capturedSnapshots: [],
             leafStore: nil,
             ramBudgetBytes: 8_192,

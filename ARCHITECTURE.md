@@ -173,6 +173,7 @@ tesseract/
 │   │   ├── ServerCompletion.swift     # Actor-confined cache-aware execution module
 │   │   ├── CacheClaim.swift          # Cache Claim: a request's lane, pins and Leaf Lease; check-out, check-in, rewind; one conclusion (ADR-0069)
 │   │   ├── TurnRestore.swift         # Turn Restore: how a keyed turn's cache opened; every report of the turn reads it (ADR-0069)
+│   │   ├── TurnReport.swift          # Turn Report: the filed Turn Restore, the trace tally, the turn's one leafStore event (ADR-0069)
 │   │   ├── LeafLease.swift           # Scalar lease identity, shared tree/writer exclusion, exact recurrent rewind
 │   │   ├── PrefixCacheManager.swift   # Radix-tree KV snapshot cache (RAM tier)
 │   │   ├── SSDSnapshotStore.swift     # SSD tier: writer queue + body I/O
@@ -651,7 +652,10 @@ plan (`PlannedResolution`), and dropping a snapshot that failed to restore
 returns the re-plan, so the manager keeps that order rather than plan
 application (ADR-0087 amendment). Its check-out answer and what the restore yielded
 are the turn's one Turn Restore (`TurnRestore`), which the `lookup` line, the
-memory phases, the `leafStore` report and the leaf's reserve source all read.
+memory phases, the `leafStore` report and the leaf's reserve source all read;
+plan application files it in the claim's Turn Report (`TurnReport`), which
+also carries the trace tally and logs the turn's one `leafStore` event, a
+rewind the claim reports to it included.
 Whether a snapshot can seed a prefill is one rule,
 the Usable Restore (`PrefillPlanner.usableRestore`), read by the keyed turn's
 plan and every re-prefill; the Leaf Store's boundary route and the Speculative

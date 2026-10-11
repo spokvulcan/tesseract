@@ -41,9 +41,6 @@ nonisolated struct DecodeStartTests {
         case prefillStrategyChunked
 
         var speculates: Bool { self == .speculativeSplit || self == .speculativeWholePrompt }
-        var keepsCache: Bool {
-            self != .prefillStrategySingleShot && self != .prefillStrategyChunked
-        }
     }
 
     enum Penalty: String, CaseIterable, Sendable {
@@ -121,6 +118,28 @@ nonisolated struct DecodeStartTests {
         let arm: SpeculativeArm?
     }
 
+    /// The Raw Generation Start's arm without a plan: the Prefill Strategy
+    /// route's own start, which keeps no cache of the app's and badges
+    /// nothing.
+    private static func startPrefillStrategy(
+        _ input: LMInput, session: any ModelSession, provider: ToyModelSessionProvider,
+        parameters: GenerateParameters, progress: ProgressEventLog
+    ) async throws -> Outcome {
+        let verbsBefore = provider.recorder.verbs.count
+        let decode = try PrefillStrategyDecodeStart(
+            input, session: session, parameters: parameters)
+        progress.append(
+            .prefillFinished(
+                .init(
+                    promptTokens: prompt.count, cachedTokens: 0,
+                    newTokensToPrefill: prompt.count, prefillMs: 1)))
+        let (stream, task) = decode.startLoop(
+            promptTokenCount: prompt.count, session: session, tools: nil)
+        return Outcome(
+            stream: stream, task: task, owner: nil,
+            verbs: Array(provider.recorder.verbs.dropFirst(verbsBefore)), arm: nil)
+    }
+
     /// Warm the cache as `row.kind`'s path does, make the Decode Start, report
     /// the prefill and start the loop, all in one session.
     private static func start(
@@ -164,9 +183,13 @@ nonisolated struct DecodeStartTests {
                 cache = try session.newCache(parameters: parameters)
                 handover = .preparing(LMInput(text: text), prepare: nil)
             case .prefillStrategySingleShot:
-                handover = .prefillStrategy(LMInput(text: text))
+                return try await startPrefillStrategy(
+                    LMInput(text: text), session: session, provider: provider,
+                    parameters: parameters, progress: progress)
             case .prefillStrategyChunked:
-                handover = .prefillStrategy(LMInput(tokens: text.tokens[.newAxis]))
+                return try await startPrefillStrategy(
+                    LMInput(tokens: text.tokens[.newAxis]), session: session, provider: provider,
+                    parameters: parameters, progress: progress)
             }
             let verbsBefore = provider.recorder.verbs.count
             let decode = try DecodeStart.make(
@@ -176,10 +199,10 @@ nonisolated struct DecodeStartTests {
                     promptTokens: prompt.count, cachedTokens: 0,
                     newTokensToPrefill: prompt.count, prefillMs: 1),
                 to: { event in progress.append(event) })
-            let owner = row.kind.keepsCache ? decode.cacheOwner(lease: nil) : nil
+            let owner = decode.cacheOwner(lease: nil)
             let (stream, task) = decode.startLoop(
                 promptTokenCount: prompt.count, session: session, tools: nil,
-                generatedTokens: row.kind.keepsCache ? GeneratedTokenRecorder() : nil)
+                generatedTokens: GeneratedTokenRecorder())
             return Outcome(
                 stream: stream, task: task, owner: owner,
                 verbs: Array(provider.recorder.verbs.dropFirst(verbsBefore)), arm: decode.arm)
@@ -266,6 +289,55 @@ nonisolated struct DecodeStartTests {
         #expect(await Self.drain(outcome) == Self.expectedText(.frequency))
         #expect(model.forwardForms.form(at: Self.lastPromptPosition) == .fullPrecision)
         #expect(model.forwardForms.form(at: Self.firstDecodePosition) == .affineQuantized)
+    }
+
+    /// A speculative handover's iterator converts the cache at the end of its
+    /// own prefill, and the Decode Start reads the converted array back: the
+    /// owner keeps the TurboQuant layers decode advances, not the
+    /// full-precision ones the caller allocated. The toy's DFlash2 verify
+    /// moves only full-precision rows, so these rows stop before decode.
+    @Test(arguments: [Kind.speculativeSplit, .speculativeWholePrompt])
+    func aSpeculativeHandoverReadsTheConvertedArrayBack(_ kind: Kind) async throws {
+        let row = Row(kind: kind, scheme: .turbo8v4, penalty: .none)
+        let model = ToyLanguageModel(script: Self.prompt + Self.completion, headDim: 64)
+        let provider = ToyModelSessionProvider(
+            model: model, tokenizer: ToySequencingTokenizer(),
+            speculation: .scriptedDFlash2(over: model))
+        let parameters = Self.parameters(row)
+
+        let (allocated, kept, owner) = try await provider.withSession { session in
+            let text = LMInput.Text(tokens: MLXArray(Self.prompt.map(Int32.init)))
+            let plan = try #require(
+                session.speculation.plan(
+                    for: SpeculationRequest(
+                        isTextOnly: true, kvBits: nil, kvScheme: .turbo8v4, temperature: 0,
+                        promptTokens: Self.prompt.count, restoresPrefix: false,
+                        storedLeaf: nil)))
+            var cache = try session.newCache(parameters: parameters)
+            let allocated = UnsafeSendableBox(cache)
+            var split = 0
+            if kind == .speculativeSplit {
+                split = 8
+                _ = try session.prefill(
+                    text: LMInput.Text(tokens: MLXArray(Self.prompt[...split].map(Int32.init))),
+                    cache: cache, checkpoints: [:], checkpointBaseOffset: 0,
+                    prefillStepSize: 4, consumeAll: false, initialState: nil,
+                    evalPolicy: .pipelined, storedForm: nil)
+            }
+            let decode = try DecodeStart.make(
+                .speculative(
+                    plan, input: LMInput(text: text), prefilledPrefixTokens: split,
+                    positionDelta: 0),
+                cache: &cache, session: session, parameters: parameters)
+            return (allocated, UnsafeSendableBox(cache), decode.cacheOwner(lease: nil))
+        }
+
+        #expect(kept.value.allSatisfy { $0 is TurboQuantKVCache }, "\(kept.value)")
+        #expect(
+            zip(owner.cache, kept.value).allSatisfy { ($0 as AnyObject) === ($1 as AnyObject) })
+        #expect(
+            !zip(allocated.value, kept.value).contains { ($0 as AnyObject) === ($1 as AnyObject) },
+            "the caller's reference keeps no replaced layer")
     }
 
     /// A leased leaf's cache adopts the array decode advances: a conversion

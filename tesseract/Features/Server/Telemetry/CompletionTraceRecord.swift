@@ -271,7 +271,7 @@ nonisolated struct EmittedPathTraceTelemetry: Codable, Sendable, Equatable {
             resolvedSuffix: resolves?.requestEdgeSuffixTokens,
             resolveMissReason: resolves?.requestEdgeMissReason ?? resolves?.requestEdgeSkipReason,
             restoreMode: report.restore?.mode,
-            copyReason: (report.restore?.copy?.reason ?? report.copyReason)?.rawValue,
+            copyReason: report.reportedCopyReason?.rawValue,
             leafSource: report.source?.rawValue
         )
     }

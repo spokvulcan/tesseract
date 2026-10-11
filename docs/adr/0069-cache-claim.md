@@ -364,17 +364,15 @@ stored leaf's source for every path. The whole-completion suites
 (`ServerCompletionRestoreFallbackTests`, `CacheClaimTests`) still check that
 plan application produces the outcome.
 
-Not built from the proposal this step came from: one per-turn report, grown
-from the **Completion Trace Accumulator**, that renders the `lookup` line, the
-memory phases, the one `leafStore` event, the reserve source and the trace
-record in one place; the claim reporting its rewinds into that report rather
-than building its own `leafStore`; a trivial report for an **Unkeyed
-Completion** in place of its stand-in `lookupReason: .missNoEntries`; and one
-home for the handoff scope, which the check-out, the Leaf Admission's move
-and the Leaf Store's copy reason each spell (an MTP turn's copied leaf has no
-copy reason). Each moves where lines are written, which the byte-identical
-bar pins line by line; they were left for a change that can run the
-before-and-after diagnostics diff on them alone.
+Not built in this step, and taken up in the sections below: one home for the handoff scope,
+which the check-out, the Leaf Admission's move and the Leaf Store's copy
+reason each spelled; one per-turn report, grown from the **Completion Trace
+Accumulator**, that renders every output from the Turn Restore; the claim
+reporting its rewinds into that report rather than building its own
+`leafStore`; and a trivial report for an **Unkeyed Completion** in place of
+its stand-in `lookupReason: .missNoEntries`. Each moves where a rule or a line
+lives, so each was left for a step that runs the before-and-after diagnostics
+diff on it alone.
 
 ### Declared: a fallback turn's leaf reads its source like a cold turn's
 
@@ -418,3 +416,99 @@ corpus, which counts a record as a hit when either offset is positive, counts
 it as the miss it was. No diagnostics line changes. Pinned by
 `CompletionTraceAccumulatorTests.restoredOffsetIsWhatTheTurnRestored` (hit and
 miss reasons against every outcome) and `aFallbackTurnsRecordRestoredNothing`.
+
+### One home for the handoff scope
+
+ADR-0064 decision 7 scopes the Leaf Handoff to text-only key spaces over
+unquantized KV, off the MTP path. Three places spelled it: the check-out's
+`imageKeySpace` and `quantizedPartition` rungs, the Leaf Admission's move of
+a finished turn, and the Leaf Store's copy reason. `CacheClaim.HandoffExclusion.of(textOnly:kvBits:arm:)`
+is now the one rule: it answers why a turn is outside the scope, the first
+reason in that order, or `nil` when its cache may move. The check-out asks it
+without an arm (MTP engages only on a turn that restores nothing), the Leaf
+Admission asks it with the decoding arm, and the Leaf Store's copy reason is
+its `copyReason`. No line changes. `CacheClaimTests.theHandoffScopeIsOneRule`
+tables the rule; the claim's refusal ladder and the Leaf Admission's move
+cases keep their rows.
+
+### Declared: an MTP turn's copied leaf reports `copyReason=mtp`
+
+The handoff scope leaves the MTP path out, so an MTP-decoded turn's live leaf
+is copied, but the Leaf Store gave no reason for the copy. With the scope as
+one rule its copy reason is the rule's, and it now reads `mtp`. On a turn the
+MTP drafter decoded (a turn that restored nothing, text-only over unquantized
+KV), and on no other: the `leafStore` event gains `copyReason=mtp`, the
+`recordingRequest` phase's `leafCopyReason` reads `mtp` where it read `none`,
+and the trace record's emitted-path `copyReason` reads `mtp` where it had
+none. Pinned by the MTP row of `CacheClaimTests.theHandoffScopeIsOneRule`. No
+toy session engages MTP end to end (the suites' resident drafter traps if a
+request engages it), so the pin is the rule's; the Leaf Store reads it with
+the turn's decoding arm.
+
+### One Turn Report renders the turn's outputs
+
+The Turn Restore was one value, but each output still took it from wherever
+it happened to be: the generation value, the Leaf Admission's context and the
+`leafStore` report the drive patched; the trace tally sat in the drive and
+was threaded into the Leaf Store phase; and the one-`leafStore` rule was held
+by a flag the drive had to set on the claim before the phase
+(`enterLeafStorePhase`, #589), because the claim built a `leafStore` report of
+its own for a rewind. Now each request's Cache Claim keeps a **Turn Report**
+(`TurnReport`):
+
+1. **Plan application files the Turn Restore in it once**, where the
+   `restored` phase is marked. The generation value no longer carries it; the
+   Leaf Admission's context (the reserve's source), the phase's report, the
+   `recordingRequest` phase and the trace record read the filed one.
+2. **It owns the turn's one `leafStore` event.** The Leaf Store phase begins
+   it (`beginLeafStorePhase`, the phase's first step), and its report, with
+   the restore filed in, is logged through it. The claim reports each Leaf
+   Rewind to it (`leafRewound`) instead of building a report: before the
+   phase the rewind is the turn's one `leafStore` (`path=rewind
+   restoreMode=handoff`, as the claim's read); from the phase on, the phase's
+   report says it. The claim no longer knows the Leaf Store phase exists.
+3. **It carries the trace tally** (the Completion Trace Accumulator it grew
+   from): checkpoint admission's evictions, each Leaf Admission's tally and
+   the boundary Backing Leaf's supersession go into it, and the trace record
+   is made from it.
+
+4. **Each output renders from it, not from loose copies.** The `lookup` line
+   takes the Turn Restore itself (its `restoreMode`, fallback, copy reason,
+   refusal and wait), and the `leafStore` report's `reportedCopyReason` is
+   the one copy-reason projection the event, the `recordingRequest` phase
+   (`recordingFacts`) and the trace record read, where each spelled it.
+
+No line changes: each line is written at the step it was, through the same
+request context. `TurnReportTests` drives the report's interface (the
+rewind before and after the phase, the filed restore); the cancelled-turn
+replay cases and the keyed sequencing suite check it through a real turn.
+
+### Declared: a rewind reports the wait its handoff cost
+
+The claim's rewind report said `restoreMode=handoff` and made up a wait of
+zero, since the claim's report was built from the lease alone. The claim now
+keeps the handoff it reported at check-out with the leased leaf and reports
+that to the Turn Report, so the rewind renders the turn's real handoff. On a
+turn that ends before the Leaf Store phase after a Pending-Payload Wait that
+ended in a handoff, and on no other, the `leafStore path=rewind` event gains
+`copyWaitMs`, as the same turn's `lookup` line and any phase report already
+carry. Pinned by `TurnReportTests.aRewindAfterAWaitedHandoffReportsTheWait`.
+
+### An Unkeyed Completion reports no lookup
+
+The Unkeyed Completion's generation value carried a stand-in
+`lookupReason: .missNoEntries` for a lookup it never made. Its lookup reason
+is now absent (`nil`), and its Turn Report stays trivial: no restore filed
+(`.cold`), no trace record (the accumulator makes none for an unkeyed turn,
+and its restored-offset rule reads an absent reason as nothing restored), and
+the Leaf Store phase's one `leafStore` is its `unkeyed-completion` skip. No
+diagnostics line changes. Two `Log.agent` lines, which are not diagnostics
+events, now print the request's cache reason where they printed the lookup
+reason: `unkeyed(<reason>)` on an unkeyed turn instead of the stand-in
+`missNoEntries`, and the same text as before on a keyed one. Pinned by the
+nil row of `CompletionTraceAccumulatorTests.restoredOffsetIsWhatTheTurnRestored`.
+
+The drive's remaining keyed-or-unkeyed branches (the tuner's request record,
+the trace's key path, the emitted-path summary) read Request Keying's outcome,
+not the turn's cache account, so the report does not absorb them and they
+stay.

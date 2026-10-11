@@ -205,9 +205,11 @@ the request that extends that leaf takes the objects back as its live cache.
 A boundary turn's re-prefilled cache moves in the same way: it is the
 request's own by construction, so the capture takes it rather than copying it.
 Only at quiescent points; only for a leaf hit at its full offset that every
-layer can return from (**Leaf Rewind**); anything else restores by copy as
-before — except a check-out refused only for a pending full payload, which is
-worth the **Pending-Payload Wait** first.
+layer can return from (**Leaf Rewind**); only inside its scope, a text-only key
+space over unquantized KV that the MTP drafter did not decode, one rule the
+check-out and the leaf's capture both read (`CacheClaim.HandoffExclusion`);
+anything else restores by copy as before — except a check-out refused only for
+a pending full payload, which is worth the **Pending-Payload Wait** first.
 _Avoid_: copy-on-write restore (the alias ADR-0023 rejected — a handoff shares
 nothing between two owners); zero-copy (the SSD write still copies); cache
 sharing (one owner at a time, never two).
@@ -693,20 +695,23 @@ where the **KV Scheme** converts: standard, where the app prefilled all but the
 last prompt token and the cache converts before the iterator's first forward;
 speculative, where the **Speculation Plan**'s iterator prefills the rest from a
 split (or the whole prompt from zero) and converts before the prompt's final
-position; preparing, where the app's iterator prefills the whole prompt and
-converts after it; or the **Prefill Strategy** route, which prefills into a
-cache of its own. A keyed split never precedes the **Minimum Warm Offset**, so
-the iterator takes text only. Every generation path names its own (ADR-0093).
+position; or preparing, where the app's iterator prefills the whole prompt and
+converts after it. The **Prefill Strategy** route, which prefills into a cache
+of its own and keeps no array of the app's, is no handover: it starts through
+its own small start. A keyed split never precedes the **Minimum Warm Offset**,
+so the iterator takes text only. Every generation path names its own
+(ADR-0093).
 _Avoid_: decode route, speculation route (route belongs to the **Prefill
 Strategy** and the **Completion Route**); decode handoff (handoff is the
 **Leaf Handoff**'s word for moving a leaf between owners).
 
 **Decode Start**:
-The one module that starts decode for every generation path: from the **Decode
-Handover** it builds the iterator through the **Model Session**'s verbs,
-converts the KV cache once where the handover needs it, hands the array decode
-advances to its owner, badges a speculative arm and starts the token loop
-(ADR-0093).
+The one module that starts decode for every generation path whose cache the
+app holds: from the **Decode Handover** it builds the iterator through the
+**Model Session**'s verbs, converts the KV cache once where the handover needs
+it, hands the array decode advances to its owner, badges a speculative arm and
+starts the token loop (ADR-0093). The **Prefill Strategy** route, which owns
+its cache, has a start of its own with none of those steps.
 _Avoid_: iterator factory (it decides the conversion and the owner too);
 quantize step (the conversion is one of its decisions, not a step of its own);
 a session verb that starts decode (it sits above the seam, ADR-0016).
@@ -938,13 +943,24 @@ _Avoid_: restore mode (its wire string, which reads `failedCopy` for the
 last); restore outcome (the claim's check-out answer, one input to it);
 **Cache Opening** (the plan's intent, decided before the check-out).
 
+**Turn Report**:
+One request's account of its cache, kept by its **Cache Claim**: the turn's
+**Turn Restore**, filed once by plan application; the trace tally; and the
+turn's one `leafStore` event — the Leaf Store phase's report once the phase
+begins, or the claim's **Leaf Rewind** for a turn that ends before it, which
+the claim reports to it rather than logging. The outputs that say how the
+turn's cache opened read the filed restore from it (ADR-0069 amendment).
+_Avoid_: leaf store report (the phase's account, one of its inputs); a flag
+the drive sets on the claim (the retired `enterLeafStorePhase`); turn record
+(the trace corpus's line, which it makes).
+
 **Completion Trace Accumulator**:
 The fold of one cache-aware **Server Completion**'s trace facts into the terminal
 trace record — the terminal-vs-recovered eviction tally paired with its correlated
 diagnostics emission (so tally and log lines cannot drift), the restored-offset
 rule (the offset the **Turn Restore** restored, 0 when it restored nothing),
-and the admitted-snapshot projections. The drive feeds facts; the value
-decides what the record contains.
+and the admitted-snapshot projections. A turn's **Turn Report** carries its
+tally and the drive feeds facts; the value decides what the record contains.
 _Avoid_: telemetry store (the window-scoped event buffer); trace logger (it
 derives, the diagnostics context logs).
 

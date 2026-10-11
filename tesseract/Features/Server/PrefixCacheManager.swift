@@ -804,13 +804,11 @@ final class PrefixCacheManager {
     /// the way `Resolved.alignmentLookup` says. The order plan application
     /// used to hold by comment is the manager's. It also carries what the plan
     /// was made from, so a dropped snapshot's re-plan is the same plan again
-    /// (`dropUnrestorableSnapshot(_:corruptLayers:replanning:)`).
+    /// (`dropUnrestorableSnapshot(_:tokens:partitionKey:corruptLayers:replanning:)`).
     struct PlannedResolution: Sendable {
         let resolved: Resolved
         let checkpointPlan: CheckpointPlan
-        fileprivate let tokens: [Int]
         fileprivate let stablePrefixOffset: Int?
-        fileprivate let partitionKey: CachePartitionKey
     }
 
     /// Snapshot Resolution for a keyed turn's **Cache Claim**, then, in its
@@ -835,8 +833,8 @@ final class PrefixCacheManager {
                 partitionKey: partitionKey, alignTo: resolved.alignmentLookup)
         }
         return PlannedResolution(
-            resolved: resolved, checkpointPlan: checkpointPlan, tokens: tokens,
-            stablePrefixOffset: stablePrefixOffset, partitionKey: partitionKey)
+            resolved: resolved, checkpointPlan: checkpointPlan,
+            stablePrefixOffset: stablePrefixOffset)
     }
 
     /// Snapshot Resolution for a Speculative Canonical Prefill pass.
@@ -2017,8 +2015,7 @@ final class PrefixCacheManager {
     /// cleared. Any other failure, such as a view whose Backing Leaf no
     /// longer fits it, keeps the SSD copy. Acts only while the node at the
     /// snapshot's path still holds that very body.
-    @discardableResult
-    func dropUnrestorableSnapshot(
+    private func dropUnrestorableSnapshot(
         _ snapshot: HybridCacheSnapshot,
         tokens: [Int],
         partitionKey: CachePartitionKey,
@@ -2049,25 +2046,24 @@ final class PrefixCacheManager {
         return drop
     }
 
-    /// Drop the snapshot a keyed turn's restore threw on, as above, and plan
-    /// the turn's checkpoints again against the settled tree in the same
-    /// hop: a checkpoint the drop took is captured anew on the same turn
-    /// (ADR-0069 amendment). The re-plan is `nil` unless a body went, since
-    /// only then can a checkpoint the plan counted as stored be gone.
+    /// Drop the snapshot a restore threw on, as above, and for a keyed turn
+    /// (`planned`, its resolution of `tokens`) plan its checkpoints again
+    /// against the settled tree in the same hop: a checkpoint the drop took
+    /// is captured anew on the same turn (ADR-0069 amendment). The re-plan is
+    /// `nil` unless a body went, since only then can a checkpoint the plan
+    /// counted as stored be gone.
     func dropUnrestorableSnapshot(
-        _ snapshot: HybridCacheSnapshot, corruptLayers: Bool,
-        replanning planned: PlannedResolution
+        _ snapshot: HybridCacheSnapshot, tokens: [Int], partitionKey: CachePartitionKey,
+        corruptLayers: Bool, replanning planned: PlannedResolution?
     ) -> (drop: UnrestorableSnapshotDrop, replanned: CheckpointPlan?) {
         let drop = dropUnrestorableSnapshot(
-            snapshot, tokens: planned.tokens, partitionKey: planned.partitionKey,
-            corruptLayers: corruptLayers)
-        guard drop == .body || drop == .bodyAndSSDCopy else { return (drop, nil) }
+            snapshot, tokens: tokens, partitionKey: partitionKey, corruptLayers: corruptLayers)
+        guard let planned, drop == .body || drop == .bodyAndSSDCopy else { return (drop, nil) }
         return (
             drop,
             planCheckpoints(
-                tokens: planned.tokens, stablePrefixOffset: planned.stablePrefixOffset,
-                partitionKey: planned.partitionKey,
-                alignTo: planned.resolved.alignmentLookup)
+                tokens: tokens, stablePrefixOffset: planned.stablePrefixOffset,
+                partitionKey: partitionKey, alignTo: planned.resolved.alignmentLookup)
         )
     }
 
@@ -2382,9 +2378,8 @@ final class PrefixCacheManager {
     /// **Budget Floor** protected (every drop demoting via **Snapshot
     /// Demotion** where backing is available); a regrowth just raises
     /// the budget — the cache refills naturally on subsequent
-    /// admissions. Invoked by the injected `MemoryPressureSource`;
-    /// callable directly by tests through the in-memory peer or
-    /// as-is.
+    /// admissions. Invoked by the injected `MemoryPressureSource`, which
+    /// the suites drive through its in-memory peer.
     private func applyMemoryPressure(_ level: MemoryPressureLevel) {
         let floor = floorContents().bytes
         let previous = budgetBand.currentBytes
@@ -3223,21 +3218,21 @@ final class PrefixCacheManager {
                 tokens: tokens, stablePrefixOffset: stablePrefixOffset,
                 partitionKey: partitionKey)
         }
-    }
 
-    /// Test-only: zero the lifetime counters so a scenario can assert
-    /// deltas from a known baseline.
-    func cumulativeCountersResetForTesting() {
-        cumulativeCounters = PromptCacheCumulativeCounters()
-    }
+        /// Zero the lifetime counters so a scenario can assert deltas from a
+        /// known baseline.
+        func resetCumulativeCounters() {
+            manager.cumulativeCounters = PromptCacheCumulativeCounters()
+        }
 
-    /// Test-only: inject an in-memory **Snapshot Hydrating** peer so the
-    /// SSD-hydration composition in `resolve` (retry cap, clear-on-fail vs
-    /// promote-on-success ordering) is assertable through this manager's own
-    /// interface without a loaded model, a temp directory, or the concrete
-    /// `SSDSnapshotStore`. Production leaves this unset.
-    func setSnapshotHydratingForTesting(_ handle: (any SnapshotHydrating)?) {
-        store.setHydratingOverrideForTesting(handle)
+        /// Inject an in-memory **Snapshot Hydrating** peer so the
+        /// SSD-hydration composition in `resolve` (retry cap, clear-on-fail
+        /// vs promote-on-success ordering) is assertable through the
+        /// manager's own interface without a loaded model, a temp directory,
+        /// or the concrete `SSDSnapshotStore`. Production leaves it unset.
+        func setSnapshotHydrating(_ handle: (any SnapshotHydrating)?) {
+            manager.store.setHydratingOverrideForTesting(handle)
+        }
     }
 
     // MARK: - Measured-seconds estimators

@@ -300,13 +300,14 @@ nonisolated enum SpeculativeCanonicalPrefill {
         // 4. Restore, then the chunked Residual Prefill. One Model Session
         // per chunk with a cancellation check between chunks, so a
         // preempting generation enters its session within ~one chunk; each
-        // chunk is evaluated before its session ends (no pipelined work
-        // outliving the session that enqueued it).
+        // chunk is evaluated, checked, before its session ends (no pipelined
+        // work outliving the session that enqueued it, and an MLX failure
+        // throws).
         let residualCount = admitPath.count - point.offset
         let warm = WarmState()
         let prefillStart = Date.timeIntervalSinceReferenceDate
 
-        let restored = await sessions.withSession { session -> ResidualPrefill.Failure? in
+        let failure = await sessions.withSession { session -> ResidualPrefill.Failure? in
             do throws(ResidualPrefill.Failure) {
                 warm.cache = try await ResidualPrefill.restore(
                     base, partitionKey: seed.request.facts.partitionKey,
@@ -316,35 +317,40 @@ nonisolated enum SpeculativeCanonicalPrefill {
                 return error
             }
         }
-        if let restored {
+        if let failure {
             diagnostics.logSkip(
                 stage: "speculativePrefill",
                 reason: "restore-failed",
                 level: .warning,
-                extraFields: [("error", restored.underlying.localizedDescription)]
+                extraFields: [("error", failure.underlying.localizedDescription)]
             )
             return
         }
 
         let stepSize = max(seed.request.facts.prefillStepSize, 1)
         let seedsPositionAnchor = seed.request.seedsPositionAnchor
-        prefill: while warm.consumed < residualCount, !Task.isCancelled {
+        let tokenNDim = seed.request.facts.tokenNDim
+        let storedForm = seed.request.facts.partitionKey.kvScheme
+        while warm.consumed < residualCount, !Task.isCancelled {
             let range = warm.consumed..<min(warm.consumed + stepSize, residualCount)
-            do {
+            // A chunk that passed the loop's check runs to its end, as the
+            // pass's chunks always have: a preemption that lands while it
+            // waits for its session stops the pass at the next check, not
+            // before this chunk. Detached, the claim's conclusion's way, so
+            // the pass's cancellation does not reach the prefill's own check.
+            let chunk = await Task.detached {
                 try await sessions.withSession { session in
                     warm.chunkState = try ResidualPrefill.prefill(
                         warm.cache, path: admitPath,
                         range: (point.offset + range.lowerBound)..<(point.offset + range.upperBound),
                         state: warm.consumed == 0
-                            ? base.initialState(seedsPositionAnchor: seedsPositionAnchor)
+                            ? point.initialState(seedsPositionAnchor: seedsPositionAnchor)
                             : warm.chunkState,
-                        prefillStepSize: stepSize, tokenNDim: seed.request.facts.tokenNDim,
-                        storedForm: seed.request.facts.partitionKey.kvScheme, in: session)
+                        prefillStepSize: stepSize, tokenNDim: tokenNDim,
+                        evalPolicy: .checkedSynchronous, storedForm: storedForm, in: session)
                 }
-            } catch is CancellationError {
-                // Preempted between the loop's check and the chunk's own.
-                break prefill
-            } catch {
+            }.result
+            if case .failure(let error) = chunk {
                 diagnostics.logSkip(
                     stage: "speculativePrefill",
                     reason: "prefill-threw",

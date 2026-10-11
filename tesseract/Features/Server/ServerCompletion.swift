@@ -60,8 +60,9 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     var promptTokenCount: Int { facts.promptTokenCount }
     /// Number of leading tokens skipped because the cache already covered them.
     let skippedPrefillTokens: Int
-    /// Lookup outcome classification, surfaced for in-app observability.
-    let lookupReason: PrefixCacheManager.LookupReason
+    /// Lookup outcome classification, surfaced for in-app observability;
+    /// `nil` for an **Unkeyed Completion**, which never looked anything up.
+    let lookupReason: PrefixCacheManager.LookupReason?
     /// Shared-prefix length in tokens between the request and the best cache entry.
     let sharedPrefixLength: Int
     /// The turn's maximum advance (`CacheClaim.maximumAdvance`): the
@@ -105,7 +106,8 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     /// The wire string for `Diagnostics.cacheReason`: the lookup outcome, or
     /// the unkeyed degradation when the request never reached the lookup.
     var cacheReasonDescription: String {
-        keying.unkeyedReason.map { "unkeyed(\($0.rawValue))" } ?? String(describing: lookupReason)
+        keying.unkeyedReason.map { "unkeyed(\($0.rawValue))" }
+            ?? lookupReason.map { String(describing: $0) } ?? "none"
     }
     /// Validated mid-prefill checkpoint admission, if any checkpoints survived
     /// extraction-edge path validation.
@@ -124,11 +126,6 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     /// once `completion` has finished — the tail of the turn's **Emitted
     /// Path**, which the live leaf is keyed on and the index registers.
     let generatedTokens: GeneratedTokenRecorder
-    /// How the request's cache opened (**Turn Restore**): the claim's
-    /// check-out and what the restore yielded — what the `leafStore` report
-    /// says, and one input to the stored leaf's source. `.cold` for a turn
-    /// that planned no restore, an Unkeyed Completion included.
-    var restore = TurnRestore.cold
 }
 
 /// All copies of the generation handle share this one reference. Handoff
@@ -872,10 +869,10 @@ nonisolated final class ServerCompletion {
         // Set only when a canonical leaf landed: the **Speculative Canonical
         // Prefill** seed handed to the post-finish hook (issue #76).
         var speculativeSeed: SpeculativeCanonicalPrefill.Seed?
-        // The one home for the trace record's derivation rules: eviction
-        // tallies (with their correlated diagnostics events), the
-        // restored-offset rule, and the admitted-snapshot projections.
-        var trace = CompletionTraceAccumulator()
+        // The turn's report: the trace tally (with its correlated
+        // diagnostics events), the filed Turn Restore, and the one
+        // `leafStore` event.
+        let turnReport = claim.report
         var terminalOutcome = "completed"
         memory.mark(.decoding)
 
@@ -907,7 +904,7 @@ nonisolated final class ServerCompletion {
                     + "cached=\(mlxStart.skippedPrefillTokens)/"
                     + "\(mlxStart.promptTokenCount) "
                     + "sharedPrefix=\(mlxStart.sharedPrefixLength) "
-                    + "lookup=\(mlxStart.lookupReason) "
+                    + "lookup=\(mlxStart.cacheReasonDescription) "
                     + "restoreMs=\(String(format: "%.1f", mlxStart.restoreMs * 1000)) "
                     + "prefillMs=\(String(format: "%.1f", mlxStart.prefillMs * 1000))"
             )
@@ -974,7 +971,7 @@ nonisolated final class ServerCompletion {
                         + "libraryParsedToolCalls=\(outcome.diagnostics.libraryParsedToolCalls) "
                         + "cachedTokens=\(mlxStart.skippedPrefillTokens)/"
                         + "\(mlxStart.promptTokenCount) "
-                        + "lookupReason=\(mlxStart.lookupReason) "
+                        + "lookupReason=\(mlxStart.cacheReasonDescription) "
                         + "parserInsideThink=\(parserState.insideThinkBlock) "
                         + "parserThinkClosed=\(parserState.thinkBlockClosed) "
                         + "parserBufferLen=\(parserState.bufferLen) "
@@ -1000,7 +997,7 @@ nonisolated final class ServerCompletion {
                 let diagnostics = await MainActor.run {
                     prefixCache.admit(admission)
                 }
-                trace.ingest(evictions: diagnostics.evictions, diagnostics: diagnosticsContext)
+                turnReport.ingest(evictions: diagnostics.evictions)
                 storedSnapshotsForTuner = admission.snapshots
             }
 
@@ -1020,9 +1017,6 @@ nonisolated final class ServerCompletion {
             // leaf store completed.
             memory.mark(
                 .storingLeaf, facts: await MainActor.run { prefixCache.memoryTelemetryFacts() })
-            // The phase's report, logged below, is now the turn's one
-            // `leafStore` event, a rewind in the phase included.
-            claim.enterLeafStorePhase()
             let leafStoreStart = Date.timeIntervalSinceReferenceDate
             var leafResult = await LeafStorePhase.run(
                 mlxStartBox: mlxStartBox,
@@ -1035,14 +1029,13 @@ nonisolated final class ServerCompletion {
                 assistantReasoning: accumulator.thinking,
                 toolCalls: toolCalls,
                 diagnosticsContext: diagnosticsContext,
-                trace: &trace,
                 memory: memory
             )
             if mlxStart.facts.ssdEnabled, !Task.isCancelled {
                 await prefixCache.persistViewCheckpoints(
                     partitionKey: mlxStart.facts.partitionKey, sessions: sessions)
             }
-            leafResult.report.restore = mlxStart.restore
+            leafResult.report = turnReport.filed(leafResult.report)
             leafResult.report.leafStoreSeconds =
                 Date.timeIntervalSinceReferenceDate - leafStoreStart
             let leafStoreForTuner = leafResult.leafStore
@@ -1050,14 +1043,7 @@ nonisolated final class ServerCompletion {
                 speculativeSeed = seed
             }
 
-            memory.mark(
-                .recordingRequest,
-                facts: [
-                    "leafSource": leafResult.report.source?.rawValue ?? "skipped",
-                    "leafCopyReason":
-                        (leafResult.report.restore?.copy?.reason ?? leafResult.report.copyReason)?
-                        .rawValue ?? "none",
-                ])
+            memory.mark(.recordingRequest, facts: leafResult.report.recordingFacts)
             // Record the request lifecycle for the alpha tuner. Fires
             // for every request, including the leaf-skipped paths
             // — the tuner needs the full workload trace, not just
@@ -1102,7 +1088,7 @@ nonisolated final class ServerCompletion {
             // edge, planner, leaf store) into the same account.
             let emittedPathSummary = mlxStart.keying.keyed?.render.emittedPathTelemetry?.summary
             leafResult.report.emittedPathResolves = emittedPathSummary
-            diagnosticsContext.log(leafResult.report, level: .notice)
+            turnReport.logLeafStore(leafResult.report)
 
             // Per-completion trace record (PRD #82, slice #83): one line in
             // the replay corpus for every finished cache-aware completion.
@@ -1110,7 +1096,7 @@ nonisolated final class ServerCompletion {
             // stream closed without an `.info` event have no TTFT and emit
             // nothing — same condition as the live `ttft` event.
             if let completionInfo = outcome.completionInfo {
-                let record = trace.makeRecord(
+                let record = turnReport.trace.makeRecord(
                     timestamp: Date().timeIntervalSinceReferenceDate,
                     requestID: requestID,
                     modelID: diagnosticsContext.modelID,
@@ -1119,7 +1105,7 @@ nonisolated final class ServerCompletion {
                         unkeyedReason: mlxStart.keying.unkeyedReason,
                         keyPath: keyPath,
                         lookupReason: mlxStart.lookupReason,
-                        restore: mlxStart.restore,
+                        restore: turnReport.restore,
                         restoredFromSSD: mlxStart.restoredFromSSD,
                         hitTokens: mlxStart.skippedPrefillTokens,
                         sharedPrefixLength: mlxStart.sharedPrefixLength,
@@ -1509,10 +1495,7 @@ nonisolated final class ServerCompletion {
                 }
                 restoreMs = Date.timeIntervalSinceReferenceDate - restoreStarted
                 if let handoff {
-                    restore = .handoff(
-                        .init(
-                            leaseID: handoff.leaseID, rewindStateBytes: handoff.rewindStateBytes,
-                            waitSeconds: handoff.waitSeconds))
+                    restore = .handoff(handoff.lease)
                 } else if restoredCache != nil {
                     restore = .copy(copy)
                 }
@@ -1537,9 +1520,9 @@ nonisolated final class ServerCompletion {
                         // one the drop took is captured anew on this turn
                         // (ADR-0069 amendment).
                         let replanned = await ResidualPrefill.dropUnrestorable(
-                            failed, error: restoreFailure, replanning: planned,
-                            prefixCache: prefixCache, diagnostics: diagnosticsContext
-                        ).replanned
+                            failed, error: restoreFailure, tokens: keySpace.keyPath,
+                            partitionKey: partitionKey, replanning: planned,
+                            prefixCache: prefixCache, diagnostics: diagnosticsContext)
                         if let replanned { checkpointPlan = replanned }
                     }
                     prefillPlan = PrefillPlanner.coldPlan(
@@ -1554,13 +1537,15 @@ nonisolated final class ServerCompletion {
                         outputCeiling: parameters.maxTokens,
                         speculativeAllowance: speculation?.advanceAllowance ?? 0)
                 }
+                claim.report.file(restore)
                 memory.mark(
                     .restored,
                     facts: RequestMemoryTelemetry.cacheFacts(restoredCache ?? [])
                         .merging(restore.memoryFacts) { _, new in new })
             }
             switch prefillPlan.restore {
-            case .restore(let cacheOffset, let anchorDelta):
+            case .restore(let point):
+                let cacheOffset = point.offset
                 cacheToUse = restoredCache
                 if !keySpace.isIdentity,
                     cacheOffset < keySpace.minimumWarmOffset,
@@ -1575,10 +1560,8 @@ nonisolated final class ServerCompletion {
                         text: LMInput.Text(
                             tokens: fullInput.text.tokens[0..., prefixEnd...], mask: nil))
                     executionBaseOffset = prefixEnd
-                    if seedsPositionAnchor {
-                        imageContinuationAnchor = PositionAnchor.seededState(
-                            ropeDelta: anchorDelta)
-                    }
+                    imageContinuationAnchor = point.initialState(
+                        seedsPositionAnchor: seedsPositionAnchor)
                 } else {
                     // Image-free remainder: suffix-only prefill. Layers restore
                     // with their absolute logical offset intact, and each
@@ -1590,10 +1573,8 @@ nonisolated final class ServerCompletion {
                     inputForGeneration = LMInput(
                         text: LMInput.Text(tokens: slicedTokens, mask: nil))
                     executionBaseOffset = cacheOffset
-                    if seedsPositionAnchor {
-                        executorInitialState = PositionAnchor.seededState(
-                            ropeDelta: anchorDelta)
-                    }
+                    executorInitialState = point.initialState(
+                        seedsPositionAnchor: seedsPositionAnchor)
                 }
             case .cold where !keySpace.isIdentity:
                 // No valid restore: cold image prefill, but driven through the
@@ -1663,9 +1644,7 @@ nonisolated final class ServerCompletion {
                     hydratedFromSSD: resolved.hydratedFromSSD,
                     chainPrefixRestore: resolved.wasChainPrefixRestore,
                     divergence: lookupResult.divergence,
-                    restoreMode: restore.mode, restoreFellBack: restore.fellBack,
-                    copyReason: restore.copy?.reason, copyRefusal: restore.copy?.refusal,
-                    copyWaitSeconds: restore.waitSeconds,
+                    restore: restore,
                     backingLeafOffset: lookupResult.backingLeaf?.tokenOffset,
                     warmBody: lookupResult.snapshot?.isWarm == true,
                     backingLeafWarm: lookupResult.backingLeaf?.isWarm == true
@@ -2038,8 +2017,7 @@ nonisolated final class ServerCompletion {
                 snapshotAdmission: snapshotAdmission,
                 transientLastMessageBoundarySnapshot: transientLastMessageBoundarySnapshot,
                 transientLastUserBoundarySnapshot: transientLastUserBoundarySnapshot,
-                generatedTokens: generatedTokens,
-                restore: restore
+                generatedTokens: generatedTokens
             )
         }
     }
@@ -2299,7 +2277,7 @@ nonisolated final class ServerCompletion {
             hydrationSeconds: 0,
             restoredFromSSD: false,
             skippedPrefillTokens: 0,
-            lookupReason: .missNoEntries,
+            lookupReason: nil,
             sharedPrefixLength: 0,
             maximumAdvance: CacheClaim.maximumAdvance(
                 newPromptTokens: fullTokenCount, outputCeiling: parameters.maxTokens,

@@ -80,7 +80,7 @@ struct LeafCheckoutMemoryEvidenceTests {
             }
             let request = handoff.cache
             #expect(request.cache[0] as AnyObject === attention)
-            #expect(handoff.rewindStateBytes == 64)
+            #expect(handoff.lease.rewindStateBytes == 64)
             if assertsAllocations {
                 #expect(
                     Memory.activeMemory - beforeMove < 4096,

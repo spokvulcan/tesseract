@@ -52,6 +52,8 @@ nonisolated extension LeafStorePhase {
         let prefixCache: PrefixCacheManager
         let diagnosticsContext: PrefixCacheDiagnostics.Context
         let stages: LeafStages
+        /// Why the turn's leaf is copied rather than moved, by the handoff
+        /// scope (`CacheClaim.HandoffExclusion`); `nil` inside it.
         let copyReason: Report.CopyReason?
         let memory: RequestMemoryTelemetry?
         /// The request's **Cache Claim**: a leaf captured by move from the
@@ -79,12 +81,14 @@ nonisolated extension LeafStorePhase {
             memory = inputs.memory
             claim = inputs.claim
             isTextOnly = inputs.request.facts.isTextOnly
-            restore = mlxStart.restore
+            restore = inputs.claim.report.restore
             maximumAdvance = mlxStart.maximumAdvance
             copyReason =
-                !inputs.request.facts.isTextOnly
-                ? .imageKeySpace
-                : inputs.request.facts.partitionKey.kvBits != nil ? .quantized : nil
+                CacheClaim.HandoffExclusion.of(
+                    textOnly: inputs.request.facts.isTextOnly,
+                    kvBits: inputs.request.facts.partitionKey.kvBits,
+                    arm: mlxStart.speculativeArm
+                )?.copyReason
         }
 
         /// Prepare this leaf's **Leaf Admission** before the session is
@@ -280,9 +284,10 @@ nonisolated extension LeafStorePhase {
                     try ResidualPrefill.prefill(
                         restoredCache, path: storedTokens,
                         range: boundaryOffset..<storedTokens.count,
-                        state: base.initialState(seedsPositionAnchor: request.seedsPositionAnchor),
+                        state: base.point.initialState(
+                            seedsPositionAnchor: request.seedsPositionAnchor),
                         prefillStepSize: request.facts.prefillStepSize,
-                        tokenNDim: request.facts.tokenNDim,
+                        tokenNDim: request.facts.tokenNDim, evalPolicy: .pipelined,
                         storedForm: context.partitionKey.kvScheme, in: session)
                 }
                 timings.prefillSeconds = secondsSince(prefillStart)

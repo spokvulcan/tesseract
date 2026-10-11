@@ -95,13 +95,43 @@ nonisolated final class CacheClaim: @unchecked Sendable {
     struct Handoff: Sendable {
         /// The leaf's own cache objects, now the request's live cache.
         let cache: FinalGenerationCache
-        let leaseID: UUID
-        /// The recurrent backup exact rewind keeps: the claim's only array
-        /// allocation.
-        let rewindStateBytes: Int
-        /// Seconds a Pending-Payload Wait cost before it ended in this
-        /// handoff; `0` when it never waited.
-        let waitSeconds: TimeInterval
+        /// What the turn reports of the handoff: the lease, the recurrent
+        /// backup exact rewind keeps (the claim's only array allocation) and
+        /// what a Pending-Payload Wait cost before it ended here.
+        let lease: TurnRestore.Handoff
+    }
+
+    /// The **Leaf Handoff**'s scope (ADR-0064 decision 7): a cache moves
+    /// between the radix tree and a generation, instead of being copied, only
+    /// for a text-only key space over unquantized KV that the MTP drafter did
+    /// not decode. The one rule the check-out, the Leaf Admission's move and
+    /// the Leaf Store's copy reason read, each with the facts it holds: the
+    /// check-out knows no arm, since MTP engages only on a turn that restores
+    /// nothing.
+    enum HandoffExclusion: Sendable, Equatable {
+        /// An image reached the model: the key space is not the token path.
+        case imageKeySpace
+        /// The partition stores quantized KV.
+        case quantizedPartition
+        /// The MTP drafter decoded the turn.
+        case mtpArm
+
+        /// Why a turn with these facts is outside the scope, the first reason
+        /// in this order; `nil` when its cache may move.
+        static func of(textOnly: Bool, kvBits: Int?, arm: SpeculativeArm? = nil) -> Self? {
+            if !textOnly { return .imageKeySpace }
+            if kvBits != nil { return .quantizedPartition }
+            return arm == .mtp ? .mtpArm : nil
+        }
+
+        /// The `copyReason` a leaf copied for this reason reports.
+        var copyReason: LeafStorePhase.Report.CopyReason {
+            switch self {
+            case .imageKeySpace: .imageKeySpace
+            case .quantizedPartition: .quantized
+            case .mtpArm: .mtp
+            }
+        }
     }
 
     /// Why a copy restore did not take the leaf: the precise rung of the
@@ -201,13 +231,17 @@ nonisolated final class CacheClaim: @unchecked Sendable {
     private let sessions: (any ModelSessionProviding)?
     private let memory: RequestMemoryTelemetry?
     private let tripwire: Tripwire
+    /// The request's **Turn Report**: plan application files the turn's
+    /// restore in it, the drive renders the turn's outputs from it, and the
+    /// claim reports its Leaf Rewinds into it.
+    let report: TurnReport
     private let lock = NSLock()
     private var owner: Owner
     private var held: CheckedOutLeaf?
+    /// The handoff the check-out reported for `held`, which its rewind
+    /// reports again.
+    private var heldHandoff: TurnRestore.Handoff?
     private var checkedOut = false
-    /// Set once the drive enters the Leaf Store phase, whose report is then
-    /// the turn's one `leafStore` event.
-    private var leafStorePhaseReports = false
 
     private init(
         requestID: UUID, owner: Owner, context: PrefixCacheDiagnostics.Context,
@@ -221,6 +255,7 @@ nonisolated final class CacheClaim: @unchecked Sendable {
         self.sessions = sessions
         self.memory = memory
         self.tripwire = tripwire
+        report = TurnReport(diagnostics: context)
     }
 
     deinit {
@@ -309,8 +344,11 @@ nonisolated final class CacheClaim: @unchecked Sendable {
         }
         guard !snapshot.isPrefixView else { return copy(.prefixView) }
         guard !snapshot.isWarm else { return copy(.warmBody) }
-        guard identityKeySpace else { return copy(.imageKeySpace) }
-        guard key.kvBits == nil else { return copy(.quantizedPartition) }
+        switch HandoffExclusion.of(textOnly: identityKeySpace, kvBits: key.kvBits) {
+        case .imageKeySpace?: return copy(.imageKeySpace)
+        case .quantizedPartition?: return copy(.quantizedPartition)
+        case .mtpArm?, nil: break
+        }
         guard !resolved.wasChainPrefixRestore else { return copy(.chainPrefixRestore) }
         guard resolved.lookup.snapshotTokenOffset == snapshot.tokenOffset else {
             return copy(.offsetMismatch)
@@ -336,11 +374,14 @@ nonisolated final class CacheClaim: @unchecked Sendable {
             return copy(refusal, waited: waited)
         case .leased(let grant):
             let taken = CheckedOutLeaf.take(snapshot, under: grant)
-            lock.withLock { held = taken }
-            return .handoff(
-                Handoff(
-                    cache: taken.live, leaseID: grant.lease.id,
-                    rewindStateBytes: taken.rewind.stateBytes, waitSeconds: waited))
+            let lease = TurnRestore.Handoff(
+                leaseID: grant.lease.id, rewindStateBytes: taken.rewind.stateBytes,
+                waitSeconds: waited)
+            lock.withLock {
+                held = taken
+                heldHandoff = lease
+            }
+            return .handoff(Handoff(cache: taken.live, lease: lease))
         }
     }
 
@@ -368,7 +409,10 @@ nonisolated final class CacheClaim: @unchecked Sendable {
             return .rewound(.refused(refusal))
         }
         // Frees the recurrent backup.
-        lock.withLock { self.held = nil }
+        lock.withLock {
+            self.held = nil
+            heldHandoff = nil
+        }
         return .committed
     }
 
@@ -379,15 +423,6 @@ nonisolated final class CacheClaim: @unchecked Sendable {
     func rewind(in session: any ModelSession) async -> Int? {
         guard ownsStep() else { return nil }
         return await rewindHeld()
-    }
-
-    /// The drive enters the Leaf Store phase and will log the phase's report
-    /// as the turn's one `leafStore` event. A rewind from here on, in the
-    /// phase or at the conclusion, logs only its `leafRewind`, and the report
-    /// says what became of the turn's leaf. A turn that ends before the phase
-    /// has no report, so its rewind also logs `leafStore source=rewind`.
-    func enterLeafStorePhase() {
-        lock.withLock { leafStorePhaseReports = true }
     }
 
     /// Whether the claim still holds the lease its check-out took.
@@ -482,9 +517,13 @@ nonisolated final class CacheClaim: @unchecked Sendable {
     @discardableResult
     private func rewindHeld() async -> Int? {
         guard
-            let held = lock.withLock({ () -> CheckedOutLeaf? in
-                defer { self.held = nil }
-                return self.held
+            let (held, handoff) = lock.withLock({ () -> (CheckedOutLeaf, TurnRestore.Handoff)? in
+                defer {
+                    self.held = nil
+                    heldHandoff = nil
+                }
+                guard let held = self.held, let handoff = heldHandoff else { return nil }
+                return (held, handoff)
             })
         else { return nil }
         let lease = held.grant.lease
@@ -500,16 +539,9 @@ nonisolated final class CacheClaim: @unchecked Sendable {
                     rewoundFacts["requestFullAttentionLogicalBytes"] ?? "") ?? 0,
                 compactedBytes: compaction.freedBytes),
             level: .notice)
-        if !lock.withLock({ leafStorePhaseReports }) {
-            var report = LeafStorePhase.Report()
-            report.mode = "keyed"
-            report.path = .rewind
-            report.restore = .handoff(
-                .init(
-                    leaseID: lease.id, rewindStateBytes: held.rewind.stateBytes, waitSeconds: 0))
-            report.leafOffset = lease.offset
-            lease.context.log(report, level: .notice)
-        }
+        // What became of the turn's leaf: the report logs it as the turn's
+        // one `leafStore` event unless the Leaf Store phase reports it.
+        report.leafRewound(handoff, offset: lease.offset)
         memory?.markCacheReleased(
             .rewoundLeaf,
             facts: [

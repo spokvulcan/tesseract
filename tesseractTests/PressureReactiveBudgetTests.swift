@@ -199,7 +199,7 @@ struct PressureReactiveBudgetManagerTests {
             tree.admit(node: node, ref: ref)
             tree.commitRef(node: node, expectedID: ref.snapshotID)
         }
-        manager.cumulativeCountersResetForTesting()
+        manager.testSeam().resetCumulativeCounters()
 
         pressure.send(.warning)
         #expect(manager.memoryBudgetBytes == snapBytes * 2)

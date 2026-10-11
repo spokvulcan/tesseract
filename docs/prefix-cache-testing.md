@@ -598,7 +598,13 @@ isolation under the new vendor allocation policy.
 Prefill Strategy routes. `canonicalLeafRestoreReservesTheStoredPath` exercises
 the canonical Leaf Store restore with a think-stripping template;
 `SpeculativePrefillPreemptionTests` checks that both extension chunks retain one
-reservation for the entire admit path even when cancellation ends the pass.
+reservation for the entire admit path even when cancellation ends the pass. Its
+chunk-loop cases check that each chunk is one checked `prefill` verb
+(`ModelVerbRecorder.prefillEvalPolicies`), that a chunk which throws ends the
+pass with nothing admitted, and that a preemption landing while a chunk waits
+for its session still runs that chunk: `SessionRequestLog` counts session
+requests before the container is the caller's, so the test can hold the
+session, cancel, and let the chunk in.
 These observations remain scalars in the toy model; no new production seam was
 introduced. Run the raw-generation, Prefill Strategy, Speculative Canonical
 Prefill and Generation Logit Processor suites with the prefix-cache suites.

@@ -87,7 +87,7 @@ struct PromptCacheCountersTests {
         tree.admit(node: node, ref: ref)
         tree.commitRef(node: node, expectedID: ref.snapshotID)
         tree.dropBody(node: node)
-        manager.cumulativeCountersResetForTesting()
+        manager.testSeam().resetCumulativeCounters()
 
         let body = PrefixCacheTestFixtures.makeUniformSnapshot(
             offset: tokens.count, type: .leaf

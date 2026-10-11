@@ -752,7 +752,7 @@ struct HydrationGateResolveTests {
 
     private func makeManager(hydrating: InMemorySnapshotHydrating) -> PrefixCacheManager {
         let manager = PrefixCacheManager(memoryBudgetBytes: 100 * 1024 * 1024)
-        manager.setSnapshotHydratingForTesting(hydrating)
+        manager.testSeam().setSnapshotHydrating(hydrating)
         return manager
     }
 
