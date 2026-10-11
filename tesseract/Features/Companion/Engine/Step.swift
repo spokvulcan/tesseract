@@ -61,7 +61,7 @@ nonisolated struct Step: Sendable, Equatable, Codable {
     var reminderID: String { slot.reminderID }
     var start: Date { slot.start }
     var minutes: Int { slot.minutes }
-    var end: Date { start.addingTimeInterval(TimeInterval(minutes * 60)) }
+    var end: Date { slot.end }
 
     /// Its slot holds `date`: from its start, until its end.
     func spans(_ date: Date) -> Bool { start <= date && date < end }
@@ -96,21 +96,58 @@ nonisolated struct Step: Sendable, Equatable, Codable {
         self.slot = Placement(reminderID: reminderID, start: slot.start, minutes: slot.minutes)
     }
 
-    // MARK: Its life
-
-    /// The owner started it now: it counts as cued, its end checks in, and
-    /// one started `timed` (whole) is timed once seen done.
-    mutating func start(at now: Date, timed: Bool = true) {
-        isStarted = true
-        cuedAt = now
-        if timed { timedMinutes = minutes }
+    /// Going on after the meeting that cut it, at `start`: a started step
+    /// for the time cut (`minimum` at least), one not begun whole. Not put
+    /// off: the meeting came first.
+    mutating func resume(at start: Date, minimum: Int) {
+        let minutes = isStarted ? max(cutMinutes, minimum) : self.minutes + cutMinutes
+        cutMinutes = 0
+        reslot(Placement(reminderID: reminderID, start: start, minutes: minutes))
     }
 
-    /// The step as started at `now`: a fixture's one line, and the engine's
-    /// own word for it.
+    /// Kept going `minutes` more ("15 more min"): from its end, or from
+    /// `now` if that has gone by, so a late answer doesn't make it already
+    /// over — or, answered `late` (the owner away), a fresh block from
+    /// `now`, not one stretched back to its first start. No longer a small
+    /// start either way.
+    mutating func extend(by minutes: Int, from now: Date, late: Bool) {
+        isSmall = false
+        if late {
+            reslot(Placement(reminderID: reminderID, start: now, minutes: minutes))
+        } else {
+            let until = max(end, now).addingTimeInterval(TimeInterval(minutes * 60))
+            resize(to: Int(until.timeIntervalSince(start) / 60))
+        }
+    }
+
+    /// Cut to `minutes` to end before a meeting; what was cut is kept, to
+    /// go on with after it.
+    mutating func cut(to minutes: Int) {
+        let cut = self.minutes - minutes
+        resize(to: minutes)
+        cutMinutes = cut
+    }
+
+    // MARK: Its life
+
+    /// Its start cued now.
+    mutating func cue(at now: Date) { cuedAt = now }
+
+    /// Its end checked in now.
+    mutating func checkIn(at now: Date) { checkedInAt = now }
+
+    /// Put off once more: "Just five minutes?" counts these.
+    mutating func putOffOnce() { putOff += 1 }
+
+    /// The step as the owner started it at `now`: it counts as cued, its end
+    /// checks in, and one started `timed` (whole) is timed against its
+    /// minutes once seen done. The engine's one word for a start, and a
+    /// fixture's one line.
     func started(at now: Date, timed: Bool = true) -> Step {
         var step = self
-        step.start(at: now, timed: timed)
+        step.isStarted = true
+        step.cuedAt = now
+        if timed { step.timedMinutes = minutes }
         return step
     }
 

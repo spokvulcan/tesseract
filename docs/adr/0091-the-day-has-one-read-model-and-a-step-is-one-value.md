@@ -63,7 +63,16 @@ third from the plan card's placements. On top of them:
      the task included.
 
    Moving is one operation (`Step.reslot`, and `move(to:)`, `resize(to:)`)
-   that applies those rules, so no caller resets a life by hand.
+   that applies those rules, so no caller resets a life by hand. Starting is
+   one too (`Step.started(at:timed:)`): a step whose slot is now is cut
+   clear of the next meeting first, then started (`DayEngine.startNow`),
+   whether the owner starts it from Today or from its cue. The rest of its
+   life changes through the value as well — cued, checked in, put off, cut
+   before a meeting, going on after one, kept going a quarter hour more
+   (`cue(at:)`, `checkIn(at:)`, `putOffOnce()`, `cut(to:)`,
+   `resume(at:minimum:)`, `extend(by:from:late:)`) — reached through one
+   accessor (`DayState.changeStep`). A slot's end is one sum
+   (`Placement.end`).
 3. **The cue on the panel names a step and a phase** (`CueOnPanel`), not a
    key. Taking it down unanswered — the app quitting, the Companion going
    off, a card taking the panel — is one operation (`DayState.uncuePanel`):
@@ -150,6 +159,10 @@ third from the plan card's placements. On top of them:
   - A meeting under way inside a block is the step on the Now Card, whichever
     started first (`aMeetingInsideABlockIsTheStepTheDayIsOn`); it showed the
     event that started first.
+  - A step the owner started is the step on the Now Card over a meeting it
+    runs into, and over an earlier task, not started, whose slot holds now
+    too (`aStartedStepLeadsTheNowCardOverAMeetingAndAnEarlierTask`); it
+    showed the meeting, and else offered the earlier task's Start now.
   - The Jarvis Panel lists a Morning Plan's steps from the day's plan as it
     stands, not the card's copy of it: while Jarvis rethinks a plan in the
     afternoon, the panel lists the plan the day still keeps, and a step the
@@ -158,6 +171,11 @@ third from the plan card's placements. On top of them:
   - A task taken off today's plan and put back starts a fresh step, its
     put-off count begun again (`putOff` kept it by task for the rest of the
     day) — `aStepTakenOffThePlanAndPutBackStartsAfresh`.
+  - Started from Today just before a meeting, a step is timed against the
+    minutes the meeting leaves it, as a cue's Start is
+    (`startNowOnTodayBeforeAMeetingEndsBeforeIt`). It was timed against the
+    minutes offered, so the plan's pace read the meeting's cut as the owner
+    being quick (60 planned, 25 taken).
 - The marks of a slot a step has left are no longer kept. Only the cue
   reaction's `secondsToReact` read them; it now measures from the step's
   latest cue at its current slot, so a re-plan that moves a step while its

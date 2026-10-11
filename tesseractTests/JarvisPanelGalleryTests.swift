@@ -348,9 +348,16 @@ struct JarvisPanelGalleryTests {
                     areas: container.agenda.areas, inboxListID: container.agenda.inbox?.id),
                 state: state)
         }
-        #expect(PlanStep.ahead(in: day([])).allSatisfy { $0.reminderID == nil })
-        let started = TodayFixture.morning.state.plan.map { $0.started(at: $0.start) }
-        #expect(PlanStep.ahead(in: day(started)).allSatisfy { $0.reminderID == nil })
+        let unplanned = PlanStep.ahead(in: day([]))
+        #expect(
+            unplanned.map(\.title) == [
+                "Standup", "Lunch with Sam", "Design review", "Пройти урок у Duolingo 💚",
+            ])
+        #expect(unplanned.map(\.reminderID) == [nil, nil, nil, nil])
+        let started = PlanStep.ahead(
+            in: day(TodayFixture.morning.state.plan.map { $0.started(at: $0.start) }))
+        #expect(started.map(\.title) == steps.map(\.title))
+        #expect(started.map(\.reminderID) == [nil, nil, nil, nil, nil])
     }
 
     /// Lay the panel out once to learn its height, as the panel does, then

@@ -531,7 +531,7 @@ nonisolated extension DayEngine {
             ]
 
         case .tick(let reminderID, let done):
-            return [.mutateAgenda(.tick(reminderID: reminderID, done: done))]
+            return [.mutateAgenda(.setDone(reminderID: reminderID, done: done, onToday: true))]
 
         case .place(let reminderID, let start, let minutes):
             let slot = Placement(reminderID: reminderID, start: start, minutes: minutes)
@@ -604,7 +604,7 @@ nonisolated extension DayEngine {
                     .mutateAgenda(.followUp(title: "Follow up: \(item.title)", at: later)))
             case .reminder:
                 let reminderID = String(item.id.dropFirst("reminder:".count))
-                if repeats(reminderID, snapshot: snapshot) {
+                if snapshot.agenda.isSeries(reminderID) {
                     // Its time is its whole series': a step in today's plan
                     // instead, cued when it starts, off any meeting it falls in.
                     let start =
@@ -709,16 +709,12 @@ nonisolated extension DayEngine {
     /// A task's slot in today's plan, in place of any it had; one from now
     /// is started, and ends before the next meeting.
     private static func place(_ slot: Placement, snapshot: DaySnapshot, state: inout DayState) {
-        if let index = state.plan.firstIndex(where: { $0.reminderID == slot.reminderID }) {
-            state.plan[index].reslot(slot)
-        } else {
+        if !state.changeStep(slot.reminderID, { $0.reslot(slot) }) {
             state.plan.append(Step(slot))
         }
         state.plan.sort { $0.start < $1.start }
         guard slot.start <= snapshot.now.addingTimeInterval(60) else { return }
-        // Timed against the minutes it was given, before a meeting cuts them.
-        markStartedIfNow(slot.reminderID, snapshot: snapshot, state: &state)
-        keepClear(slot.reminderID, snapshot: snapshot, state: &state)
+        startNow(slot.reminderID, snapshot: snapshot, state: &state)
     }
 
     /// A reply that landed after the 04:00 rollover (the lid closed on the
@@ -803,7 +799,7 @@ nonisolated extension DayEngine {
         case .reminder:
             guard completing else { return [] }
             let reminderID = String(item.id.dropFirst("reminder:".count))
-            return [.mutateAgenda(.complete(reminderID: reminderID))]
+            return [.mutateAgenda(.setDone(reminderID: reminderID, done: true))]
         }
     }
 
@@ -817,12 +813,6 @@ nonisolated extension DayEngine {
         case .later: .clearDue(reminderID: reminderID)
         case .drop: .delete(reminderID: reminderID)
         }
-    }
-
-    /// A repeating reminder is one item for its whole series: a new date or
-    /// time is every occurrence's.
-    private static func repeats(_ reminderID: String, snapshot: DaySnapshot) -> Bool {
-        snapshot.agenda.open.first { $0.id == reminderID }?.repeats == true
     }
 
     static func reaction(_ action: String, card: DayCard, snapshot: DaySnapshot) -> DayEffect {

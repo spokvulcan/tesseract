@@ -731,11 +731,12 @@ in Reminders the Agenda makes (`Agenda.apply`,
 dates and series in that one place, and the runtime only performs. The day
 holds a repeating task by its series, and the Agenda answers for that day's
 **Occurrence** (ADR-0092, `Features/Companion/Agenda/Agenda+Occurrences.swift`):
-open, or done, the copy Reminders kept, matched to its series by one rule;
-taken back, the copy goes and the series is back on its date. The in-memory
-store does what the Mac's stores do where the day can tell: a done copy and
-the series moved on, an event's id naming its start. Views read the time
-from the runtime's clock. The Jarvis Panel
+open, or done, the copy Reminders kept, read by one rule. Only an
+occurrence the Agenda ticked off itself is taken back as one (the copy goes,
+the series is back on its date); any other untick opens just the reminder
+it names. The in-memory store does what the Mac's stores do where the day
+can tell: a done copy and the series moved on, an event's id naming its
+start. Views read the time from the runtime's clock. The Jarvis Panel
 keeps what it shows (a card by id, read live from the day's state; a cue; the
 Done it says; a Break Cue); the engine keeps which cue it put there
 (`cueOnPanel`, `breakCuedAt`), so one taken down unanswered — under a card,

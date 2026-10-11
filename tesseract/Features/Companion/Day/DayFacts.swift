@@ -152,6 +152,12 @@ nonisolated struct DayFacts: Sendable, Equatable {
     }
 
     var startOfToday: Date { Self.startOfDay(for: now, calendar: calendar) }
+
+    /// The days a leftover can go to besides tomorrow, its Another Day: the
+    /// day after tomorrow to a week on, from the owner's today.
+    var anotherDays: [Date] {
+        (2..<8).compactMap { calendar.date(byAdding: .day, value: $0, to: startOfToday) }
+    }
     var endOfToday: Date { calendar.date(byAdding: .day, value: 1, to: startOfToday) ?? now }
     var endOfTomorrow: Date {
         calendar.date(byAdding: .day, value: 1, to: endOfToday) ?? endOfToday

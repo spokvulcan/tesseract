@@ -39,6 +39,9 @@ nonisolated struct TimelineTask: Sendable, Equatable, Identifiable {
     var isCarried: Bool
     /// The owner started its step, at this slot (Start on a cue, Start now).
     var isStarted = false
+
+    /// When its slot or time ends; nil for an Anytime task.
+    var end: Date? { start.map { Placement.end(of: $0, minutes: minutes) } }
 }
 
 nonisolated struct TimelineRow: Sendable, Equatable, Identifiable {
@@ -210,7 +213,7 @@ nonisolated struct Timeline: Sendable, Equatable {
     /// task already under way (one a focus session held back; no time),
     /// else the next event or task.
     func nextStep(after slot: Placement) -> (title: String, at: Date?, link: URL?)? {
-        let slotEnd = slot.start.addingTimeInterval(TimeInterval(slot.minutes * 60))
+        let slotEnd = slot.end
         for row in rows {
             let at = AgendaTime.clock(row.start, calendar: facts.calendar)
             switch row.kind {
@@ -412,7 +415,7 @@ nonisolated struct Timeline: Sendable, Equatable {
         }
         rows += timed.map { item in
             let start = item.start ?? now
-            let end = start.addingTimeInterval(TimeInterval(item.minutes * 60))
+            let end = item.end ?? now
             return TimelineRow(
                 id: "task-\(item.id)", start: start, end: end, kind: .task(item),
                 isPast: item.isDone || end <= now)
@@ -471,7 +474,7 @@ nonisolated struct Timeline: Sendable, Equatable {
                 let item = timelineTask(
                     reminder.id, reminder, start: due, minutes: defaultTaskMinutes,
                     planned: false, isMustDo: false, facts: facts)
-                let finish = due.addingTimeInterval(TimeInterval(item.minutes * 60))
+                let finish = item.end ?? due
                 rows.append(
                     TimelineRow(
                         id: "task-\(item.id)", start: due, end: finish, kind: .task(item),
@@ -525,7 +528,7 @@ nonisolated struct Timeline: Sendable, Equatable {
         let done = reminder.isCompleted || facts.doneToday.contains { $0.id == reminder.id }
         var slid = false
         if !done, let start {
-            slid = start.addingTimeInterval(TimeInterval(minutes * 60)) <= facts.now
+            slid = Placement.end(of: start, minutes: minutes) <= facts.now
         }
         let carried = !done && (reminder.due.map { $0 < facts.startOfToday } ?? false)
         return TimelineTask(

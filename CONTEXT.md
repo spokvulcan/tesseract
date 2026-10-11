@@ -1912,9 +1912,9 @@ an EventKit store and an in-memory store (the test host's, ADR-0073), and a
 facade that keeps today's snapshot, turns every write into a one-line
 confirmation with an undo, and makes the day's changes by Reminders' rules for
 dates and series: the owner's today and tomorrow, a task's time of day kept
-when it moves, a repeating reminder never losing its date. It answers for a
-repeating task's Occurrence that day. The single source of truth for tasks and
-plans.
+when it moves, a repeating reminder never losing its date or given a new
+time. It answers for a repeating task's Occurrence that day. The single source
+of truth for tasks and plans.
 _Avoid_: tasks file (retired `tasks.md`), task store (Reminders is the store).
 
 **Occurrence**:
@@ -1922,9 +1922,10 @@ One day's turn of a repeating reminder. Reminders keeps a repeating reminder as
 one item for its whole series, open on its next date: ticked off, the
 occurrence stays behind as a done copy of its own, and the series moves on.
 The day holds a repeating task by its series, and the Agenda answers for that
-day's occurrence: open, or done and when. Taken back, by an undo or by
-unticking it, Reminders is as it was: the series back on that date, the copy
-gone.
+day's occurrence: open, or done and when. One Tesseract ticked off, taken
+back by an undo or by unticking it, leaves Reminders as it was: the series
+back on that date, the copy gone. Any other untick opens again only the
+reminder unticked.
 _Avoid_: instance, the copy (it is how Reminders keeps a done occurrence).
 
 **Area**:
@@ -1980,6 +1981,14 @@ its place, its own link or the invite's notes — so ten minutes ahead, or late,
 joining is one click. Reminders with a due time need none: they carry their own
 alarm, delivered by Reminders on every device.
 _Avoid_: wake (retired), alert (unqualified).
+
+**Time to leave**:
+When the owner sets off for an event in person, set by the Morning Plan from
+how long the way there takes. It stands while its event is on the calendar at
+the same time; the event moved or gone, it no longer applies. The way there is
+busy time: no free time is offered in it, and a step ends before it. When it
+comes, the Now Card says so and a Nudge rings.
+_Avoid_: departure (the code's word), travel time.
 
 **Step**:
 One task's slot in today's plan, and what became of it that day: cued at its

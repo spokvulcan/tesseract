@@ -297,6 +297,43 @@ struct TimelineTests {
         #expect(day.focus == nil)
     }
 
+    /// A step the owner started is the step the day is on over a meeting it
+    /// runs into, and over an earlier task, not started, whose slot holds
+    /// now too. The Now Card led with the meeting, and else offered the
+    /// earlier task's Start now.
+    @Test @MainActor func aStartedStepLeadsTheNowCardOverAMeetingAndAnEarlierTask() {
+        let started = Self.letterStep.started(at: Self.local(30, 10))
+        let overMeeting = Timeline(
+            snapshot: DayFixture.snapshot(
+                now: Self.local(30, 10, 10), events: [Self.sync], open: [Self.letter], done: []),
+            state: DayFixture.state(plan: [started]))
+        #expect(
+            NowCardBuilder.build(overMeeting, companionOn: true).headline
+                == "Write to the case worker")
+        let earlier = Step("rent", at: Self.local(30, 9, 45), minutes: 60)
+        let overTask = Timeline(
+            snapshot: DayFixture.snapshot(
+                now: Self.local(30, 10, 10), events: [], open: [Self.letter, DayFixture.rent],
+                done: []),
+            state: DayFixture.state(plan: [earlier, started]))
+        let card = NowCardBuilder.build(overTask, companionOn: true)
+        #expect(card.headline == "Write to the case worker")
+        #expect(card.span == DateInterval(start: Self.local(30, 10), end: Self.local(30, 10, 30)))
+        #expect(DaySteps.steps(overTask).filter(\.isUnderWay).map(\.id) == ["task-letter"])
+    }
+
+    /// A leftover's Another Day: the day after tomorrow to a week on, from
+    /// the owner's today — at 01:00 still the day that is ending.
+    @Test func anotherDayIsTheDayAfterTomorrowToAWeekOn() {
+        let days = [2, 3, 4, 5, 6, 7].map {
+            Calendar.current.date(from: DateComponents(year: 2026, month: 10, day: $0))!
+        }
+        for now in [Self.local(30, 22), Self.local(31, 1)] {
+            let facts = DayFacts(snapshot: DayFixture.snapshot(now: now), state: DayFixture.state())
+            #expect(facts.anotherDays == days)
+        }
+    }
+
     // MARK: The Inbox
 
     @Test func theInboxHoldsUndatedCapturesUntilTheyArePlanned() {
