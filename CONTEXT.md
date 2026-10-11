@@ -2426,7 +2426,8 @@ scheduler (no policy beyond FIFO).
 **Inference Arbiter**:
 The model-affine layer that composes the **LLM Gate** with the LLM's identity,
 holding the gate across both load and body so the loaded model cannot change under
-a running consumer, and the residency mirror Offload Model reads (LLM and voice).
+a running consumer, and the language model's holder for **Model Residency** (its
+offload waits its turn at the gate).
 Distinct from the gate below it (no model awareness) and from
 `ModelDownloadManager` (acquisition, not arbitration).
 _Avoid_: gate (the layer below), model manager (collides with
@@ -2448,6 +2449,20 @@ with whether it is loaded and what it is doing right now ("Jarvis · Triage",
 system's swap. Memory, not the GPU, is what the models share; this is where the
 owner sees it.
 _Avoid_: model manager (the Models page in Settings), activity monitor.
+
+**Model Residency**:
+The one module that knows which models are in memory, what each is doing, and how
+to free them. Each model's holder — the agent engine behind the **Inference
+Arbiter**, the speech engine's presenter, the transcription engine, the **Proofread
+Pass**, the recall embedder — reports to it as one row: the model it holds, whether
+that is loaded and what it is doing, and how Offload Model frees it (dictation's
+Whisper stays: always armed). The **Models section**, the Models page's in-memory
+mark and Offload Model all read it, so they can't disagree. Offload frees every
+model a holder lets go of at once, the language model after the running
+generation. Where a model's files are once usable is one answer too
+(`ModelDownloadManager.usableDirectory(for:)`), which every loader asks.
+_Avoid_: residency mirror (the arbiter's retired `.llm`/`.tts` slots), model
+manager, slots, loaded models list (the page's retired `LoadedModels`).
 
 **Foreground Gate**:
 The phone's one switch between "GPU work may start" and "the app is leaving the

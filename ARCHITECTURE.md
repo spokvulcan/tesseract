@@ -70,6 +70,7 @@ tesseract/
 │   ├── AppDelegate.swift        # macOS lifecycle, single instance, window management
 │   ├── AppBindings.swift        # App Bindings: launch sequence + subscription rules
 │   ├── HotkeyTable.swift        # Hotkey Table: every global hotkey, registered and re-bound from its setting
+│   ├── ModelResidency.swift     # Model Residency: which models are in memory, what each does, Offload Model
 │   ├── AppTerminationCoordinator.swift # Teardown ordering (closure-struct steps)
 │   ├── Harness.swift            # The harness table: every headless bench and parity run, by flag (ADR-0095)
 │   └── DependencyContainer.swift# Composition root, pure wiring
@@ -139,7 +140,7 @@ tesseract/
 │   │   ├── LLMActor.swift             # MLX LLM inference actor
 │   │   ├── Speculation.swift          # Speculation: resident drafters + the per-request Speculation Plan (ADR-0079)
 │   │   ├── LLMGate.swift              # One LLM generation at a time, FIFO (ADR-0081)
-│   │   ├── InferenceArbiter.swift     # LLM gate + model identity + residency facade
+│   │   ├── InferenceArbiter.swift     # LLM gate + model identity; the language model's holder for Model Residency
 │   │   ├── Core/                      # Agent loop, state reducer, accumulator
 │   │   ├── Tools/                     # Built-in + extension tools
 │   │   ├── Commands/                  # Slash command registry + parser
@@ -427,7 +428,7 @@ playback**):
   rows and the frames' loudness into word starts, which the stream carries as
   `SpeechEvent.words`. The
   app-side `SpeechEnginePresenter` is the `@Observable @MainActor` residency
-  mirror for views and the arbiter — a presenter, not a facade: orchestration
+  mirror for views and Model Residency — a presenter, not a facade: orchestration
   lives in the package engine. It follows the Readiness the engine publishes,
   so a reload the engine starts by itself, for an utterance on a session that
   outlived Offload Model, shows as loaded too.
@@ -572,17 +573,24 @@ cache, so chat turns, the Companion's moments, HTTP requests, `/compact`,
 reloads and offload take turns at the **LLM Gate**. `LLMGate` is the pure FIFO
 mechanism (atomic handoff, cancellation-safe); `InferenceArbiter` composes it with
 the LLM's identity (load, reload-on-mismatch) in `withLLM`, so the model cannot
-change under a running generation, and mirrors residency (`.llm`/`.tts`) for
-Offload Model. Speech, dictation, the proofreader and the embedder never take the
+change under a running generation; its `offloadLLM` waits its turn at the gate.
+Speech, dictation, the proofreader and the embedder never take the
 gate: MLX's process-wide evaluation lock keeps concurrent use safe, so a voice
 reply interleaves with a generation instead of waiting for it. Whisper's audio
 encoder runs on the GPU too, and a generation slows while it decodes (ADR-0086).
 The proofreader still *skips* while the LLM generates (ADR-0034), so a dictation
 never waits.
 LLM consumers depend on the single-member `InferenceArbitrating` seam; tests
-inject `InMemoryInferenceArbiter`. The menu bar's Models section shows what is
-loaded and what each model is doing, with the app's memory. Vocabulary:
-CONTEXT.md → LLM gate.
+inject `InMemoryInferenceArbiter`. **Model Residency** (`App/ModelResidency.swift`)
+is the one place that knows which models are in memory: each model's holder (the
+agent engine behind the arbiter, the speech engine's presenter, the transcription
+engine, the Proofread Pass, the `RecallEmbedder`) reports to it as one row, in
+`App/DependencyContainer+ModelResidency.swift` — the model, whether it is loaded and
+what it is doing, and how to free it. The menu bar's Models section, the Models
+page's in-memory mark and Offload Model all read it; Offload frees every model a
+holder lets go of, at once, the language model after the running generation. Every
+loader finds a model's files through `ModelDownloadManager.usableDirectory(for:)`.
+Vocabulary: CONTEXT.md → LLM gate.
 
 ### 6. HTTP Server and Prefix Cache
 

@@ -78,6 +78,12 @@ final class ModelDownloadManager: ObservableObject {
         statuses[id] ?? .notDownloaded
     }
 
+    /// A downloaded model's size on disk; nil while it isn't downloaded.
+    func sizeOnDisk(of id: String) -> Int64? {
+        if case .downloaded(let size) = status(for: id) { return size }
+        return nil
+    }
+
     // MARK: - Status
 
     func refreshAllStatuses() {
@@ -464,6 +470,16 @@ final class ModelDownloadManager: ObservableObject {
 
     // MARK: - Path Resolution
 
+    /// The usable directory for a model: where its files are, once they are
+    /// all there by its entry's completeness rule — nil until then. Every
+    /// loader asks here, so a model's holder and the catalog can't disagree
+    /// on its folder.
+    func usableDirectory(for modelID: String) -> URL? {
+        isDownloaded(modelID) ? modelPath(for: modelID) : nil
+    }
+
+    /// Where a model's files go: its download, verify and delete folder,
+    /// complete or not.
     func modelPath(for modelID: String) -> URL? {
         guard let model = definitions.first(where: { $0.id == modelID }) else { return nil }
         guard let subdir = model.cacheSubdirectory else { return nil }

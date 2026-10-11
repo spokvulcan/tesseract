@@ -9,6 +9,8 @@
   the LLM gate
 - Relates to: ADR-0080 (the Companion's moments take the gate like any chat),
   ADR-0009 (speech and the speculative prefill already shared the GPU)
+- Amended: 2026-10-11 (Model Residency: one module for what is loaded and for
+  Offload Model, which now reaches every model that can be freed)
 
 ## Context
 
@@ -103,3 +105,38 @@ lease guarantee?
 - `Platform/MenuModelsSection.swift`, `App/DependencyContainer+ModelActivity.swift`
   — the Models section.
 - `Features/Agent/LLMActor.swift` — `cacheLimitMB = 512`.
+
+## Amendment (2026-10-11): Model Residency
+
+Decisions 4 and 5 stand; where they are built moved, and Offload reaches
+further. The menu's Models section and the Models page used to derive "which
+models are loaded" twice, with different reads of the language model's state;
+the arbiter mirrored residency for two models (`.llm`, `.tts`) while Offload
+freed three; the recall embedder was never unloaded, and its loaded flag sat on
+the composition root.
+
+- **Model Residency** (`tesseract/App/ModelResidency.swift`) is the one module
+  that knows which models are in memory. Each model's holder reports to it as
+  one row (`tesseract/App/DependencyContainer+ModelResidency.swift`): the
+  model, whether it is loaded and what it is doing, and how to free it. The
+  Models section (decision 5), the Models page's in-memory mark and Offload
+  Model all read it.
+- **Offload Model** frees every model a holder lets go of, at once: the voice,
+  the proofreader and the recall embedder right away, the language model after
+  the running generation (decision 4: `InferenceArbiter.offloadLLM` waits its
+  turn at the gate). Dictation's Whisper stays, as before (always-armed
+  dictation, ADR-0025). Unloading the embedder is safe: an embed already
+  running keeps its own reference to the model, and the next recall loads it
+  again (0.4 s). Clear Disk Cache offloads the same way before it wipes.
+- The arbiter no longer mirrors residency: `ModelSlot`, `loadedSlots` and the
+  voice closures are gone; it is the language model's holder.
+- Every loader finds a model's files through one answer,
+  `ModelDownloadManager.usableDirectory(for:)`: the proofreader, the recall
+  embedder (now `RecallEmbedder`, which keeps its own loaded mirror), the
+  arbiter's load and the vision probe.
+
+Behaviour changes: Offload frees the recall embedder, and frees the
+proofreader without waiting for the language model's generation; the Offload
+item is enabled while any model it can free is loaded, the proofreader or the
+embedder alone included; Clear Disk Cache frees the proofreader and the
+embedder too. Tests: `ModelResidencyTests` (replacing `LoadedModelsTests`).

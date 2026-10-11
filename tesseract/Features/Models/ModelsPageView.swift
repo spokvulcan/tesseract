@@ -166,10 +166,10 @@ struct ModelsPageView: View {
     }
 
     private func onDiskDescription(for model: ModelDefinition) -> String {
-        if case .downloaded(let sizeOnDisk) = downloadManager.status(for: model.id) {
-            return ByteCountFormatter.string(fromByteCount: sizeOnDisk, countStyle: .file)
+        guard let sizeOnDisk = downloadManager.sizeOnDisk(of: model.id) else {
+            return model.sizeDescription
         }
-        return model.sizeDescription
+        return ByteCountFormatter.string(fromByteCount: sizeOnDisk, countStyle: .file)
     }
 
     // MARK: - Storage
@@ -183,47 +183,7 @@ struct ModelsPageView: View {
     // MARK: - Memory state
 
     private func isModelLoadedInMemory(_ model: ModelDefinition) -> Bool {
-        LoadedModels(
-            speechToTextModelID: container.transcriptionEngine.isModelLoaded
-                ? container.settingsManager.selectedSpeechToTextModelID : nil,
-            isVoiceModelLoaded: container.speechEnginePresenter.isModelLoaded,
-            agentModelID: container.inferenceArbiter.loadedLLMModelID,
-            isDFlash2DraftLoaded: container.agentEngine.isDFlash2DraftLoaded,
-            isProofreadModelLoaded: container.proofreadPass.isModelLoaded,
-            isEmbedderLoaded: container.isEmbedderLoaded
-        ).contains(model)
-    }
-}
-
-// MARK: - Loaded models
-
-/// What the Models page marks as in memory, one fact per engine, each from
-/// the engine that holds the model. A draft is never loaded on its own: it
-/// loads beside its target when the setting allows it and the target pairs
-/// with it, so its fact comes from that load, not from the target's id.
-struct LoadedModels: Equatable {
-    var speechToTextModelID: String?
-    var isVoiceModelLoaded = false
-    var agentModelID: String?
-    var isDFlash2DraftLoaded = false
-    var isProofreadModelLoaded = false
-    var isEmbedderLoaded = false
-
-    func contains(_ model: ModelDefinition) -> Bool {
-        switch model.category {
-        case .speechToText:
-            model.id == speechToTextModelID
-        case .textToSpeech:
-            model.id == ModelDefinition.defaultTextToSpeechModelID && isVoiceModelLoaded
-        case .agent:
-            model.id == agentModelID
-        case .proofread:
-            model.id == ModelDefinition.defaultProofreadModelID && isProofreadModelLoaded
-        case .embedding:
-            model.id == ModelDefinition.defaultEmbeddingModelID && isEmbedderLoaded
-        case .draft:
-            model.id == DFlash2Support.draftModelID && isDFlash2DraftLoaded
-        }
+        container.modelResidency.isLoaded(model.id)
     }
 }
 

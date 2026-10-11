@@ -72,9 +72,7 @@ final class DependencyContainer: ObservableObject {
             isEnabled: { settings.proofreadDictation },
             isLLMBusy: { arbiter.isLLMBusy },
             modelDirectory: {
-                downloads.isDownloaded(ModelDefinition.defaultProofreadModelID)
-                    ? downloads.modelPath(for: ModelDefinition.defaultProofreadModelID)
-                    : nil
+                downloads.usableDirectory(for: ModelDefinition.defaultProofreadModelID)
             },
             loadModel: { try await model.load(from: $0) },
             runModel: { try await model.run(system: $0, text: $1) },
@@ -153,7 +151,7 @@ final class DependencyContainer: ObservableObject {
         registry.appendBuiltInTool(createNotificationRuleTool(store: triageRuleStore))
         // Memory the owner controls: remember, forget, recall — pull only.
         for tool in createProfileTools(
-            profile: profileStore, index: recallIndex, embed: recallEmbedding)
+            profile: profileStore, index: recallIndex, embed: recallEmbedder.recallEmbedding)
         {
             registry.appendBuiltInTool(tool)
         }
@@ -242,24 +240,11 @@ final class DependencyContainer: ObservableObject {
             .appendingPathComponent("Tesseract Agent/companion/recall.sqlite"))
     /// The embedder that reranks recall by meaning, loaded on first use when
     /// its model is downloaded.
-    lazy var memoryEmbedder = MemoryEmbedder()
-    /// Whether the recall embedder holds its model, for the Models page.
-    @Published private(set) var isEmbedderLoaded = false
-    private var recallEmbedding: RecallEmbedding {
-        let embedder = memoryEmbedder
-        let downloads = modelDownloadManager
-        let id = ModelDefinition.defaultEmbeddingModelID
-        return { [weak self] texts in
-            let directory: URL? = await MainActor.run {
-                downloads.isDownloaded(id) ? downloads.modelPath(for: id) : nil
-            }
-            guard let directory else { return nil }
-            do { try await embedder.load(from: directory) } catch { return nil }
-            await MainActor.run { self?.isEmbedderLoaded = true }
-            let vectors = await embedder.embed(texts)
-            return vectors.count == texts.count ? vectors : nil
-        }
-    }
+    lazy var recallEmbedder = RecallEmbedder(
+        embedder: MemoryEmbedder(),
+        modelDirectory: { [modelDownloadManager] in
+            modelDownloadManager.usableDirectory(for: ModelDefinition.defaultEmbeddingModelID)
+        })
     lazy var frontmostApp = FrontmostAppTracker()
     lazy var powerMonitor = PowerMonitor()
     /// The Jarvis panel's own push-to-talk.
@@ -307,17 +292,16 @@ final class DependencyContainer: ObservableObject {
     /// change, one JSONL file per day under Application Support.
     lazy var companionTrace = CompanionTrace()
     lazy var agentConversationStore = AgentConversationStore()
-    lazy var inferenceArbiter: InferenceArbiter = {
-        // TTS residency arrives as closures (evaluated lazily), so the
-        // arbiter never holds the speech engine.
-        InferenceArbiter(
-            agentEngine: agentEngine,
-            settingsManager: settingsManager,
-            modelDownloadManager: modelDownloadManager,
-            isTTSLoaded: { [weak self] in self?.speechEnginePresenter.isModelLoaded ?? false },
-            unloadTTS: { [weak self] in await self?.speechEnginePresenter.unload() }
-        )
-    }()
+    lazy var inferenceArbiter = InferenceArbiter(
+        agentEngine: agentEngine,
+        settingsManager: settingsManager,
+        modelDownloadManager: modelDownloadManager
+    )
+
+    /// **Model Residency**: which models are in memory, what each is doing,
+    /// and Offload Model — one row per model's holder
+    /// (`DependencyContainer+ModelResidency.swift`).
+    lazy var modelResidency: ModelResidency = makeModelResidency()
     lazy var serverInferenceService = ServerInferenceService(
         completionStarter: llmActor,
         engine: agentEngine,
@@ -531,13 +515,14 @@ final class DependencyContainer: ObservableObject {
         builtVoiceSession = controller
         return controller
     }()
-    /// The voice session once something built it: a hotkey asks whether a
-    /// session is active without building one (and the chat session with it).
-    private var builtVoiceSession: CompanionVoiceSessionController?
+    /// The voice session once something built it: a hotkey or the Models
+    /// section asks whether a session is active without building one (and the
+    /// chat session with it).
+    private(set) var builtVoiceSession: CompanionVoiceSessionController?
 
     // Speech (TTS) — engine v2 (ADR-0038/0039): the engine actor lives in the
     // TesseractSpeech package behind its ports; the presenter mirrors
-    // residency for views and the arbiter; the coordinator drives sessions.
+    // residency for views and Model Residency; the coordinator drives sessions.
     lazy var textExtractor = TextExtractor()
     lazy var speechEnginePresenter: SpeechEnginePresenter = {
         // The catalog's Voice Engine entry downloads this same spec (the
@@ -628,23 +613,18 @@ final class DependencyContainer: ObservableObject {
         // `AgentEngine.unloadModel` flushes pending SSD writes before the
         // teardown, so a plain offload never costs the disk tier its fresh
         // snapshots.
-        manager.onOffloadModel = { [inferenceArbiter, proofreadPass] in
-            Task {
-                await inferenceArbiter.offloadAllModels()
-                // The proofread model lives outside the arbiter's slots —
-                // "Offload Model" frees it explicitly.
-                await proofreadPass.unload()
-            }
+        manager.onOffloadModel = { [weak self] in
+            Task { await self?.modelResidency.offload() }
         }
         manager.onClearMemoryCache = { [agentEngine] in
             agentEngine.llmActor.prefixCacheAdmin.clearRAMTier()
         }
         // Disk clear must not race the detached unload: a live ledger's
         // manifest persist after the wipe would resurrect the store.
-        manager.onClearDiskCache = { [inferenceArbiter, agentEngine, settingsManager] in
+        manager.onClearDiskCache = { [weak self, agentEngine, settingsManager] in
             let root = settingsManager.ssdPrefixCacheRootURL
             Task {
-                await inferenceArbiter.offloadAllModels()
+                await self?.modelResidency.offload()
                 await agentEngine.awaitPendingUnload()
                 SSDSnapshotStore.wipeArtifacts(at: root)
             }
@@ -655,16 +635,14 @@ final class DependencyContainer: ObservableObject {
                 port: Int(HTTPServer.clampedPort(settingsManager.serverPort))
             )
         }
-        manager.isModelLoaded = { [inferenceArbiter] in
-            !inferenceArbiter.loadedSlots.isEmpty
-        }
+        manager.isModelLoaded = { [weak self] in self?.modelResidency.canOffload ?? false }
         manager.residentCacheBytes = { [agentEngine] in
             agentEngine.llmActor.prefixCacheAdmin.residentRAMBytes
         }
         manager.diskCacheBytes = { [settingsManager] in
             SSDSnapshotStore.artifactBytes(at: settingsManager.ssdPrefixCacheRootURL)
         }
-        manager.modelActivity = { [weak self] in self?.modelActivity() ?? .empty }
+        manager.modelActivity = { [weak self] in self?.modelResidency.activity ?? .empty }
         return manager
     }()
 
@@ -934,9 +912,7 @@ final class DependencyContainer: ObservableObject {
                 speechState: { [speechCoordinator] in
                     speechCoordinator.state
                 },
-                isLLMSlotLoaded: { [inferenceArbiter] in
-                    inferenceArbiter.loadedSlots.contains(.llm)
-                },
+                isLLMSlotLoaded: { [inferenceArbiter] in inferenceArbiter.isLLMLoaded },
                 whisperModelPath: { [modelDownloadManager, settingsManager] in
                     guard
                         let path = modelDownloadManager.modelPath(
