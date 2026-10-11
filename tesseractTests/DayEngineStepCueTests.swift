@@ -1122,6 +1122,26 @@ struct DayEngineStepCueTests {
         #expect(!gone.state.plan.contains { $0.reminderID == "letter" })
     }
 
+    /// The letter's cue is up at 11:10, and a new plan moves its step to
+    /// 12:30 before the owner answers. A step's marks are its slot's, so the
+    /// answer is traced without a time to react (ADR-0091).
+    @Test func aCueAnsweredAfterANewPlanMovedItsStepHasNoTimeToReact() throws {
+        var state = Self.cued()
+        let card = MorningPlanCard(
+            line: "After lunch.", mustDoID: nil,
+            placements: [Placement(reminderID: "letter", start: Self.local(12, 30), minutes: 20)],
+            suggestions: [])
+        _ = DayEngine.accept(
+            .morningPlan(card), kind: .morningPlan, fallback: false,
+            snapshot: Self.snapshot(at: Self.local(11, 12)), state: &state)
+        let started = DayEngine.decide(
+            .cardAction(.step(reminderID: "letter", .start)),
+            snapshot: Self.snapshot(at: Self.local(11, 13)), state: state)
+        let fields = try #require(Self.traced(.cueReaction, in: started.effects))
+        #expect(fields["action"] == .string("start"))
+        #expect(fields["secondsToReact"] == nil)
+    }
+
     @Test func theEveningWrapUpWaitsForAStepTheOwnerStarted() throws {
         // The letter, started at 20:50 for twenty minutes, runs over 21:00.
         var state = Self.letterOnly()
