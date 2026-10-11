@@ -496,7 +496,9 @@ private struct TaskStep: View {
                 actions.setDone(task.id, !task.isDone)
             }
             if isTomorrow {
-                if !task.isDone {
+                // A repeating reminder's date is its whole series': done
+                // early, it is ticked off where it is.
+                if !task.isDone, !task.reminder.repeats {
                     Button("Move to Today") { actions.moveToToday(task.id) }
                 }
             } else {
@@ -645,8 +647,9 @@ private struct NowStep: View {
 
 // MARK: - Actions
 
-/// What Today's buttons do to the day: Reminders through the Agenda, the
-/// plan through the runtime.
+/// What Today's buttons do to the day: a task ticked off through the Agenda;
+/// the plan, and a task moved to another day, through the runtime (its
+/// clock, and the engine's rules for a repeating reminder).
 @MainActor
 struct TodayActions {
     let agenda: Agenda
@@ -669,25 +672,19 @@ struct TodayActions {
         Task { _ = try? await agenda.updateReminder(id: id, completed: done, source: "today") }
     }
 
-    /// Due on the owner's tomorrow (after midnight and before the day rolls
-    /// over at 04:00, that is still today's date).
+    /// Off today's plan and due on the owner's tomorrow, as a Step Cue's
+    /// Tomorrow leaves it: at its own time of day, if it has one, by the
+    /// runtime's clock. A repeating reminder is one item for its whole
+    /// series, so a date alone would take the time from every occurrence.
     func moveToTomorrow(_ id: String) {
-        runtime.act(.removeFromPlan(reminderID: id))
-        guard let tomorrow = DayKey(for: Date()).next().date() else { return }
-        Task {
-            _ = try? await agenda.updateReminder(
-                id: id, due: .set(tomorrow, hasTime: false), source: "today")
-        }
+        runtime.act(.tomorrow(reminderID: id))
     }
 
-    /// Due on the owner's today, at no set time: off tomorrow and into
-    /// today's Anytime tasks.
+    /// Due on the owner's today by the runtime's clock, at no set time: off
+    /// tomorrow and into today's Anytime tasks. Never a repeating reminder,
+    /// whose date is its whole series'.
     func moveToToday(_ id: String) {
-        guard let today = DayKey(for: Date()).date() else { return }
-        Task {
-            _ = try? await agenda.updateReminder(
-                id: id, due: .set(today, hasTime: false), source: "today")
-        }
+        runtime.act(.today(reminderID: id))
     }
 
     /// Give an Inbox item the slot Jarvis offered.

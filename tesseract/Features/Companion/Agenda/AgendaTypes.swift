@@ -179,7 +179,8 @@ nonisolated struct AgendaReminder: Sendable, Equatable, Hashable, Identifiable, 
     var completedAt: Date?
     var createdAt: Date?
     /// A repeating reminder: one item for the whole series, so deleting it
-    /// deletes them all, and it can't lose its date.
+    /// deletes them all, it can't lose its date, and a new date or time is
+    /// every occurrence's (a date given without its time takes it from all).
     var repeats: Bool
 
     init(

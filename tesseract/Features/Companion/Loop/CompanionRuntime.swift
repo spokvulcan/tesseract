@@ -361,6 +361,12 @@ final class CompanionRuntime {
                         calendar: calendar)
                     ?? now()
                 try await moveReminder(id, toDay: tomorrow)
+            case .dueToday(let id):
+                // The owner's today: at 01:30 it is yesterday's date.
+                let today =
+                    DayKey(for: now(), calendar: calendar).date(calendar: calendar) ?? now()
+                _ = try await agenda.updateReminder(
+                    id: id, due: .set(today, hasTime: false), source: "today")
             case .dueOn(let id, let day):
                 try await moveReminder(id, toDay: calendar.startOfDay(for: day))
             case .dueAt(let id, let at):
@@ -384,7 +390,9 @@ final class CompanionRuntime {
         }
     }
 
-    /// Re-date a reminder to `day`, keeping its time of day if it had one.
+    /// Re-date a reminder to `day`, keeping its time of day if it had one (a
+    /// repeating reminder's is its whole series'). Every Tomorrow comes
+    /// here: a Step Cue's, the Evening Wrap-up's and Today's.
     private func moveReminder(_ id: String, toDay day: Date) async throws {
         let calendar = Calendar.current
         let reminder = await agenda.store.reminder(id: id, now: now())

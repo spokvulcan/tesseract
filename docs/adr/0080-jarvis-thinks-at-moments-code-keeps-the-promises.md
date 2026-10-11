@@ -637,3 +637,36 @@ tomorrow. What changed:
 
 Not changed: the Undo after ticking off a repeating reminder reopens the
 series, which is open already, so the occurrence stays done.
+
+## Amendments (2026-10-11, a series moved by accident)
+
+Reminders keeps a repeating reminder as one item for its whole series, so a
+new date or time is every occurrence's. Three actions meant for one day
+changed the series. Tomorrow on Today (the Now Card, the Day Line, the
+Inbox) dated the task itself: the owner's tomorrow by the real clock, as a
+whole day, where a Step Cue's Tomorrow and the Evening Wrap-up's keep its
+time of day. It took the time from every occurrence, and in Reminders the
+alarm with it (a whole-day due date gets none). Move to Today on a task due
+tomorrow did the same, today. Later on a reminder that came due ("Remind me
+in half an hour") moved it to half an hour from now: a daily one at 09:00,
+put off at 14:07, would ring at 14:37 every day. What changed:
+
+- **One Tomorrow.** Today's is the cue's (`CardAction.tomorrow`): off
+  today's plan, due on the owner's tomorrow by the runtime's clock, at its
+  own time of day (`dueTomorrow`); an undated task, the Inbox's, still gets
+  none.
+- **Move to Today is a one-off task's.** It goes through the runtime too
+  (`CardAction.today`, `dueToday`: today by the runtime's clock, one of
+  today's Anytime tasks). The Day Line doesn't offer it on a repeating
+  reminder, and the engine never re-dates one to today: done early, it is
+  ticked off where it is, and the series stays on its days.
+- **Later on a repeating reminder is a step.** A quarter hour in today's
+  plan half an hour from now (after a meeting it would fall in, by the
+  plan's rule for a step not begun), put on the panel as a Step Cue when it
+  starts; the series keeps its time. A one-off reminder is still moved half
+  an hour on, for Reminders to ring on every device. With Step Cues off in
+  Settings, the step only shows on Today.
+- `TodayRedatingTests` runs them through Today's actions, the runtime and
+  the in-memory store, where the series, ticked off, goes on at its time.
+  The store keeps no alarms: the alarm is read from the EventKit adapter,
+  not tested.
