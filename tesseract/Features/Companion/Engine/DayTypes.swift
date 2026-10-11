@@ -54,6 +54,12 @@ nonisolated enum CardAction: Sendable, Equatable {
     case dismiss(cardID: String)
     case setMustDo(reminderID: String?)
     case removeFromPlan(reminderID: String)
+    /// Tomorrow on Today (the Now Card, the Day Line, the Inbox): off today's
+    /// plan and due tomorrow, as a Step Cue's Tomorrow leaves it.
+    case tomorrow(reminderID: String)
+    /// Move to Today on a task due tomorrow: into today's Anytime tasks.
+    /// Never a repeating reminder, whose date is its whole series'.
+    case today(reminderID: String)
     /// Put a task into today's plan at a time ("Find a time").
     case place(reminderID: String, start: Date, minutes: Int)
     /// Tasks that slid, back into today's plan in one go ("Fit all 3 in").
@@ -277,6 +283,8 @@ nonisolated enum DeliveryRung: String, Sendable, Equatable, Codable {
 nonisolated enum AgendaMutation: Sendable, Equatable {
     /// Due tomorrow, keeping a time of day if it had one.
     case dueTomorrow(reminderID: String)
+    /// Due on the owner's today, at no set time: one of today's Anytime tasks.
+    case dueToday(reminderID: String)
     /// No date: it waits in its Area or the Inbox.
     case clearDue(reminderID: String)
     /// Let it go.

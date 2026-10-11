@@ -507,6 +507,24 @@ nonisolated extension DayEngine {
             state.plan.removeAll { $0.reminderID == reminderID }
             return [.trace(.cardReaction, ["action": "unplanned"])]
 
+        case .tomorrow(let reminderID):
+            // The cue's Tomorrow: one rule for the date, which keeps the
+            // time of day a repeating reminder's whole series shares.
+            state.plan.removeAll { $0.reminderID == reminderID }
+            return [
+                .mutateAgenda(.dueTomorrow(reminderID: reminderID)),
+                .trace(.cardReaction, ["action": "tomorrow"]),
+            ]
+
+        case .today(let reminderID):
+            // A repeating reminder's date is its whole series': done early,
+            // it is ticked off where it is.
+            guard !repeats(reminderID, snapshot: snapshot) else { return [] }
+            return [
+                .mutateAgenda(.dueToday(reminderID: reminderID)),
+                .trace(.cardReaction, ["action": "today"]),
+            ]
+
         case .place(let reminderID, let start, let minutes):
             let slot = Placement(reminderID: reminderID, start: start, minutes: minutes)
             place(slot, snapshot: snapshot, state: &state)
@@ -578,7 +596,18 @@ nonisolated extension DayEngine {
                     .mutateAgenda(.followUp(title: "Follow up: \(item.title)", at: later)))
             case .reminder:
                 let reminderID = String(item.id.dropFirst("reminder:".count))
-                effects.append(.mutateAgenda(.dueAt(reminderID: reminderID, at: later)))
+                if repeats(reminderID, snapshot: snapshot) {
+                    // Its time is its whole series': a step in today's plan
+                    // instead, cued when it starts, off any meeting it falls in.
+                    let start =
+                        snapshot.calendar.dateInterval(of: .minute, for: later)?.start ?? later
+                    place(
+                        Placement(reminderID: reminderID, start: start, minutes: stepLaterMinutes),
+                        snapshot: snapshot, state: &state)
+                    effects += clearStepsOfMeetings(snapshot: snapshot, state: &state)
+                } else {
+                    effects.append(.mutateAgenda(.dueAt(reminderID: reminderID, at: later)))
+                }
             case .agent:
                 break  // It stays in Waiting on you.
             }
@@ -772,13 +801,19 @@ nonisolated extension DayEngine {
     private static func mutation(
         for suggestion: Leftover.Suggestion, reminderID: String, snapshot: DaySnapshot
     ) -> AgendaMutation {
-        let repeats = snapshot.agenda.open.first { $0.id == reminderID }?.repeats == true
+        let repeats = Self.repeats(reminderID, snapshot: snapshot)
         switch suggestion {
         case .tomorrow: return .dueTomorrow(reminderID: reminderID)
         case .later where !repeats: return .clearDue(reminderID: reminderID)
         case .drop where !repeats: return .delete(reminderID: reminderID)
         case .later, .drop: return .dueTomorrow(reminderID: reminderID)
         }
+    }
+
+    /// A repeating reminder is one item for its whole series: a new date or
+    /// time is every occurrence's.
+    private static func repeats(_ reminderID: String, snapshot: DaySnapshot) -> Bool {
+        snapshot.agenda.open.first { $0.id == reminderID }?.repeats == true
     }
 
     static func reaction(_ action: String, card: DayCard, snapshot: DaySnapshot) -> DayEffect {

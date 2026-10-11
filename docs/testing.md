@@ -479,7 +479,12 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # and started small, the clock, the evening),
 # a repeating task ticked off (the day follows its done occurrence: the
 # must-do done, the step in its slot, its pace; the in-memory store keeps the
-# copy and moves the series on, as Reminders does),
+# copy and moves the series on, as Reminders does), a task re-dated from
+# Today, by the runtime's clock and never moving a repeating reminder's series
+# by accident (Tomorrow is the Step Cue's, at its own time of day; Move to
+# Today is a one-off task's; Later on a repeating reminder is a step half an
+# hour on, cued then; through Today's actions, the runtime and the in-memory
+# Agenda),
 # cards and prompts, the Day Thread's store, a moment's turn read back for
 # Today's Chat (ThreadMomentTests: every request names its moment, the line
 # from its card, the card it made found in the day's state, the Day Opening
@@ -508,6 +513,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/MenuBarClockGalleryTests \
   -only-testing:tesseractTests/DayWalkTests \
   -only-testing:tesseractTests/DayEngineRepeatingTaskTests \
+  -only-testing:tesseractTests/TodayRedatingTests \
   -only-testing:tesseractTests/NotificationSourceTests \
   -only-testing:tesseractTests/ModifierKeyDetectorTests \
   -only-testing:tesseractTests/CardItemActionTests \
