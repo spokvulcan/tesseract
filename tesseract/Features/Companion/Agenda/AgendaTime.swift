@@ -105,12 +105,4 @@ nonisolated enum AgendaTime {
         let parts = calendar.dateComponents([.hour, .minute], from: date)
         return String(format: "%02d:%02d", parts.hour ?? 0, parts.minute ?? 0)
     }
-
-    /// `2026-10-01T10:00`, the form the tools read back.
-    static func iso(_ date: Date, hasTime: Bool, calendar: Calendar = .current) -> String {
-        let parts = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date)
-        let day = String(
-            format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
-        return hasTime ? day + "T" + clock(date, calendar: calendar) : day
-    }
 }
