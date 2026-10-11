@@ -462,10 +462,14 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # (still the day that is ending until 04:00), the completion the EventKit
 # store hands its Reminders fetch (nonisolated, delivered off the main thread;
 # no store is touched), capture and the one-key hotkey,
-# the Timeline (tomorrow after today, without today's must-do star, and the
-# small hours past midnight), the Now Card (its decision table, the Inbox's
-# slot offers, how long a card's line stays fresh, the time left of the step
-# under way), a title's links read short (LinkedTitleTests), a calendar named
+# the Timeline, the day's one read (ADR-0091), from fixture snapshots and
+# states (tomorrow after today, without today's must-do star, and the small
+# hours past midnight; the step under way by its one rule — a started step
+# inside a block reads the same on the Now Card, the Day Line, the menu bar
+# and the engine, a meeting under way beats a block —; a time to leave only
+# while its event stands; the Inbox), the Now Card (its decision table on the
+# Timeline, the Inbox's slot offers, how long a card's line stays fresh, the
+# time left of the step under way), a title's links read short (LinkedTitleTests), a calendar named
 # by its address reads as its domain (AgendaCalendarLabelTests), Today
 # rendered with the app's wiring over fixture days (one deep in a slot, its
 # time left draining) at a wide, a regular and a phone width
@@ -476,23 +480,31 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # once, and never while away, quiet, in a call, a game or a meeting, or over a
 # panel that is up — what came due meanwhile is cued late once the owner can
 # see it; a started step's check-in at its end, which no other start
-# interrupts; and what each choice does), the wind-down (one banner as quiet
+# interrupts; and what each choice does; a step moved by a new plan keeping
+# how often it was put off, one taken off the plan and put back starting
+# afresh), the day's saved state (a day saved while each step's life lived
+# in maps beside the plan loads into its steps), the wind-down (one banner as quiet
 # hours begin with the owner at the Mac), the Jarvis Panel's content over
 # fixture cards at the height it fits them (the plan's steps, the wrap-up's
 # leftovers; TEST_RUNNER_PANEL_GALLERY_DIR=<dir> writes the PNGs), the menu
 # bar's clock beside the glyph (a started step's time left, the next event or
 # time to leave in its last half hour; the same directory gets its PNGs), one
-# day walked through the engine signal by signal where those rules meet (the
-# plan, a cue started, an absence and the late check-in, the must-do put off
-# and started small, the clock, the evening),
-# a repeating task ticked off (the day follows its done occurrence: the
-# must-do done, the step in its slot, its pace; the in-memory store keeps the
-# copy and moves the series on, as Reminders does), a task re-dated from
+# day walked through the engine signal by signal where those rules meet, the
+# in-memory Agenda making each change it asks for (the plan, a cue started,
+# an absence and the late check-in, the must-do put off and started small,
+# the clock, the evening),
+# a repeating task ticked off (ADR-0092: the day keeps the series and the
+# Agenda answers for its occurrence — the must-do done, the step in its slot,
+# its pace, Today's Chat's plan; the in-memory store keeps the copy and moves
+# the series on, as Reminders does; taken back by Undo, by unticking the task
+# or its copy, Reminders is as it was), a task re-dated from
 # Today, by the runtime's clock and never moving a repeating reminder's series
 # by accident (Tomorrow is the Step Cue's, at its own time of day; Move to
 # Today is a one-off task's; Later on a repeating reminder is a step half an
-# hour on, cued then; through Today's actions, the runtime and the in-memory
-# Agenda),
+# hour on, cued then; Later or Let go on a repeating leftover skips it to
+# tomorrow at its time — the Agenda's rules for dates and series; a tick on
+# Today goes through the engine like a card's Done; through Today's actions,
+# the runtime and the in-memory Agenda),
 # cards and prompts, the Day Thread's store, a moment's turn read back for
 # Today's Chat (ThreadMomentTests: every request names its moment, the line
 # from its card, the card it made found in the day's state, the Day Opening
@@ -534,7 +546,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/AgendaTimeTests \
   -only-testing:tesseractTests/CaptureParserTests \
   -only-testing:tesseractTests/NudgePlannerTests \
-  -only-testing:tesseractTests/TimelineBuilderTests \
+  -only-testing:tesseractTests/TimelineTests \
   -only-testing:tesseractTests/NowCardTests \
   -only-testing:tesseractTests/LinkedTitleTests \
   -only-testing:tesseractTests/TodayGalleryTests \

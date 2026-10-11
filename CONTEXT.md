@@ -1787,12 +1787,46 @@ reads as its card (its line, what it holds, its choices live while the day
 still holds the card), never as a system note.
 _Avoid_: dashboard, Mission Control (retired), home screen (unqualified).
 
+**Timeline**:
+The day as the owner lives it, read once from Reminders, Calendar and the Day
+Engine's state at one moment: events and tasks in time order on the Day Line,
+free time, the Now line, the Anytime tasks, then tomorrow — with what every
+surface asks of the day: the step under way, the next step, when to leave for
+an event, the Inbox's offers, what waits on the owner. Today draws it, the
+Jarvis Panel lists a plan's steps from it, the menu bar counts down from it,
+and the Day Engine reads its focus and tomorrow from it, so no two of them
+read the day two ways.
+_Avoid_: day model, schedule.
+
+**Step under way**:
+The one step the day is on, by one rule, the first that matches: a step the
+owner started whose slot holds now (inside a block of theirs, or over a
+meeting it runs into); a meeting under way; a block of the owner's own under
+way; a task whose slot or time holds now, not started. The Now Card leads with
+it, the Day Line tints its row alone, and while a started one runs the menu
+bar counts it down and no other Step Cue interrupts it.
+_Avoid_: current step, active step, focus (unqualified).
+
+**Meeting**:
+An event with other people invited, or a place to be (an appointment, a
+class): it ends a step five minutes before it, the time to leave for it does
+too, and under way it is the step under way over a block. Only one with other
+people keeps a Step Cue off the panel.
+_Avoid_: event (unqualified: a block is one too).
+
+**Block**:
+An event of the owner's own: no one else invited and nowhere to be ("Work",
+09:00–13:00). Steps happen in it: it ends none and moves none, and a step the
+owner starts inside it is the step under way. A plan still places nothing
+over it.
+_Avoid_: focus time, meeting.
+
 **Now Card**:
-The top of Today: the step the day is on (the meeting under way, the task
-whose slot is now — once the owner started it, how much of it is left, in
-words and a short bar that drains like a visual timer; not started (its cue
-closed, missed or answered by mistake), its time and Start now — a task
-that slid, free time and what fits
+The top of Today: the step the day is on (the step under way — one the owner
+started, how much of it is left, in words and a short bar that drains like a
+visual timer; the meeting or block under way; a task whose slot is now, not
+started (its cue closed, missed or answered by mistake), its time and Start
+now — the time to leave, a task that slid, free time and what fits
 in it, the next step, what's left, or a done day and how tomorrow starts —
 within half a day, how far off that is; in
 the evening it closes the day — what is still ahead tonight, else what got
@@ -1812,9 +1846,23 @@ _Avoid_: hero, focus card, "the card" (unqualified: each Moment makes a card).
 **Agenda**:
 Apple Reminders and Calendar as Tesseract reads and writes them: one port with
 an EventKit store and an in-memory store (the test host's, ADR-0073), and a
-facade that keeps today's snapshot and turns every write into a one-line
-confirmation with an undo. The single source of truth for tasks and plans.
+facade that keeps today's snapshot, turns every write into a one-line
+confirmation with an undo, and makes the day's changes by Reminders' rules for
+dates and series: the owner's today and tomorrow, a task's time of day kept
+when it moves, a repeating reminder never losing its date. It answers for a
+repeating task's Occurrence that day. The single source of truth for tasks and
+plans.
 _Avoid_: tasks file (retired `tasks.md`), task store (Reminders is the store).
+
+**Occurrence**:
+One day's turn of a repeating reminder. Reminders keeps a repeating reminder as
+one item for its whole series, open on its next date: ticked off, the
+occurrence stays behind as a done copy of its own, and the series moves on.
+The day holds a repeating task by its series, and the Agenda answers for that
+day's occurrence: open, or done and when. Taken back, by an undo or by
+unticking it, Reminders is as it was: the series back on that date, the copy
+gone.
+_Avoid_: instance, the copy (it is how Reminders keeps a done occurrence).
 
 **Area**:
 A part of the owner's life a day spans — Work, a side project, Health, Life —
@@ -1857,9 +1905,7 @@ The day's one optional thing that matters most. It can sit anywhere in the day,
 even late; the owner moves or clears it with one click. Once it is done, the
 Now Card says so: what else fits is "a bonus", and the evening counts it
 ("the must-do among them"). A repeating one is done when that day's
-occurrence is: Reminders keeps the occurrence ticked off as a copy with an
-id of its own and moves the series on, and the day follows the copy, its
-slot and steps with it.
+Occurrence is; its slot and steps stay the series'.
 _Avoid_: focus (the day has several goals, not one focus), priority.
 
 **Nudge**:
@@ -1871,6 +1917,17 @@ its place, its own link or the invite's notes — so ten minutes ahead, or late,
 joining is one click. Reminders with a due time need none: they carry their own
 alarm, delivered by Reminders on every device.
 _Avoid_: wake (retired), alert (unqualified).
+
+**Step**:
+One task's slot in today's plan, and what became of it that day: cued at its
+start, started, checked in at its end, put off, cut short before a meeting. The
+plan holds one step per task. A step moved to a new start is cued anew, as if
+just planned there; one made longer or shorter checks in again at its new end;
+how often it was put off, and the minutes a meeting cut from it, go with it
+wherever it moves that day. A task taken off the plan and put back is a fresh
+step.
+_Avoid_: slot (a step's time alone), placement (a slot a plan or an offer
+proposes), task (the reminder itself).
 
 **Step Cue**:
 A planned step put on the Jarvis Panel when its slot starts and the owner is at

@@ -68,10 +68,7 @@ nonisolated enum NudgePlanner {
         departures: [Departure], events: [AgendaEvent], now: Date, calendar: Calendar = .current
     ) -> [Nudge] {
         departures.compactMap { departure in
-            guard departure.at > now,
-                let event = events.first(where: { $0.id == departure.eventID }),
-                event.start == departure.eventStart
-            else { return nil }
+            guard departure.at > now, let event = departure.event(in: events) else { return nil }
             var body = "It starts at \(AgendaTime.clock(event.start, calendar: calendar))"
             if let place = event.place { body += " · \(place)" }
             let digest = stableHash(

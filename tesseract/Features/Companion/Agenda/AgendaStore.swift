@@ -56,10 +56,13 @@ protocol AgendaStore: AnyObject {
 
 extension AgendaStore {
     /// The reminder with `id` among the open ones, or among those completed in
-    /// the last week (enough for undo and for today's done list).
+    /// the last week, this second included (enough for undo and for today's
+    /// done list).
     func reminder(id: String, now: Date = Date()) async -> AgendaReminder? {
         if let open = await openReminders().first(where: { $0.id == id }) { return open }
-        return await completedReminders(from: now.addingTimeInterval(-7 * 86_400), to: now)
-            .first { $0.id == id }
+        return await completedReminders(
+            from: now.addingTimeInterval(-7 * 86_400), to: now.addingTimeInterval(1)
+        )
+        .first { $0.id == id }
     }
 }

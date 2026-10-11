@@ -290,6 +290,7 @@ struct TodayComposer: View {
 /// few seconds, with its undo). Never a stack of banners.
 private struct ComposerNotice: View {
     @Environment(Agenda.self) private var agenda
+    @Environment(CompanionRuntime.self) private var runtime
     @Environment(CaptureService.self) private var capture
     @Environment(DayThread.self) private var thread
     @Environment(AgentVoiceInputController.self) private var voice
@@ -323,7 +324,9 @@ private struct ComposerNotice: View {
             banner(icon: "exclamationmark.triangle", tint: .red, message: error) {
                 thread.chat.error = nil
             }
-        } else if let change = agenda.lastChange, Date().timeIntervalSince(change.at) < 15 {
+        } else if let change = agenda.lastChange,
+            runtime.now().timeIntervalSince(change.at) < 15
+        {
             banner(
                 icon: "checkmark.circle", tint: .accentColor, message: change.line,
                 actionTitle: "Undo", action: { Task { await capture.undo(change) } }

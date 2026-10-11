@@ -97,7 +97,6 @@ nonisolated enum CardParser {
         }
         guard let line = cleanLine(decoded.line) else { return .invalid("no line") }
         let mustDo = decoded.mustDo.flatMap { facts.task($0) != nil ? $0 : nil }
-        let busy = facts.eventsToday.map { DateInterval(start: $0.start, end: $0.end) }
         var seen = Set<String>()
         let placements: [Placement] = (decoded.plan?.values ?? []).compactMap { entry in
             guard facts.task(entry.id) != nil, !seen.contains(entry.id),
@@ -107,12 +106,8 @@ nonisolated enum CardParser {
             else { return nil }
             let minutes = min(max(entry.minutes ?? 15, 5), 240)
             let slot = DateInterval(start: start.date, duration: TimeInterval(minutes * 60))
-            // Never over an event.
-            guard
-                !busy.contains(where: {
-                    $0.intersects(slot) && $0.end != slot.start && slot.end != $0.start
-                })
-            else { return nil }
+            // Never over an event, a block of the owner's own included.
+            guard facts.isClearOfEvents(slot) else { return nil }
             seen.insert(entry.id)
             return Placement(reminderID: entry.id, start: start.date, minutes: minutes)
         }

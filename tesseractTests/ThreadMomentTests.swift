@@ -33,8 +33,8 @@ struct ThreadMomentTests {
         #expect(kind(of: BreakpointMoment.triageRequest([])) == .moment(.triage))
 
         let away = BreakpointInputs(
-            awayFrom: TimelineBuilderTests.local(30, 13, 20),
-            now: TimelineBuilderTests.local(30, 14, 5), toJudge: [], alreadyWaiting: [],
+            awayFrom: DayFixture.local(30, 13, 20),
+            now: DayFixture.local(30, 14, 5), toJudge: [], alreadyWaiting: [],
             raisedByRule: [], agents: [], dueWhileAway: [], nextEvent: nil, fitsBefore: [],
             whereYouWere: nil)
         let welcome = ThreadMoment.header(BreakpointMoment.request(away))
@@ -158,7 +158,7 @@ struct ThreadMomentTests {
 
     @Test func aBareDayOpeningReadsBackEmpty() {
         let opening = MomentPrompts.dayOpening(
-            facts: DayFacts(now: TimelineBuilderTests.local(30, 7, 30)), profile: [],
+            facts: DayFacts(now: DayFixture.local(30, 7, 30)), profile: [],
             carryOver: nil)
         let digest = DayOpeningDigest(opening)
         #expect(digest.day == "Wednesday 30 September")

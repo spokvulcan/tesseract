@@ -30,23 +30,21 @@ struct TodayView: View {
         var id: String { rawValue }
     }
 
-    /// A fixed clock, for the Today gallery; nil follows the real one.
-    private let fixedNow: Date?
     @State private var mode: Mode
-    @State private var now: Date
+    /// The minute Today shows, read from the runtime's clock on the minute;
+    /// nil until the first read.
+    @State private var now: Date?
     @State private var speakingMessageID: UUID?
 
-    init(fixedNow: Date? = nil, mode: Mode = .day) {
-        self.fixedNow = fixedNow
+    init(mode: Mode = .day) {
         _mode = State(initialValue: mode)
-        _now = State(initialValue: fixedNow ?? Date())
     }
 
     var body: some View {
         Group {
             switch mode {
             case .day:
-                TodayDayPage(now: now)
+                TodayDayPage(now: now ?? runtime.now())
             case .chat:
                 ChatTranscriptView(speakingMessageID: $speakingMessageID, isSpeechActive: false)
                     .environment(thread.chat)
@@ -83,14 +81,14 @@ struct TodayView: View {
         }
         .task {
             runtime.todayOpened()
-            guard fixedNow == nil else { return }
             // Tick on the minute, so the Now line and card read the clock.
             while !Task.isCancelled {
-                let day = DayKey(for: now)
-                now = Date()
+                let shown = now ?? runtime.now()
+                let current = runtime.now()
+                now = current
                 // A new day at 04:00: fetch its tomorrow.
-                if DayKey(for: now) != day { await agenda.refresh() }
-                let intoMinute = now.timeIntervalSinceReferenceDate.truncatingRemainder(
+                if DayKey(for: current) != DayKey(for: shown) { await agenda.refresh() }
+                let intoMinute = current.timeIntervalSinceReferenceDate.truncatingRemainder(
                     dividingBy: 60)
                 try? await Task.sleep(for: .seconds(60 - intoMinute))
             }
@@ -167,7 +165,6 @@ extension Color {
 // MARK: - The day page
 
 private struct TodayDayPage: View {
-    @Environment(Agenda.self) private var agenda
     @Environment(CompanionRuntime.self) private var runtime
     @Environment(SettingsManager.self) private var settings
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -175,38 +172,24 @@ private struct TodayDayPage: View {
     @State private var width = TodayLayout.Width.regular
 
     var body: some View {
-        let state = runtime.state
-        let facts = DayFacts(
-            snapshot: agenda.snapshot, areas: agenda.areas, inboxListID: agenda.inbox?.id,
-            now: now, mustDoID: state.mustDoID, plan: state.plan, weekFocus: state.weekFocus,
-            departures: state.departures)
-        let timeline = TimelineBuilder.build(facts: facts)
-        let isEvening = NowCardBuilder.isEvening(
-            now, eveningMinutes: settings.companionEveningMinutes, calendar: facts.calendar)
-        let card = NowCardBuilder.build(
-            timeline: timeline, facts: facts,
-            context: NowCardBuilder.Context(
-                companionOn: settings.companionHeartbeatEnabled,
-                planned: state.morningPlanAt != nil, wrappedUp: state.eveningWrapUpAt != nil,
-                eveningMinutes: settings.companionEveningMinutes,
-                inboxCount: TodaySideColumn.inbox(agenda: agenda, plan: state.plan).count,
-                startedSteps: state.startedSteps))
-        // The Inbox's offers keep clear of the card's own.
-        let offerFacts = card.reserving(facts)
+        // The day, read once: the Now Card decides on it, the steps draw it,
+        // and the Inbox's offers keep clear of the card's own.
+        let day = runtime.timeline(at: now)
+        let card = NowCardBuilder.build(day, companionOn: settings.companionHeartbeatEnabled)
         let motion: Animation? = reduceMotion ? nil : .smooth(duration: 0.25)
         ScrollView {
             VStack(alignment: .leading, spacing: TodayLayout.rhythm) {
-                TodayHeader(timeline: timeline, now: now, weekFocus: state.weekFocus)
+                TodayHeader(day: day)
                 TodayAccessNotice()
                 if width == .wide {
                     HStack(alignment: .top, spacing: TodayLayout.columnGap) {
-                        day(card: card, facts: facts, timeline: timeline)
-                        TodaySideColumn(facts: offerFacts, isEvening: isEvening)
+                        steps(card: card, day: day)
+                        TodaySideColumn(day: day, card: card)
                             .frame(width: TodayLayout.sideWidth, alignment: .leading)
                     }
                 } else {
-                    day(card: card, facts: facts, timeline: timeline)
-                    TodaySideColumn(facts: offerFacts, isEvening: isEvening)
+                    steps(card: card, day: day)
+                    TodaySideColumn(day: day, card: card)
                         .padding(.top, 8)
                 }
             }
@@ -215,8 +198,8 @@ private struct TodayDayPage: View {
             .frame(maxWidth: TodayLayout.maxWidth, alignment: .leading)
             .frame(maxWidth: .infinity)
             // Steps move when the owner acts, not as the clock ticks.
-            .animation(motion, value: state.plan)
-            .animation(motion, value: timeline.doneCount)
+            .animation(motion, value: day.facts.plan)
+            .animation(motion, value: day.doneCount)
         }
         .onGeometryChange(for: TodayLayout.Width.self) { proxy in
             TodayLayout.Width(proxy.size.width)
@@ -225,10 +208,10 @@ private struct TodayDayPage: View {
         }
     }
 
-    private func day(card: NowCard, facts: DayFacts, timeline: TodayTimeline) -> some View {
+    private func steps(card: NowCard, day: Timeline) -> some View {
         VStack(alignment: .leading, spacing: TodayLayout.rhythm + 4) {
-            NowCardView(card: card, facts: facts)
-            DaySteps(timeline: timeline, style: width == .compact ? .list : .table)
+            NowCardView(card: card, day: day)
+            DaySteps(day: day, style: width == .compact ? .list : .table)
         }
     }
 }
@@ -236,12 +219,10 @@ private struct TodayDayPage: View {
 // MARK: - Header
 
 private struct TodayHeader: View {
-    let timeline: TodayTimeline
-    let now: Date
-    /// The week's one focus, kept in sight all week.
-    let weekFocus: String?
+    let day: Timeline
 
     var body: some View {
+        let now = day.facts.now
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 // The owner's day: until 04:00, the one that is ending.
@@ -250,20 +231,21 @@ private struct TodayHeader: View {
                         .dateTime.weekday(.wide).day().month(.wide))
                 )
                 .fontWeight(.semibold)
-                if let weekFocus {
+                // The week's one focus, kept in sight all week.
+                if let weekFocus = day.facts.weekFocus {
                     Text("· This week: \(weekFocus)")
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
                 Spacer()
-                if timeline.totalCount > 0 {
-                    Text("\(timeline.doneCount) of \(timeline.totalCount) done")
+                if day.totalCount > 0 {
+                    Text("\(day.doneCount) of \(day.totalCount) done")
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
             }
-            if timeline.totalCount > 0 {
-                DayProgress(done: timeline.doneCount, total: timeline.totalCount)
+            if day.totalCount > 0 {
+                DayProgress(done: day.doneCount, total: day.totalCount)
             }
         }
     }

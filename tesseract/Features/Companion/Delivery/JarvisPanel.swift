@@ -55,7 +55,8 @@ final class JarvisPanelController {
     private var panel: GlassPanel?
     private let thread: DayThread
     private let voice: AgentVoiceInputController
-    private let agenda: Agenda
+    private let day: () -> Timeline?
+    private let now: () -> Date
     private let liveCard: (String) -> DayCard?
     private let onAction: (CardAction) -> Void
     private let onExpand: () -> Void
@@ -80,17 +81,23 @@ final class JarvisPanelController {
     /// The row of pictures waiting above the field.
     static let pictureRowHeight: CGFloat = 58
 
-    /// - Parameter liveCard: the card as the day has it now, so items the
-    ///   owner handles leave the panel and a refined card updates in it.
+    /// - Parameters:
+    ///   - day: the day as it stands, read once (`CompanionRuntime.timeline`):
+    ///     a plan's steps are listed from it.
+    ///   - now: the day's clock (the runtime's), which the panel's words are
+    ///     said by.
+    ///   - liveCard: the card as the day has it now, so items the owner
+    ///     handles leave the panel and a refined card updates in it.
     init(
-        thread: DayThread, voice: AgentVoiceInputController, agenda: Agenda,
-        liveCard: @escaping (String) -> DayCard?,
+        thread: DayThread, voice: AgentVoiceInputController, day: @escaping () -> Timeline?,
+        now: @escaping () -> Date, liveCard: @escaping (String) -> DayCard?,
         onAction: @escaping (CardAction) -> Void, onExpand: @escaping () -> Void,
         capture: CaptureService, pictureRemedy: @escaping () -> String? = { nil }
     ) {
         self.thread = thread
         self.voice = voice
-        self.agenda = agenda
+        self.day = day
+        self.now = now
         self.liveCard = liveCard
         self.onAction = onAction
         self.onExpand = onExpand
@@ -99,7 +106,6 @@ final class JarvisPanelController {
     }
 
     var isShowing: Bool { panel?.isVisible == true }
-    var shownCardID: String? { isShowing ? model.card?.id : nil }
 
     /// How long a step marked done is said, with its Undo, before the panel
     /// closes.
@@ -260,7 +266,7 @@ final class JarvisPanelController {
         }
         panel.host(
             JarvisPanelView(
-                model: model, thread: thread, agenda: agenda, liveCard: liveCard,
+                model: model, thread: thread, day: day, liveCard: liveCard,
                 close: { [weak self] in
                     guard let self else { return }
                     // Off the panel, not thrown away: what it holds stays in Today.
@@ -309,7 +315,8 @@ final class JarvisPanelController {
                     // On the next turn: never resize the window inside its own
                     // layout pass.
                     Task { @MainActor [weak self] in self?.fit(content: height) }
-                }),
+                },
+                now: now),
             drop: GlassPanel.Drop(
                 types: PasteboardImageReader.dragTypes + [.fileURL],
                 accepts: PasteboardImageReader.containsImageContent,
@@ -448,7 +455,8 @@ final class JarvisPanelController {
 struct JarvisPanelView: View {
     @Bindable var model: JarvisPanelModel
     let thread: DayThread
-    let agenda: Agenda
+    /// The day as it stands: a plan's steps are listed from it.
+    let day: () -> Timeline?
     let liveCard: (String) -> DayCard?
     let close: () -> Void
     let expand: () -> Void
@@ -470,7 +478,7 @@ struct JarvisPanelView: View {
     var removePicture: (UUID) -> Void = { _ in }
     /// What the panel says was laid out at this height.
     var onContentHeight: (CGFloat) -> Void = { _ in }
-    /// The clock the plan's steps are read against (fixed in the gallery).
+    /// The day's clock (the runtime's; fixed in the gallery).
     var now: () -> Date = Date.init
 
     var body: some View {
@@ -498,7 +506,7 @@ struct JarvisPanelView: View {
                         StepDoneContent(cue: done, now: now(), undo: undoDone, join: join)
                     } else if let shown = model.card {
                         CardContent(
-                            card: liveCard(shown.id) ?? shown, agenda: agenda, now: now(),
+                            card: liveCard(shown.id) ?? shown, day: day(),
                             showQuiet: $model.showQuiet, act: act, keep: keep, expand: expand)
                     }
                     if let asked = model.asked {
@@ -846,8 +854,7 @@ private struct CircleButton: View {
 
 private struct CardContent: View {
     let card: DayCard
-    let agenda: Agenda
-    let now: Date
+    let day: Timeline?
     @Binding var showQuiet: Bool
     let act: (CardAction) -> Void
     let keep: () -> Void
@@ -916,8 +923,7 @@ private struct CardContent: View {
                 }
             case .morningPlan(let plan):
                 MorningPlanContent(
-                    card: card, plan: plan, agenda: agenda, now: now, act: act, keep: keep,
-                    expand: expand)
+                    card: card, plan: plan, day: day, act: act, keep: keep, expand: expand)
             case .eveningWrapUp(let wrapUp):
                 WrapUpContent(card: card, wrapUp: wrapUp, act: act, keep: keep, expand: expand)
             case .reflection:
@@ -936,7 +942,7 @@ private struct CardContent: View {
 }
 
 /// The plan, whole on the panel: Jarvis's line, the steps ahead (the tasks
-/// he placed among the day's events, the must-do starred), his tips, and a
+/// in the day's plan among its events, the must-do starred), his tips, and a
 /// yes — no trip to Today to see it.
 private struct MorningPlanContent: View {
     /// Between the rows of a list on the panel (its sections are 12 apart).
@@ -944,16 +950,16 @@ private struct MorningPlanContent: View {
 
     let card: DayCard
     let plan: MorningPlanCard
-    let agenda: Agenda
-    let now: Date
+    let day: Timeline?
     let act: (CardAction) -> Void
     let keep: () -> Void
     let expand: () -> Void
 
     var body: some View {
-        let steps = PlanStep.ahead(plan: plan, agenda: agenda, now: now)
+        let steps = day.map(PlanStep.ahead(in:)) ?? []
         // Jarvis's own plan, not the card code put up while he thinks.
-        let first = card.isRefining ? nil : PlanStep.startable(steps, now: now)
+        let first =
+            card.isRefining ? nil : day.flatMap { PlanStep.startable(steps, now: $0.facts.now) }
         VStack(alignment: .leading, spacing: 12) {
             Text(card.kind.title).fontWeight(.semibold)
             Text(card.line).fixedSize(horizontal: false, vertical: true)
@@ -1011,8 +1017,8 @@ struct PlanStep: Identifiable, Equatable {
     var title: String
     var minutes: Int
     var kind: Kind
-    /// The reminder of a task the plan placed (nil for an event, or a task
-    /// only due at a time).
+    /// The reminder of a task the plan placed and the owner hasn't started
+    /// (nil for an event, a task only due at a time, or one under way).
     var reminderID: String? = nil
 
     /// The most the panel lists; Today has the rest.
@@ -1028,13 +1034,9 @@ struct PlanStep: Identifiable, Equatable {
     }
 
     /// The day's events and the plan's tasks still ahead, in time order —
-    /// read through the same Timeline as Today.
-    @MainActor
-    static func ahead(plan: MorningPlanCard, agenda: Agenda, now: Date) -> [PlanStep] {
-        let facts = DayFacts(
-            snapshot: agenda.snapshot, areas: agenda.areas, inboxListID: agenda.inbox?.id,
-            now: now, mustDoID: plan.mustDoID, plan: plan.placements)
-        let steps = TimelineBuilder.build(facts: facts).rows.compactMap { row -> PlanStep? in
+    /// the same Timeline as Today's.
+    static func ahead(in day: Timeline) -> [PlanStep] {
+        let steps = day.rows.compactMap { row -> PlanStep? in
             guard !row.isPast else { return nil }
             switch row.kind {
             case .event(let event):
@@ -1042,11 +1044,11 @@ struct PlanStep: Identifiable, Equatable {
                     id: row.id, start: event.start, title: event.title,
                     minutes: Int(event.duration / 60), kind: .event(colorHex: event.colorHex))
             case .task(let task) where !task.isDone:
-                // Only a step the plan placed can be started from it.
+                // Only a step in the plan, not yet started, starts from it.
                 return PlanStep(
                     id: row.id, start: row.start, title: task.reminder.title,
                     minutes: task.minutes, kind: .task(isMustDo: task.isMustDo),
-                    reminderID: task.isPlanned ? task.id : nil)
+                    reminderID: task.isPlanned && !task.isStarted ? task.id : nil)
             default:
                 return nil
             }

@@ -3,14 +3,15 @@
 //  tesseract
 //
 //  The top of Today: where the owner is in the day and the one step that
-//  moves it on. Built by code from the Timeline, so it is there the moment
-//  Today opens and never waits on the model: the meeting they're in, the
-//  task whose slot is now (under way, or one click from starting), a task
-//  that slid and the next free slot for it,
-//  free time and what fits in it, what's next; in the evening, the day
-//  closing (never a slid task at midnight); and once the day is done, how
-//  tomorrow starts. Jarvis proposes; the owner says yes in one click.
-//  Pure: the day's facts in, a card out.
+//  moves it on. A decision table on the Timeline, the day's one read
+//  (ADR-0091), so it is there the moment Today opens and never waits on the
+//  model: the step the day is on (the step the owner started and how much
+//  of it is left, the meeting they're in, a block of their own, a task whose
+//  slot is now and one click from starting), the time to leave, a task that
+//  slid and the next free slot for it, free time and what fits in it,
+//  what's next; in the evening, the day closing (never a slid task at
+//  midnight); and once the day is done, how tomorrow starts. Jarvis
+//  proposes; the owner says yes in one click. Pure: the day in, a card out.
 //
 
 import Foundation
@@ -54,63 +55,35 @@ nonisolated struct NowAction: Sendable, Equatable, Identifiable {
 
 nonisolated enum NowCardBuilder {
 
-    /// What the card needs to know besides the day's facts.
-    struct Context: Sendable, Equatable {
-        var companionOn: Bool
-        /// The Morning Plan ran today.
-        var planned: Bool
-        /// The Evening Wrap-up ran today.
-        var wrappedUp: Bool
-        var eveningMinutes: Int
-        var inboxCount: Int = 0
-        /// The slots the owner started, by `StepCue.key`: one whose time
-        /// is now is under way; one not started is offered to start.
-        var startedSteps: Set<String> = []
-    }
-
     static let maxActions = 3
     /// A call this close is offered to join from the card.
     static let joinLead = 15
 
-    static func build(timeline: TodayTimeline, facts: DayFacts, context: Context) -> NowCard {
-        let evening = isEvening(
-            facts.now, eveningMinutes: context.eveningMinutes, calendar: facts.calendar)
-        var card = focus(
-            timeline: timeline, facts: facts, evening: evening, context: context)
-        if context.companionOn, !context.planned, !evening {
+    /// The card for `day`. With Jarvis on (`companionOn`), a day not yet
+    /// planned is offered a plan, and an evening not yet wrapped up a
+    /// wrap-up.
+    static func build(_ day: Timeline, companionOn: Bool) -> NowCard {
+        var card = focus(day)
+        if companionOn, !day.isPlanned, !day.isEvening {
             card.actions.append(NowAction(kind: .planDay, title: "Plan my day"))
         }
-        if context.companionOn, !context.wrappedUp, evening {
+        if companionOn, !day.isWrappedUp, day.isEvening {
             card.actions.append(NowAction(kind: .wrapUp, title: "Wrap up the day"))
         }
         card.actions = Array(card.actions.prefix(maxActions))
         return card
     }
 
-    /// The Evening Wrap-up's window: from the evening time until 03:00.
-    static func isEvening(_ now: Date, eveningMinutes: Int, calendar: Calendar) -> Bool {
-        let parts = calendar.dateComponents([.hour, .minute], from: now)
-        let minute = (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
-        return minute >= eveningMinutes || minute < 3 * 60
-    }
-
     // MARK: - The focus
 
-    private static func focus(
-        timeline: TodayTimeline, facts: DayFacts, evening: Bool, context: Context
-    ) -> NowCard {
+    private static func focus(_ day: Timeline) -> NowCard {
+        let facts = day.facts
         let now = facts.now
+        let evening = day.isEvening
         func clock(_ date: Date) -> String { AgendaTime.clock(date, calendar: facts.calendar) }
 
         // Events and open tasks still ahead, in time order.
-        let ahead = timeline.rows.filter { row in
-            guard row.start > now else { return false }
-            switch row.kind {
-            case .event: return true
-            case .task(let task): return !task.isDone
-            case .free, .now: return false
-            }
-        }
+        let ahead = day.ahead
         func then(after date: Date) -> String? {
             ahead.first { $0.start >= date }.map { "then \(title(of: $0)) at \(clock($0.start))" }
         }
@@ -122,9 +95,7 @@ nonisolated enum NowCardBuilder {
         // When to leave for an event in person, if the plan set a time.
         func departure(for row: TimelineRow) -> Departure? {
             guard case .event(let event) = row.kind else { return nil }
-            return facts.departures.first {
-                $0.eventID == event.id && $0.eventStart == event.start
-            }
+            return day.departure(for: event)
         }
 
         // A call under way, or about to start, is one click to join.
@@ -133,20 +104,13 @@ nonisolated enum NowCardBuilder {
             return [NowAction(kind: .join(link), title: "Join", help: "Open the call")]
         }
 
-        // In a meeting or a block.
-        for row in timeline.rows {
-            guard case .event(let event) = row.kind, event.start <= now, event.end > now else {
-                continue
-            }
+        // In a meeting or a block, when that is the step the day is on.
+        if let event = day.underWay?.event {
             return NowCard(
                 headline: event.title,
                 detail: joined(left(until: event.end), then(after: event.end)),
                 actions: join(event),
                 span: DateInterval(start: event.start, end: event.end))
-        }
-
-        let timed = timeline.rows.compactMap { row -> TimelineTask? in
-            if case .task(let task) = row.kind, !task.isDone { task } else { nil }
         }
 
         // Time to leave for an event in person: that is the step now, over
@@ -161,13 +125,9 @@ nonisolated enum NowCardBuilder {
         // (its time left drains); else its time, one click from starting —
         // a cue closed, missed or answered by mistake leaves Today the
         // place to start it.
-        if let task = timed.first(where: { task in
-            guard let start = task.start else { return false }
-            return start <= now && end(of: task) > now
-        }) {
+        if let underWay = day.underWay, let task = underWay.task {
             let start = task.start ?? now
-            let slot = Placement(reminderID: task.id, start: start, minutes: task.minutes)
-            guard context.startedSteps.contains(StepCue.key(slot)) else {
+            guard underWay.kind == .started else {
                 return NowCard(
                     headline: task.reminder.title,
                     detail: joined(
@@ -186,14 +146,18 @@ nonisolated enum NowCardBuilder {
                 headline: task.reminder.title,
                 detail: joined(left(until: end(of: task)), then(after: end(of: task))),
                 actions: [NowAction(kind: .complete(reminderID: task.id), title: "Done")],
-                span: DateInterval(start: task.start ?? now, end: end(of: task)),
+                span: DateInterval(start: start, end: end(of: task)),
                 isMustDo: task.isMustDo)
         }
 
-        let openAnytime = timeline.anytime.filter { !$0.isDone }
+        let timed = day.rows.compactMap { row -> TimelineTask? in
+            if case .task(let task) = row.kind, !task.isDone { task } else { nil }
+        }
+
+        let openAnytime = day.anytime.filter { !$0.isDone }
         // The day's one thing that mattered most is done: the rest is a
         // bonus, and the card says so.
-        let mustDoDone = timeline.mustDo?.isDone == true
+        let mustDoDone = day.mustDo?.isDone == true
 
         // The next step. A task can start early; an event in person says
         // when to leave for it.
@@ -238,13 +202,13 @@ nonisolated enum NowCardBuilder {
             if !open.isEmpty {
                 let names = open.prefix(2).map(\.reminder.title).joined(separator: ", ")
                 let more = open.count > 2 ? " and \(open.count - 2) more" : ""
-                let done = timeline.doneCount
+                let done = day.doneCount
                 // Wrapped up, what's open has its place: look ahead instead.
                 let detail =
-                    context.wrappedUp
-                    ? lookAhead(timeline.tomorrow, now: now, clock: clock)
+                    day.isWrappedUp
+                    ? lookAhead(day.tomorrow, now: now, clock: clock)
                     : done > 0 ? "Still open: \(names)\(more)." : "\(names)\(more)."
-                let count = "\(done) of \(timeline.totalCount) done today"
+                let count = "\(done) of \(day.totalCount) done today"
                 return NowCard(
                     headline: done > 0
                         ? (mustDoDone ? "\(count), the must-do among them." : "\(count).")
@@ -265,7 +229,7 @@ nonisolated enum NowCardBuilder {
             let done = NowAction(kind: .complete(reminderID: task.id), title: "Done")
             let tomorrow = NowAction(kind: .tomorrow(reminderID: task.id), title: "Tomorrow")
             var actions = [tomorrow, done]
-            let fitted = slid.count > 1 ? TimelineBuilder.fit(slid, facts: facts) : []
+            let fitted = slid.count > 1 ? day.fit(slid) : []
             if fitted.count > 1 {
                 let all =
                     fitted.count < slid.count
@@ -277,8 +241,7 @@ nonisolated enum NowCardBuilder {
                     .joined(separator: " · ")
                 let fit = NowAction(kind: .placeAll(fitted), title: "Fit \(all) in", help: help)
                 actions = [fit, done, tomorrow]
-            } else if let slot = TimelineBuilder.firstFreeSlot(minutes: task.minutes, facts: facts)
-            {
+            } else if let slot = day.firstFreeSlot(minutes: task.minutes) {
                 let place = NowAction(
                     kind: .place(reminderID: task.id, start: slot, minutes: task.minutes),
                     title: "Do it at \(clock(slot))")
@@ -291,7 +254,7 @@ nonisolated enum NowCardBuilder {
 
         // Free time now: what fits in it. With nothing to fit and nothing
         // after it, the day is done, not free.
-        let freeNow = timeline.rows.contains { row in
+        let freeNow = day.rows.contains { row in
             if case .free = row.kind, row.start <= now { true } else { false }
         }
         let candidate =
@@ -325,7 +288,7 @@ nonisolated enum NowCardBuilder {
                     ], isMustDo: task.isMustDo)
             }
             let next = ahead.first.map { "Then \(title(of: $0))." }
-            let inboxCount = context.inboxCount
+            let inboxCount = day.inbox.count
             let inbox =
                 inboxCount > 0
                 ? " \(inboxCount) Inbox item\(inboxCount == 1 ? "" : "s") could use a time." : ""
@@ -346,7 +309,7 @@ nonisolated enum NowCardBuilder {
                 headline: "\(left.count) left for today", detail: names + more + ".", actions: [])
         }
 
-        let hadADay = timeline.totalCount > 0 || !facts.eventsToday.isEmpty
+        let hadADay = day.totalCount > 0 || !facts.eventsToday.isEmpty
         guard hadADay else {
             return NowCard(
                 headline: "A clear day.",
@@ -354,7 +317,7 @@ nonisolated enum NowCardBuilder {
         }
         return NowCard(
             headline: "All done for today.",
-            detail: lookAhead(timeline.tomorrow, now: now, clock: clock), actions: [])
+            detail: lookAhead(day.tomorrow, now: now, clock: clock), actions: [])
     }
 
     /// How tomorrow begins: its first step, steps below on the Day Line.
@@ -402,46 +365,7 @@ nonisolated enum NowCardBuilder {
     }
 }
 
-// MARK: - Inbox
-
-/// Where an Inbox item goes when the owner takes Jarvis's offer: the next
-/// free slot today, or tomorrow once today has no room left (and always in
-/// the evening).
-nonisolated enum InboxSlot: Sendable, Equatable {
-    case today(Date)
-    case tomorrow
-
-    /// How long an Inbox item gets in the day.
-    static let minutes = 30
-
-    static func suggest(facts: DayFacts, evening: Bool) -> InboxSlot {
-        guard !evening, let start = TimelineBuilder.firstFreeSlot(minutes: minutes, facts: facts)
-        else { return .tomorrow }
-        return .today(start)
-    }
-
-    /// One slot each, in order: every offer keeps clear of the ones before
-    /// it and of what's already planned (the Now Card's own offer included),
-    /// so saying yes to all of them never stacks two things in one slot.
-    static func suggest(for ids: [String], facts: DayFacts, evening: Bool) -> [String: InboxSlot] {
-        var facts = facts
-        var slots: [String: InboxSlot] = [:]
-        for id in ids {
-            let slot = suggest(facts: facts, evening: evening)
-            slots[id] = slot
-            if case .today(let start) = slot {
-                facts.plan.removeAll { $0.reminderID == id }
-                facts.plan.append(Placement(reminderID: id, start: start, minutes: minutes))
-            }
-        }
-        return slots
-    }
-}
-
 nonisolated extension NowCard {
-    /// The slot this card offers in today's plan.
-    var offeredPlacement: Placement? { offeredPlacements.first }
-
     /// Every slot this card offers: one ("Do it at 16:30"), or one per task
     /// that slid ("Fit all 3 in").
     var offeredPlacements: [Placement] {
@@ -453,17 +377,6 @@ nonisolated extension NowCard {
             case .complete, .tomorrow, .planDay, .wrapUp, .join: []
             }
         }
-    }
-
-    /// The day with this card's offer taken (in place of the tasks' old
-    /// slots, as a yes would), so the Inbox's offers keep clear of it.
-    func reserving(_ facts: DayFacts) -> DayFacts {
-        var facts = facts
-        for offered in offeredPlacements {
-            facts.plan.removeAll { $0.reminderID == offered.reminderID }
-            facts.plan.append(offered)
-        }
-        return facts
     }
 }
 

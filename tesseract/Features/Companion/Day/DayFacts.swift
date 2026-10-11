@@ -3,11 +3,13 @@
 //  tesseract
 //
 //  The facts a moment is asked about and its card is checked against: the
-//  events and tasks of the day, as plain values. The same facts write the
-//  request, validate the reply (a card may only name ids it was shown) and
-//  build the fallback card when the model fails. "Today" is the owner's day,
-//  which rolls over at 04:00 (DayKey): after midnight the small hours still
-//  belong to the day that is ending.
+//  events and tasks of the day, as plain values, read once from the
+//  Agenda's snapshot and the Day Engine's state (`init(snapshot:state:)`,
+//  the one projection of the two). The same facts write the request,
+//  validate the reply (a card may only name ids it was shown), build the
+//  fallback card when the model fails, and underlie the Timeline. "Today" is
+//  the owner's day, which rolls over at 04:00 (DayKey): after midnight the
+//  small hours still belong to the day that is ending.
 //
 
 import Foundation
@@ -43,6 +45,10 @@ nonisolated struct DayFacts: Sendable, Equatable {
     var departures: [Departure] = []
     /// How long the owner's started steps took against their plan, lately.
     var stepRuns: [StepRun] = []
+    /// A repeating task the day holds (in its plan, or its must-do), done
+    /// today, by the task's id: the copy Reminders kept of the occurrence,
+    /// which the task's own slot shows (`AgendaSnapshot.doneOccurrence`).
+    var doneOccurrences: [String: AgendaReminder] = [:]
 
     /// Actual over planned minutes across at least five recent steps: how
     /// far the owner's days run past (or short of) their plans.
@@ -74,27 +80,45 @@ nonisolated struct DayFacts: Sendable, Equatable {
         self.weekFocus = weekFocus
     }
 
-    /// Build from the Agenda's snapshot.
-    init(
-        snapshot: AgendaSnapshot, areas: [Area], inboxListID: String?, now: Date,
-        calendar: Calendar = .current, mustDoID: String? = nil, plan: [Placement] = [],
-        weekFocus: String? = nil, departures: [Departure] = []
-    ) {
+    /// The day as the loop gathered it (`snapshot`: the Agenda's snapshot,
+    /// the Areas, the clock) and the engine keeps it (`state`: the must-do,
+    /// the plan, the departures, the week).
+    init(snapshot: DaySnapshot, state: DayState) {
+        let (now, calendar, agenda) = (snapshot.now, snapshot.calendar, snapshot.agenda)
         let startOfToday = Self.startOfDay(for: now, calendar: calendar)
         let endOfToday = calendar.date(byAdding: .day, value: 1, to: startOfToday) ?? now
         let endOfTomorrow = calendar.date(byAdding: .day, value: 1, to: endOfToday) ?? endOfToday
         self.init(
-            now: now, calendar: calendar, events: snapshot.events,
-            dueOrOverdue: snapshot.open.filter { ($0.due ?? .distantFuture) < endOfToday },
-            dueTomorrow: snapshot.open.filter { reminder in
+            now: now, calendar: calendar, events: agenda.events,
+            dueOrOverdue: agenda.open.filter { ($0.due ?? .distantFuture) < endOfToday },
+            dueTomorrow: agenda.open.filter { reminder in
                 guard let due = reminder.due else { return false }
                 return due >= endOfToday && due < endOfTomorrow
             },
-            undated: snapshot.open.filter { $0.due == nil },
-            doneToday: snapshot.doneToday, areas: areas, inboxListID: inboxListID,
-            mustDoID: mustDoID, plan: plan, doneThisWeek: snapshot.doneThisWeek,
-            weekFocus: weekFocus)
-        self.departures = departures
+            undated: agenda.open.filter { $0.due == nil },
+            doneToday: agenda.doneToday, areas: snapshot.areas,
+            inboxListID: snapshot.inboxListID, mustDoID: state.mustDoID,
+            plan: state.plan.map(\.slot), doneThisWeek: agenda.doneThisWeek,
+            weekFocus: state.weekFocus)
+        mustDoDays = state.mustDoDays
+        departures = state.departures
+        stepRuns = state.stepRuns
+        // At the Mac past midnight (until 05:00) on this day's date.
+        if let last = state.lastActiveAt, let midnight = state.day.date(calendar: calendar),
+            last >= midnight, last < midnight.addingTimeInterval(5 * 3600),
+            last <= now, now.timeIntervalSince(last) < 12 * 3600
+        {
+            upLateUntil = last
+        }
+        if state.mustDoID != nil {
+            mustDoDays[state.day.rawValue] = state.mustDoDoneAt != nil
+        }
+        for id in Set(state.plan.map(\.reminderID) + [state.mustDoID].compactMap(\.self)) {
+            guard let done = agenda.doneOccurrence(of: id, on: state.day, calendar: calendar),
+                done.id != id
+            else { continue }
+            doneOccurrences[id] = done
+        }
     }
 
     /// The owner's day is the week's last (the day before the calendar's

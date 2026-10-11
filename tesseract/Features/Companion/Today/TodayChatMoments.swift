@@ -673,13 +673,16 @@ private struct PlanDetails: View {
     let plan: MorningPlanCard
 
     var body: some View {
-        let actions = TodayActions(agenda: agenda, runtime: runtime)
-        let reminders = Dictionary(
-            (agenda.snapshot.open + agenda.snapshot.doneToday).map { ($0.id, $0) },
-            uniquingKeysWith: { first, _ in first })
+        let actions = TodayActions(runtime: runtime)
+        // Each task as today sees it: a repeating one ticked off is today's
+        // occurrence, done, not its series moved on.
+        let today = DayKey(for: runtime.now(), calendar: agenda.calendar)
         VStack(alignment: .leading, spacing: MomentLayout.sectionSpacing) {
             let steps = plan.placements.compactMap { slot in
-                reminders[slot.reminderID].map { PlanEntry(slot: slot, reminder: $0) }
+                agenda.snapshot.occurrence(
+                    of: slot.reminderID, on: today, calendar: agenda.calendar
+                )
+                .map { PlanEntry(slot: slot, reminder: $0) }
             }
             if !steps.isEmpty {
                 MomentSection("The plan") {
@@ -692,7 +695,7 @@ private struct PlanDetails: View {
                                 .foregroundStyle(.secondary)
                                 .frame(width: MomentLayout.clockWidth, alignment: .leading)
                             Button {
-                                actions.setDone(reminder.id, !reminder.isCompleted)
+                                actions.setDone(slot.reminderID, !reminder.isCompleted)
                             } label: {
                                 Image(
                                     systemName: reminder.isCompleted
@@ -958,9 +961,11 @@ private struct LeftoverChoiceRow: View {
             HStack(spacing: 6) {
                 choice("Tomorrow", .tomorrow, cardID)
                 Menu("Another day") {
-                    // From the owner's today: until 04:00, the day that is ending.
+                    // From the owner's today, by the runtime's clock: until
+                    // 04:00, the day that is ending.
+                    let now = runtime.now()
                     let today =
-                        DayKey(for: Date()).date() ?? Calendar.current.startOfDay(for: Date())
+                        DayKey(for: now).date() ?? Calendar.current.startOfDay(for: now)
                     ForEach(2..<8, id: \.self) { offset in
                         let day =
                             Calendar.current.date(byAdding: .day, value: offset, to: today) ?? today

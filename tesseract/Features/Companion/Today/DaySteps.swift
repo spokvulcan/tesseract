@@ -6,8 +6,9 @@
 //  a narrow one shows a list shaped for a phone. One Day Line runs down the
 //  schedule, walked up to the Now line and ahead after it, with each step's
 //  marker on it: a ring to tick for a task, a dot in the calendar's color
-//  for an event, the accent dot for now; the step under way wears the accent
-//  too. The day's Anytime tasks close it; then the line runs on past the day
+//  for an event, the accent dot for now; the step the day is on (the
+//  Timeline's one rule, ADR-0091) wears the accent too, alone. The day's
+//  Anytime tasks close it; then the line runs on past the day
 //  break into tomorrow, so what comes next is always in sight. A link in a
 //  title reads short and opens with a click. Row actions live in context
 //  menus (design-language §2).
@@ -16,13 +17,13 @@
 import SwiftUI
 
 struct DaySteps: View {
-    let timeline: TodayTimeline
+    let day: Timeline
     let style: TodayLayout.StepStyle
 
     var body: some View {
-        let steps = Self.steps(timeline)
+        let steps = Self.steps(day)
         let nowIndex = steps.firstIndex { $0.kind == .now } ?? steps.count
-        let nowStart = timeline.rows.first { $0.kind == .now }?.start
+        let nowStart = day.rows.first { $0.kind == .now }?.start
         // The line runs from the day's first timed step to tomorrow's last.
         let first = steps.firstIndex(where: \.isOnLine)
         let last = steps.lastIndex(where: \.isOnLine)
@@ -41,10 +42,14 @@ struct DaySteps: View {
                     }
                 switch step.kind {
                 case .allDay(let event, _):
-                    EventStep(event: event, isPast: false, isAllDay: true, style: style, line: line)
+                    EventStep(
+                        event: event, isPast: false, isAllDay: true,
+                        leave: day.departure(for: event), style: style, line: line)
                 case .event(let event, let isPast):
+                    // When to leave for it, while it is still ahead.
                     EventStep(
                         event: event, isPast: isPast, isAllDay: false,
+                        leave: isPast ? nil : day.departure(for: event),
                         isUnderWay: step.isUnderWay, style: style, line: line)
                 case .task(let task, let isTomorrow):
                     TaskStep(
@@ -56,7 +61,7 @@ struct DaySteps: View {
                         start: start, minutes: minutes, showsTime: start != nowStart,
                         style: style, line: line)
                 case .now:
-                    NowStep(time: nowStart ?? Date(), style: style, line: line)
+                    NowStep(time: nowStart ?? day.facts.now, style: style, line: line)
                 case .heading(let title):
                     HeadingStep(title: title, line: line)
                 case .dayBreak(let date):
@@ -76,28 +81,28 @@ struct DaySteps: View {
 
     /// The two days as one run of steps: today's all-day events, its
     /// timeline and its Anytime tasks, the day break, then tomorrow the
-    /// same way.
-    static func steps(_ timeline: TodayTimeline) -> [Step] {
-        let now = timeline.rows.first { $0.kind == .now }?.start
-        var steps = timeline.allDayEvents.map {
+    /// same way. The step the day is on is the one under way.
+    static func steps(_ day: Timeline) -> [Step] {
+        var steps = day.allDayEvents.map {
             Step(id: "allday-\($0.id)", kind: .allDay($0, isTomorrow: false))
         }
-        for row in timeline.rows {
-            steps.append(Step(row: row, isTomorrow: false, now: now))
+        for row in day.rows {
+            steps.append(
+                Step(row: row, isTomorrow: false, isUnderWay: row.id == day.underWay?.row.id))
         }
-        if !timeline.anytime.isEmpty {
+        if !day.anytime.isEmpty {
             steps.append(Step(id: "anytime-today", kind: .heading("Anytime today")))
-            steps += timeline.anytime.map {
+            steps += day.anytime.map {
                 Step(id: "task-\($0.id)", kind: .task($0, isTomorrow: false))
             }
         }
-        let tomorrow = timeline.tomorrow
+        let tomorrow = day.tomorrow
         steps.append(Step(id: "day-break", kind: .dayBreak(tomorrow.date)))
         steps += tomorrow.allDayEvents.map {
             Step(id: "tomorrow-allday-\($0.id)", kind: .allDay($0, isTomorrow: true))
         }
         for row in tomorrow.rows {
-            steps.append(Step(row: row, isTomorrow: true, now: now))
+            steps.append(Step(row: row, isTomorrow: true, isUnderWay: false))
         }
         if !tomorrow.anytime.isEmpty {
             steps.append(Step(id: "anytime-tomorrow", kind: .heading("Anytime tomorrow")))
@@ -128,7 +133,7 @@ struct DaySteps: View {
 
         let id: String
         let kind: Kind
-        /// The meeting the owner is in, or the task whose slot is now.
+        /// The step the day is on (`Timeline.underWay`).
         var isUnderWay = false
 
         /// Today's all-day events sit above the line, which starts at the
@@ -145,7 +150,7 @@ struct DaySteps: View {
 }
 
 extension DaySteps.Step {
-    init(row: TimelineRow, isTomorrow: Bool, now: Date?) {
+    init(row: TimelineRow, isTomorrow: Bool, isUnderWay: Bool) {
         let kind: Kind =
             switch row.kind {
             case .event(let event): .event(event, isPast: row.isPast)
@@ -153,19 +158,8 @@ extension DaySteps.Step {
             case .free(let minutes): .free(start: row.start, minutes: minutes)
             case .now: .now
             }
-        // Under way from its start until its end; a done task is not.
-        let underWay: Bool =
-            switch row.kind {
-            case .event, .task:
-                if let now, let end = row.end {
-                    !row.isPast && row.start <= now && end > now
-                } else {
-                    false
-                }
-            case .free, .now: false
-            }
         self.init(
-            id: (isTomorrow ? "tomorrow-" : "") + row.id, kind: kind, isUnderWay: underWay)
+            id: (isTomorrow ? "tomorrow-" : "") + row.id, kind: kind, isUnderWay: isUnderWay)
     }
 }
 
@@ -363,22 +357,15 @@ private struct AreaTag: View {
 // MARK: - Steps
 
 private struct EventStep: View {
-    @Environment(Agenda.self) private var agenda
     @Environment(CompanionRuntime.self) private var runtime
     let event: AgendaEvent
     let isPast: Bool
     let isAllDay: Bool
+    /// When the plan says to leave for it, while it is still ahead.
+    var leave: Departure? = nil
     var isUnderWay = false
     let style: TodayLayout.StepStyle
     let line: DayLine?
-
-    /// When the plan says to leave for it, while it is still ahead.
-    private var leave: Departure? {
-        guard !isPast else { return nil }
-        return runtime.state.departures.first {
-            $0.eventID == event.id && $0.eventStart == event.start
-        }
-    }
 
     var body: some View {
         StepRow(line: line, isUnderWay: isUnderWay) {
@@ -413,7 +400,7 @@ private struct EventStep: View {
             // the Now Card as it starts.
             if let link = event.meetingLink, !isPast {
                 Button("Join Call") {
-                    TodayActions(agenda: agenda, runtime: runtime).perform(.join(link))
+                    TodayActions(runtime: runtime).perform(.join(link))
                 }
             }
         }
@@ -436,7 +423,6 @@ private struct EventStep: View {
 }
 
 private struct TaskStep: View {
-    @Environment(Agenda.self) private var agenda
     @Environment(CompanionRuntime.self) private var runtime
     let task: TimelineTask
     /// Due tomorrow: today's must-do and plan are not its own.
@@ -447,7 +433,7 @@ private struct TaskStep: View {
     let line: DayLine?
 
     var body: some View {
-        let actions = TodayActions(agenda: agenda, runtime: runtime)
+        let actions = TodayActions(runtime: runtime)
         StepRow(line: line, isUnderWay: isUnderWay) {
             Button {
                 actions.setDone(task.id, !task.isDone)
@@ -647,12 +633,11 @@ private struct NowStep: View {
 
 // MARK: - Actions
 
-/// What Today's buttons do to the day: a task ticked off through the Agenda;
-/// the plan, and a task moved to another day, through the runtime (its
-/// clock, and the engine's rules for a repeating reminder).
+/// What Today's buttons do to the day: each is the action a card or a cue
+/// sends, through the runtime — decided by the Day Engine, and made in
+/// Reminders by the Agenda, with its rules for dates and series.
 @MainActor
 struct TodayActions {
-    let agenda: Agenda
     let runtime: CompanionRuntime
 
     func perform(_ kind: NowAction.Kind) {
@@ -668,8 +653,9 @@ struct TodayActions {
         }
     }
 
+    /// Ticked off, or unticked.
     func setDone(_ id: String, _ done: Bool) {
-        Task { _ = try? await agenda.updateReminder(id: id, completed: done, source: "today") }
+        runtime.act(.tick(reminderID: id, done: done))
     }
 
     /// Off today's plan and due on the owner's tomorrow, as a Step Cue's

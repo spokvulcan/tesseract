@@ -150,7 +150,8 @@ tesseract/
 │   ├── Companion/                     # Jarvis: the owner's day (ADR-0080)
 │   │   ├── Agenda/                    # Reminders + Calendar port (EventKit, in-memory), facade, tools, Areas
 │   │   ├── Capture/                   # Capture parser, capture door, hotkey panel
-│   │   ├── Engine/                    # Day Engine (pure decider), Delivery Ladder, governor, nudges
+│   │   ├── Day/                       # The day read once: the Timeline, its facts, meetings, blocks and times to leave, Waiting on You, the Day Key
+│   │   ├── Engine/                    # Day Engine (pure decider), the Step, Delivery Ladder, governor, nudges
 │   │   ├── Moments/                   # Moments, cards, prompts, card parsing, fallbacks
 │   │   ├── Thread/                    # Day Thread: one conversation per day on its own agent; pictures seen in their turn; moments read back
 │   │   ├── Loop/                      # Companion runtime: gather → decide → perform, day state
@@ -678,7 +679,43 @@ Cards reach the owner through the **Delivery Ladder**: the glyph, the **Jarvis
 Panel** (`Platform/GlassPanel.swift`, a borderless non-activating panel over
 `NSGlassEffectView`), a banner, or voice. The day's plan keeps its own time:
 when a planned slot starts and the owner is at the Mac, the engine puts it on
-the panel as a **Step Cue** (`DayEngine+Steps`), built by code. The system prompt carries no time;
+the panel as a **Step Cue** (`DayEngine+Steps`), built by code. The plan is a
+list of **Steps** (`Step`, ADR-0091): a task's slot and its life that day —
+cued, started, checked in, put off, cut short — each part bound to the
+step's start, its end or its task, so moving a step is one operation that
+keeps what goes with it.
+
+The day is read once (ADR-0091): `Timeline(snapshot:state:)`
+(`Features/Companion/Day/`) projects the Agenda's snapshot and the day's
+state into `DayFacts` — what a moment is asked about — and the Timeline —
+the Day Line's rows, free time, tomorrow — and answers what every surface
+asks: the **Step under way** (one rule, `UnderWay`), the next step, when to
+leave for an event, the Inbox's offers, Waiting on You, the menu bar's
+clock. Today draws it (`CompanionRuntime.timeline(at:)`, one call), the Now
+Card is a decision table on it (`NowCardBuilder`), the Jarvis Panel lists a
+plan's steps from it, and the engine reads its focus, next step and tomorrow
+from it. How time is taken is said once (`DayFacts+Time`): an event is a
+meeting (other people, or a place) or a block of the owner's own, and a
+time to leave stands while its event does; the Day Line's free time, a
+step's boundaries and a plan's placements are each a named composition of
+that.
+
+Every owner action — a card's, a cue's, a button on Today — comes in
+through `CompanionRuntime.act` and is decided by the engine; what it changes
+in Reminders the Agenda makes (`Agenda.apply`,
+`Features/Companion/Agenda/Agenda+Changes.swift`), with Reminders' rules for
+dates and series in that one place, and the runtime only performs. The day
+holds a repeating task by its series, and the Agenda answers for that day's
+**Occurrence** (ADR-0092, `Features/Companion/Agenda/Agenda+Occurrences.swift`):
+open, or done, the copy Reminders kept, matched to its series by one rule;
+taken back, the copy goes and the series is back on its date. The in-memory
+store does what the Mac's stores do where the day can tell: a done copy and
+the series moved on, an event's id naming its start. Views read the time
+from the runtime's clock. The Jarvis Panel
+keeps what it shows (a card by id, read live from the day's state; a cue; the
+Done it says; a Break Cue); the engine keeps which cue it put there
+(`cueOnPanel`, `breakCuedAt`), so one taken down unanswered — under a card,
+by a quit, with the Companion off — is cued again. The system prompt carries no time;
 every user message carries a stored **Now Tag**. Other apps' banners are sorted
 by code on arrival (`NotificationSources`: a person, an app's news, or noise —
 the system's banners and games, recognised by `AppIdentityResolver`), so only
