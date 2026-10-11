@@ -349,10 +349,10 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # Dictation and Learned Words (ADR-0085/0086/0096; quit the app first, its capture
 # engine starves test hosts): Voice Capture and its sessions (Learned Words after the
 # regex cleanup, the silent-capture skip, every stage on every surface, the Live
-# Preview and the take reading the same, "insert anyway" committing like any take,
-# one open take across surfaces, a cancel never cutting off another surface's
-# transcription; Voice Input's spoken words joining typed ones), the
-# regex cleanup, the
+# Preview and the take reading the same, "insert anyway" committing like any take
+# and keeping the take's own app, one open take across surfaces, a cancel never
+# cutting off another surface's transcription; Voice Input's spoken words joining
+# typed ones), the regex cleanup, the
 # Correction Pair store and the gold mark a fix gives, the sounds-alike key, take
 # tokens, matching and the Learned Word store (exceptions per app, ordinary words
 # not learned, Forget and Undo), the fix (target by sound on real mishearings,

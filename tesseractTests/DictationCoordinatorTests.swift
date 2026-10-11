@@ -1125,4 +1125,56 @@ struct DictationCoordinatorTests {
         #expect(store.entries.first?.catches.first?.tokenStart == 2)
     }
 
+    /// The app in front, as a test moves it.
+    @MainActor
+    final class FrontmostApp {
+        var app: TargetApp?
+    }
+
+    /// "Insert anyway" keeps the rejected take's own app, the one in front
+    /// when that take started, even after another take began in another app;
+    /// it pastes into the app in front now. (Before the session owned it, the
+    /// history kept whichever app the session's latest take started in.)
+    @Test
+    func insertingARejectedTakeAnywayKeepsTheTakesOwnApp() async throws {
+        let bundle = try makeFakeModelBundle()
+        defer { try? FileManager.default.removeItem(at: bundle) }
+        let recognizer = InMemorySpeechRecognizer(
+            result: TranscriptionResult(
+                text: "hello world", segments: [], language: "en", processingTime: 0))
+        let engine = try await makeEngine(recognizer: recognizer, bundle: bundle)
+        let notes = TargetApp(bundleID: "com.apple.Notes", name: "Notes", pid: 1)
+        let terminal = TargetApp(bundleID: "com.apple.Terminal", name: "Terminal", pid: 2)
+        let front = FrontmostApp()
+        front.app = notes
+        let feed = DictationFeed()
+        let store = FakeTranscriptionStore()
+        let coordinator = makeCoordinator(
+            audioCapture: FakeAudioCapture(
+                cannedAudio: AudioData(samples: [0.1, 0.2], sampleRate: 16_000, duration: 2.0)),
+            transcriptionEngine: engine, textInjector: FakeTextInjector(), history: store,
+            settings: SettingsManager(store: InMemorySettingsStore()), feed: feed,
+            proofreadPass: makeProofreadPass(replying: { _ in "REJECT: mumbling" }),
+            frontmostApp: { front.app })
+        var delivered: [DictatedTake] = []
+        coordinator.onTakeCommitted = { delivered.append($0) }
+
+        coordinator.onHotkeyDown()
+        coordinator.onHotkeyUp()
+        try await waitUntil { feed.beat != nil }
+        // Another take starts in Terminal, and is let go.
+        front.app = terminal
+        coordinator.onHotkeyDown()
+        coordinator.cancel()
+
+        coordinator.insertRawAnyway()
+        try await waitUntil { !delivered.isEmpty }
+
+        #expect(
+            store.entries.first?.app
+                == TranscriptionEntry.App(bundleID: "com.apple.Notes", name: "Notes"))
+        #expect(delivered.first?.app == notes)
+        #expect(delivered.first?.pastedInto == terminal)
+    }
+
 }

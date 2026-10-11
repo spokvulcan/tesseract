@@ -97,10 +97,15 @@ when one left a stage out.
   surface, as it always was for dictation (a Voice Input's pass read
   "Transcribing" there).
 - "Insert anyway" commits like any take: its history entry keeps the take's
-  length (it kept 0 s) and the take's own app.
-- Spoken words join the agent composer's text the way they join every other
-  field's: after the typed words with their trailing spaces and newlines
-  trimmed (`AgentVoiceInputControllerTests`).
+  length (it kept 0 s) and the take's own app, the one in front when that
+  take started (it kept the app the session's latest take started in, so a
+  take begun and let go after the rejection moved it). Both pinned in
+  `DictationCoordinatorTests`.
+- Spoken words join every field's text one way: after the typed words with
+  their leading and trailing spaces and newlines trimmed, one space between
+  (`AgentVoiceInputControllerTests`). For the agent composer both trims are
+  new (it appended to the typed text as it stood); the other fields trimmed
+  already.
 - A preview decode's span is no longer recorded in `DictationPerf`; it was
   cleared at every release, so the log line is unchanged.
 - A test builds the module over peers (`tesseractTests/VoiceCapturePeers.swift`)

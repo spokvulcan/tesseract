@@ -149,5 +149,7 @@ the composition root.
 Behaviour changes: Offload frees the recall embedder, and frees the
 proofreader without waiting for the language model's generation; the Offload
 item is enabled while any model it can free is loaded, the proofreader or the
-embedder alone included. Tests: `ModelResidencyTests` (replacing
-`LoadedModelsTests`).
+embedder alone included. Two log lines changed: "InferenceArbiter: unloaded TTS"
+is gone (the voice's holder frees it), and "InferenceArbiter.offloadAllModels:
+the LLM gate failed" is now "InferenceArbiter.offloadLLM: the LLM gate failed".
+Tests: `ModelResidencyTests` (replacing `LoadedModelsTests`).

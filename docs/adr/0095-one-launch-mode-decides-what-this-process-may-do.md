@@ -112,7 +112,11 @@ decides first and a harness keeps the owner's data as the owner's launch does.
     Welcome window;
   - a harness no longer runs the Companion's retired-data clean at launch
     (only tests skipped it). A scratch launch skips it too, which changes
-    nothing: its storage starts empty.
+    nothing: its storage starts empty;
+  - a test host or a scratch launch whose arguments carry a harness flag no
+    longer runs that harness: the environment decides first
+    (`theEnvironmentDecidesBeforeTheArguments`). Before, the dispatch chain
+    read only the arguments.
 - A scratch launch no longer marks onboarding done in its in-memory settings
   to keep the Welcome window shut; the Launch Mode opens the main window for
   it.
