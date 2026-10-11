@@ -4,6 +4,9 @@
 - Date: 2026-10-03
 - Amends: ADR-0085 (the Lens is the one dictation overlay, not only the card
   where a take is fixed; it also takes the keyboard while a held take waits)
+- Amended by: ADR-0096 (2026-10-11: the preview pump and the take's text
+  pipeline live in the Voice Capture Session; "Insert anyway" is the
+  session's)
 - Relates to: #612 (the Catch PRD, slice 2), #291 (the Live Partial signal the
   Live Preview succeeds), #283 (the dictation overlay redesign map, whose
   Overlay Variant registry this deletes), ADR-0081 (models share memory, not
@@ -226,3 +229,18 @@ Where two systems disagree, Parakeet TDT 0.6B v2 decides which is right.
   the caller's cancel frees the lane), `SettingsCatalogueTests` and
   `SettingsManagerTests`. `AppBindingsTests` and `OverlayPlacementTests` lose
   the deleted rules and the pill.
+
+## Amendment (2026-10-11): the preview and the paste read through one pipeline
+
+Decisions 1–3 hold; where they are built moved (ADR-0096). The Live Preview
+pump left `DictationCoordinator` for the **Voice Capture Session**:
+`start(preview:)` decodes the take while it is recorded, and `stop()` and
+`cancel()` end the pump and clear the preview. The preview and the final pass
+read the heard text through the session's one pipeline (the regex cleanup,
+then the Learned Words for the take's app), so decision 3 has one home, and
+`VoiceCaptureSessionTests` checks that the same take reads the same in both.
+A stale decode is dropped by the session's own Operation Guard and phase.
+"Insert anyway" on a rejected take is the session's `commitRejectedTake`,
+through dictation's own commit, so the take is committed like any other (its
+history entry keeps its length). ⇧ on the dictation hotkey's registration is a
+row of the **Hotkey Table** (`tesseract/App/HotkeyTable.swift`).

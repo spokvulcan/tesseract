@@ -7,7 +7,8 @@
 - Amended by: ADR-0086 (2026-10-03: the Lens is the one dictation overlay and
   streams the take while it is recorded, so the recording overlay is no longer
   the Overlay Variant (decision 6); it also takes the keyboard while a held
-  take waits)
+  take waits); ADR-0096 (2026-10-11: every caller gains the Learned Words by
+  construction — one Voice Capture module builds every surface's session)
 - Relates to: #612 (the Catch PRD, slice 1), #289 (the Correction Pair
   flywheel), #283 (the dictation overlay redesign map), ADR-0081 (dictation
   never waits for the LLM; Learned Words need no model at all), ADR-0073 (the
@@ -239,3 +240,14 @@ new spellings), every fix that reached the gates was learned, and the final
 The auto target picked the misheard words on 40 of 46 fixes; the misses were
 article-merged forms ("APR" for "the PR") and a span the owner widens by hand
 (⇧← ⇧→).
+
+## Amendment (2026-10-11): every caller gains them by construction
+
+Decision 2 promised the Learned Words to every caller, but the session took
+them as an optional dependency, and the Onboarding Tour's Voice Input was
+built without them (and without the Capture Dump and the Proofread Pass).
+Since ADR-0096 every surface takes its session from **Voice Capture**, which
+is built once with every stage required, so no caller can leave one out. The
+Learned Words still apply after the regex cleanup and before the Proofread
+Pass, inside the session; the catches a commit receives already stand where
+they land in the committed text.

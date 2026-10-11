@@ -100,22 +100,14 @@ nonisolated enum PrefixCacheDiagnostics {
         /// the pinned divergence-free wire lines stay byte-stable.
         let divergence: PrefixDivergenceProbe?
 
-        let restoreMode: String?
-        /// The turn planned a restore, got no cache from it and ran cold
-        /// (ADR-0069 amendment). Rendered as `restoreFallback=cold` beside
-        /// `restoreMode` only on such a turn, so every other lookup line
-        /// stays byte-stable.
-        let restoreFellBack: Bool
-        let copyReason: LeafStorePhase.Report.CopyReason?
-        /// The precise rung that refused the leaf (`CacheClaim.CopyRefusal`),
-        /// rendered beside `copyReason` only on a copy restore, so every
-        /// other lookup line stays byte-stable.
-        let copyRefusal: CacheClaim.CopyRefusal?
-        /// Seconds the restore waited for a pending full payload to stop
-        /// aliasing the leaf's body before it settled (#523). Rendered
-        /// beside `copyReason` only when a wait actually happened, so the
-        /// pinned wire lines of every other restore stay byte-stable.
-        let copyWaitSeconds: TimeInterval
+        /// The turn's **Turn Restore**, which renders `restoreMode`; on a
+        /// turn that fell back cold `restoreFallback=cold` (ADR-0069
+        /// amendment); on a copy restore the claim's `copyReason` and the
+        /// precise rung that refused the leaf (`copyRefusal`); and
+        /// `copyWaitMs` only when a Pending-Payload Wait happened (#523) —
+        /// each only where it applies, so every other lookup line stays
+        /// byte-stable.
+        let restore: TurnRestore?
         let backingLeafOffset: Int?
         let warmBody: Bool
         let backingLeafWarm: Bool
@@ -132,10 +124,7 @@ nonisolated enum PrefixCacheDiagnostics {
             hydratedFromSSD: Bool = false,
             chainPrefixRestore: Bool = false,
             divergence: PrefixDivergenceProbe? = nil,
-            restoreMode: String? = nil, restoreFellBack: Bool = false,
-            copyReason: LeafStorePhase.Report.CopyReason? = nil,
-            copyRefusal: CacheClaim.CopyRefusal? = nil,
-            copyWaitSeconds: TimeInterval = 0,
+            restore: TurnRestore? = nil,
             backingLeafOffset: Int? = nil,
             warmBody: Bool = false,
             backingLeafWarm: Bool = false
@@ -173,11 +162,7 @@ nonisolated enum PrefixCacheDiagnostics {
             self.hydratedFromSSD = hydratedFromSSD
             self.chainPrefixRestore = chainPrefixRestore
             self.divergence = divergence
-            self.restoreMode = restoreMode
-            self.restoreFellBack = restoreFellBack
-            self.copyReason = copyReason
-            self.copyRefusal = copyRefusal
-            self.copyWaitSeconds = copyWaitSeconds
+            self.restore = restore
             self.backingLeafOffset = backingLeafOffset
             self.warmBody = warmBody
             self.backingLeafWarm = backingLeafWarm
@@ -201,18 +186,19 @@ nonisolated enum PrefixCacheDiagnostics {
                 ("chainPrefixRestore", chainPrefixRestore ? "true" : "false"),
             ]
             if warmBody { fields.append(("source", "warm")) }
-            if let restoreMode { fields.append(("restoreMode", restoreMode)) }
-            if restoreFellBack { fields.append(("restoreFallback", "cold")) }
+            if let restore { fields.append(("restoreMode", restore.mode)) }
+            if restore?.fellBack == true { fields.append(("restoreFallback", "cold")) }
             if let backingLeafOffset {
                 fields.append(("source", "view"))
                 fields.append(("backingLeafOffset", "\(backingLeafOffset)"))
                 fields.append(("backingLeafForm", backingLeafWarm ? "warm" : "ownedBody"))
             }
-            if let copyReason { fields.append(("copyReason", copyReason.rawValue)) }
-            if let copyRefusal { fields.append(("copyRefusal", copyRefusal.rawValue)) }
-            if copyWaitSeconds > 0 {
-                fields.append(
-                    ("copyWaitMs", PrefixCacheDiagnostics.milliseconds(copyWaitSeconds)))
+            if let copy = restore?.copy {
+                fields.append(("copyReason", copy.reason.rawValue))
+                fields.append(("copyRefusal", copy.refusal.rawValue))
+            }
+            if let wait = restore?.waitSeconds, wait > 0 {
+                fields.append(("copyWaitMs", PrefixCacheDiagnostics.milliseconds(wait)))
             }
             if let divergence {
                 fields.append(("divergenceOffset", "\(divergence.offset)"))

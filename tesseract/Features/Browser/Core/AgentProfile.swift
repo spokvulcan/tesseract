@@ -34,12 +34,12 @@ final class AgentProfile {
         self.dataStore = dataStore
     }
 
-    /// Production profile: the persistent, stable-identity store. Under a test
-    /// runner or in a scratch launch it is non-persistent, so neither reaches
-    /// the owner's logins (ADR-0073).
+    /// Production profile: the persistent, stable-identity store. Where the
+    /// Launch Mode keeps off the owner's data (a test host, a scratch launch)
+    /// it is non-persistent, so neither reaches the owner's logins (ADR-0073).
     convenience init() {
         self.init(
-            dataStore: ProcessEnvironment.usesScratchData
+            dataStore: LaunchMode.current.keepsOffOwnersData
                 ? .nonPersistent()
                 : WKWebsiteDataStore(forIdentifier: Self.dataStoreIdentifier))
     }

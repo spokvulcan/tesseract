@@ -39,7 +39,6 @@ struct AgentComposerView: View {
     @EnvironmentObject private var permissions: PermissionsManager
     @EnvironmentObject private var downloadManager: ModelDownloadManager
 
-    @State private var isHoldingMic = false
     @State private var textHeight: CGFloat = 20
 
     /// Whether controls that depend on a loaded model should be disabled —
@@ -251,11 +250,8 @@ struct AgentComposerView: View {
         .onAppear {
             voiceInput.onVoiceTranscription = { [weak composerDraft = composerDraft] text in
                 guard let composerDraft else { return }
-                if composerDraft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    composerDraft.text = text
-                } else {
-                    composerDraft.text += " " + text
-                }
+                composerDraft.text = AgentVoiceInputController.joining(
+                    text, to: composerDraft.text)
             }
         }
     }
@@ -498,20 +494,7 @@ struct AgentComposerView: View {
             .font(actionIconFont)
             .frame(width: actionIconFrame, height: actionIconFrame)
             .contentShape(Circle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in
-                        guard !isHoldingMic else { return }
-                        isHoldingMic = true
-                        voiceInput.start()
-                    }
-                    .onEnded { _ in
-                        isHoldingMic = false
-                        if voiceInput.voiceState == .recording {
-                            voiceInput.finishCapture()
-                        }
-                    }
-            )
+            .holdToTalk(voiceInput)
             .disabled(!canUseVoice)
             .help(voiceButtonHelp)
     }
@@ -541,8 +524,7 @@ struct AgentComposerView: View {
     // MARK: - Computed State
 
     private var selectedModelDisplayName: String {
-        ModelDefinition.all.first { $0.id == settings.selectedAgentModelID }?.displayName
-            ?? settings.selectedAgentModelID
+        ModelDefinition.displayName(of: settings.selectedAgentModelID)
     }
 
     private var isWhisperAvailable: Bool {
@@ -672,8 +654,7 @@ private struct ModelButtonView: View {
     }
 
     private var selectedDisplayName: String {
-        ModelDefinition.all.first { $0.id == settings.selectedAgentModelID }?.displayName
-            ?? settings.selectedAgentModelID
+        ModelDefinition.displayName(of: settings.selectedAgentModelID)
     }
 
     private var loadStateHelp: String {

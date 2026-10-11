@@ -5,8 +5,10 @@
 //  A hermetic Agenda: dictionaries, not a mock, and a peer implementation of
 //  the EventKit store. The test host's container uses it (ADR-0073), so a
 //  test run never asks for or touches the owner's Reminders or Calendar; the
-//  tests seed it with fixture days. A repeating reminder ticked off works as
-//  in Reminders: a done copy with an id of its own, the series moved on.
+//  tests seed it with fixture days. It behaves as Reminders and Calendar do
+//  where the day can tell (ADR-0092): a repeating reminder ticked off is a
+//  done copy with an id of its own and the series moved on, and an event's
+//  id names its start, so one moved is known by a new id.
 //
 
 import Foundation
@@ -162,10 +164,11 @@ final class InMemoryAgendaStore: AgendaStore {
         }
         let calendar = try calendar(for: draft.calendarID)
         let event = AgendaEvent(
-            id: "E\(events.count + 1)-\(UUID().uuidString.prefix(4))", title: draft.title,
-            start: draft.start, end: draft.end, isAllDay: draft.isAllDay, calendarID: calendar.id,
-            calendarTitle: calendar.title, colorHex: calendar.colorHex, location: draft.location,
-            notes: draft.notes)
+            id: Self.occurrenceID(
+                "E\(events.count + 1)-\(UUID().uuidString.prefix(4))", draft.start),
+            title: draft.title, start: draft.start, end: draft.end, isAllDay: draft.isAllDay,
+            calendarID: calendar.id, calendarTitle: calendar.title, colorHex: calendar.colorHex,
+            location: draft.location, notes: draft.notes)
         events[event.id] = event
         record("addEvent \(event.title)")
         return event
@@ -173,17 +176,33 @@ final class InMemoryAgendaStore: AgendaStore {
 
     func updateEvent(id: String, _ change: EventChange) throws -> AgendaEvent {
         guard access.canUseCalendar else { throw AgendaError.noAccess("Calendar") }
-        guard var event = events[id] else { throw AgendaError.notFound("event \(id)") }
-        guard event.isEditable else { throw AgendaError.readOnly("“\(event.title)”") }
-        if let title = change.title { event.title = title }
-        if let start = change.start { event.start = start }
-        if let end = change.end { event.end = end }
+        guard let before = events[id] else { throw AgendaError.notFound("event \(id)") }
+        guard before.isEditable else { throw AgendaError.readOnly("“\(before.title)”") }
+        let start = change.start ?? before.start
+        // An occurrence's id names its start, as EventKit's does: one moved
+        // to another time is known by a new id.
+        let movedID =
+            start == before.start
+            ? id : Self.occurrenceID(String(id.prefix { $0 != "|" }), start)
+        let event = AgendaEvent(
+            id: movedID, title: change.title ?? before.title, start: start,
+            end: change.end ?? before.end, isAllDay: before.isAllDay,
+            calendarID: before.calendarID, calendarTitle: before.calendarTitle,
+            colorHex: before.colorHex, location: before.location, notes: before.notes,
+            hasOtherAttendees: before.hasOtherAttendees, isEditable: before.isEditable,
+            url: before.url)
         guard event.end > event.start else {
             throw AgendaError.invalid("An event must end after it starts.")
         }
-        events[id] = event
+        events[id] = nil
+        events[event.id] = event
         record("updateEvent \(event.title)")
         return event
+    }
+
+    /// `identifier|start`, an occurrence's id as the EventKit store makes it.
+    private static func occurrenceID(_ identifier: String, _ start: Date) -> String {
+        "\(identifier)|\(Int(start.timeIntervalSince1970))"
     }
 
     func deleteEvent(id: String) throws {

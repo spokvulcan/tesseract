@@ -13,18 +13,11 @@ import os
 @MainActor
 final class DependencyContainer: ObservableObject {
     // Core Services
-    /// Under a test runner, or in a scratch launch, the settings live in
-    /// memory, so neither reads or changes the owner's (ADR-0073).
-    let settingsManager: SettingsManager = {
-        guard ProcessEnvironment.usesScratchData else {
-            return SettingsManager(store: UserDefaultsSettingsStore())
-        }
-        let settings = SettingsManager(store: InMemorySettingsStore())
-        // A scratch launch opens the main window, not the first-launch tour,
-        // which would start model downloads.
-        if ProcessEnvironment.isScratchLaunch { settings.hasCompletedOnboarding = true }
-        return settings
-    }()
+    /// Where the Launch Mode keeps off the owner's data (a test host, a
+    /// scratch launch), the settings live in memory (ADR-0073).
+    let settingsManager = SettingsManager(
+        store: LaunchMode.current.keepsOffOwnersData
+            ? InMemorySettingsStore() : UserDefaultsSettingsStore())
     lazy var permissionsManager = PermissionsManager()
     lazy var audioDeviceManager = AudioDeviceManager()
 
@@ -79,9 +72,7 @@ final class DependencyContainer: ObservableObject {
             isEnabled: { settings.proofreadDictation },
             isLLMBusy: { arbiter.isLLMBusy },
             modelDirectory: {
-                downloads.isDownloaded(ModelDefinition.defaultProofreadModelID)
-                    ? downloads.modelPath(for: ModelDefinition.defaultProofreadModelID)
-                    : nil
+                downloads.usableDirectory(for: ModelDefinition.defaultProofreadModelID)
             },
             loadModel: { try await model.load(from: $0) },
             runModel: { try await model.run(system: $0, text: $1) },
@@ -89,24 +80,23 @@ final class DependencyContainer: ObservableObject {
         )
     }
 
-    /// Every push-to-talk made so far, one per surface: the Models section's
-    /// Dictation row reads their takes from here, so a surface built with
-    /// `makeVoiceInput()` is never left out of it.
-    private(set) var voiceInputs: [AgentVoiceInputController] = []
+    /// **Voice Capture** (ADR-0096): every push-to-talk surface's takes, with
+    /// every stage — the shared mic and Whisper, the Capture Dump, the
+    /// Learned Words, the Proofread Pass and the dictation language — and
+    /// whether any take is open, for the Models section.
+    lazy var voiceCapture: VoiceCapture = makeVoiceCapture()
 
-    /// A surface's own push-to-talk on the shared mic, Whisper and Proofread
-    /// Pass, registered in `voiceInputs`.
-    private func makeVoiceInput() -> AgentVoiceInputController {
-        let voiceInput = AgentVoiceInputController(
-            audioCapture: audioCaptureEngine,
-            transcriptionEngine: transcriptionEngine,
-            settings: settingsManager,
-            proofreadPass: proofreadPass,
+    private func makeVoiceCapture() -> VoiceCapture {
+        let settings = settingsManager
+        let pass = proofreadPass
+        return VoiceCapture(
+            microphone: audioCaptureEngine,
+            recognizer: transcriptionEngine,
             captureDump: captureDumpStore,
-            learnedWords: learnedWordStore
-        )
-        voiceInputs.append(voiceInput)
-        return voiceInput
+            isCaptureDumpEnabled: { settings.captureDumpEnabled },
+            learnedWords: learnedWordStore,
+            proofread: { await pass.proofread($0) },
+            language: { settings.language })
     }
 
     /// The only thing in the app that watches for the *absence* of a person:
@@ -161,7 +151,7 @@ final class DependencyContainer: ObservableObject {
         registry.appendBuiltInTool(createNotificationRuleTool(store: triageRuleStore))
         // Memory the owner controls: remember, forget, recall — pull only.
         for tool in createProfileTools(
-            profile: profileStore, index: recallIndex, embed: recallEmbedding)
+            profile: profileStore, index: recallIndex, embed: recallEmbedder.recallEmbedding)
         {
             registry.appendBuiltInTool(tool)
         }
@@ -171,11 +161,11 @@ final class DependencyContainer: ObservableObject {
     // MARK: - The Companion's day
 
     /// Apple Reminders and Calendar, the single source of truth for the
-    /// owner's tasks and plans. The test host and a scratch launch get the
-    /// in-memory store, so neither asks for or touches the owner's real data
-    /// (ADR-0073).
+    /// owner's tasks and plans. Where the Launch Mode keeps off the owner's
+    /// data (a test host, a scratch launch), the in-memory store, so neither
+    /// asks for or touches the owner's real data (ADR-0073).
     lazy var agendaStore: any AgendaStore =
-        ProcessEnvironment.usesScratchData ? InMemoryAgendaStore() : EventKitAgendaStore()
+        LaunchMode.current.keepsOffOwnersData ? InMemoryAgendaStore() : EventKitAgendaStore()
     lazy var agenda = Agenda(
         store: agendaStore,
         areaMapJSON: { [settingsManager] in settingsManager.companionAreasJSON },
@@ -183,11 +173,11 @@ final class DependencyContainer: ObservableObject {
         trace: companionTrace)
     lazy var captureService = CaptureService(agenda: agenda)
     /// The capture panel's own push-to-talk, separate from the composer's.
-    lazy var captureVoiceInput = makeVoiceInput()
+    lazy var captureVoiceInput = AgentVoiceInputController(session: voiceCapture.makeSession())
     lazy var capturePanel = CapturePanelController(
         capture: captureService, voice: captureVoiceInput)
     lazy var companionNotifier: CompanionNotifier = {
-        let notifier = CompanionNotifier(usesOS: !ProcessEnvironment.usesScratchData)
+        let notifier = CompanionNotifier(usesOS: LaunchMode.current.postsNotifications)
         notifier.onOpen = { (NSApp.delegate as? AppDelegate)?.navigateToToday() }
         return notifier
     }()
@@ -240,7 +230,7 @@ final class DependencyContainer: ObservableObject {
     lazy var triageRuleStore = TriageRuleStore(settings: settingsManager)
     /// The owner's Profile: facts they approved, and Jarvis's proposals.
     lazy var profileStore = ProfileStore(
-        url: ProcessEnvironment.usesScratchData ? nil : ProfileStore.productionURL,
+        url: LaunchMode.current.keepsOffOwnersData ? nil : ProfileStore.productionURL,
         trace: companionTrace)
     /// Full-text search over saved conversations, for `recall`.
     lazy var recallIndex = RecallIndex(
@@ -250,33 +240,22 @@ final class DependencyContainer: ObservableObject {
             .appendingPathComponent("Tesseract Agent/companion/recall.sqlite"))
     /// The embedder that reranks recall by meaning, loaded on first use when
     /// its model is downloaded.
-    lazy var memoryEmbedder = MemoryEmbedder()
-    /// Whether the recall embedder holds its model, for the Models page.
-    @Published private(set) var isEmbedderLoaded = false
-    private var recallEmbedding: RecallEmbedding {
-        let embedder = memoryEmbedder
-        let downloads = modelDownloadManager
-        let id = ModelDefinition.defaultEmbeddingModelID
-        return { [weak self] texts in
-            let directory: URL? = await MainActor.run {
-                downloads.isDownloaded(id) ? downloads.modelPath(for: id) : nil
-            }
-            guard let directory else { return nil }
-            do { try await embedder.load(from: directory) } catch { return nil }
-            await MainActor.run { self?.isEmbedderLoaded = true }
-            let vectors = await embedder.embed(texts)
-            return vectors.count == texts.count ? vectors : nil
-        }
-    }
+    lazy var recallEmbedder = RecallEmbedder(
+        embedder: MemoryEmbedder(),
+        modelDirectory: { [modelDownloadManager] in
+            modelDownloadManager.usableDirectory(for: ModelDefinition.defaultEmbeddingModelID)
+        })
     lazy var frontmostApp = FrontmostAppTracker()
     lazy var powerMonitor = PowerMonitor()
     /// The Jarvis panel's own push-to-talk.
-    lazy var panelVoiceInput = makeVoiceInput()
+    lazy var panelVoiceInput = AgentVoiceInputController(session: voiceCapture.makeSession())
     /// Today's composer's own push-to-talk.
-    lazy var todayVoiceInput = makeVoiceInput()
+    lazy var todayVoiceInput = AgentVoiceInputController(session: voiceCapture.makeSession())
     /// The floating card rung: the Breakpoint card in a Siri-style glass panel.
     lazy var jarvisPanel: JarvisPanelController = JarvisPanelController(
-        thread: dayThread, voice: panelVoiceInput, agenda: agenda,
+        thread: dayThread, voice: panelVoiceInput,
+        day: { [weak self] in self?.companionRuntime.timeline() },
+        now: { [weak self] in self?.companionRuntime.now() ?? Date() },
         liveCard: { [weak self] id in self?.companionRuntime.state.cards.first { $0.id == id } },
         onAction: { [weak self] action in self?.companionRuntime.act(action) },
         onExpand: { (NSApp.delegate as? AppDelegate)?.navigateToToday() },
@@ -292,7 +271,7 @@ final class DependencyContainer: ObservableObject {
         settings: settingsManager, agenda: agenda, notifier: companionNotifier,
         trace: companionTrace, idleMonitor: idleMonitor, presence: companionPresence,
         thread: dayThread,
-        stateStore: ProcessEnvironment.usesScratchData ? DayStateStore(url: nil) : .production,
+        stateStore: LaunchMode.current.keepsOffOwnersData ? DayStateStore(url: nil) : .production,
         frontmost: frontmostApp, power: powerMonitor,
         delivery: CompanionDelivery(
             showPanel: { [weak self] card in self?.jarvisPanel.show(card) },
@@ -315,17 +294,16 @@ final class DependencyContainer: ObservableObject {
     /// change, one JSONL file per day under Application Support.
     lazy var companionTrace = CompanionTrace()
     lazy var agentConversationStore = AgentConversationStore()
-    lazy var inferenceArbiter: InferenceArbiter = {
-        // TTS residency arrives as closures (evaluated lazily), so the
-        // arbiter never holds the speech engine.
-        InferenceArbiter(
-            agentEngine: agentEngine,
-            settingsManager: settingsManager,
-            modelDownloadManager: modelDownloadManager,
-            isTTSLoaded: { [weak self] in self?.speechEnginePresenter.isModelLoaded ?? false },
-            unloadTTS: { [weak self] in await self?.speechEnginePresenter.unload() }
-        )
-    }()
+    lazy var inferenceArbiter = InferenceArbiter(
+        agentEngine: agentEngine,
+        settingsManager: settingsManager,
+        modelDownloadManager: modelDownloadManager
+    )
+
+    /// **Model Residency**: which models are in memory, what each is doing,
+    /// and Offload Model — one row per model's holder
+    /// (`DependencyContainer+ModelResidency.swift`).
+    lazy var modelResidency: ModelResidency = makeModelResidency()
     lazy var serverInferenceService = ServerInferenceService(
         completionStarter: llmActor,
         engine: agentEngine,
@@ -414,7 +392,7 @@ final class DependencyContainer: ObservableObject {
     // derived from agent events. Constructed here — not in the views — because
     // cross-cutting surfaces need them too (Appshot stages into the Composer
     // Draft; the push-to-talk hotkey drives voice input).
-    lazy var agentVoiceInput = makeVoiceInput()
+    lazy var agentVoiceInput = AgentVoiceInputController(session: voiceCapture.makeSession())
     lazy var composerDraft = ComposerDraftController(conversationImages: { [agent] in
         agent.state.messages.flatMap { $0.transcriptImages }
     })
@@ -509,15 +487,7 @@ final class DependencyContainer: ObservableObject {
     // speaks; a key press or a click interrupts him.
     lazy var companionVoiceSession: CompanionVoiceSessionController = {
         let controller = CompanionVoiceSessionController(
-            capture: VoiceCaptureSession(
-                audioCapture: audioCaptureEngine,
-                transcriptionEngine: transcriptionEngine,
-                captureDump: captureDumpStore,
-                isCaptureDumpEnabled: { [settingsManager] in
-                    settingsManager.captureDumpEnabled
-                },
-                learnedWords: learnedWordStore
-            ),
+            capture: voiceCapture.makeSession(),
             meterLevel: { [dictationFeed] in dictationFeed.level },
             meterSpectrum: { [dictationFeed] in dictationFeed.spectrum },
             inputDead: { [audioCaptureEngine] in audioCaptureEngine.isInputDead },
@@ -537,27 +507,32 @@ final class DependencyContainer: ObservableObject {
             },
             overlay: companionVoicePrototype,
             recorder: companionTrace,
-            settings: settingsManager,
-            proofreadPass: proofreadPass
+            settings: settingsManager
         )
         // The reply hook: while a session is live it owns the spoken reply
         // and the auto-listen loop; autoSpeak stays the chat-only path.
         chatSession.voiceReplyHandler = { [weak controller] text in
             controller?.replyCompleted(text) ?? false
         }
+        builtVoiceSession = controller
         return controller
     }()
+    /// The voice session once something built it: a hotkey or the Models
+    /// section asks whether a session is active without building one (and the
+    /// chat session with it).
+    private(set) var builtVoiceSession: CompanionVoiceSessionController?
 
     // Speech (TTS) — engine v2 (ADR-0038/0039): the engine actor lives in the
     // TesseractSpeech package behind its ports; the presenter mirrors
-    // residency for views and the arbiter; the coordinator drives sessions.
+    // residency for views and Model Residency; the coordinator drives sessions.
     lazy var textExtractor = TextExtractor()
     lazy var speechEnginePresenter: SpeechEnginePresenter = {
         // The catalog's Voice Engine entry downloads this same spec (the
         // ADR-0037 precision gate is recorded there), and the engine loads it
-        // from that entry's folder: the store root plus the repo's
-        // subdirectory, as `modelPath(for:)` builds it. The engine never
-        // downloads; without the files it throws `modelUnavailable`.
+        // from that entry's folder, by the one folder rule `modelPath(for:)`
+        // applies (pure, so the engine's off-main closure applies it too).
+        // The engine never downloads; without the files it throws
+        // `modelUnavailable`.
         let store = ModelDownloadManager.modelStorageURL
         return SpeechEnginePresenter(
             engine: SpeechEngine(
@@ -566,8 +541,7 @@ final class DependencyContainer: ObservableObject {
                 // checkpoint once and kept in Caches (ADR-0075).
                 synthesizer: Qwen3Synthesizer(
                     checkpointDirectory: { spec in
-                        store.appendingPathComponent(
-                            ModelDefinition.storageSubdirectory(forRepo: spec.repo))
+                        ModelDefinition.directory(forRepo: spec.repo, in: store)
                     },
                     neuralEngineCache: Qwen3Synthesizer.neuralEngineCache(
                         in: StorageEnvironment.caches))
@@ -641,23 +615,20 @@ final class DependencyContainer: ObservableObject {
         // `AgentEngine.unloadModel` flushes pending SSD writes before the
         // teardown, so a plain offload never costs the disk tier its fresh
         // snapshots.
-        manager.onOffloadModel = { [inferenceArbiter, proofreadPass] in
-            Task {
-                await inferenceArbiter.offloadAllModels()
-                // The proofread model lives outside the arbiter's slots —
-                // "Offload Model" frees it explicitly.
-                await proofreadPass.unload()
-            }
+        manager.onOffloadModel = { [weak self] in
+            Task { await self?.modelResidency.offload() }
         }
         manager.onClearMemoryCache = { [agentEngine] in
             agentEngine.llmActor.prefixCacheAdmin.clearRAMTier()
         }
         // Disk clear must not race the detached unload: a live ledger's
-        // manifest persist after the wipe would resurrect the store.
-        manager.onClearDiskCache = { [inferenceArbiter, agentEngine, settingsManager] in
+        // manifest persist after the wipe would resurrect the store. It frees
+        // the voice and the language model, as it always has.
+        manager.onClearDiskCache = { [weak self, inferenceArbiter, agentEngine, settingsManager] in
             let root = settingsManager.ssdPrefixCacheRootURL
             Task {
-                await inferenceArbiter.offloadAllModels()
+                await self?.offloadVoice()
+                await inferenceArbiter.offloadLLM()
                 await agentEngine.awaitPendingUnload()
                 SSDSnapshotStore.wipeArtifacts(at: root)
             }
@@ -668,16 +639,14 @@ final class DependencyContainer: ObservableObject {
                 port: Int(HTTPServer.clampedPort(settingsManager.serverPort))
             )
         }
-        manager.isModelLoaded = { [inferenceArbiter] in
-            !inferenceArbiter.loadedSlots.isEmpty
-        }
+        manager.canOffload = { [weak self] in self?.modelResidency.canOffload ?? false }
         manager.residentCacheBytes = { [agentEngine] in
             agentEngine.llmActor.prefixCacheAdmin.residentRAMBytes
         }
         manager.diskCacheBytes = { [settingsManager] in
             SSDSnapshotStore.artifactBytes(at: settingsManager.ssdPrefixCacheRootURL)
         }
-        manager.modelActivity = { [weak self] in self?.modelActivity() ?? .empty }
+        manager.modelActivity = { [weak self] in self?.modelResidency.activity ?? .empty }
         return manager
     }()
 
@@ -685,19 +654,41 @@ final class DependencyContainer: ObservableObject {
     // with a rule; this container only wires its inputs and effects.
     lazy var appBindings = makeAppBindings()
 
+    /// The **Hotkey Table**: every global hotkey, registered at launch and
+    /// re-bound when its setting changes. The container supplies what each
+    /// action is; the table says which key does it.
+    lazy var hotkeyTable = HotkeyTable(
+        settings: settingsManager, registrar: hotkeyManager, actions: makeHotkeyActions())
+
+    private func makeHotkeyActions() -> HotkeyActions {
+        HotkeyActions(
+            startDictation: { [weak self] in self?.dictationCoordinator.onHotkeyDown() },
+            finishDictation: { [weak self] in self?.dictationCoordinator.onHotkeyUp() },
+            cancelDictation: { [weak self] in self?.dictationCoordinator.cancel() },
+            holdTake: { [weak self] in self?.dictationCoordinator.shiftTapped() },
+            fixLastTake: { [weak self] in self?.dictationLens.fixHotkeyPressed() },
+            speakSelectedText: { [weak self] in self?.speechCoordinator.onHotkeyPressed() },
+            startTalking: { [weak self] in self?.agentVoiceInput.start() },
+            finishTalking: { [weak self] in self?.agentVoiceInput.finishCapture() },
+            captureKeyDown: { [weak self] in self?.capturePanel.hotkeyDown() },
+            captureKeyUp: { [weak self] in self?.capturePanel.hotkeyUp() },
+            captureKeyCancelled: { [weak self] in self?.capturePanel.hotkeyCancelled() },
+            takeAppshot: { [weak self] in Task { await self?.appshotController.takeAppshot() } },
+            isVoiceSessionActive: { [weak self] in self?.builtVoiceSession?.isActive ?? false },
+            interruptVoiceSession: { [weak self] in
+                self?.builtVoiceSession?.bargeIn(source: "key")
+            })
+    }
+
     // Coordinator
     lazy var dictationCoordinator: DictationCoordinator = {
         let coordinator = DictationCoordinator(
-            audioCapture: audioCaptureEngine,
-            transcriptionEngine: transcriptionEngine,
+            session: voiceCapture.makeSession(),
             textInjector: textInjector,
             history: transcriptionHistory,
             settings: settingsManager,
             feed: dictationFeed,
-            proofreadPass: proofreadPass,
-            captureDump: captureDumpStore,
-            pairs: correctionPairStore,
-            learnedWords: learnedWordStore
+            pairs: correctionPairStore
         )
         // Every committed take is the one ⌃⌥Space reopens in the Lens.
         coordinator.onTakeCommitted = { [weak self] take in
@@ -787,18 +778,13 @@ final class DependencyContainer: ObservableObject {
     }
 
     func setup() async {
-        // The app is also the unit-test host. Never start model prewarms,
-        // inference reloads, or the owner's background services from tests.
-        guard !ProcessEnvironment.isRunningTests else { return }
-        // The SSD read experiment owns its single target model and scratch tier.
-        guard !CommandLine.arguments.contains("--ssd-read-bench") else { return }
-        // The TurboQuant bench reads the process-wide MLX memory counters; the
-        // Companion and the prewarms must not load a model beside it.
-        guard !CommandLine.arguments.contains("--turboquant-bench") else { return }
-        // The DFlash2 bench and its speed ruler own their model too: a
-        // Companion moment that loaded a second copy beside a ruler run
-        // deadlocked both in MLX's compile.
-        guard !CommandLine.arguments.contains("--dflash2-bench") else { return }
+        // The owner's background work — prewarms, model loads, the Companion,
+        // the server, the hotkeys — runs only where the Launch Mode runs it
+        // (ADR-0095): never in the unit tests' host, and never beside a
+        // harness, which owns its model (a Companion moment that loaded a
+        // second copy beside a DFlash2 ruler run deadlocked both in MLX's
+        // compile).
+        guard LaunchMode.current.runsOwnersBackgroundWork else { return }
         // Prevent duplicate setup from multiple window instances
         guard !hasSetup else { return }
         hasSetup = true
@@ -871,76 +857,12 @@ final class DependencyContainer: ObservableObject {
         switch step {
         case .registerHotkeys:
             return { [self] in
-                // Register dictation push-to-talk — through the same registration
-                // API as every other hotkey (audit #285 item 7).
-                hotkeyManager.registerHotkey(
-                    id: HotkeyManager.dictationHotkeyID,
-                    combo: settingsManager.hotkey,
-                    onDown: { [weak self] in self?.dictationCoordinator.onHotkeyDown() },
-                    onUp: { [weak self] in self?.dictationCoordinator.onHotkeyUp() },
-                    // A one-key dictation hotkey spoiled by another key: the
-                    // owner is typing with that modifier, not dictating.
-                    onCancel: { [weak self] in self?.dictationCoordinator.cancel() },
-                    // ⇧ while talking: the take waits in the Lens (PRD #612).
-                    onShiftTap: { [weak self] in self?.dictationCoordinator.shiftTapped() }
-                )
+                // Every global hotkey, bound now and re-bound when its
+                // setting changes.
+                hotkeyTable.start()
                 // The Lens is the dictation overlay: build its panel now so
                 // the first press shows it at once.
                 dictationLens.prepare()
-                // Register the fix hotkey (⌃⌥Space by default): reopens the
-                // last take in the Lens to fix a word by typing the one meant.
-                hotkeyManager.registerHotkey(
-                    id: HotkeyManager.fixLastTakeHotkeyID,
-                    combo: settingsManager.fixHotkey,
-                    onDown: { [weak self] in self?.dictationLens.fixHotkeyPressed() }
-                )
-                // Register TTS hotkey. In a voice session it and the Agent
-                // hotkey are the interrupt key: Jarvis stops and listens
-                // (ADR-0082).
-                hotkeyManager.registerHotkey(
-                    id: "tts",
-                    combo: settingsManager.ttsHotkey,
-                    onDown: { [weak self] in
-                        guard let self else { return }
-                        if companionVoiceSession.isActive {
-                            companionVoiceSession.bargeIn(source: "key")
-                        } else {
-                            speechCoordinator.onHotkeyPressed()
-                        }
-                    }
-                )
-                // Register Agent hotkey
-                hotkeyManager.registerHotkey(
-                    id: "agent",
-                    combo: settingsManager.agentHotkey,
-                    onDown: { [weak self] in
-                        guard let self else { return }
-                        if companionVoiceSession.isActive {
-                            companionVoiceSession.bargeIn(source: "key")
-                        } else {
-                            agentVoiceInput.start()
-                        }
-                    },
-                    onUp: { [weak self] in self?.agentVoiceInput.finishCapture() }
-                )
-                // Register the capture hotkey: tap to type, hold to speak.
-                // As one key (Right ⌥ by default), another key pressed with
-                // it cancels: the owner is typing.
-                hotkeyManager.registerHotkey(
-                    id: "capture",
-                    combo: settingsManager.captureHotkey,
-                    onDown: { [weak self] in self?.capturePanel.hotkeyDown() },
-                    onUp: { [weak self] in self?.capturePanel.hotkeyUp() },
-                    onCancel: { [weak self] in self?.capturePanel.hotkeyCancelled() }
-                )
-                // Register Appshot hotkey (one-shot tap, no held state)
-                hotkeyManager.registerHotkey(
-                    id: "appshot",
-                    combo: settingsManager.appshotHotkey,
-                    onDown: { [weak self] in
-                        Task { await self?.appshotController.takeAppshot() }
-                    }
-                )
             }
         case .attachDictationMeters:
             return { [self] in
@@ -994,12 +916,7 @@ final class DependencyContainer: ObservableObject {
                 speechState: { [speechCoordinator] in
                     speechCoordinator.state
                 },
-                currentDictationHotkey: { [hotkeyManager] in
-                    hotkeyManager.currentDictationHotkey
-                },
-                isLLMSlotLoaded: { [inferenceArbiter] in
-                    inferenceArbiter.loadedSlots.contains(.llm)
-                },
+                isLLMLoaded: { [inferenceArbiter] in inferenceArbiter.isLLMLoaded },
                 whisperModelPath: { [modelDownloadManager, settingsManager] in
                     guard
                         let path = modelDownloadManager.modelPath(
@@ -1025,26 +942,6 @@ final class DependencyContainer: ObservableObject {
                 },
                 prewarmProofreader: { [proofreadPass] in
                     await proofreadPass.prewarm()
-                },
-                updateDictationHotkey: { [hotkeyManager] in
-                    hotkeyManager.updateRegisteredHotkey(
-                        id: HotkeyManager.dictationHotkeyID, combo: $0)
-                },
-                updateTTSHotkey: { [hotkeyManager] in
-                    hotkeyManager.updateRegisteredHotkey(id: "tts", combo: $0)
-                },
-                updateAgentHotkey: { [hotkeyManager] in
-                    hotkeyManager.updateRegisteredHotkey(id: "agent", combo: $0)
-                },
-                updateAppshotHotkey: { [hotkeyManager] in
-                    hotkeyManager.updateRegisteredHotkey(id: "appshot", combo: $0)
-                },
-                updateCaptureHotkey: { [hotkeyManager] in
-                    hotkeyManager.updateRegisteredHotkey(id: "capture", combo: $0)
-                },
-                updateFixHotkey: { [hotkeyManager] in
-                    hotkeyManager.updateRegisteredHotkey(
-                        id: HotkeyManager.fixLastTakeHotkeyID, combo: $0)
                 },
                 startHTTPServer: { [httpServer] in
                     await httpServer.start()

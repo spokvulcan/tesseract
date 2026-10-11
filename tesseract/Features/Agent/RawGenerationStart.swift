@@ -81,6 +81,8 @@ nonisolated enum RawGenerationStart {
         // capture prefill — over a fresh cache. A prompt with images (a tool
         // result's screenshot) has the vision target prefill through its last
         // image first, and the iterator takes the text after it (ADR-0089).
+        // Without a plan the Prefill Strategy route prefills into a cache of
+        // its own.
         //
         // `prefillMs` is stamped right after the iterator build, before the
         // MainActor round trips of the badge and the loop start — the number
@@ -90,50 +92,36 @@ nonisolated enum RawGenerationStart {
                 isTextOnly: prepared.image == nil && prepared.video == nil
                     && prepared.audio == nil,
                 kvBits: parameters.kvBits,
-                kvScheme: parameters.kvScheme.flatMap(KVScheme.init(rawValue:)),
+                kvScheme: KVScheme(parameters),
                 temperature: parameters.temperature,
                 promptTokens: promptTokenCount,
                 restoresPrefix: false,
                 storedLeaf: nil
             ))
-        let loop: (AsyncStream<RawGeneration>, Task<Void, Never>)
-        var engagedArm: SpeculativeArm?
+        let stream: AsyncStream<RawGeneration>
+        let completion: Task<Void, Never>
         if let speculation {
-            // The array stays inside this call: a KV Scheme replaces its
-            // attention entries in the iterator, and a reference held here
-            // would keep the full-precision buffers for the whole generation.
-            let iterator = try session.makeSpeculativeDecodeIterator(
-                prepared,
-                cache: try {
-                    let cache = try session.newCache(parameters: parameters)
-                    for layer in cache { layer.reserveCapacity(promptTokenCount) }
-                    return cache
-                }(), prefilledPrefixTokens: 0, positionDelta: 0, plan: speculation,
-                parameters: parameters)
+            // No reference outlives the Decode Start's conversion: it hands
+            // back the array the iterator advances.
+            var cache = try session.newCache(parameters: parameters)
+            for layer in cache { layer.reserveCapacity(promptTokenCount) }
+            let decode = try DecodeStart.make(
+                .speculative(
+                    speculation, input: prepared, prefilledPrefixTokens: 0, positionDelta: 0),
+                cache: &cache, session: session, parameters: parameters)
             prefill.prefillMs = (Date.timeIntervalSinceReferenceDate - prefillStarted) * 1000
-            engagedArm = speculation.arm
-            loop = iterator.startGeneration(
-                promptTokenCount: promptTokenCount,
-                modelConfiguration: session.configuration,
-                tokenizer: session.tokenizer,
-                tools: tools
-            )
+            (stream, completion) = decode.startLoop(
+                promptTokenCount: promptTokenCount, session: session, tools: tools,
+                generatedTokens: nil)
+            await decode.reportPrefillFinished(prefill, to: progressHandler)
         } else {
-            let iterator = try session.makeRawDecodeIterator(prepared, parameters: parameters)
+            let decode = try PrefillStrategyDecodeStart(
+                prepared, session: session, parameters: parameters)
             prefill.prefillMs = (Date.timeIntervalSinceReferenceDate - prefillStarted) * 1000
-            loop = TokenGenerationLoop.start(
-                promptTokenCount: promptTokenCount,
-                modelConfiguration: session.configuration,
-                tokenizer: session.tokenizer,
-                iterator: iterator,
-                tools: tools
-            )
+            (stream, completion) = decode.startLoop(
+                promptTokenCount: promptTokenCount, session: session, tools: tools)
+            await progressHandler?(.prefillFinished(prefill))
         }
-        if let engagedArm {
-            await progressHandler?(.speculationEngaged(engagedArm))
-        }
-        await progressHandler?(.prefillFinished(prefill))
-        let (stream, completion) = loop
         return HTTPServerRawGenerationStart(
             stream: stream,
             generationPrompt: generationPrompt,

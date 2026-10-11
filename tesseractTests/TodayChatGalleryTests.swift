@@ -88,7 +88,7 @@ struct TodayChatGalleryTests {
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         defer { window.close() }
         let host = NSHostingView(
-            rootView: TodayView(fixedNow: fixture.now, mode: .chat)
+            rootView: TodayView(mode: .chat)
                 .injectCompanionDependencies(from: container)
                 .frame(width: width, height: height)
                 .background(Color(nsColor: .windowBackgroundColor)))
@@ -263,9 +263,9 @@ extension TodayFixture {
         state.weekFocus = "Ship the Companion"
         state.weekFocusSetAt = at(9, day: 3)
         state.plan = [
-            Placement(reminderID: "mail", start: at(8, 30), minutes: 20),
-            Placement(reminderID: "pr", start: at(8, 55), minutes: 30),
-            Placement(reminderID: "adr", start: at(13, 45), minutes: 75),
+            Step("mail", at: at(8, 30), minutes: 20),
+            Step("pr", at: at(8, 55), minutes: 30),
+            Step("adr", at: at(13, 45), minutes: 75),
         ]
         state.taskProposals = fullDayReflection.tasks
         let day = state.day.rawValue
@@ -277,7 +277,7 @@ extension TodayFixture {
                     MorningPlanCard(
                         line:
                             "A light morning: two quick things before standup, and the ADR gets the quiet stretch after lunch.",
-                        mustDoID: "adr", placements: state.plan,
+                        mustDoID: "adr", placements: state.plan.map(\.slot),
                         suggestions: [
                             "Start with mail while the coffee's hot.",
                             "Rent takes two minutes; leave it for the evening.",

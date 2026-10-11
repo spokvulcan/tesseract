@@ -56,10 +56,6 @@ nonisolated struct RequestFacts: Sendable {
     /// The chunked prefill step, for the request's own prefill and every
     /// re-prefill after it (the boundary residual, the speculative pass).
     let prefillStepSize: Int
-    /// What every decode iterator runs with: the request's parameters with
-    /// `kvBits` cleared, because the module quantizes the cache itself
-    /// before the iterator sees it (ADR-0006).
-    let decodeParameters: GenerateParameters
     /// The SSD tier gate, sampled once per request.
     let ssdEnabled: Bool
     /// The tool-call format the generation loop parses with, so the Emitted
@@ -96,9 +92,6 @@ nonisolated struct RequestFacts: Sendable {
         self.toolsDefined = toolsDefined
         self.isTextOnly = isTextOnly
         self.prefillStepSize = parameters.prefill.stepSize ?? 512
-        var decodeParameters = parameters
-        decodeParameters.kvBits = nil
-        self.decodeParameters = decodeParameters
         self.ssdEnabled = ssdEnabled
         self.toolCallFormat = toolCallFormat
     }
@@ -292,7 +285,7 @@ nonisolated enum RequestKeyingPhase {
             modelID: modelID,
             kvBits: parameters.kvBits,
             kvGroupSize: parameters.kvGroupSize,
-            kvScheme: parameters.kvScheme.flatMap(KVScheme.init(rawValue:)),
+            kvScheme: KVScheme(parameters),
             modelFingerprint: modelFingerprint,
             templateContextDigest: conversation.templateContextDigest
         )

@@ -2,38 +2,128 @@
 //  VoiceCaptureSession.swift
 //  tesseract
 //
-//  The **Voice Capture Session** — the single concrete home for the push-to-talk
-//  *capture → transcribe → commit* lifecycle that `DictationCoordinator` (the
-//  global dictation overlay) and **Voice Input** (`AgentVoiceInputController`, the
-//  agent composer leaf) both drive. It owns the subtle, bug-prone parts — the
+//  **Voice Capture** (ADR-0096): the one module every push-to-talk surface
+//  takes its takes from — dictation, the agent composer, Today's composer, the
+//  capture and Jarvis panels, the voice session, the Onboarding Tour. It is
+//  built once from the shared microphone and recognizer, the Capture Dump and
+//  its switch, the Learned Words, the Proofread Pass and the dictation
+//  language, every one required, and hands each surface its own **Voice
+//  Capture Session** with every stage. No surface can build a take that skips
+//  one (ADR-0085 §2).
+//
+//  The session owns the take: the capture→transcribe→commit lifecycle with the
 //  **Operation Guard** ticket discipline re-checked after every `await`, the
-//  microphone-busy guard, the minimum-duration and empty-text guards,
-//  post-processing, the in-flight transcription `Task`, and cancellation — behind a
-//  small value-returning interface. Each caller keeps only what genuinely differs:
-//  its own state vocabulary, error model, sounds, maximum-recording-duration
-//  auto-stop, error auto-reset, and the commit it injects.
+//  microphone-busy, minimum-duration, silence and empty-text guards, the
+//  take's one text pipeline (the regex cleanup, then the Learned Words) for
+//  both the **Live Preview** and the final pass (ADR-0086 §3), the Proofread
+//  Pass as a phase of the take, "insert anyway" for a take the pass rejected,
+//  the in-flight `Task`, and cancellation. Each surface keeps only what is its
+//  own: its commit, its presentation, its sounds and its errors.
 //
-//  Composed *directly* (not behind a port), exactly as both callers compose
-//  `OperationGuard`: there is one production implementation, so there is no seam to
-//  vary across. The interface *is* the test surface — `VoiceCaptureSessionTests`
-//  drives this type through `start`/`stop`/`transcribeAndCommit`/`cancel` using the
-//  fakes that already sit *below* it.
-//
-//  **Learned Words** (PRD #612) apply here, after the regex cleanup and before the
-//  Proofread Pass, so every caller gains them: dictation, Voice Input, the capture
-//  and Jarvis panels and the voice session. A capture that never rose above
-//  silence is not transcribed at all.
+//  Whether a take is open — listening, transcribing, proofreading — is one
+//  fact per session (`phase`), and one across them (`VoiceCapture`), which the
+//  menu bar's Models section reads.
 //
 
 import Foundation
+import Observation
 
+/// Builds every push-to-talk surface's **Voice Capture Session** from one set
+/// of stages, and says whether any of their takes is open.
+@Observable @MainActor
+final class VoiceCapture {
+    @ObservationIgnored private let stages: Stages
+    /// Every session made so far, held weakly: a surface owns its session.
+    private var sessions: [WeakSession] = []
+
+    init(
+        microphone: any AudioCapturing,
+        recognizer: any Transcribing,
+        captureDump: any CaptureDumpStoring,
+        isCaptureDumpEnabled: @escaping @MainActor () -> Bool,
+        learnedWords: any LearnedWordApplying,
+        proofread: @escaping @MainActor (String) async -> ProofreadVerdict?,
+        language: @escaping @MainActor () -> String,
+        frontmostApp: @escaping @MainActor () -> TargetApp? = { TargetApp.frontmost() }
+    ) {
+        stages = Stages(
+            microphone: microphone, recognizer: recognizer, captureDump: captureDump,
+            isCaptureDumpEnabled: isCaptureDumpEnabled, learnedWords: learnedWords,
+            proofread: proofread, language: language, frontmostApp: frontmostApp)
+    }
+
+    /// A surface's own session, with every stage.
+    func makeSession() -> VoiceCaptureSession {
+        let session = VoiceCaptureSession(stages: stages)
+        sessions.removeAll { $0.session == nil }
+        sessions.append(WeakSession(session: session))
+        return session
+    }
+
+    /// A take is being recorded on some surface.
+    var isListening: Bool { isAnySession(in: .listening) }
+    /// A take is being transcribed and committed on some surface.
+    var isTranscribing: Bool { isAnySession(in: .transcribing) }
+    /// The Proofread Pass is reading a take on some surface.
+    var isProofreading: Bool { isAnySession(in: .proofreading) }
+
+    private func isAnySession(in phase: VoiceCaptureSession.Phase) -> Bool {
+        sessions.contains { $0.session?.phase == phase }
+    }
+
+    private struct WeakSession {
+        weak var session: VoiceCaptureSession?
+    }
+}
+
+/// The stages every take runs through, built once by `VoiceCapture`.
 @MainActor
+private struct Stages {
+    let microphone: any AudioCapturing
+    let recognizer: any Transcribing
+    let captureDump: any CaptureDumpStoring
+    let isCaptureDumpEnabled: @MainActor () -> Bool
+    let learnedWords: any LearnedWordApplying
+    let proofread: @MainActor (String) async -> ProofreadVerdict?
+    let language: @MainActor () -> String
+    let frontmostApp: @MainActor () -> TargetApp?
+    let postProcessor = TranscriptionPostProcessor()
+
+    /// A take's text as it will read: the regex cleanup, then the Learned
+    /// Words for the take's app. The Live Preview and the final pass both
+    /// read through here, so the preview reads like the take will (ADR-0086).
+    func read(_ heard: String, in app: TargetApp?) -> (
+        cleaned: String, learned: LearnedWordsApplication
+    ) {
+        let cleaned = postProcessor.process(heard)
+        guard !cleaned.isEmpty else { return (cleaned, .unchanged(cleaned)) }
+        return (cleaned, learnedWords.apply(to: cleaned, appBundleID: app?.bundleID))
+    }
+}
+
+/// One surface's push-to-talk takes, from `VoiceCapture.makeSession()`.
+@Observable @MainActor
 final class VoiceCaptureSession {
     /// A capture below this is rejected by ``stop()`` before any transcription runs
     /// — an accidental tap must not show a spurious "processing" flash.
     private static let minimumRecordingDuration: TimeInterval = 0.5
 
-    /// The outcome of ``start()``.
+    /// The pause between a preview decode landing and the next snapshot.
+    /// Cadence is self-pacing: a slow decode simply stretches its own cycle.
+    private static let previewInterval: Duration = .milliseconds(300)
+
+    /// Where the session's take is.
+    enum Phase: Equatable, Sendable {
+        case idle
+        /// The microphone is open for the take.
+        case listening
+        /// The take is being transcribed and committed.
+        case transcribing
+        /// The Proofread Pass is reading the take.
+        case proofreading
+    }
+
+    /// The outcome of ``start(preview:)``.
     enum StartResult {
         /// Capture began; the operation epoch was advanced.
         case started
@@ -47,8 +137,7 @@ final class VoiceCaptureSession {
     enum StopResult {
         /// Capture produced audio at or above the minimum duration.
         /// `dumpFile` is the Capture Dump recording this stop saved (nil when
-        /// the dump is disabled or absent) — the **Correction Pair**'s audio
-        /// reference.
+        /// the dump is disabled) — the **Correction Pair**'s audio reference.
         case audio(AudioData, dumpFile: String?)
         /// The capture was shorter than the minimum duration.
         case tooShort
@@ -80,23 +169,19 @@ final class VoiceCaptureSession {
         let committedText: String?
         /// The app in front when the take started.
         let app: TargetApp?
-
-        init(
-            rawASR: String, cleaned: String, learned: String? = nil,
-            catches: [LearnedWordCatch] = [], verdict: ProofreadVerdict?,
-            committedText: String?, app: TargetApp? = nil
-        ) {
-            self.rawASR = rawASR
-            self.cleaned = cleaned
-            self.learned = learned ?? cleaned
-            self.catches = catches
-            self.verdict = verdict
-            self.committedText = committedText
-            self.app = app
-        }
     }
 
-    /// The outcome of ``transcribeAndCommit(_:language:proofread:commit:)``.
+    /// What a surface's `commit` receives: the text, the take's length, what
+    /// the Learned Words caught in that text (where they now stand), and the
+    /// app in front when the take started.
+    struct Commit: Sendable {
+        let text: String
+        let duration: TimeInterval
+        let catches: [LearnedWordCatch]
+        let app: TargetApp?
+    }
+
+    /// The outcome of ``transcribeAndCommit(_:onTake:commit:)``.
     enum Outcome {
         /// Transcription succeeded, produced non-empty text, and the injected
         /// `commit` ran to completion while this operation was still current.
@@ -106,7 +191,8 @@ final class VoiceCaptureSession {
         /// Post-processing yielded empty text — no speech to commit.
         case empty
         /// The **Proofread Pass** judged the take unintelligible: nothing was
-        /// committed; `raw` stays available for "insert raw anyway".
+        /// committed; ``commitRejectedTake(_:)`` still can. `raw` is its text
+        /// as the Learned Words left it.
         case rejected(raw: String, reason: String)
         /// Transcription (or the commit) failed; the error is surfaced to map.
         case failed(any Error)
@@ -117,182 +203,166 @@ final class VoiceCaptureSession {
         case superseded
     }
 
-    private let audioCapture: any AudioCapturing
-    private let transcriptionEngine: any Transcribing
-    private let postProcessor = TranscriptionPostProcessor()
+    /// Where the take is. A stop that returns audio leaves it transcribing
+    /// until ``transcribeAndCommit(_:onTake:commit:)`` resolves.
+    private(set) var phase: Phase = .idle
 
-    /// The **Learned Words**, applied to every take after the regex cleanup;
-    /// `nil` where a caller (or a test) doesn't exercise them.
-    private let learnedWords: (any LearnedWordApplying)?
-
-    /// The app in front, read when a take starts: the Learned Words' per-app
-    /// exceptions and the Lens key off it.
-    private let frontmostApp: @MainActor () -> TargetApp?
+    /// Called on every phase change, as it happens: a surface narrates the
+    /// take in its own presentation (dictation's Overlay Feed shows the
+    /// Proofread Pass).
+    @ObservationIgnored var onPhaseChange: (@MainActor (Phase) -> Void)?
 
     /// The app in front when the current take started.
     private(set) var targetApp: TargetApp?
 
-    /// The **Capture Dump** and its enablement, both caller-injected. The dump
-    /// only ever sees captures that passed the minimum-duration guard — an
-    /// accidental tap or an abandoned (cancelled) recording is not evidence.
-    private let captureDump: (any CaptureDumpStoring)?
-    private let isCaptureDumpEnabled: () -> Bool
+    /// A take the Proofread Pass rejected, waiting for "insert anyway".
+    var hasRejectedTake: Bool { rejected != nil }
+
+    @ObservationIgnored private let stages: Stages
 
     /// The **Operation Guard** for this session. `invalidate()`d at *operation
     /// start* and at `cancel()` so a transcription that finishes (or races
     /// cancellation to *success*) after a cancel-and-restart recognizes it is stale
-    /// via its `OperationTicket` and commits nothing. See CONTEXT.md →
-    /// "Operation staleness".
-    private let operations = OperationGuard()
+    /// via its `OperationTicket` and commits nothing.
+    @ObservationIgnored private let operations = OperationGuard()
 
     /// The in-flight transcribe→commit `Task`. Held so `cancel()` can cancel it: the
     /// commit's `await` is itself the side effect and is cancellation-aware, so the
     /// post-`await` ticket check alone can't stop a commit already suspended in
     /// flight — cancelling the task does. Identity-guarded on clear so an overlapping
     /// successor is never clobbered.
-    private var inFlightTask: Task<Outcome, Never>?
+    @ObservationIgnored private var inFlightTask: Task<Outcome, Never>?
 
     /// This session started the running capture. The microphone and the
     /// recognizer are shared, so ``cancel()`` stops only what it started.
-    private var ownsCapture = false
+    @ObservationIgnored private var ownsCapture = false
 
-    init(
-        audioCapture: any AudioCapturing,
-        transcriptionEngine: any Transcribing,
-        captureDump: (any CaptureDumpStoring)? = nil,
-        isCaptureDumpEnabled: @escaping () -> Bool = { true },
-        learnedWords: (any LearnedWordApplying)? = nil,
-        frontmostApp: @escaping @MainActor () -> TargetApp? = { TargetApp.frontmost() }
-    ) {
-        self.audioCapture = audioCapture
-        self.transcriptionEngine = transcriptionEngine
-        self.captureDump = captureDump
-        self.isCaptureDumpEnabled = isCaptureDumpEnabled
-        self.learnedWords = learnedWords
-        self.frontmostApp = frontmostApp
+    /// This session's own calls into the shared recognizer, still running.
+    /// The recognizer cancels whichever transcription it is running, so
+    /// ``cancel()`` tells it to only while one of them is this session's:
+    /// while this session's take proofreads or commits, the transcription it
+    /// runs is another surface's.
+    @ObservationIgnored private var ownTranscriptions = 0
+
+    /// The Live Preview pump and where it shows each preview.
+    @ObservationIgnored private var previewTask: Task<Void, Never>?
+    @ObservationIgnored private var showPreview: (@MainActor (LivePreview?) -> Void)?
+
+    /// The last take the Proofread Pass rejected, with its length.
+    @ObservationIgnored private var rejected: (take: Take, duration: TimeInterval)?
+
+    fileprivate init(stages: Stages) {
+        self.stages = stages
     }
 
     // MARK: - Interface
 
     /// Begins capture. Welds the Operation Guard epoch bump to capture start (so a
     /// new operation supersedes an overlapping prior one) and carries the single
-    /// microphone-busy guard — both callers gain it here, once.
-    func start() -> StartResult {
-        guard !audioCapture.isCapturing else { return .micBusy }
+    /// microphone-busy guard. With `preview`, the session decodes the take while
+    /// it is recorded and shows each **Live Preview** there, read the way the
+    /// take will read; ``stop()`` and ``cancel()`` end it with `nil`.
+    func start(preview: (@MainActor (LivePreview?) -> Void)? = nil) -> StartResult {
+        guard !stages.microphone.isCapturing else { return .micBusy }
         operations.invalidate()
         do {
-            try audioCapture.startCapture()
+            try stages.microphone.startCapture()
             ownsCapture = true
-            targetApp = frontmostApp()
+            targetApp = stages.frontmostApp()
+            setPhase(.listening)
+            if let preview { startPreview(preview) }
             return .started
         } catch {
+            // The epoch moved: whatever this session still had in flight is
+            // superseded and commits nothing, so no take of its is open.
+            setPhase(.idle)
             return .captureFailed(error)
         }
     }
 
-    /// Stops capture and applies the minimum-duration guard. Does not advance the
-    /// epoch — the caller's maximum-duration auto-stop drives *when* this is called.
+    /// Stops capture and applies the minimum-duration and silence guards. Does
+    /// not advance the epoch — the caller's maximum-duration auto-stop drives
+    /// *when* this is called.
     func stop() -> StopResult {
+        stopPreview()
         ownsCapture = false
-        guard var audioData = audioCapture.stopCapture() else { return .noAudio }
-        guard audioData.duration >= Self.minimumRecordingDuration else { return .tooShort }
-        // Not evidence either: a silent capture is neither transcribed nor
-        // dumped.
-        guard !CaptureLevel.isSilent(audioData) else { return .silent }
-        var dumpFile: String?
-        if let raw = audioData.raw {
-            if let captureDump, isCaptureDumpEnabled() {
-                dumpFile = captureDump.save(raw)
-            }
-            // The dump is `raw`'s only consumer. (Bookkeeping more than memory
-            // now: `samples` shares the same native-rate storage since the
-            // recognizer took over the 16 kHz conversion.)
-            audioData.raw = nil
-        }
-        return .audio(audioData, dumpFile: dumpFile)
+        let result = stopCapture()
+        if case .audio = result { setPhase(.transcribing) } else { setPhase(.idle) }
+        return result
     }
 
-    /// Transcribes `audio`, post-processes it, optionally runs the caller's
-    /// **Proofread Pass**, and — while the operation is still current — runs the
-    /// caller-injected `commit` inside the guarded region, so the post-commit
-    /// staleness re-check (which suppresses a success that races a cancel
-    /// mid-commit) is preserved without exposing the ticket. Owns the in-flight
+    /// Transcribes `audio`, reads it through the take's text pipeline, runs the
+    /// **Proofread Pass** as the `.proofreading` phase, and — while the
+    /// operation is still current — runs the caller-injected `commit` inside the
+    /// guarded region, so the post-commit staleness re-check (which suppresses a
+    /// success that races a cancel mid-commit) is preserved without exposing the
+    /// ticket. Counts the take's **Catches** once it is in. Owns the in-flight
     /// `Task`; callers spawn a fire-and-forget outer `Task` purely to avoid
     /// blocking and do not track it.
     ///
-    /// `proofread` returns a verdict or `nil` for "pass skipped" (disabled,
-    /// model unavailable, GPU busy, error) — every skip commits the
-    /// regex-cleaned text, so the pass can only improve, never gate.
+    /// A skipped pass (disabled, model unavailable, the LLM busy, an error)
+    /// commits the cleaned text, so the pass can only improve, never gate.
     func transcribeAndCommit(
         _ audio: AudioData,
-        language: String,
-        proofread: (@MainActor (String) async -> ProofreadVerdict?)? = nil,
         onTake: (@MainActor (Take) -> Void)? = nil,
-        commit: @escaping @MainActor (String, TimeInterval) async throws -> Void
+        commit: @escaping @MainActor (Commit) async throws -> Void
     ) async -> Outcome {
         let ticket = operations.capture()
         let app = targetApp
+        setPhase(.transcribing)
         let task = Task { () -> Outcome in
             do {
-                let result = try await transcriptionEngine.transcribe(audio, language: language)
+                let result = try await transcribe(audio)
 
                 // A cancel-and-restart since this operation began means a newer
                 // operation owns the caller's state — drop this result.
                 guard ticket.isCurrent else { return .superseded }
 
-                let processedText = postProcessor.process(result.text)
-                guard !processedText.isEmpty else { return .empty }
-
+                let reading = stages.read(result.text, in: app)
+                guard !reading.cleaned.isEmpty else { return .empty }
                 // The owner's words, as the owner's fixes taught them.
-                let learned =
-                    learnedWords?.apply(to: processedText, appBundleID: app?.bundleID)
-                    ?? .unchanged(processedText)
+                let learned = reading.learned
 
-                var commitText = learned.text
+                setPhase(.proofreading)
+                let verdict = await stages.proofread(learned.text)
+                // The pass awaited — a cancel-and-restart during it means a
+                // newer operation owns the state.
+                guard ticket.isCurrent else { return .superseded }
+                setPhase(.transcribing)
+
+                var take = Take(
+                    rawASR: result.text, cleaned: reading.cleaned, learned: learned.text,
+                    catches: learned.catches, verdict: verdict, committedText: learned.text,
+                    app: app)
                 var edits: [WordEdit] = []
-                var verdict: ProofreadVerdict?
-                if let proofread {
-                    verdict = await proofread(learned.text)
-                    // The pass awaited — a cancel-and-restart during it means
-                    // a newer operation owns the state.
-                    guard ticket.isCurrent else { return .superseded }
-                    switch verdict {
-                    case .corrected(let text, let correctedEdits):
-                        commitText = text
-                        edits = correctedEdits
-                    case .rejected(let reason):
-                        onTake?(
-                            Take(
-                                rawASR: result.text, cleaned: processedText,
-                                learned: learned.text, catches: learned.catches,
-                                verdict: verdict, committedText: nil, app: app))
-                        return .rejected(raw: learned.text, reason: reason)
-                    case .unchanged, nil:
-                        break
-                    }
+                switch verdict {
+                case .corrected(let text, let correctedEdits):
+                    take = take.committing(text)
+                    edits = correctedEdits
+                case .rejected(let reason):
+                    let rejectedTake = take.committing(nil)
+                    onTake?(rejectedTake)
+                    rejected = (rejectedTake, audio.duration)
+                    return .rejected(raw: learned.text, reason: reason)
+                case .unchanged, nil:
+                    break
                 }
 
                 // Before the commit, so the caller can link what it stores in
                 // the commit (a history entry) to the take it just observed.
-                onTake?(
-                    Take(
-                        rawASR: result.text, cleaned: processedText,
-                        learned: learned.text, catches: learned.catches,
-                        verdict: verdict, committedText: commitText, app: app))
-
-                try await commit(commitText, audio.duration)
+                onTake?(take)
+                let committed = take.commit(duration: audio.duration)
+                try await commit(committed)
 
                 // The commit may suspend (e.g. text injection); a cancel-and-restart
                 // during it means the newer operation owns the state — suppress the
                 // success the caller would otherwise present.
                 guard ticket.isCurrent else { return .superseded }
+                rejected = nil
                 // Counted once the take is in, and only the catches that
                 // landed (the Proofread Pass may have rewritten one): a
                 // rejected, failed or superseded take caught nothing.
-                learnedWords?.recordCatches(
-                    commitText == learned.text
-                        ? learned.catches
-                        : LearnedWordMatcher.relocate(learned.catches, in: commitText))
+                stages.learnedWords.recordCatches(committed.catches)
                 return .committed(edits: edits)
             } catch is CancellationError {
                 return ticket.isCurrent ? .cancelled : .superseded
@@ -301,12 +371,33 @@ final class VoiceCaptureSession {
             }
         }
         inFlightTask = task
-        defer {
-            // Identity-guarded: clear only if the slot still holds *this* task, so an
-            // overlapping successor started after a cancel isn't freed by this exit.
-            if inFlightTask == task { inFlightTask = nil }
+        let outcome = await task.value
+        // Identity-guarded: clear only if the slot still holds *this* task, so an
+        // overlapping successor started after a cancel isn't freed by this exit.
+        if inFlightTask == task { inFlightTask = nil }
+        if ticket.isCurrent { setPhase(.idle) }
+        return outcome
+    }
+
+    /// "Insert anyway" on a take the Proofread Pass rejected: commits its text
+    /// as the Learned Words left it through `commit`, exactly like a take that
+    /// landed, and counts its catches once it is in. Returns the commit's
+    /// result, or nil when no rejected take waits; the take is spent either
+    /// way, so a second press inserts nothing.
+    func commitRejectedTake(
+        _ commit: @MainActor (Commit) async throws -> Void
+    ) async -> Result<Void, any Error>? {
+        guard let waiting = rejected else { return nil }
+        rejected = nil
+        let committed = waiting.take.committing(waiting.take.learned)
+            .commit(duration: waiting.duration)
+        do {
+            try await commit(committed)
+        } catch {
+            return .failure(error)
         }
-        return await task.value
+        stages.learnedWords.recordCatches(committed.catches)
+        return .success(())
     }
 
     /// Cancels the operation: advances the epoch (so a late success commits
@@ -319,13 +410,123 @@ final class VoiceCaptureSession {
     /// (dictation's, or the composer's).
     func cancel() {
         operations.invalidate()
-        let transcribing = inFlightTask != nil
+        stopPreview()
         inFlightTask?.cancel()
         inFlightTask = nil
-        if ownsCapture, audioCapture.isCapturing {
-            _ = audioCapture.stopCapture()
+        if ownsCapture, stages.microphone.isCapturing {
+            _ = stages.microphone.stopCapture()
         }
         ownsCapture = false
-        if transcribing { transcriptionEngine.cancelTranscription() }
+        if ownTranscriptions > 0 { stages.recognizer.cancelTranscription() }
+        setPhase(.idle)
+    }
+
+    // MARK: - Private
+
+    /// One call into the shared recognizer, counted as this session's own
+    /// while it runs.
+    private func transcribe(_ audio: AudioData) async throws -> TranscriptionResult {
+        ownTranscriptions += 1
+        defer { ownTranscriptions -= 1 }
+        return try await stages.recognizer.transcribe(audio, language: stages.language())
+    }
+
+    private func setPhase(_ newPhase: Phase) {
+        guard phase != newPhase else { return }
+        phase = newPhase
+        onPhaseChange?(newPhase)
+    }
+
+    private func stopCapture() -> StopResult {
+        guard var audioData = stages.microphone.stopCapture() else { return .noAudio }
+        guard audioData.duration >= Self.minimumRecordingDuration else { return .tooShort }
+        // Not evidence either: a silent capture is neither transcribed nor
+        // dumped. Nor is an accidental tap or an abandoned (cancelled) take.
+        guard !CaptureLevel.isSilent(audioData) else { return .silent }
+        var dumpFile: String?
+        if let raw = audioData.raw {
+            if stages.isCaptureDumpEnabled() {
+                dumpFile = stages.captureDump.save(raw)
+            }
+            // The dump is `raw`'s only consumer. (Bookkeeping more than memory
+            // now: `samples` shares the same native-rate storage since the
+            // recognizer took over the 16 kHz conversion.)
+            audioData.raw = nil
+        }
+        return .audio(audioData, dumpFile: dumpFile)
+    }
+
+    // MARK: - Live Preview (ADR-0086)
+
+    /// Decodes the take while it is recorded, from the end of its last
+    /// confirmed segment, and shows what Whisper heard read through the take's
+    /// text pipeline (its catches shown, not counted). A decode that resolves
+    /// after its take ended is dropped, never shown on the next take; the
+    /// paste is always the full pass.
+    private func startPreview(_ show: @escaping @MainActor (LivePreview?) -> Void) {
+        let ticket = operations.capture()
+        let app = targetApp
+        showPreview = show
+        previewTask = Task { [weak self] in
+            var assembler = LivePreviewAssembler()
+            while !Task.isCancelled {
+                guard let self, ticket.isCurrent, self.phase == .listening else { return }
+                if let tail = self.stages.microphone.captureSnapshot(from: assembler.confirmedEnd),
+                    let window = assembler.window(ofTail: tail)
+                {
+                    let result = await self.stages.recognizer.transcribePartial(
+                        window, language: self.stages.language())
+                    guard !Task.isCancelled, ticket.isCurrent, self.phase == .listening
+                    else { return }
+                    if let result {
+                        assembler.fold(result, windowDuration: window.duration)
+                        show(self.preview(of: assembler, in: app))
+                    }
+                }
+                try? await Task.sleep(for: Self.previewInterval)
+            }
+        }
+    }
+
+    private func stopPreview() {
+        previewTask?.cancel()
+        previewTask = nil
+        guard let show = showPreview else { return }
+        showPreview = nil
+        show(nil)
+    }
+
+    /// The preview as the take will read. Its confirmed words are its leading
+    /// words that match the confirmed text on its own (read the same way):
+    /// where the two readings differ at the boundary, the word is provisional.
+    private func preview(of assembler: LivePreviewAssembler, in app: TargetApp?) -> LivePreview? {
+        let reading = stages.read(assembler.rawText, in: app)
+        guard !reading.cleaned.isEmpty else { return nil }
+        let learned = reading.learned
+        let confirmed = stages.read(assembler.confirmed, in: app).learned.text
+        let confirmedWords = zip(TakeText.tokens(confirmed), TakeText.tokens(learned.text))
+            .prefix { $0.bare == $1.bare }.count
+        return LivePreview(
+            text: learned.text, catches: learned.catches, confirmedTokens: confirmedWords)
+    }
+}
+
+extension VoiceCaptureSession.Take {
+    /// The take committing `text` (nil: rejected).
+    fileprivate func committing(_ text: String?) -> Self {
+        Self(
+            rawASR: rawASR, cleaned: cleaned, learned: learned, catches: catches,
+            verdict: verdict, committedText: text, app: app)
+    }
+
+    /// What the surface's commit receives: the committed text with the
+    /// catches where they stand in it (the Proofread Pass may have moved
+    /// them).
+    fileprivate func commit(duration: TimeInterval) -> VoiceCaptureSession.Commit {
+        let text = committedText ?? learned
+        return VoiceCaptureSession.Commit(
+            text: text, duration: duration,
+            catches: text == learned ? catches : LearnedWordMatcher.relocate(catches, in: text),
+            app: app)
     }
 }

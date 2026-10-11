@@ -101,7 +101,7 @@ struct LeafLeaseMemoryEvidenceTests {
                 #expect(tree.leaseCount == 0)
                 #expect(tree.leasedBytes == 0)
                 #expect(
-                    manager.budgetFloorBytes() == 4_160,
+                    manager.testSeam().budgetFloorBytes() == 4_160,
                     "the newest leaf remains a legitimate floor member")
                 memory?.mark(.releasingRequest, facts: manager.memoryTelemetryFacts())
                 record("returned", iteration: iteration, requestID: requestID)
@@ -111,7 +111,7 @@ struct LeafLeaseMemoryEvidenceTests {
             #expect(recurrent == nil)
             #expect(array == nil)
             #expect(tree.totalSnapshotBytes == 0)
-            #expect(manager.budgetFloorBytes() == 0)
+            #expect(manager.testSeam().budgetFloorBytes() == 0)
             record("cleared", iteration: iteration, requestID: requestID)
             memory?.mark(.releasingRequest, facts: manager.memoryTelemetryFacts())
             memory?.finish(outcome: outcome)

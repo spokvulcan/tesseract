@@ -318,6 +318,70 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
         await fixture.drain()
     }
 
+    /// The failed-restore policy covers the Leaf Store's boundary route
+    /// (ADR-0094's declared change): the planned branch view the canonical
+    /// leaf would be re-prefilled from fails to restore, so it is dropped
+    /// through the manager like a keyed turn's failed restore — one
+    /// `unrestorable-snapshot` line, then the store's own `prefill-threw` —
+    /// and the next lookup can no longer serve it.
+    @Test func aBoundaryThatFailsToRestoreIsDroppedLikeTheKeyedTurns() async throws {
+        let tokenizer = ToySequencingTokenizer(thinking: true)
+        let completions = ToyCompletionQueue(
+            generationPrompts: [[ToySequencingTokenizer.assistantMarkTokenId]],
+            eosTokenId: ToySequencingTokenizer.eotTokenId)
+        let modelID = "boundary-unrestorable-\(UUID())"
+        let capture = TelemetryCapture(modelID: modelID)
+        defer { capture.stop() }
+        let fault = ToyRestoreFault()
+        let fixture = ServerCompletionFixture(
+            provider: ToyModelSessionProvider(
+                model: ToyLanguageModel(completions: completions), tokenizer: tokenizer,
+                restoreFault: fault),
+            modelID: modelID)
+        let preserving = TemplateRenderContext(
+            kwargs: [.preserveThinking: true], preservesThinking: true)
+        for (index, text) in ["abcd-one", "abcd-two"].enumerated() {
+            completions.enqueue(Array("</think>ok".utf8).map(Int.init))
+            let handle = try await fixture.start(
+                conversation: Self.conversation([.assistant(content: text)]),
+                parameters: Self.parameters(),
+                renderContext: index == 0 ? preserving : .canonical)
+            #expect(try await collectServerText(handle).text == "ok")
+        }
+        _ = capture.drain()
+        // The turn restores the view by copy; the boundary route's restore
+        // of the same view is the one that fails.
+        fault.arm(skipping: 1)
+        completions.enqueue(Array("</think>ok".utf8).map(Int.init))
+        let handle = try await fixture.start(
+            conversation: Self.conversation([.assistant(content: "abcd-three")]),
+            parameters: Self.parameters(), renderContext: .canonical)
+        #expect(try await collectServerText(handle).text == "ok")
+        let events = capture.drain()
+
+        #expect(events.first { $0.eventName == "lookup" }?.field("source") == "view")
+        let failed = try #require(fault.failedBodyIDs.first)
+        let skips = events.filter { $0.eventName == "skip" }
+        let unrestorable = try #require(
+            skips.first { $0.field("reason") == "unrestorable-snapshot" })
+        #expect(unrestorable.field("stage") == "restore")
+        #expect(unrestorable.field("drop") == "body")
+        #expect(unrestorable.field("checkpointType") == "branchPoint")
+        let threw = try #require(skips.first { $0.field("reason") == "prefill-threw" })
+        #expect(threw.field("stage") == "canonicalLeafStore")
+        #expect(
+            try #require(skips.firstIndex { $0.field("reason") == "unrestorable-snapshot" })
+                < skips.firstIndex { $0.field("reason") == "prefill-threw" } ?? 0)
+        let leafStore = try #require(events.last { $0.eventName == "leafStore" })
+        #expect(leafStore.field("path") == "skipped")
+        #expect(leafStore.field("skip") == "prefill-threw")
+        let resident = await MainActor.run {
+            fixture.cacheAdmin.residentSnapshotsForTesting().map(\.snapshot.bodyID)
+        }
+        #expect(!resident.contains(failed))
+        await fixture.drain()
+    }
+
     @MainActor
     @Test(arguments: [nil, 4] as [Int?])
     func creationAndRestoreReservePromptRowsWithoutReservingOutput(kvBits: Int?) async throws {

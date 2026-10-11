@@ -78,6 +78,12 @@ final class ModelDownloadManager: ObservableObject {
         statuses[id] ?? .notDownloaded
     }
 
+    /// A downloaded model's size on disk; nil while it isn't downloaded.
+    func sizeOnDisk(of id: String) -> Int64? {
+        if case .downloaded(let size) = status(for: id) { return size }
+        return nil
+    }
+
     // MARK: - Status
 
     func refreshAllStatuses() {
@@ -112,15 +118,10 @@ final class ModelDownloadManager: ObservableObject {
     }
 
     private func computeStatus(for model: ModelDefinition) -> ModelStatus {
-        guard case .huggingFace(_, let requiredExtension, let pathPrefix) = model.source else {
+        guard case .huggingFace(_, let requiredExtension, _) = model.source else {
             return .notDownloaded
         }
-        guard let subdir = model.cacheSubdirectory else { return .notDownloaded }
-
-        var checkDir = storageRoot.appendingPathComponent(subdir)
-        if let pathPrefix {
-            checkDir = checkDir.appendingPathComponent(pathPrefix)
-        }
+        let checkDir = directory(for: model)
 
         guard FileManager.default.fileExists(atPath: checkDir.path) else {
             return .notDownloaded
@@ -282,13 +283,9 @@ final class ModelDownloadManager: ObservableObject {
             )
         }
 
-        guard let subdir = model.cacheSubdirectory else {
-            throw NSError(
-                domain: "ModelDownload", code: 2,
-                userInfo: [NSLocalizedDescriptionKey: "No cache subdirectory for \(model.id)"]
-            )
-        }
-        let modelDir = storageRoot.appendingPathComponent(subdir)
+        // The repo's folder: files keep their paths in the repo, the path
+        // prefix's folder included.
+        let modelDir = ModelDefinition.directory(forRepo: repo, in: storageRoot)
 
         var pending = [RemoteModelFile]()
         for file in filtered {
@@ -449,14 +446,7 @@ final class ModelDownloadManager: ObservableObject {
 
     func deleteModel(modelID: String) {
         guard let model = definitions.first(where: { $0.id == modelID }) else { return }
-        guard let subdir = model.cacheSubdirectory else { return }
-
-        var deleteDir = storageRoot.appendingPathComponent(subdir)
-        if let prefix = model.pathPrefix {
-            deleteDir = deleteDir.appendingPathComponent(prefix)
-        }
-
-        try? FileManager.default.removeItem(at: deleteDir)
+        try? FileManager.default.removeItem(at: directory(for: model))
         statuses[modelID] = .notDownloaded
 
         Log.general.info("Deleted cached model: \(model.displayName)")
@@ -464,16 +454,23 @@ final class ModelDownloadManager: ObservableObject {
 
     // MARK: - Path Resolution
 
+    /// The usable directory for a model: where its files are, once they are
+    /// all there by its entry's completeness rule — nil until then. A loader
+    /// that needs a complete model asks here, so the model's holder and the
+    /// catalog can't disagree on its folder.
+    func usableDirectory(for modelID: String) -> URL? {
+        isDownloaded(modelID) ? modelPath(for: modelID) : nil
+    }
+
+    /// Where a model's files go: its download, verify and delete folder,
+    /// complete or not. Nil for an id the catalog doesn't list.
     func modelPath(for modelID: String) -> URL? {
-        guard let model = definitions.first(where: { $0.id == modelID }) else { return nil }
-        guard let subdir = model.cacheSubdirectory else { return nil }
+        definitions.first { $0.id == modelID }.map(directory(for:))
+    }
 
-        var path = storageRoot.appendingPathComponent(subdir)
-        if let prefix = model.pathPrefix {
-            path = path.appendingPathComponent(prefix)
-        }
-
-        return path
+    /// Where this manager keeps `model`'s files, by the one folder rule.
+    func directory(for model: ModelDefinition) -> URL {
+        model.directory(in: storageRoot)
     }
 
     // MARK: - Computed

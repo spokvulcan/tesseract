@@ -2,7 +2,7 @@ import Testing
 
 @testable import Tesseract_Agent
 
-/// The ADR-0008 satisfaction rule on the `.llm` slot's loaded state: loads
+/// The ADR-0008 satisfaction rule on the language model's loaded state: loads
 /// upgrade, never downgrade. A loaded vision container serves text-only
 /// demands for the same model, so chat (toggle off) and HTTP callers sharing
 /// the slot cannot thrash reloads — and the warm prefix cache survives.

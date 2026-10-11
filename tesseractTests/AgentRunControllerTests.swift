@@ -111,6 +111,56 @@ struct AgentRunControllerTests {
         #expect(run.isGenerating == false)
     }
 
+    // MARK: - A newer run
+
+    /// Holds a run's body until the test lets it go.
+    @MainActor
+    private final class Latch {
+        private var continuation: CheckedContinuation<Void, Never>?
+        private var isOpen = false
+        private(set) var hasReturned = false
+
+        func hold() async {
+            if !isOpen { await withCheckedContinuation { continuation = $0 } }
+            hasReturned = true
+        }
+
+        func open() {
+            isOpen = true
+            continuation?.resume()
+            continuation = nil
+        }
+    }
+
+    /// `.agentEnd` lowers the flag before a run's body returns, so the owner
+    /// can send again while the older run still holds the gate. The older
+    /// run's settling then leaves the newer run its flag and its settle: it
+    /// lowered both, and the Chat Session handed the queued message back to
+    /// the composer while its turn still ran.
+    @Test func anOlderRunSettlingLeavesTheNewerRunItsFlagAndItsSettle() async throws {
+        let run = AgentRunController(
+            agent: makeAgent(), arbiter: InMemoryInferenceArbiter(), reportError: { _ in })
+        let settles = ErrorRecorder()
+        run.setOnRunSettled { settles.report("settled") }
+        let older = Latch()
+        let newer = Latch()
+
+        run.runUnderGate { await older.hold() }
+        run.finish()  // the older run's `.agentEnd`, folded before its body returns
+        run.runUnderGate { await newer.hold() }
+        older.open()
+        #expect(await waitUntil { older.hasReturned })
+        // A negative check: nothing more may happen once the older body returns.
+        for _ in 0..<100 { await Task.yield() }
+
+        #expect(run.isGenerating == true)
+        #expect(settles.messages.isEmpty)
+
+        newer.open()
+        #expect(await observe(until: { !run.isGenerating }))
+        #expect(settles.messages == ["settled"])
+    }
+
     // MARK: - Vision requirement on the send path (ADR-0013)
 
     /// With "Use vision models when available" on (the default), the chat send

@@ -8,48 +8,26 @@ import MLXLMCommon
 import Observation
 import os
 
-/// A model the arbiter tracks for residency: what is loaded, and what
-/// Offload Model frees. Both can be in memory at once and run at once.
-nonisolated enum ModelSlot: Sendable, Hashable, CustomStringConvertible {
-    case llm
-    case tts
-
-    var description: String {
-        switch self {
-        case .llm: "llm"
-        case .tts: "tts"
-        }
-    }
-}
-
 /// Single authority for the LLM's identity and its one-at-a-time rule, and
-/// the residency mirror for Offload Model.
+/// the language model's holder for **Model Residency** (its unload waits its
+/// turn at the gate).
 ///
 /// LLM work — chat turns, the Companion's moments, HTTP requests, `/compact`,
 /// reloads — runs inside `withLLM`, which takes the **LLM Gate** (FIFO) and
 /// makes sure the selected model is loaded first, so the model can never
 /// change under a running generation. Nothing else takes the gate: speech,
 /// dictation, the proofreader and the embedder run beside the LLM (ADR-0081).
-/// Memory, not the GPU, is the shared limit; the menu bar shows what is
-/// loaded and working.
-///
-/// Memory residency model:
-///   - LLM + TTS are co-resident (independently lazy-loaded, both allowed in
-///     memory simultaneously). Neither evicts the other.
-///   - STT (WhisperKit) runs on CoreML in a separate memory pool — not managed here.
+/// Memory, not the GPU, is the shared limit; **Model Residency** knows what
+/// is loaded and working, and frees it.
 @Observable @MainActor
 final class InferenceArbiter: InferenceArbitrating {
 
-    /// Which slots are currently loaded. Derived from engine state so it cannot
-    /// desync if engines are loaded/unloaded outside the arbiter (e.g., AppDelegate teardown).
-    var loadedSlots: Set<ModelSlot> {
-        var slots: Set<ModelSlot> = []
-        if agentEngine.isModelLoaded { slots.insert(.llm) }
-        if isTTSLoaded() { slots.insert(.tts) }
-        return slots
-    }
+    /// Whether the language model is loaded. Derived from engine state so it
+    /// cannot desync if the engine is loaded or unloaded outside the arbiter
+    /// (e.g., AppDelegate teardown).
+    var isLLMLoaded: Bool { agentEngine.isModelLoaded }
 
-    /// Identity of the currently-loaded `.llm` slot — model ID and vision mode.
+    /// Identity of the loaded language model — model ID and vision mode.
     /// Kept as a single struct so reload-relevant keys can never drift out of
     /// sync.
     ///
@@ -70,7 +48,7 @@ final class InferenceArbiter: InferenceArbitrating {
 
     private(set) var loadedLLMState: LoadedLLMState?
 
-    /// The model ID currently loaded in the `.llm` slot, or `nil` if unloaded.
+    /// The language model's ID while it is loaded, or `nil`.
     /// Thin accessor over `loadedLLMState` — retained for existing call sites.
     var loadedLLMModelID: String? { loadedLLMState?.modelID }
 
@@ -114,25 +92,14 @@ final class InferenceArbiter: InferenceArbitrating {
     private let settingsManager: SettingsManager
     private let modelDownloadManager: ModelDownloadManager
 
-    /// The v2 speech engine loads itself (ADR-0039), so the arbiter only
-    /// *observes* TTS residency and can *release* it — closures rather than a
-    /// stored engine, which also keeps the container's arbiter ↔ speech
-    /// wiring acyclic.
-    private let isTTSLoaded: @MainActor () -> Bool
-    private let unloadTTS: @MainActor () async -> Void
-
     init(
         agentEngine: AgentEngine,
         settingsManager: SettingsManager,
-        modelDownloadManager: ModelDownloadManager,
-        isTTSLoaded: @escaping @MainActor () -> Bool,
-        unloadTTS: @escaping @MainActor () async -> Void
+        modelDownloadManager: ModelDownloadManager
     ) {
         self.agentEngine = agentEngine
         self.settingsManager = settingsManager
         self.modelDownloadManager = modelDownloadManager
-        self.isTTSLoaded = isTTSLoaded
-        self.unloadTTS = unloadTTS
     }
 
     // MARK: - Public API
@@ -190,11 +157,11 @@ final class InferenceArbiter: InferenceArbitrating {
             isVisionCapable: modelDownloadManager.isVisionCapable(targetModelID)
         )
         let desired = LoadedLLMState(modelID: targetModelID, visionMode: desiredVision)
-        if loadedSlots.contains(.llm), let loaded = loadedLLMState, loaded.satisfies(desired) {
+        if isLLMLoaded, let loaded = loadedLLMState, loaded.satisfies(desired) {
             return
         }
         // Model or vision mode changed, or not loaded — (re)load
-        if loadedSlots.contains(.llm) { await unload(.llm) }
+        if isLLMLoaded { unloadLLM() }
         // Drain the detached unload task before the next load. Without
         // this, the actor-level `llmActor.unloadModel()` can interleave
         // after the new `llmActor.loadModel()` and tear down the freshly
@@ -205,9 +172,7 @@ final class InferenceArbiter: InferenceArbitrating {
     }
 
     private func loadLLM(modelID: String, visionMode: Bool) async throws {
-        guard modelDownloadManager.isDownloaded(modelID),
-            let path = modelDownloadManager.modelPath(for: modelID)
-        else {
+        guard let path = modelDownloadManager.usableDirectory(for: modelID) else {
             Log.general.error("InferenceArbiter: LLM model '\(modelID)' not downloaded")
             // Specific error case so HTTP callers can surface 404
             // `model_not_found` instead of a generic 503. Closes the race
@@ -220,39 +185,25 @@ final class InferenceArbiter: InferenceArbitrating {
         try await agentEngine.loadModel(from: path, visionMode: visionMode)
     }
 
-    /// User-initiated offload (the status-bar menu's "Offload Model"): the
-    /// voice engine is released at once (it cancels its own utterance first);
-    /// the LLM waits its turn at the gate, so a running generation finishes
-    /// first and nothing can interleave. The next consumer lazy-reloads as
-    /// usual. STT is deliberately untouched: always-armed dictation is a
-    /// product promise (ADR-0025), and WhisperKit lives in a separate memory
-    /// pool anyway.
-    func offloadAllModels() async {
-        if loadedSlots.contains(.tts) { await unload(.tts) }
+    /// The language model's part of Offload Model: it waits its turn at the
+    /// gate, so a running generation finishes first and nothing can
+    /// interleave. The next consumer lazy-reloads as usual.
+    func offloadLLM() async {
         do {
             try await gate.withExclusive {
-                guard loadedSlots.contains(.llm) else { return }
-                await unload(.llm)
+                guard isLLMLoaded else { return }
+                unloadLLM()
             }
         } catch {
             Log.general.error(
-                "InferenceArbiter.offloadAllModels: the LLM gate failed: "
+                "InferenceArbiter.offloadLLM: the LLM gate failed: "
                     + "\(error.localizedDescription)")
         }
     }
 
-    private func unload(_ slot: ModelSlot) async {
-        switch slot {
-        case .llm:
-            agentEngine.unloadModel()
-            loadedLLMState = nil
-            Log.general.info("InferenceArbiter: unloaded LLM")
-
-        case .tts:
-            // The engine cancels its active utterance and waits for it before
-            // releasing the model.
-            await unloadTTS()
-            Log.general.info("InferenceArbiter: unloaded TTS")
-        }
+    private func unloadLLM() {
+        agentEngine.unloadModel()
+        loadedLLMState = nil
+        Log.general.info("InferenceArbiter: unloaded LLM")
     }
 }

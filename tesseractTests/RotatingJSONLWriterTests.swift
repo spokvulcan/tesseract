@@ -81,10 +81,6 @@ struct RotatingJSONLWriterTests {
 /// of the app's storage.
 struct TelemetryEnvironmentTests {
 
-    @Test func testProcessIsDetected() {
-        #expect(ProcessEnvironment.isRunningTests)
-    }
-
     @Test func durableDirectoriesDivertAwayFromApplicationSupport() throws {
         let owners = try #require(
             FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)

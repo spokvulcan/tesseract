@@ -209,7 +209,7 @@ final class CapturePanelController {
         }
         // Words were waiting in the field: the spoken ones join them, for
         // the owner to look over and save.
-        model.text = typedBeforeHold + " " + text
+        model.text = AgentVoiceInputController.joining(text, to: typedBeforeHold)
         typedBeforeHold = ""
         model.focusRequest += 1
         panel?.makeKey()
@@ -231,7 +231,7 @@ final class CapturePanelController {
     /// over, never saved as heard.
     private func voiceRejected(_ raw: String) {
         model.mode = .typing
-        model.text = typedBeforeHold.isEmpty ? raw : typedBeforeHold + " " + raw
+        model.text = AgentVoiceInputController.joining(raw, to: typedBeforeHold)
         typedBeforeHold = ""
         model.outcome = .failed("Not sure I heard that right. Fix it if needed, then press Return.")
         panel?.setHeight(Self.withLineHeight)

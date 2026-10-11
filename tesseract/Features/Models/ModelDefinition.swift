@@ -72,11 +72,6 @@ struct ModelDefinition: Identifiable, Sendable {
     /// When the entry's directory counts as downloaded.
     var completeness: ModelCompleteness = .anyRequiredFile
 
-    var cacheSubdirectory: String? {
-        guard case .huggingFace(let repo, _, _) = source else { return nil }
-        return Self.storageSubdirectory(forRepo: repo)
-    }
-
     /// The model store's directory name under Application Support. Every
     /// model family (agent, TTS, ASR) stores here, and users' existing
     /// multi-GB downloads live at this path, so it never changes.
@@ -85,6 +80,25 @@ struct ModelDefinition: Identifiable, Sendable {
     /// A repo's directory name under the model store: "/" flattened to "_".
     nonisolated static func storageSubdirectory(forRepo repo: String) -> String {
         repo.replacingOccurrences(of: "/", with: "_")
+    }
+
+    /// The one folder rule: a repo's files live in its folder under the
+    /// model store, and a model in it beneath its path prefix, when it has
+    /// one. Pure, so code off the main actor applies it too (the voice
+    /// engine's checkpoint closure).
+    nonisolated static func directory(
+        forRepo repo: String, pathPrefix: String? = nil, in store: URL
+    ) -> URL {
+        let folder = store.appendingPathComponent(storageSubdirectory(forRepo: repo))
+        return pathPrefix.map { folder.appendingPathComponent($0) } ?? folder
+    }
+
+    /// Where this model's files live under the model store `store`.
+    nonisolated func directory(in store: URL) -> URL {
+        switch source {
+        case .huggingFace(let repo, _, let pathPrefix):
+            Self.directory(forRepo: repo, pathPrefix: pathPrefix, in: store)
+        }
     }
 
     var requiredExtension: String? {
@@ -418,6 +432,12 @@ extension ModelDefinition {
             dependencies: []
         ),
     ]
+
+    /// A model's name to show: its catalog entry's, or its id when the
+    /// catalog doesn't list it.
+    static func displayName(of id: String) -> String {
+        withID(id)?.displayName ?? id
+    }
 
     static func withID(_ id: String) -> ModelDefinition? {
         all.first { $0.id == id }

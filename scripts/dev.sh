@@ -25,8 +25,9 @@ PROJECT="$PROJECT_DIR/tesseract.xcodeproj"
 SCHEME="tesseract"
 BUNDLE_ID="app.tesseract.agent"
 # Uses Xcode's default DerivedData so CLI and GUI share the same build artifacts,
-# module cache, and resolved SPM packages.
-DERIVED_DATA_GLOB="$HOME/Library/Developer/Xcode/DerivedData/tesseract-*"
+# module cache, and resolved SPM packages: this checkout's own, since every
+# worktree has one.
+. "$PROJECT_DIR/scripts/lib/checkout.sh"
 
 # --- Helpers ---------------------------------------------------------------
 
@@ -36,10 +37,7 @@ find_app() {
     # Resolve the products dir from xcodebuild, not an mtime-sorted glob —
     # stale sibling DerivedData dirs picked hours-old binaries (#165).
     local products_dir
-    products_dir=$(xcodebuild -project "$PROJECT" -scheme "$SCHEME" \
-        -configuration "$configuration" -destination 'platform=macOS' \
-        -skipPackagePluginValidation -showBuildSettings 2>/dev/null \
-        | awk -F' = ' '/[[:space:]]BUILT_PRODUCTS_DIR =/{print $2; exit}')
+    products_dir=$(built_products_dir "$PROJECT" "$SCHEME" "$configuration")
     app_path="$products_dir/Tesseract Agent.app"
     if [ -z "$products_dir" ] || [ ! -d "$app_path" ]; then
         echo "Error: Tesseract Agent.app ($configuration) not found at BUILT_PRODUCTS_DIR ('${products_dir:-unresolved}'). Run a matching build first." >&2
@@ -115,7 +113,7 @@ cmd_build() {
     shift || true
 
     local derived_data
-    derived_data=$(ls -d $DERIVED_DATA_GLOB 2>/dev/null | head -1)
+    derived_data=$(checkout_derived_data "$PROJECT" || true)
     if [ -n "$derived_data" ]; then
         # Check SourcePackages integrity — if checkouts are missing/empty, re-resolve
         local checkouts="$derived_data/SourcePackages/checkouts"
@@ -150,7 +148,7 @@ cmd_build() {
         if grep -q "Unable to find module dependency\|missing required module" "$build_log"; then
             echo ""
             echo "Detected stale module cache. Cleaning intermediates and retrying..."
-            derived_data=$(ls -d $DERIVED_DATA_GLOB 2>/dev/null | head -1)
+            derived_data=$(checkout_derived_data "$PROJECT" || true)
             [ -n "$derived_data" ] && rm -rf "$derived_data/Build/Intermediates.noindex" 2>/dev/null
 
             exit_code=0
@@ -181,7 +179,7 @@ cmd_build() {
     rm -f "$build_log"
 
     # Stamp the configuration for change detection
-    derived_data=$(ls -d $DERIVED_DATA_GLOB 2>/dev/null | head -1)
+    derived_data=$(checkout_derived_data "$PROJECT" || true)
     [ -n "$derived_data" ] && echo "$configuration" > "$derived_data/.last_config"
 
     echo ""
@@ -360,7 +358,10 @@ cmd_clean() {
     echo "Cleaning build..."
     xcodebuild clean -project "$PROJECT" -scheme "$SCHEME" 2>&1 | tail -1
     echo "Removing DerivedData..."
-    rm -rf $DERIVED_DATA_GLOB
+    # This checkout's only: another worktree's build is that worktree's.
+    local derived_data
+    derived_data=$(checkout_derived_data "$PROJECT" || true)
+    [ -n "$derived_data" ] && rm -rf "$derived_data"
     # Remove legacy CLI-only DerivedData if it still exists
     rm -rf "$PROJECT_DIR/.build/DerivedData"
     echo "Clean complete."

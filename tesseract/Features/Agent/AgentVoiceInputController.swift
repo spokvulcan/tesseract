@@ -2,16 +2,17 @@
 //  AgentVoiceInputController.swift
 //  tesseract
 //
-//  The **Voice Input** module: the agent composer's push-to-talk
-//  capture→transcribe→emit flow, carved out of `AgentCoordinator`. Distinct from
-//  `DictationCoordinator`, the global system-wide dictation overlay — when
-//  unqualified this is "agent voice input".
+//  The **Voice Input** module: a field's push-to-talk capture→transcribe→emit
+//  flow — the agent composer's, Today's, the capture and Jarvis panels', the
+//  Onboarding Tour's. Distinct from `DictationCoordinator`, the global
+//  system-wide dictation overlay — when unqualified this is "agent voice
+//  input".
 //
-//  A thin composer over the shared **Voice Capture Session**: it maps the session's
-//  outcomes onto `AgentVoiceState` and supplies a commit that **emits** the text to
-//  the composer via `onVoiceTranscription`; it does **not** send. (The pre-carve
-//  name `stopVoiceInputAndSend` was a misnomer.) Errors stay in `voiceState`, never
-//  the coordinator's shared `error` banner. No sounds. No `Agent`, no arbiter.
+//  A thin presenter over a **Voice Capture Session** from **Voice Capture**,
+//  so its takes run every stage (ADR-0096): it maps the session's outcomes
+//  onto `AgentVoiceState` and supplies a commit that **emits** the text to the
+//  surface via `onVoiceTranscription`; it does **not** send. Errors stay in
+//  `voiceState`, never a shared banner. No sounds. No `Agent`, no arbiter.
 //
 
 import Foundation
@@ -42,42 +43,22 @@ final class AgentVoiceInputController {
 
     // MARK: - Dependencies
 
-    /// The shared capture lifecycle. `nil` when capture/transcription dependencies
-    /// were not supplied — voice input then fails safe (`start()` reports it
-    /// unavailable) rather than half-working.
-    private let session: VoiceCaptureSession?
-    private let settings: SettingsManager?
-
-    /// The shared **Proofread Pass** — agent voice input benefits from the
-    /// same polish as dictation (no overlay narration here; `voiceState`
-    /// stays `.transcribing` through the pass).
-    private let proofreadPass: ProofreadPass?
+    /// This surface's takes, with every stage.
+    private let session: VoiceCaptureSession
 
     @ObservationIgnored private var voiceErrorResetTask: Task<Void, Never>?
 
     // MARK: - Init
 
-    init(
-        audioCapture: (any AudioCapturing)? = nil,
-        transcriptionEngine: (any Transcribing)? = nil,
-        settings: SettingsManager? = nil,
-        proofreadPass: ProofreadPass? = nil,
-        captureDump: (any CaptureDumpStoring)? = nil,
-        learnedWords: (any LearnedWordApplying)? = nil
-    ) {
-        if let audioCapture, let transcriptionEngine {
-            self.session = VoiceCaptureSession(
-                audioCapture: audioCapture,
-                transcriptionEngine: transcriptionEngine,
-                captureDump: captureDump,
-                isCaptureDumpEnabled: { settings?.captureDumpEnabled ?? true },
-                learnedWords: learnedWords
-            )
-        } else {
-            self.session = nil
-        }
-        self.settings = settings
-        self.proofreadPass = proofreadPass
+    init(session: VoiceCaptureSession) {
+        self.session = session
+    }
+
+    /// Spoken words join the words already in the field: after them, with one
+    /// space between, or on their own when the field holds none.
+    static func joining(_ spoken: String, to typed: String) -> String {
+        let typed = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        return typed.isEmpty ? spoken : typed + " " + spoken
     }
 
     // MARK: - Capture
@@ -91,10 +72,6 @@ final class AgentVoiceInputController {
             voiceState = .idle
         }
         guard voiceState == .idle else { return }
-        guard let session else {
-            setVoiceError("Voice input not available")
-            return
-        }
 
         switch session.start() {
         case .started:
@@ -111,10 +88,6 @@ final class AgentVoiceInputController {
     /// `onVoiceTranscription`. It does **not** send.
     func finishCapture() {
         guard voiceState == .recording else { return }
-        guard let session else {
-            cancel()
-            return
-        }
 
         switch session.stop() {
         case .noAudio, .tooShort:
@@ -130,16 +103,10 @@ final class AgentVoiceInputController {
             // Fire-and-forget: the session owns the in-flight task and its
             // cancellation; this outer task only maps the outcome.
             Task {
-                var proofread: (@MainActor (String) async -> ProofreadVerdict?)?
-                if let pass = proofreadPass {
-                    proofread = { text in await pass.proofread(text) }
-                }
-                let outcome = await session.transcribeAndCommit(
-                    audioData, language: settings?.language ?? "en", proofread: proofread
-                ) { [self] text, _ in
-                    Log.agent.info("Voice transcribed: \(text)")
+                let outcome = await session.transcribeAndCommit(audioData) { [self] words in
+                    Log.agent.info("Voice transcribed: \(words.text)")
                     voiceState = .idle
-                    onVoiceTranscription?(text)
+                    onVoiceTranscription?(words.text)
                 }
 
                 switch outcome {
@@ -172,7 +139,7 @@ final class AgentVoiceInputController {
     }
 
     func cancel() {
-        session?.cancel()
+        session.cancel()
         voiceState = .idle
         Log.agent.info("Voice input cancelled")
     }

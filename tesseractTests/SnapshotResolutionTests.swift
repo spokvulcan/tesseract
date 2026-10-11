@@ -163,7 +163,7 @@ import MLXLMCommon
             telemetry.trees.flatMap(\.nodes).first { $0.tokenOffset == 4 })
         #expect(checkpoint.hasSnapshot)
         #expect(checkpoint.checkpointKind == "prefixView")
-        let restored = try #require(resolved.lookup.restoreCache())
+        let restored = try #require(resolved.lookup.restoredCache())
         #expect(restored[0].offset == 4)
         #expect(restored[1].state[0].item(Float.self) == 42)
         let ownedAddresses = Set(
@@ -211,10 +211,59 @@ import MLXLMCommon
         _ manager: PrefixCacheManager, path: [Int], offset: Int
     ) -> SnapshotRef {
         let ref = PrefixCacheTestFixtures.makeRef(tokenOffset: offset)
-        manager.restoreSnapshotRef(
+        manager.testSeam().restoreSnapshotRef(
             path: path, snapshotRef: ref, partitionKey: key, lastAccessTime: .now
         )
         return ref
+    }
+
+    // MARK: - A keyed turn's planned resolution
+
+    /// A keyed turn's resolution returns its checkpoint plan (ADR-0087
+    /// decision 6), made against the settled tree and aligned to the hit:
+    /// the tree matches 400 tokens past the system checkpoint it hits, so
+    /// the plan adds the alignment branch point there and leaves out the
+    /// system checkpoint the tree already holds. Dropping that checkpoint as
+    /// unrestorable plans the turn again in the same hop, and the re-plan
+    /// wants it back; a drop that took nothing returns no re-plan.
+    @Test func aKeyedResolutionCarriesItsPlanAndADropPlansItAgain() async throws {
+        let manager = makeManager()
+        let matched = Array(1...500)
+        manager.admit(
+            SnapshotAdmission.checkpoints(
+                fullPromptTokens: matched,
+                candidates: [.ramOnly(makeSnapshot(offset: 100, type: .system))],
+                partitionKey: key)!)
+        let request = matched + [999]
+        let context = diagnostics
+        let (planned, handOver) = await CacheClaim.withRequestClaim(
+            context: context, prefixCache: manager,
+            sessions: ToyModelSessionProvider(model: ToyLanguageModel(script: [1, 2])),
+            memory: nil, tripwire: .standard
+        ) { claim in
+            await manager.resolve(
+                tokens: request, promptTokenCount: request.count, partitionKey: key,
+                modelFingerprint: nil, diagnostics: context, planningFrom: 100, for: claim)
+        }
+        #expect(planned.resolved.lookup.snapshotTokenOffset == 100)
+        #expect(planned.checkpointPlan.contains { $0.offset == 500 && $0.type == .branchPoint })
+        #expect(!planned.checkpointPlan.contains { $0.offset == 100 })
+
+        let failed = try #require(planned.resolved.lookup.snapshot)
+        let dropped = manager.dropUnrestorableSnapshot(
+            failed, tokens: request, partitionKey: key, corruptLayers: false,
+            replanning: planned)
+        #expect(dropped.drop == .body)
+        let replanned = try #require(dropped.replanned)
+        #expect(replanned.contains { $0.offset == 100 && $0.type == .system })
+        #expect(replanned.contains { $0.offset == 500 && $0.type == .branchPoint })
+
+        let again = manager.dropUnrestorableSnapshot(
+            failed, tokens: request, partitionKey: key, corruptLayers: false,
+            replanning: planned)
+        #expect(again.drop == .notFound)
+        #expect(again.replanned == nil)
+        await handOver.withClaim { _ in }
     }
 
     // MARK: - Without hydration (passthrough)
@@ -300,7 +349,7 @@ import MLXLMCommon
     @Test func resolveHydratesAnSSDHitAndPromotesIt() async {
         let manager = makeManager()
         let peer = InMemorySnapshotHydrating()
-        manager.setSnapshotHydratingForTesting(peer)
+        manager.testSeam().setSnapshotHydrating(peer)
         let path = [1, 2, 3, 4, 5, 6, 7, 8]
         let ref = plantSSDOnly(manager, path: path, offset: 8)
         peer.programSuccess(id: ref.snapshotID, body: makeSnapshot(offset: 8))
@@ -332,7 +381,7 @@ import MLXLMCommon
     @Test func resolveRetriesAfterAFailedHydrationUntilAShallowerNodeSucceeds() async {
         let manager = makeManager()
         let peer = InMemorySnapshotHydrating()
-        manager.setSnapshotHydratingForTesting(peer)
+        manager.testSeam().setSnapshotHydrating(peer)
         // A chain of state-5 nodes at increasing depth. Inserted shallow→deep
         // so each extends the path without disturbing the prior ref.
         let ref4 = plantSSDOnly(manager, path: [1, 2, 3, 4], offset: 4)
@@ -365,7 +414,7 @@ import MLXLMCommon
     @Test func resolveSurfacesAMissAfterThreeConsecutiveHydrationFailures() async {
         let manager = makeManager()
         let peer = InMemorySnapshotHydrating()
-        manager.setSnapshotHydratingForTesting(peer)
+        manager.testSeam().setSnapshotHydrating(peer)
         let ref4 = plantSSDOnly(manager, path: [1, 2, 3, 4], offset: 4)
         let ref6 = plantSSDOnly(manager, path: [1, 2, 3, 4, 5, 6], offset: 6)
         let ref8 = plantSSDOnly(manager, path: [1, 2, 3, 4, 5, 6, 7, 8], offset: 8)
@@ -389,7 +438,7 @@ import MLXLMCommon
     @Test func resolveStopsAClearStormAtTheRetryCap() async {
         let manager = makeManager()
         let peer = InMemorySnapshotHydrating()
-        manager.setSnapshotHydratingForTesting(peer)
+        manager.testSeam().setSnapshotHydrating(peer)
         // Five state-5 nodes on the path — more than the cap. All fail.
         let path: [Int] = Array(1...10)
         let ref2 = plantSSDOnly(manager, path: Array(path[0..<2]), offset: 2)
@@ -413,7 +462,7 @@ import MLXLMCommon
     @Test func resolveFallsBackToAShallowerResidentBodyAfterAFailedHydration() async {
         let manager = makeManager()
         let peer = InMemorySnapshotHydrating()
-        manager.setSnapshotHydratingForTesting(peer)
+        manager.testSeam().setSnapshotHydrating(peer)
         // A RAM-resident body at offset 4, then a deeper state-5 node at 8.
         let ramPath = [1, 2, 3, 4]
         manager.admit(
@@ -445,7 +494,7 @@ import MLXLMCommon
     @Test func aFailedHydrationCallsNeitherRecordHitNorPromote() async {
         let manager = makeManager()
         let peer = InMemorySnapshotHydrating()
-        manager.setSnapshotHydratingForTesting(peer)
+        manager.testSeam().setSnapshotHydrating(peer)
         let path = [1, 2, 3, 4]
         let ref = plantSSDOnly(manager, path: path, offset: 4)
         peer.programFailure(id: ref.snapshotID)

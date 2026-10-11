@@ -24,6 +24,9 @@ import MLXNN
 /// payloads.
 nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensionProvider {
     let capacityRecords = ToyCacheCapacityRecords()
+    /// The attention form every forward read, in order: where a KV Scheme
+    /// or `kvBits` converted the cache, relative to the prompt's last token.
+    let forwardForms = ToyForwardForms()
     let kvHeads: [Int]
     let headDim: Int
     /// Optional microscopic whole-state layer for hybrid snapshot accounting.
@@ -125,6 +128,9 @@ nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensio
         let tokenCount = batched.dim(-1)
         let offset = cache?.first?.offset ?? 0
         onForward?(offset)
+        if let first = cache?.first {
+            forwardForms.append(offset: offset, tokens: tokenCount, layer: first)
+        }
 
         if let cache {
             // Content-derived K/V — one head, `headDim` copies of the token
@@ -489,11 +495,20 @@ nonisolated final class ModelVerbRecorder: @unchecked Sendable {
 
     private let lock = NSLock()
     private var _verbs: [ModelVerb] = []
+    private var _prefillEvalPolicies: [PrefillExecutor.EvalPolicy] = []
     private var _prefillCapacities: [Int] = []
     private var _captures: [Capture] = []
     private var _speculativeHandovers: [SpeculativeHandover] = []
 
     var prefillCapacities: [Int] { lock.withLock { _prefillCapacities } }
+    /// The eval policy each `prefill` verb ran its chunks under, in order.
+    var prefillEvalPolicies: [PrefillExecutor.EvalPolicy] {
+        lock.withLock { _prefillEvalPolicies }
+    }
+
+    func recordPrefillEvalPolicy(_ policy: PrefillExecutor.EvalPolicy) {
+        lock.withLock { _prefillEvalPolicies.append(policy) }
+    }
     var captures: [Capture] { lock.withLock { _captures } }
     var speculativeHandovers: [SpeculativeHandover] {
         lock.withLock { _speculativeHandovers }
@@ -521,6 +536,38 @@ nonisolated final class ModelVerbRecorder: @unchecked Sendable {
 
     func record(_ verb: ModelVerb) {
         lock.withLock { _verbs.append(verb) }
+    }
+}
+
+/// Session requests in the order callers make them, counted before the
+/// container is theirs: a test can act while a caller waits for its session.
+nonisolated final class SessionRequestLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    private var waiters: [(target: Int, continuation: CheckedContinuation<Void, Never>)] = []
+
+    var requests: Int { lock.withLock { count } }
+
+    func requested() {
+        let ready = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+            count += 1
+            let ready = waiters.filter { $0.target <= count }.map(\.continuation)
+            waiters.removeAll { $0.target <= count }
+            return ready
+        }
+        for continuation in ready { continuation.resume() }
+    }
+
+    /// Returns once `target` sessions have been requested.
+    func reached(_ target: Int) async {
+        await withCheckedContinuation { continuation in
+            let now = lock.withLock { () -> Bool in
+                if count >= target { return true }
+                waiters.append((target, continuation))
+                return false
+            }
+            if now { continuation.resume() }
+        }
     }
 }
 
@@ -556,21 +603,32 @@ nonisolated final class ToyRestoreFault: @unchecked Sendable {
 
     private let lock = NSLock()
     private var armed: (any Error)?
+    private var skipping = 0
     private var _failedBodyIDs: [UUID] = []
 
     /// The bodies a fired fault failed to restore, in order.
     var failedBodyIDs: [UUID] { lock.withLock { _failedBodyIDs } }
 
-    /// Fail the next restore with `error`: `Injected` by default, or the
+    /// Fail a restore with `error`: `Injected` by default, or the
     /// `HybridCacheSnapshot.RestoreError` a corrupt persisted layer raises.
-    func arm(throwing error: any Error = Injected()) {
-        lock.withLock { armed = error }
+    /// The first `skipping` restores still succeed — the turn's own restore,
+    /// say, before its leaf store's.
+    func arm(throwing error: any Error = Injected(), skipping: Int = 0) {
+        lock.withLock {
+            armed = error
+            self.skipping = skipping
+        }
     }
 
     func fireIfArmed(restoring snapshot: HybridCacheSnapshot) throws {
         let error: (any Error)? = lock.withLock {
+            guard armed != nil else { return nil }
+            guard skipping == 0 else {
+                skipping -= 1
+                return nil
+            }
             defer { armed = nil }
-            if armed != nil { _failedBodyIDs.append(snapshot.bodyID) }
+            _failedBodyIDs.append(snapshot.bodyID)
             return armed
         }
         if let error { throw error }
@@ -658,6 +716,7 @@ nonisolated struct RecordingModelSession: ModelSession {
         storedForm: KVScheme?
     ) throws -> PrefillExecutor.Output {
         recorder.record(.prefill)
+        recorder.recordPrefillEvalPolicy(evalPolicy)
         try prefillFault?.fireIfArmed()
         let output = try base.prefill(
             text: text,
@@ -770,6 +829,9 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
     let prefillFault: ToyPrefillFault?
     /// Fails the next `restore` verb once armed; `nil` never fails.
     let restoreFault: ToyRestoreFault?
+    /// Counts session requests as callers make them, before the container
+    /// is theirs; `nil` counts nothing.
+    let sessionRequests: SessionRequestLog?
 
     init(
         model: ToyLanguageModel,
@@ -781,8 +843,10 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
         anchorsVision: Bool = false,
         speculation: Speculation = .none,
         prefillFault: ToyPrefillFault? = nil,
-        restoreFault: ToyRestoreFault? = nil
+        restoreFault: ToyRestoreFault? = nil,
+        sessionRequests: SessionRequestLog? = nil
     ) {
+        self.sessionRequests = sessionRequests
         self.reportsFlatTextTokens = reportsFlatTextTokens
         self.anchorsVision = anchorsVision
         self.speculation = speculation
@@ -808,6 +872,7 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
         let speculation = self.speculation
         let prefillFault = self.prefillFault
         let restoreFault = self.restoreFault
+        sessionRequests?.requested()
         return try await container.perform(nonSendable: payload) { context, payload in
             try await ModelSessionScope.$isInside.withValue(true) {
                 try await body(
@@ -864,6 +929,45 @@ extension Speculation {
         Speculation(
             mtpDrafter: InactiveMTPDrafter(),
             scratchProfile: identity?.fullAttentionScratchProfile)
+    }
+}
+
+/// The attention form of the cache each toy forward read, and the prompt
+/// positions it covered.
+nonisolated final class ToyForwardForms: @unchecked Sendable {
+    enum Form: String, Sendable {
+        case fullPrecision, turboQuant, affineQuantized, other
+    }
+
+    struct Entry: Sendable {
+        let offset: Int
+        let tokens: Int
+        let form: Form
+
+        func covers(_ position: Int) -> Bool {
+            position >= offset && position < offset + tokens
+        }
+    }
+
+    private let lock = NSLock()
+    private var entries: [Entry] = []
+    var values: [Entry] { lock.withLock { entries } }
+
+    func append(offset: Int, tokens: Int, layer: any KVCache) {
+        let form: Form =
+            switch layer {
+            case is TurboQuantKVCache: .turboQuant
+            case is any QuantizedKVCacheProtocol: .affineQuantized
+            case is KVCacheSimple: .fullPrecision
+            default: .other
+            }
+        let entry = Entry(offset: offset, tokens: tokens, form: form)
+        lock.withLock { entries.append(entry) }
+    }
+
+    /// The form the last forward over `position` read.
+    func form(at position: Int) -> Form? {
+        values.last { $0.covers(position) }?.form
     }
 }
 

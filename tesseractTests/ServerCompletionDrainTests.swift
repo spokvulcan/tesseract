@@ -226,7 +226,7 @@ struct ServerCompletionDrainTests {
         )
         await fixture.module.scheduleSpeculativePrefill(
             seed: seed,
-            container: fixture.provider.container,
+            sessions: fixture.provider,
             entryDrainGeneration: 1,
             on: fixture.actor
         )

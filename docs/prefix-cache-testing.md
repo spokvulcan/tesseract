@@ -384,12 +384,25 @@ each captured checkpoint labelled with the offset its cache held
 (`ModelVerbRecorder.captures` records both), and every body left in the cache
 reading back the path it is stored under
 (`PrefixCacheAdmin.residentSnapshotsForTesting`; the toy writes each fed id
-into its K/V row). A resident MTP drafter that traps if engaged
+into its K/V row), and the leaf reporting the source its capture took
+(`handoff` or `live`, never `copy`). A resident MTP drafter that traps if engaged
 (`Speculation.inactiveMTP`) checks that the fallback keeps its Speculation
 Plan. The failed snapshot is dropped: a system checkpoint that failed is gone
 after the turn, recaptured on the same turn, and restored by the next request;
 over an SSD tier a `RestoreError` also removes its old copy from the manifest,
-and any other error keeps it.
+and any other error keeps it. The same policy covers the Residual Prefill's
+two producers (ADR-0094): `ToyRestoreFault.arm(skipping:)` lets the turn's own
+restore through and fails the next, so
+`ServerCompletionKeyedSequencingTests.aBoundaryThatFailsToRestoreIsDroppedLikeTheKeyedTurns`
+fails the boundary route's restore of a planned branch view and
+`SpeculativePrefillPreemptionTests.aBoundaryThatFailsToRestoreIsDropped` the
+speculative pass's; each checks the `unrestorable-snapshot` line before the
+producer's own, and that the view or leaf is gone. The rule both read,
+`PrefillPlanner.usableRestore`, is a table in `PrefillPlannerTests`. What a
+turn's restore turned out to be is one `TurnRestore` (ADR-0069's 2026-10-11
+amendment); `TurnRestoreTests` tables every outcome's projections (the wire
+mode, the `restored` phase's facts, the `leafStore` fields, and the stored
+leaf's source on every path) without running a completion.
 
 `CacheClaimMemoryEvidenceTests` measures the MLX peak around one step at a time
 on synthetic caches: check-in before extraction, a refused check-in, the
@@ -585,7 +598,13 @@ isolation under the new vendor allocation policy.
 Prefill Strategy routes. `canonicalLeafRestoreReservesTheStoredPath` exercises
 the canonical Leaf Store restore with a think-stripping template;
 `SpeculativePrefillPreemptionTests` checks that both extension chunks retain one
-reservation for the entire admit path even when cancellation ends the pass.
+reservation for the entire admit path even when cancellation ends the pass. Its
+chunk-loop cases check that each chunk is one checked `prefill` verb
+(`ModelVerbRecorder.prefillEvalPolicies`), that a chunk which throws ends the
+pass with nothing admitted, and that a preemption landing while a chunk waits
+for its session still runs that chunk: `SessionRequestLog` counts session
+requests before the container is the caller's, so the test can hold the
+session, cancel, and let the chunk in.
 These observations remain scalars in the toy model; no new production seam was
 introduced. Run the raw-generation, Prefill Strategy, Speculative Canonical
 Prefill and Generation Logit Processor suites with the prefix-cache suites.
@@ -702,9 +721,9 @@ compressed cache (`TEST_RUNNER_TURBOQUANT_DECODE_BENCH_CHUNKS=64,512,1024`).
 App side: `TurboQuantSnapshotTests` (capture, restore, move, prefix views,
 the Stored Form, the SSD round trip), `SpeculationPlanTests` (a scheme keeps
 DFlash2 and refuses MTP), `RequestFactsTests` and `SnapshotManifestTests`
-(the scheme in the partition key, digest and meta),
-`ServerCompletionUnkeyedSequencingTests` (an Unkeyed Completion decodes over
-the scheme's layers after both the text and the anchored vision prefill).
+(the scheme in the partition key, digest and meta), `DecodeStartTests` (where
+each Decode Handover converts, relative to the prompt's last token, and that
+the owner keeps the array decode advanced, ADR-0093).
 
 Loaded-model checks: `scripts/dflash2-bench.sh --bench-kv-scheme turbo8v4`
 runs both arms in the scheme (prompts from `--bench-prompt-file`), and

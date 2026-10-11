@@ -29,7 +29,10 @@ nonisolated struct CompletionTraceAccumulator: Sendable {
         let partitionDigest: String
         let unkeyedReason: CacheKeySpace.UnkeyedReason?
         let keyPath: [Int]
-        let lookupReason: PrefixCacheManager.LookupReason
+        /// `nil` for an Unkeyed Completion, which never looked up.
+        let lookupReason: PrefixCacheManager.LookupReason?
+        /// How the turn's cache opened: whether the hit was restored.
+        let restore: TurnRestore
         let restoredFromSSD: Bool
         let hitTokens: Int
         let sharedPrefixLength: Int
@@ -42,14 +45,16 @@ nonisolated struct CompletionTraceAccumulator: Sendable {
     private(set) var terminalEvictionCount = 0
     private(set) var recoveredEvictionCount = 0
 
-    /// The cache state the generation began from: the hit offset, or 0
-    /// for a miss. The one home for the rule (previously derived inline
-    /// at the record-build site).
-    static func restoredOffset(for lookupReason: PrefixCacheManager.LookupReason) -> Int {
-        if case .hit(let offset, _, _) = lookupReason {
-            return offset
-        }
-        return 0
+    /// The cache state the generation began from: the hit offset when the
+    /// turn restored it (its **Turn Restore** is a handoff or a copy), else
+    /// 0 — a miss, a hit the plan ran cold, or a restore that yielded no
+    /// cache and fell back cold. The one home for the rule (previously
+    /// derived inline at the record-build site).
+    static func restoredOffset(
+        for lookupReason: PrefixCacheManager.LookupReason?, restore: TurnRestore
+    ) -> Int {
+        guard restore.restored, case .hit(let offset, _, _)? = lookupReason else { return 0 }
+        return offset
     }
 
     /// Classify one batch of eviction events into the trace tallies and
@@ -118,7 +123,8 @@ nonisolated struct CompletionTraceAccumulator: Sendable {
         tailSeconds: Double? = nil,
         emittedPath: EmittedPathTraceTelemetry? = nil
     ) -> CompletionTraceRecord? {
-        let restoredOffset = Self.restoredOffset(for: start.lookupReason)
+        let restoredOffset = Self.restoredOffset(
+            for: start.lookupReason, restore: start.restore)
         return CompletionTraceRecord.make(
             timestamp: timestamp,
             requestID: requestID,

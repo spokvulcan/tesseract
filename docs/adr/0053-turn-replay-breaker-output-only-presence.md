@@ -3,6 +3,8 @@
 - Status: Accepted
 - Date: 2026-07-20
 - Relates to: ADR-0046 (Report-Back), ADR-0052 (report_back in every chat)
+- Amended by: ADR-0093 (2026-10-11: the logit seam loses its
+  `pathQuantizesKVUpFront` flag; see the amendments at the end)
 
 ## Context
 
@@ -90,3 +92,16 @@ prefill decode, and both state-threaded decode inits — route through it; none
 hand-picks a processor. Decision rows and per-path wiring (the state-threaded
 iterators asserted to hold the seam's `OutputPresencePenalty`, not the vendor
 default) are tested in `GenerationLogitProcessorTests`.
+
+## Amendment (2026-10-11): the seam loses its flag
+
+With the Decode Start (ADR-0093) deciding where each path converts the KV
+cache, `GenerationLogitProcessor` keeps two shapes: `processor(for:)`, for an
+iterator that holds the processor itself, and `components(for:)`, for an
+iterator built from parameters, which keeps the vendor's KV plan. The
+`pathQuantizesKVUpFront` flag is gone. The one carve-out it encoded — the
+single-shot arm's explicit-processor init runs no KV plan, so with `kvBits` it
+keeps the vendor's own penalties (theoretical, #252) — sits in
+`PrefillStrategy`, the only place it applies. Which processor each path
+decodes with, and what seeds it, is pinned by outcome in `DecodeStartTests`;
+`GenerationLogitProcessorTests` keeps the seam's decision rows.

@@ -48,13 +48,13 @@ nonisolated struct PrefillBoundaries: Sendable, Equatable {
 /// orchestrator executes (slice + restore + iterate), where Snapshot Admission
 /// is the write-side value it commits afterward.
 nonisolated struct PrefillPlan: Sendable {
-    /// The restore-vs-cold decision. `.restore` carries the offset its KV
-    /// state covers (the prefill base) and the **Position Anchor** rope delta
-    /// for that offset (zero for image-free prefixes) — a cold plan cannot
-    /// carry a delta at all.
+    /// The restore-vs-cold decision. `.restore` carries the usable restore's
+    /// point: the offset its KV state covers (the prefill base) and the
+    /// **Position Anchor** rope delta for that offset (zero for image-free
+    /// prefixes) — a cold plan cannot carry a delta at all.
     enum Restore: Sendable {
         case cold
-        case restore(cacheOffset: Int, anchorDelta: Int)
+        case restore(PrefillPlanner.RestorePoint)
 
         /// Whether the turn starts from a cached prefix.
         var restoresPrefix: Bool {
@@ -96,7 +96,7 @@ nonisolated struct PrefillPlan: Sendable {
     /// zero on a cold prefill. Single source for what were two values that
     /// could drift (`skippedTokens` and `checkpointBaseOffset`).
     var prefillBaseOffset: Int {
-        if case .restore(let cacheOffset, _) = restore { return cacheOffset }
+        if case .restore(let point) = restore { return point.offset }
         return 0
     }
 
@@ -124,6 +124,69 @@ nonisolated struct PrefillPlan: Sendable {
 /// KV cache. The orchestrator runs the resulting plan (slice → restore →
 /// iterate → capture).
 nonisolated enum PrefillPlanner {
+
+    // MARK: - The usable-restore rule
+
+    /// Where a usable restore leaves the prefill that extends it: the offset
+    /// its snapshot covers, and the **Position Anchor**'s rope delta there
+    /// (zero with no image before it).
+    struct RestorePoint: Sendable, Equatable {
+        let offset: Int
+        let anchorDelta: Int
+
+        /// The model state the prefill past this point forwards with first:
+        /// the **Position Anchor** seeded with its rope delta on a container
+        /// that anchors warm continuations, nothing otherwise. The one
+        /// anchor-seed rule every restore-and-extend reads.
+        func initialState(seedsPositionAnchor: Bool) -> LMOutput.State? {
+            seedsPositionAnchor ? PositionAnchor.seededState(ropeDelta: anchorDelta) : nil
+        }
+    }
+
+    /// What the prefill past a restore point may forward.
+    enum Residual: Sendable {
+        /// The keyed turn's own prefill, which forwards an **Image Span**
+        /// through the anchored vision continuation before its text.
+        case mayCarryImages
+        /// A re-prefill of text alone — the Leaf Store's boundary route, the
+        /// Speculative Canonical Prefill, a salvaged prefill's resend: its
+        /// residual doubles as model input, so it may hold no image run.
+        case textOnly
+    }
+
+    /// Why a snapshot cannot seed the prefill, in the order the rule checks.
+    enum Unusable: Error, Equatable {
+        /// It covers none of the target.
+        case coversNothing
+        /// It covers all of it: nothing would be left to prefill.
+        case coversWholeTarget
+        /// A text-only residual would start inside an image prefix.
+        case insideImagePrefix
+        /// It splits an image run, so no Position Anchor exists there.
+        case splitsImageRun
+    }
+
+    /// The usable-restore rule (ADR-0087 decision 7, ADR-0094), the one
+    /// spelling every restore-and-extend reads: the keyed turn's plan, the
+    /// Leaf Admission Builder, the Leaf Store's boundary route, the
+    /// Speculative Canonical Prefill and salvage-on-cancel. A snapshot at
+    /// `offset` can seed a prefill toward `target` key-path tokens when it
+    /// covers some of the target but not all of it and does not split an
+    /// image run; a text-only residual also needs it at or past the
+    /// **Minimum Warm Offset**, which makes its anchor defined.
+    static func usableRestore(
+        offset: Int, target: Int, keySpace: CacheKeySpace, residual: Residual
+    ) -> Result<RestorePoint, Unusable> {
+        guard offset > 0 else { return .failure(.coversNothing) }
+        guard offset < target else { return .failure(.coversWholeTarget) }
+        if residual == .textOnly, offset < keySpace.minimumWarmOffset {
+            return .failure(.insideImagePrefix)
+        }
+        guard let anchorDelta = keySpace.positionAnchorDelta(upTo: offset) else {
+            return .failure(.splitsImageRun)
+        }
+        return .success(RestorePoint(offset: offset, anchorDelta: anchorDelta))
+    }
     /// Detect the three prefill boundaries for one request. Depends only on a
     /// `Tokenizer`; runs the same two-probe stable-prefix detection plus the
     /// last-message arithmetic and the last-user re-render.
@@ -238,8 +301,9 @@ nonisolated enum PrefillPlanner {
     ///   snapshot is restored and the remainder is continued *through* the
     ///   image, chunked. The `minimumWarmOffset` clamp survives only as the
     ///   no-valid-restore fallback (the cold `else`);
-    /// - the sole restore guard is `positionAnchorDelta(upTo:) != nil`, which
-    ///   rejects an offset that splits a placeholder run (a corrupt boundary);
+    /// - whether the hit restores is the usable-restore rule with a residual that
+    ///   may carry images, which rejects an offset that splits a placeholder
+    ///   run (a corrupt boundary);
     /// - a usable restore carries its **Position Anchor** rope delta;
     /// - checkpoints inside the continued image span
     ///   `[cacheOffset, minimumWarmOffset)` (and, on a cold plan, the
@@ -255,17 +319,17 @@ nonisolated enum PrefillPlanner {
     ) -> PrefillPlan {
         let minimumWarmOffset = keySpace.minimumWarmOffset
         guard let snapshot = lookupResult.snapshot,
-            snapshot.tokenOffset > 0,
-            snapshot.tokenOffset < promptTokenCount,
-            let anchorDelta = keySpace.positionAnchorDelta(upTo: snapshot.tokenOffset)
+            case .success(let point) = usableRestore(
+                offset: snapshot.tokenOffset, target: promptTokenCount, keySpace: keySpace,
+                residual: .mayCarryImages)
         else {
             return coldPlan(
                 boundaries: boundaries, checkpointPlan: checkpointPlan,
                 promptTokenCount: promptTokenCount, keySpace: keySpace)
         }
-        let cacheOffset = snapshot.tokenOffset
+        let cacheOffset = point.offset
         return PrefillPlan(
-            restore: .restore(cacheOffset: cacheOffset, anchorDelta: anchorDelta),
+            restore: .restore(point),
             // Capture in the suffix the snapshot doesn't cover, minus the
             // continued image span: `> cacheOffset` (past the restore) and
             // `>= minimumWarmOffset` (past the atomically-forwarded image).

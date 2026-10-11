@@ -10,7 +10,7 @@ import Testing
 
 struct MomentPromptsTests {
 
-    static let facts = TimelineBuilderTests.facts(now: TimelineBuilderTests.local(30, 7, 30))
+    static let facts = DayFixture.facts(now: DayFixture.local(30, 7, 30))
 
     @Test func theDayOpeningCarriesProfileAreasAgendaAndNote() {
         let opening = MomentPrompts.dayOpening(
@@ -54,11 +54,11 @@ struct MomentPromptsTests {
         // also holds dated work.
         let films = (1...20).map { reminder("film\($0)", list: "movies") }
         let facts = DayFacts(
-            now: TimelineBuilderTests.local(30, 7, 30),
+            now: DayFixture.local(30, 7, 30),
             dueOrOverdue: [
                 AgendaReminder(
                     id: "spec", title: "Write the spec", listID: "work", listTitle: "Work",
-                    due: TimelineBuilderTests.local(30, 0))
+                    due: DayFixture.local(30, 0))
             ],
             undated: films + [reminder("idea", list: "inbox"), reminder("deck", list: "work")],
             inboxListID: "inbox")
@@ -184,7 +184,7 @@ struct MomentPromptsTests {
     }
 
     @Test func thePlanIsToldHowLongStepsReallyTake() {
-        let at = TimelineBuilderTests.local(29, 12)
+        let at = DayFixture.local(29, 12)
         var facts = Self.facts
         facts.stepRuns = Array(repeating: StepRun(planned: 30, actual: 45, at: at), count: 6)
         #expect(

@@ -101,20 +101,19 @@ private struct LanguageChangePopover: View {
 
 // MARK: - Try-it
 
-/// The live dictation slot: a dedicated voice-input controller over the shared
-/// capture engine — real capture, real transcription, right in the tour. When
-/// preconditions are missing it degrades to an honest locked state; the tour
-/// never blocks (`OnboardingTryIt.dictationIsLive`).
+/// The live dictation slot: the tour's own Voice Input, its takes from **Voice
+/// Capture** like every surface's — real capture, real transcription, the
+/// Learned Words, the Capture Dump and the Proofread Pass, right in the tour.
+/// When preconditions are missing it degrades to an honest locked state; the
+/// tour never blocks (`OnboardingTryIt.dictationIsLive`).
 private struct DictationTryItStrip: View {
     let controller: OnboardingTourController
 
     @EnvironmentObject private var permissionsManager: PermissionsManager
-    @Environment(SettingsManager.self) private var settings
-    @Environment(AudioCaptureEngine.self) private var audioCapture
+    @Environment(VoiceCapture.self) private var voiceCapture
     @Environment(TranscriptionEngine.self) private var transcriptionEngine
 
     @State private var voice: AgentVoiceInputController?
-    @State private var isHolding = false
     @State private var transcribed = ""
 
     private var isLive: Bool {
@@ -185,19 +184,7 @@ private struct DictationTryItStrip: View {
             }
             .scaleEffect(recording ? 1.12 : 1)
             .animation(.spring(response: 0.3, dampingFraction: 0.7), value: recording)
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in
-                        guard !isHolding, transcriptionEngine.isModelLoaded else { return }
-                        isHolding = true
-                        transcribed = ""
-                        voice?.start()
-                    }
-                    .onEnded { _ in
-                        isHolding = false
-                        voice?.finishCapture()
-                    }
-            )
+            .holdToTalk(voice, canStart: transcriptionEngine.isModelLoaded) { transcribed = "" }
             .accessibilityLabel("Hold to dictate")
     }
 
@@ -213,11 +200,7 @@ private struct DictationTryItStrip: View {
 
     private func makeVoiceControllerIfNeeded() {
         guard voice == nil else { return }
-        let controller = AgentVoiceInputController(
-            audioCapture: audioCapture,
-            transcriptionEngine: transcriptionEngine,
-            settings: settings
-        )
+        let controller = AgentVoiceInputController(session: voiceCapture.makeSession())
         controller.onVoiceTranscription = { text in
             withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
                 transcribed = text

@@ -34,12 +34,12 @@ nonisolated final class UnsafeSendableBox<T>: @unchecked Sendable {
 nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     let stream: AsyncStream<RawGeneration>
     let completion: Task<Void, Never>
-    /// The app-owned KV cache array the generation runs on. The module
-    /// quantizes it *before* building the `TokenIterator` (so the iterator's
-    /// decode-time quantization pass cannot swap elements behind our back),
-    /// which makes this array the live final cache once `completion`
-    /// finishes — the post-generation leaf capture reads it directly.
-    /// Replaces the fork's `FinalizedKVCacheHandle` (ADR-0006).
+    /// The app-owned KV cache array the generation runs on: the array the
+    /// **Decode Start** handed over, after its one KV Scheme conversion, so
+    /// no decode-time pass swaps elements behind our back and this is the
+    /// live final cache once `completion` finishes — the post-generation
+    /// leaf capture reads it directly. Replaces the fork's
+    /// `FinalizedKVCacheHandle` (ADR-0006).
     let finalCacheOwner: FinalGenerationCache
     var finalCache: [any KVCache] { finalCacheOwner.cache }
     /// The iterator this request actually used. Loaded drafter capability
@@ -60,8 +60,9 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     var promptTokenCount: Int { facts.promptTokenCount }
     /// Number of leading tokens skipped because the cache already covered them.
     let skippedPrefillTokens: Int
-    /// Lookup outcome classification, surfaced for in-app observability.
-    let lookupReason: PrefixCacheManager.LookupReason
+    /// Lookup outcome classification, surfaced for in-app observability;
+    /// `nil` for an **Unkeyed Completion**, which never looked anything up.
+    let lookupReason: PrefixCacheManager.LookupReason?
     /// Shared-prefix length in tokens between the request and the best cache entry.
     let sharedPrefixLength: Int
     /// The turn's maximum advance (`CacheClaim.maximumAdvance`): the
@@ -105,7 +106,8 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     /// The wire string for `Diagnostics.cacheReason`: the lookup outcome, or
     /// the unkeyed degradation when the request never reached the lookup.
     var cacheReasonDescription: String {
-        keying.unkeyedReason.map { "unkeyed(\($0.rawValue))" } ?? String(describing: lookupReason)
+        keying.unkeyedReason.map { "unkeyed(\($0.rawValue))" }
+            ?? lookupReason.map { String(describing: $0) } ?? "none"
     }
     /// Validated mid-prefill checkpoint admission, if any checkpoints survived
     /// extraction-edge path validation.
@@ -124,16 +126,6 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     /// once `completion` has finished — the tail of the turn's **Emitted
     /// Path**, which the live leaf is keyed on and the index registers.
     let generatedTokens: GeneratedTokenRecorder
-    /// How the request restored (`cold`, `copy`, `failedCopy`, `handoff`),
-    /// as the claim's check-out decided it — one input to the stored
-    /// leaf's source.
-    var restoreMode = "cold"
-    /// Why a copy restore did not take the leaf; `nil` unless the check-out
-    /// answered copy.
-    var restoreCopy: CacheClaim.Copy?
-    /// Seconds a Pending-Payload Wait cost, whether it ended in a copy or
-    /// a handoff (#523).
-    var restoreWaitSeconds: TimeInterval = 0
 }
 
 /// All copies of the generation handle share this one reference. Handoff
@@ -201,46 +193,6 @@ nonisolated enum HTTPLeafStoreMode: String, Sendable {
     case directToolLeaf
     case canonicalUserLeaf
     case directLeaf
-}
-
-/// The two decode iterators the keyed path constructs after its app-owned
-/// prefill: the ordinary state-threaded decode, or the **Speculation
-/// Plan**'s iterator over the same warmed cache (its prefill covers only the
-/// prompt tail past the app driver's checkpoint captures).
-private nonisolated enum KeyedDecodeIterator {
-    case standard(StateThreadedTokenIterator)
-    case speculative(SpeculativeDecodeIterator)
-
-    /// Start the app-owned generation stream over whichever iterator the
-    /// keyed path built — one `TokenGenerationLoop.start` per case because
-    /// the loop's entry is generic over the concrete iterator type.
-    consuming func startGeneration(
-        promptTokenCount: Int,
-        modelConfiguration: ModelConfiguration,
-        tokenizer: any MLXLMCommon.Tokenizer,
-        tools: [ToolSpec]?,
-        generatedTokens: GeneratedTokenRecorder
-    ) -> (AsyncStream<RawGeneration>, Task<Void, Never>) {
-        switch consume self {
-        case .standard(let decode):
-            TokenGenerationLoop.start(
-                promptTokenCount: promptTokenCount,
-                modelConfiguration: modelConfiguration,
-                tokenizer: tokenizer,
-                iterator: decode,
-                tools: tools,
-                generatedTokens: generatedTokens
-            )
-        case .speculative(let decode):
-            decode.startGeneration(
-                promptTokenCount: promptTokenCount,
-                modelConfiguration: modelConfiguration,
-                tokenizer: tokenizer,
-                tools: tools,
-                generatedTokens: generatedTokens
-            )
-        }
-    }
 }
 
 nonisolated enum VisionPrefixMemoryGuard {
@@ -557,7 +509,7 @@ nonisolated final class ServerCompletion {
     /// generation or a teardown always wins; this pass is strictly droppable.
     func scheduleSpeculativePrefill(
         seed: SpeculativeCanonicalPrefill.Seed,
-        container: ModelContainer,
+        sessions: any ModelSessionProviding,
         entryDrainGeneration: Int,
         on actor: isolated LLMActor
     ) async {
@@ -598,7 +550,7 @@ nonisolated final class ServerCompletion {
             await prefixCache.storageActivityGate.withPrefillMarked {
                 await SpeculativeCanonicalPrefill.run(
                     seed: seed,
-                    container: container,
+                    sessions: sessions,
                     prefixCache: prefixCache
                 )
             }
@@ -917,10 +869,10 @@ nonisolated final class ServerCompletion {
         // Set only when a canonical leaf landed: the **Speculative Canonical
         // Prefill** seed handed to the post-finish hook (issue #76).
         var speculativeSeed: SpeculativeCanonicalPrefill.Seed?
-        // The one home for the trace record's derivation rules: eviction
-        // tallies (with their correlated diagnostics events), the
-        // restored-offset rule, and the admitted-snapshot projections.
-        var trace = CompletionTraceAccumulator()
+        // The turn's report: the trace tally (with its correlated
+        // diagnostics events), the filed Turn Restore, and the one
+        // `leafStore` event.
+        let turnReport = claim.report
         var terminalOutcome = "completed"
         memory.mark(.decoding)
 
@@ -952,7 +904,7 @@ nonisolated final class ServerCompletion {
                     + "cached=\(mlxStart.skippedPrefillTokens)/"
                     + "\(mlxStart.promptTokenCount) "
                     + "sharedPrefix=\(mlxStart.sharedPrefixLength) "
-                    + "lookup=\(mlxStart.lookupReason) "
+                    + "lookup=\(mlxStart.cacheReasonDescription) "
                     + "restoreMs=\(String(format: "%.1f", mlxStart.restoreMs * 1000)) "
                     + "prefillMs=\(String(format: "%.1f", mlxStart.prefillMs * 1000))"
             )
@@ -1019,7 +971,7 @@ nonisolated final class ServerCompletion {
                         + "libraryParsedToolCalls=\(outcome.diagnostics.libraryParsedToolCalls) "
                         + "cachedTokens=\(mlxStart.skippedPrefillTokens)/"
                         + "\(mlxStart.promptTokenCount) "
-                        + "lookupReason=\(mlxStart.lookupReason) "
+                        + "lookupReason=\(mlxStart.cacheReasonDescription) "
                         + "parserInsideThink=\(parserState.insideThinkBlock) "
                         + "parserThinkClosed=\(parserState.thinkBlockClosed) "
                         + "parserBufferLen=\(parserState.bufferLen) "
@@ -1045,7 +997,7 @@ nonisolated final class ServerCompletion {
                 let diagnostics = await MainActor.run {
                     prefixCache.admit(admission)
                 }
-                trace.ingest(evictions: diagnostics.evictions, diagnostics: diagnosticsContext)
+                turnReport.ingest(evictions: diagnostics.evictions)
                 storedSnapshotsForTuner = admission.snapshots
             }
 
@@ -1065,9 +1017,6 @@ nonisolated final class ServerCompletion {
             // leaf store completed.
             memory.mark(
                 .storingLeaf, facts: await MainActor.run { prefixCache.memoryTelemetryFacts() })
-            // The phase's report, logged below, is now the turn's one
-            // `leafStore` event, a rewind in the phase included.
-            claim.enterLeafStorePhase()
             let leafStoreStart = Date.timeIntervalSinceReferenceDate
             var leafResult = await LeafStorePhase.run(
                 mlxStartBox: mlxStartBox,
@@ -1080,17 +1029,13 @@ nonisolated final class ServerCompletion {
                 assistantReasoning: accumulator.thinking,
                 toolCalls: toolCalls,
                 diagnosticsContext: diagnosticsContext,
-                trace: &trace,
                 memory: memory
             )
             if mlxStart.facts.ssdEnabled, !Task.isCancelled {
                 await prefixCache.persistViewCheckpoints(
                     partitionKey: mlxStart.facts.partitionKey, sessions: sessions)
             }
-            leafResult.report.restoreMode = mlxStart.restoreMode
-            leafResult.report.restoreCopyReason = mlxStart.restoreCopy?.reason
-            leafResult.report.restoreCopyRefusal = mlxStart.restoreCopy?.refusal
-            leafResult.report.restoreCopyWaitSeconds = mlxStart.restoreWaitSeconds
+            leafResult.report = turnReport.filed(leafResult.report)
             leafResult.report.leafStoreSeconds =
                 Date.timeIntervalSinceReferenceDate - leafStoreStart
             let leafStoreForTuner = leafResult.leafStore
@@ -1098,14 +1043,7 @@ nonisolated final class ServerCompletion {
                 speculativeSeed = seed
             }
 
-            memory.mark(
-                .recordingRequest,
-                facts: [
-                    "leafSource": leafResult.report.source?.rawValue ?? "skipped",
-                    "leafCopyReason":
-                        (leafResult.report.restoreCopyReason ?? leafResult.report.copyReason)?
-                        .rawValue ?? "none",
-                ])
+            memory.mark(.recordingRequest, facts: leafResult.report.recordingFacts)
             // Record the request lifecycle for the alpha tuner. Fires
             // for every request, including the leaf-skipped paths
             // — the tuner needs the full workload trace, not just
@@ -1150,7 +1088,7 @@ nonisolated final class ServerCompletion {
             // edge, planner, leaf store) into the same account.
             let emittedPathSummary = mlxStart.keying.keyed?.render.emittedPathTelemetry?.summary
             leafResult.report.emittedPathResolves = emittedPathSummary
-            diagnosticsContext.log(leafResult.report, level: .notice)
+            turnReport.logLeafStore(leafResult.report)
 
             // Per-completion trace record (PRD #82, slice #83): one line in
             // the replay corpus for every finished cache-aware completion.
@@ -1158,7 +1096,7 @@ nonisolated final class ServerCompletion {
             // stream closed without an `.info` event have no TTFT and emit
             // nothing — same condition as the live `ttft` event.
             if let completionInfo = outcome.completionInfo {
-                let record = trace.makeRecord(
+                let record = turnReport.trace.makeRecord(
                     timestamp: Date().timeIntervalSinceReferenceDate,
                     requestID: requestID,
                     modelID: diagnosticsContext.modelID,
@@ -1167,6 +1105,7 @@ nonisolated final class ServerCompletion {
                         unkeyedReason: mlxStart.keying.unkeyedReason,
                         keyPath: keyPath,
                         lookupReason: mlxStart.lookupReason,
+                        restore: turnReport.restore,
                         restoredFromSSD: mlxStart.restoredFromSSD,
                         hitTokens: mlxStart.skippedPrefillTokens,
                         sharedPrefixLength: mlxStart.sharedPrefixLength,
@@ -1379,30 +1318,21 @@ nonisolated final class ServerCompletion {
             // Resolve the best usable snapshot in one place: radix lookup plus
             // lazy SSD hydration (consumed internally — only `.hit`/miss surface
             // here). `loadSync` stays off-MainActor inside this scope per
-            // ADR-0001; promote/clear hop to MainActor inside `resolve`.
-            let resolved = await prefixCache.resolve(
+            // ADR-0001; promote/clear hop to MainActor inside `resolve`, which
+            // then plans the turn's checkpoints against the settled tree in its
+            // own hop (ADR-0087 decision 6).
+            let planned = await prefixCache.resolve(
                 tokens: keySpace.keyPath,
                 promptTokenCount: fullTokenCount,
                 partitionKey: partitionKey,
                 modelFingerprint: modelFingerprint,
                 diagnostics: diagnosticsContext,
+                planningFrom: boundaries.stablePrefixOffset,
                 for: claim
             )
+            let resolved = planned.resolved
             let lookupResult = resolved.lookup
-            // Plan AFTER resolution, against the settled tree: any promote or
-            // forgiving clear has already happened, so the post-hydration-failure
-            // replan becomes the ordinary single plan. `resolved.alignmentLookup`
-            // carries the SSD-hydrated-hit special case — it aligns against
-            // nothing, matching the pre-carve ordering against the unhydrated
-            // `.ssdHit`.
-            var checkpointPlan = await MainActor.run {
-                prefixCache.planCheckpoints(
-                    tokens: keySpace.keyPath,
-                    stablePrefixOffset: boundaries.stablePrefixOffset,
-                    partitionKey: partitionKey,
-                    alignTo: resolved.alignmentLookup
-                )
-            }
+            var checkpointPlan = planned.checkpointPlan
             let lookupMs = Date.timeIntervalSinceReferenceDate - lookupStarted
 
             // 7. Fold resolution + plan into the request's Prefill Plan:
@@ -1532,13 +1462,10 @@ nonisolated final class ServerCompletion {
                 ])
             // The claim's typed restore outcome: a handoff holds the lease
             // and the leaf's own cache; a copy says why the leaf was not
-            // taken.
+            // taken. With what the restore itself yielded it is the turn's
+            // one **Turn Restore**, which every report of the turn reads.
             var handoff: CacheClaim.Handoff?
-            var restoreCopy: CacheClaim.Copy?
-            var restoreMode = "cold"
-            // The bounded wait for a pending full payload (#523): what it
-            // cost, whether it ended in a copy or a handoff.
-            var restoreWaitSeconds: TimeInterval = 0
+            var restore = TurnRestore.cold
             // The turn's maximum advance: judged at check-out, priced by
             // the Active-Inference Reserve at the leaf store (#522).
             var maximumAdvance = CacheClaim.maximumAdvance(
@@ -1548,20 +1475,18 @@ nonisolated final class ServerCompletion {
             var restoredCache: [any KVCache]?
             var restoreFailure: (any Error)?
             var restoreMs: TimeInterval = 0
-            var restoreFellBack = false
             if prefillPlan.restore.restoresPrefix {
                 let restoreStarted = Date.timeIntervalSinceReferenceDate
+                var copy: CacheClaim.Copy?
                 switch await claim.checkOut(
                     resolved, tokens: keySpace.keyPath, maximumAdvance: maximumAdvance,
                     identityKeySpace: facts.isTextOnly, in: session)
                 {
                 case .handoff(let taken):
                     handoff = taken
-                    restoreWaitSeconds = taken.waitSeconds
                     restoredCache = taken.cache.cache
-                case .copy(let copy):
-                    restoreCopy = copy
-                    restoreWaitSeconds = copy.waitSeconds
+                case .copy(let refused):
+                    copy = refused
                     (restoredCache, restoreFailure) = Self.restoreCache(
                         lookupResult, session: session)
                 case .cold:
@@ -1569,9 +1494,11 @@ nonisolated final class ServerCompletion {
                         lookupResult, session: session)
                 }
                 restoreMs = Date.timeIntervalSinceReferenceDate - restoreStarted
-                restoreMode =
-                    handoff != nil
-                    ? "handoff" : restoredCache == nil ? "failedCopy" : "copy"
+                if let handoff {
+                    restore = .handoff(handoff.lease)
+                } else if restoredCache != nil {
+                    restore = .copy(copy)
+                }
                 // A planned restore that yields no cache (its snapshot's
                 // layers failed to restore, which the restore verb treats as
                 // a miss) is a miss for the whole turn: re-plan it cold, so
@@ -1584,40 +1511,19 @@ nonisolated final class ServerCompletion {
                 // engage MTP, whose whole-prompt prefill captures none of the
                 // checkpoints this turn has to rebuild.
                 if restoredCache == nil {
-                    restoreFellBack = true
+                    restore = .failedThenCold(copy)
                     if let restoreFailure, let failed = lookupResult.snapshot {
-                        // Drop the snapshot that threw, so no later request
-                        // pays the same failed restore, then plan checkpoints
-                        // again against the settled tree: one the drop took
-                        // is captured anew on this turn (ADR-0069 amendment).
-                        let corruptLayers = restoreFailure is HybridCacheSnapshot.RestoreError
-                        let (drop, replanned) = await MainActor.run {
-                            let drop = prefixCache.dropUnrestorableSnapshot(
-                                failed, tokens: keySpace.keyPath, partitionKey: partitionKey,
-                                corruptLayers: corruptLayers)
-                            let dropped = drop == .body || drop == .bodyAndSSDCopy
-                            let replanned =
-                                dropped
-                                ? prefixCache.planCheckpoints(
-                                    tokens: keySpace.keyPath,
-                                    stablePrefixOffset: boundaries.stablePrefixOffset,
-                                    partitionKey: partitionKey,
-                                    alignTo: resolved.alignmentLookup)
-                                : nil
-                            return (drop, replanned)
-                        }
+                        // The failed-restore policy drops the snapshot that
+                        // threw, so no later request pays the same failed
+                        // restore; in the same hop the manager plans the
+                        // turn's checkpoints again against the settled tree:
+                        // one the drop took is captured anew on this turn
+                        // (ADR-0069 amendment).
+                        let replanned = await ResidualPrefill.dropUnrestorable(
+                            failed, error: restoreFailure, tokens: keySpace.keyPath,
+                            partitionKey: partitionKey, replanning: planned,
+                            prefixCache: prefixCache, diagnostics: diagnosticsContext)
                         if let replanned { checkpointPlan = replanned }
-                        diagnosticsContext.logSkip(
-                            stage: "restore",
-                            reason: "unrestorable-snapshot",
-                            level: .warning,
-                            extraFields: [
-                                ("offset", "\(failed.tokenOffset)"),
-                                ("checkpointType", failed.checkpointType.wireString),
-                                ("drop", drop.rawValue),
-                                ("error", String(describing: restoreFailure)),
-                            ]
-                        )
                     }
                     prefillPlan = PrefillPlanner.coldPlan(
                         boundaries: boundaries,
@@ -1631,22 +1537,15 @@ nonisolated final class ServerCompletion {
                         outputCeiling: parameters.maxTokens,
                         speculativeAllowance: speculation?.advanceAllowance ?? 0)
                 }
-                var restoredFacts = RequestMemoryTelemetry.cacheFacts(restoredCache ?? [])
-                    .merging([
-                        "restoreMode": restoreMode,
-                        "restoreCopyReason": restoreCopy?.reason.rawValue ?? "none",
-                        "restoreCopyRefusal": restoreCopy?.refusal.rawValue ?? "none",
-                        "restoreCopyWaitMs": PrefixCacheDiagnostics.milliseconds(
-                            restoreWaitSeconds),
-                        "recurrentRewindStateBytes": "\(handoff?.rewindStateBytes ?? 0)",
-                        "leafLeaseActive": "\(handoff != nil)",
-                        "leafLeaseID": handoff?.leaseID.uuidString ?? "none",
-                    ]) { _, new in new }
-                if restoreFellBack { restoredFacts["restoreFallback"] = "cold" }
-                memory.mark(.restored, facts: restoredFacts)
+                claim.report.file(restore)
+                memory.mark(
+                    .restored,
+                    facts: RequestMemoryTelemetry.cacheFacts(restoredCache ?? [])
+                        .merging(restore.memoryFacts) { _, new in new })
             }
             switch prefillPlan.restore {
-            case .restore(let cacheOffset, let anchorDelta):
+            case .restore(let point):
+                let cacheOffset = point.offset
                 cacheToUse = restoredCache
                 if !keySpace.isIdentity,
                     cacheOffset < keySpace.minimumWarmOffset,
@@ -1661,10 +1560,8 @@ nonisolated final class ServerCompletion {
                         text: LMInput.Text(
                             tokens: fullInput.text.tokens[0..., prefixEnd...], mask: nil))
                     executionBaseOffset = prefixEnd
-                    if seedsPositionAnchor {
-                        imageContinuationAnchor = PositionAnchor.seededState(
-                            ropeDelta: anchorDelta)
-                    }
+                    imageContinuationAnchor = point.initialState(
+                        seedsPositionAnchor: seedsPositionAnchor)
                 } else {
                     // Image-free remainder: suffix-only prefill. Layers restore
                     // with their absolute logical offset intact, and each
@@ -1676,10 +1573,8 @@ nonisolated final class ServerCompletion {
                     inputForGeneration = LMInput(
                         text: LMInput.Text(tokens: slicedTokens, mask: nil))
                     executionBaseOffset = cacheOffset
-                    if seedsPositionAnchor {
-                        executorInitialState = PositionAnchor.seededState(
-                            ropeDelta: anchorDelta)
-                    }
+                    executorInitialState = point.initialState(
+                        seedsPositionAnchor: seedsPositionAnchor)
                 }
             case .cold where !keySpace.isIdentity:
                 // No valid restore: cold image prefill, but driven through the
@@ -1749,9 +1644,7 @@ nonisolated final class ServerCompletion {
                     hydratedFromSSD: resolved.hydratedFromSSD,
                     chainPrefixRestore: resolved.wasChainPrefixRestore,
                     divergence: lookupResult.divergence,
-                    restoreMode: restoreMode, restoreFellBack: restoreFellBack,
-                    copyReason: restoreCopy?.reason, copyRefusal: restoreCopy?.refusal,
-                    copyWaitSeconds: restoreWaitSeconds,
+                    restore: restore,
                     backingLeafOffset: lookupResult.backingLeaf?.tokenOffset,
                     warmBody: lookupResult.snapshot?.isWarm == true,
                     backingLeafWarm: lookupResult.backingLeaf?.isWarm == true
@@ -1793,12 +1686,11 @@ nonisolated final class ServerCompletion {
 
             // 9. App-owned prefill (ADR-0006): drive chunked forward passes
             // over the suffix, capturing snapshots at the checkpoint offsets,
-            // quantize the module-owned cache once, then hand it to a
-            // TokenIterator holding only the final prompt token. Quantizing
-            // *before* the iterator (with `kvBits` stripped from its
-            // parameters) guarantees the iterator never swaps cache elements
-            // during decode, so the array this module retains stays the live
-            // final cache for the post-generation leaf capture.
+            // then hand the warmed cache to the **Decode Start**, which
+            // converts it once and builds the iterator holding only the
+            // final prompt token (or the Speculation Plan's iterator for the
+            // tail past the split), so the array this module retains stays
+            // the live final cache for the post-generation leaf capture.
             // Shared begin-prefill step. The ADR-0014 guard prices the
             // patches actually fed THIS forward: all images when cold; only
             // the newly-added images on a warm restore, since earlier images
@@ -1824,7 +1716,7 @@ nonisolated final class ServerCompletion {
                 prefillStartedAt = begin.startedAt
             }
             memory.mark(.prefilling, facts: RequestMemoryTelemetry.cacheFacts(liveCache))
-            let prefillResult: (iterator: KeyedDecodeIterator, snapshots: [HybridCacheSnapshot])
+            let prefillResult: (decode: DecodeStart, snapshots: [HybridCacheSnapshot])
             do {
                 prefillResult =
                     try MLXCheckedEvaluation.withErrors { error in
@@ -1942,19 +1834,14 @@ nonisolated final class ServerCompletion {
                                 throw AgentEngineError.generationFailed(
                                     "speculative split \(splitOffset) inside an image run")
                             }
-                            let iterator = try session.makeSpeculativeDecodeIterator(
-                                LMInput(text: fullInput.text),
-                                cache: liveCache,
-                                prefilledPrefixTokens: splitOffset,
-                                positionDelta: positionDelta,
-                                plan: speculation,
-                                parameters: facts.decodeParameters
-                            )
-                            // A KV Scheme converted the attention entries at
-                            // the end of the iterator's prefill.
-                            if let converted = iterator.cache { liveCache = converted }
+                            let decode = try DecodeStart.make(
+                                .speculative(
+                                    speculation, input: LMInput(text: fullInput.text),
+                                    prefilledPrefixTokens: splitOffset,
+                                    positionDelta: positionDelta),
+                                cache: &liveCache, session: session, parameters: genParams)
                             try error.check()
-                            return (iterator: .speculative(iterator), snapshots: snapshots)
+                            return (decode: decode, snapshots: snapshots)
                         }
 
                         // Pipeline the image-free text path for TTFT; keep the
@@ -1976,24 +1863,18 @@ nonisolated final class ServerCompletion {
                             )
                         }
                         try error.check()
-                        session.quantizeKVCache(&liveCache, parameters: genParams)
                         // The iterator seeds any configured penalty processors with
                         // the full suffix — its own input is only the final prompt
                         // token, which would otherwise be the entire
                         // repetition/presence/frequency context. It threads the last
                         // prefill chunk's state through the prime forward and every
                         // decode step (PRD #72 — upstream's iterator drops it).
-                        let iterator = session.makeDecodeIterator(
-                            remainder: warmed.remainder,
-                            fullText: inputForGeneration.text,
-                            cache: liveCache,
-                            state: warmed.state,
-                            parameters: facts.decodeParameters
-                        )
-                        return (
-                            iterator: .standard(iterator),
-                            snapshots: prefixSnapshots + warmed.snapshots
-                        )
+                        let decode = try DecodeStart.make(
+                            .standard(
+                                remainder: warmed.remainder, fullText: inputForGeneration.text,
+                                state: warmed.state),
+                            cache: &liveCache, session: session, parameters: genParams)
+                        return (decode: decode, snapshots: prefixSnapshots + warmed.snapshots)
                     }
             } catch is CancellationError {
                 // **Salvage-on-cancel** (issue #97): the client is gone and
@@ -2018,10 +1899,10 @@ nonisolated final class ServerCompletion {
                 Memory.clearCache()
                 throw CancellationError()
             }
-            // Quantization can replace attention objects. Retain the array
-            // that the iterator actually advances, after that replacement.
-            handoff?.cache.adopt(liveCache)
-            let finalCacheOwner = handoff?.cache ?? FinalGenerationCache(liveCache)
+            // A conversion can replace attention objects: the leased leaf's
+            // cache adopts the array the iterator actually advances.
+            let decode = prefillResult.decode
+            let finalCacheOwner = decode.cacheOwner(lease: handoff?.cache)
             let prefillMs = Date.timeIntervalSinceReferenceDate - prefillStartedAt
             let boundarySnapshots = prefillResult.snapshots.filter {
                 transientOffsets.contains($0.tokenOffset)
@@ -2039,21 +1920,13 @@ nonisolated final class ServerCompletion {
                     "boundaryCheckpointArrayBytes":
                         "\(boundarySnapshots.reduce(0) { $0 + $1.memoryBytes })",
                 ]) { _, new in new })
-            let iterator = prefillResult.iterator
-            if case .speculative(let decode) = iterator {
-                // The iterator exists — the request will decode speculatively.
-                // Fired before the token loop so the activity surfaces badge
-                // the arm live.
-                await progressHandler?(.speculationEngaged(decode.arm))
-            }
-            await progressHandler?(
-                .prefillFinished(
-                    .init(
-                        promptTokens: fullTokenCount,
-                        cachedTokens: skippedTokens,
-                        newTokensToPrefill: newTokensToPrefill,
-                        prefillMs: prefillMs * 1000
-                    )))
+            await decode.reportPrefillFinished(
+                .init(
+                    promptTokens: fullTokenCount,
+                    cachedTokens: skippedTokens,
+                    newTokensToPrefill: newTokensToPrefill,
+                    prefillMs: prefillMs * 1000
+                ), to: progressHandler)
 
             // Fold the observed prefill into the rolling FLOPs/s estimate
             // (slice #84) — a real measured operation on this device.
@@ -2121,19 +1994,15 @@ nonisolated final class ServerCompletion {
             try Task.checkCancellation()
             let generatedTokens = GeneratedTokenRecorder()
             memory.mark(.decoding)
-            let (stream, task) = iterator.startGeneration(
-                promptTokenCount: fullTokenCount,
-                modelConfiguration: session.configuration,
-                tokenizer: session.tokenizer,
-                tools: canonicalTools,
-                generatedTokens: generatedTokens
-            )
+            let (stream, task) = decode.startLoop(
+                promptTokenCount: fullTokenCount, session: session, tools: canonicalTools,
+                generatedTokens: generatedTokens)
 
             return HTTPPrefixCacheGeneration(
                 stream: stream,
                 completion: task,
                 finalCacheOwner: finalCacheOwner,
-                speculativeArm: speculation?.arm,
+                speculativeArm: decode.arm,
                 diagnosticsContext: diagnosticsContext,
                 lookupMs: lookupMs,
                 restoreMs: restoreMs,
@@ -2148,10 +2017,7 @@ nonisolated final class ServerCompletion {
                 snapshotAdmission: snapshotAdmission,
                 transientLastMessageBoundarySnapshot: transientLastMessageBoundarySnapshot,
                 transientLastUserBoundarySnapshot: transientLastUserBoundarySnapshot,
-                generatedTokens: generatedTokens,
-                restoreMode: restoreMode,
-                restoreCopy: restoreCopy,
-                restoreWaitSeconds: restoreWaitSeconds
+                generatedTokens: generatedTokens
             )
         }
     }
@@ -2257,10 +2123,10 @@ nonisolated final class ServerCompletion {
         throw AgentEngineError.generationFailed(rejection.message)
     }
 
-    /// The restore verb with `LookupResult.restoreCache`'s degrade-to-miss
-    /// contract: a snapshot whose persisted layers fail restoration is a
-    /// cache miss (no cache), never a crashed request — routed through the
-    /// **Model Session** so the sequencing suite observes restore ordering.
+    /// The restore verb with a degrade-to-miss contract: a snapshot whose
+    /// persisted layers fail restoration is a cache miss (no cache), never a
+    /// crashed request — routed through the **Model Session** so the
+    /// sequencing suite observes restore ordering.
     /// `failure` is what the restore threw, so the caller can drop the
     /// snapshot; `nil` when it restored or there was nothing to restore.
     private static func restoreCache(
@@ -2295,11 +2161,12 @@ nonisolated final class ServerCompletion {
     /// allocation (ADR-0007 phase 2). The image-free (or non-conforming)
     /// fallback runs the vendor single-shot `prepare`. Either way decode runs on
     /// the state-threaded iterator so a `.logits` prefill keeps its returned
-    /// state. `kvBits` quantization is skipped on this path — there is no
-    /// capture to protect, and the degraded corner is not worth a per-step
-    /// quantization loop. A KV Scheme is not skipped: the iterator converts
-    /// once after its prefill (ADR-0083, amended), and the arm keeps the
-    /// iterator's array as the final cache.
+    /// state: the **Decode Start**'s preparing handover. `kvBits`
+    /// quantization is skipped on this path — there is no capture to
+    /// protect, and the degraded corner is not worth a per-step quantization
+    /// loop. A KV Scheme is not skipped: the iterator converts once after its
+    /// prefill (ADR-0083, amended), and the arm keeps the iterator's array as
+    /// the final cache.
     ///
     /// Converted to the **Model Session** seam (ADR-0016): the arm consumes
     /// the port's verbs, so the sequencing suite drives it with the
@@ -2343,9 +2210,9 @@ nonisolated final class ServerCompletion {
             diagnosticsContext: diagnosticsContext,
             progressHandler: progressHandler
         )
-        let cache = begin.cache
+        var cache = begin.cache
 
-        let iterator: StateThreadedTokenIterator
+        let decode: DecodeStart
         if fullInput.image != nil,
             let anchoredPrepare = session.anchoredVisionPrepare
         {
@@ -2365,48 +2232,38 @@ nonisolated final class ServerCompletion {
                 profile: fullAttentionScratchProfile,
                 diagnosticsContext: diagnosticsContext
             )
-            iterator = try MLXCheckedEvaluation.withErrors { error in
-                let built = try session.makePreparingDecodeIterator(
-                    fullInput,
-                    cache: cache,
-                    parameters: facts.decodeParameters,
-                    prepare: { input, cache, windowSize in
-                        try anchoredPrepare(input, cache, nil, windowSize)
-                    }
-                )
+            decode = try MLXCheckedEvaluation.withErrors { error in
+                let built = try DecodeStart.make(
+                    .preparing(
+                        fullInput,
+                        prepare: { input, cache, windowSize in
+                            try anchoredPrepare(input, cache, nil, windowSize)
+                        }),
+                    cache: &cache, session: session, parameters: parameters)
                 try error.check()
                 return built
             }
         } else {
-            iterator = try session.makePreparingDecodeIterator(
-                fullInput,
-                cache: cache,
-                parameters: facts.decodeParameters,
-                prepare: nil
-            )
+            decode = try DecodeStart.make(
+                .preparing(fullInput, prepare: nil), cache: &cache, session: session,
+                parameters: parameters)
         }
         let prefillMs = Date.timeIntervalSinceReferenceDate - begin.startedAt
-        await progressHandler?(
-            .prefillFinished(
-                .init(
-                    promptTokens: fullTokenCount,
-                    cachedTokens: 0,
-                    newTokensToPrefill: fullTokenCount,
-                    prefillMs: prefillMs * 1000
-                )))
+        await decode.reportPrefillFinished(
+            .init(
+                promptTokens: fullTokenCount,
+                cachedTokens: 0,
+                newTokensToPrefill: fullTokenCount,
+                prefillMs: prefillMs * 1000
+            ), to: progressHandler)
 
         // A KV Scheme replaced the attention entries inside the iterator's
         // prefill; keep the array decode advances.
-        let finalCacheOwner = FinalGenerationCache(iterator.cache)
+        let finalCacheOwner = decode.cacheOwner(lease: nil)
         let generatedTokens = GeneratedTokenRecorder()
-        let (stream, task) = TokenGenerationLoop.start(
-            promptTokenCount: fullTokenCount,
-            modelConfiguration: session.configuration,
-            tokenizer: session.tokenizer,
-            iterator: iterator,
-            tools: toolSpecs,
-            generatedTokens: generatedTokens
-        )
+        let (stream, task) = decode.startLoop(
+            promptTokenCount: fullTokenCount, session: session, tools: toolSpecs,
+            generatedTokens: generatedTokens)
 
         return HTTPPrefixCacheGeneration(
             stream: stream,
@@ -2420,7 +2277,7 @@ nonisolated final class ServerCompletion {
             hydrationSeconds: 0,
             restoredFromSSD: false,
             skippedPrefillTokens: 0,
-            lookupReason: .missNoEntries,
+            lookupReason: nil,
             sharedPrefixLength: 0,
             maximumAdvance: CacheClaim.maximumAdvance(
                 newPromptTokens: fullTokenCount, outputCeiling: parameters.maxTokens,
@@ -2478,46 +2335,33 @@ nonisolated final class ServerCompletion {
             diagnosticsContext: diagnosticsContext,
             progressHandler: progressHandler
         )
-        let cache = begin.cache
+        var cache = begin.cache
 
-        let iterator = try MLXCheckedEvaluation.withErrors { error in
-            let built = try session.makeSpeculativeDecodeIterator(
-                fullInput,
-                cache: cache,
-                prefilledPrefixTokens: 0,
-                positionDelta: 0,
-                plan: plan,
-                parameters: request.facts.decodeParameters
-            )
+        let decode = try MLXCheckedEvaluation.withErrors { error in
+            let built = try DecodeStart.make(
+                .speculative(plan, input: fullInput, prefilledPrefixTokens: 0, positionDelta: 0),
+                cache: &cache, session: session, parameters: parameters)
             try error.check()
             return built
         }
         let prefillMs = Date.timeIntervalSinceReferenceDate - begin.startedAt
-        // The iterator exists — the request will decode speculatively. Fired
-        // before the token loop so the activity surfaces badge the arm live.
-        await progressHandler?(.speculationEngaged(arm))
-        await progressHandler?(
-            .prefillFinished(
-                .init(
-                    promptTokens: fullTokenCount,
-                    cachedTokens: 0,
-                    newTokensToPrefill: fullTokenCount,
-                    prefillMs: prefillMs * 1000
-                )))
+        await decode.reportPrefillFinished(
+            .init(
+                promptTokens: fullTokenCount,
+                cachedTokens: 0,
+                newTokensToPrefill: fullTokenCount,
+                prefillMs: prefillMs * 1000
+            ), to: progressHandler)
 
         let generatedTokens = GeneratedTokenRecorder()
-        let (stream, task) = iterator.startGeneration(
-            promptTokenCount: fullTokenCount,
-            modelConfiguration: session.configuration,
-            tokenizer: session.tokenizer,
-            tools: toolSpecs,
-            generatedTokens: generatedTokens
-        )
+        let (stream, task) = decode.startLoop(
+            promptTokenCount: fullTokenCount, session: session, tools: toolSpecs,
+            generatedTokens: generatedTokens)
 
         return HTTPPrefixCacheGeneration(
             stream: stream,
             completion: task,
-            finalCacheOwner: FinalGenerationCache(cache),
+            finalCacheOwner: decode.cacheOwner(lease: nil),
             speculativeArm: arm,
             diagnosticsContext: diagnosticsContext,
             lookupMs: lookupMs,
@@ -2647,22 +2491,22 @@ nonisolated final class ServerCompletion {
 
     /// The offset a cancelled foreground prefill may admit its progress
     /// at, or `nil` when the progress is below the capture threshold
-    /// (shared with speculative preempt capture), the cache reports an
-    /// offset past the key path (mid-flight inconsistency — never admit),
-    /// or the offset sits inside the image prefix (unanchorable).
-    /// Pure — unit-tested directly.
+    /// (shared with speculative preempt capture) or a later request could
+    /// not restore it and extend it as text — the usable-restore rule over
+    /// the key path and the one token past it a resend or the next turn
+    /// adds: no offset past the key path (a mid-flight inconsistency), none
+    /// inside the image prefix (unanchorable). Pure — unit-tested directly.
     static func salvageableOffset(
         cacheOffset: Int,
         restoreBaseOffset: Int,
-        keyPathCount: Int,
-        minimumWarmOffset: Int
+        keySpace: CacheKeySpace
     ) -> Int? {
         guard
             cacheOffset - restoreBaseOffset
                 >= SpeculativeCanonicalPrefill.minimumPreemptCaptureTokens,
-            cacheOffset > 0,
-            cacheOffset <= keyPathCount,
-            cacheOffset >= minimumWarmOffset
+            case .success = PrefillPlanner.usableRestore(
+                offset: cacheOffset, target: keySpace.keyPath.count + 1, keySpace: keySpace,
+                residual: .textOnly)
         else { return nil }
         return cacheOffset
     }
@@ -2694,9 +2538,7 @@ nonisolated final class ServerCompletion {
         guard
             salvageableOffset(
                 cacheOffset: reportedOffset,
-                restoreBaseOffset: restoreBaseOffset,
-                keyPathCount: keySpace.keyPath.count,
-                minimumWarmOffset: keySpace.minimumWarmOffset
+                restoreBaseOffset: restoreBaseOffset, keySpace: keySpace
             ) != nil
         else {
             diagnostics.logSkip(
@@ -2717,9 +2559,7 @@ nonisolated final class ServerCompletion {
         guard
             let offset = salvageableOffset(
                 cacheOffset: settledOffset,
-                restoreBaseOffset: restoreBaseOffset,
-                keyPathCount: keySpace.keyPath.count,
-                minimumWarmOffset: keySpace.minimumWarmOffset
+                restoreBaseOffset: restoreBaseOffset, keySpace: keySpace
             )
         else {
             diagnostics.logSkip(

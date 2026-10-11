@@ -37,11 +37,10 @@ nonisolated enum DayEngine {
         var effects: [DayEffect] = []
         let today = DayKey(for: snapshot.now, calendar: snapshot.calendar)
         // Counted before the rollover, so cards a new day clears clear the glyph.
-        let waitingBefore = waitingCount(state, now: snapshot.now)
+        let waitingBefore = WaitingOnYou(state: state, now: snapshot.now).glyphCount
         if state.day != today {
             // Done on the phone while the Mac slept through 04:00: it counts
             // for the day it was the must-do of — if done within that day.
-            followDoneOccurrences(snapshot: snapshot, state: &state)
             noteMustDoDone(
                 snapshot: snapshot, state: &state,
                 before: state.day.end(calendar: snapshot.calendar))
@@ -101,10 +100,7 @@ nonisolated enum DayEngine {
             }
             // The panel closes with the Companion: its cue comes back by its
             // rules once the Companion is on again.
-            if let key = state.cueOnPanel {
-                state.cuedSteps[key] = nil
-                state.cueOnPanel = nil
-            }
+            state.uncuePanel()
             state.breakCuedAt = nil
 
         case .presenceReturned(let awayFrom):
@@ -147,74 +143,34 @@ nonisolated enum DayEngine {
             effects += nudgesDelivered(delivered, state: &state)
         }
 
-        // After the signal: a repeating task ticked off is followed to the
-        // occurrence done, a must-do set by it may be done already, and a
+        // After the signal: a must-do set by it may be done already, and a
         // step started may be seen done.
-        followDoneOccurrences(snapshot: snapshot, state: &state)
         noteMustDoDone(snapshot: snapshot, state: &state)
         effects += noteStepRuns(snapshot: snapshot, state: &state)
         holdCueUnderCard(effects, snapshot: snapshot, state: &state)
-        let waitingAfter = waitingCount(state, now: snapshot.now)
+        let waitingAfter = WaitingOnYou(state: state, now: snapshot.now).glyphCount
         if waitingAfter != waitingBefore { effects.append(.setWaiting(waitingAfter)) }
         return Decision(state: state, effects: effects)
     }
 
-    /// A repeating task ticked off: Reminders keeps the done occurrence as a
-    /// copy with an id of its own and moves the series, under the old id, on
-    /// to its next date. What the day holds of the task follows the
-    /// occurrence done that day, once the series has moved past it: same
-    /// list and title, the same time of day when it has one, ticked off
-    /// within the day. So the must-do counts as done, the step stays done
-    /// where it was planned, and the series' next date stays its own day's.
-    /// A task moved on undone, or one that doesn't repeat, stays as it is.
-    private static func followDoneOccurrences(snapshot: DaySnapshot, state: inout DayState) {
-        let calendar = snapshot.calendar
-        guard let midnight = state.day.date(calendar: calendar),
-            let nextDate = calendar.date(byAdding: .day, value: 1, to: midnight),
-            let end = state.day.end(calendar: calendar)
-        else { return }
-        var held = Set(state.plan.map(\.reminderID))
-        if let mustDo = state.mustDoID { held.insert(mustDo) }
-        let done = snapshot.agenda.doneToday + snapshot.agenda.doneThisWeek
-        func timeOfDay(_ reminder: AgendaReminder) -> DateComponents? {
-            guard reminder.dueHasTime, let due = reminder.due else { return nil }
-            return calendar.dateComponents([.hour, .minute], from: due)
-        }
-        for id in held.sorted() {
-            guard let series = snapshot.agenda.open.first(where: { $0.id == id }), series.repeats,
-                let due = series.due, due >= nextDate
-            else { continue }
-            let occurrence = done.filter { reminder in
-                guard let completed = reminder.completedAt, completed >= midnight,
-                    completed < end, !held.contains(reminder.id)
-                else { return false }
-                return reminder.listID == series.listID && reminder.title == series.title
-                    && timeOfDay(reminder) == timeOfDay(series)
-            }
-            .max { ($0.completedAt ?? .distantPast) < ($1.completedAt ?? .distantPast) }
-            guard let occurrence else { continue }
-            state.follow(series: id, to: occurrence.id)
-            held.insert(occurrence.id)
-        }
-    }
-
     /// The must-do seen done, for the week's look-back; with `before`, only
-    /// if it was done by then. Seen open again (an undo, or unticked in
-    /// Reminders), it isn't done after all.
+    /// if it was done by then. A repeating one is done when the day's
+    /// occurrence is (`AgendaSnapshot.doneOccurrence`). Seen open again (an
+    /// undo, or unticked in Reminders), it isn't done after all.
     private static func noteMustDoDone(
         snapshot: DaySnapshot, state: inout DayState, before: Date? = nil
     ) {
-        if before == nil, state.mustDoDoneAt != nil,
-            snapshot.agenda.open.contains(where: { $0.id == state.mustDoID })
+        guard let mustDo = state.mustDoID else { return }
+        let done =
+            snapshot.agenda.doneOccurrence(
+                of: mustDo, on: state.day, before: before, calendar: snapshot.calendar) != nil
+        if before == nil, state.mustDoDoneAt != nil, !done,
+            snapshot.agenda.open.contains(where: { $0.id == mustDo })
         {
             state.mustDoDoneAt = nil
             return
         }
-        guard let mustDo = state.mustDoID, state.mustDoDoneAt == nil,
-            (snapshot.agenda.doneToday + snapshot.agenda.doneThisWeek).contains(where: {
-                $0.id == mustDo && ($0.completedAt ?? .distantPast) < (before ?? .distantFuture)
-            })
-        else { return }
+        guard state.mustDoDoneAt == nil, done else { return }
         state.mustDoDoneAt = snapshot.now
     }
 
@@ -295,7 +251,7 @@ nonisolated enum DayEngine {
     static func waitingPlanIfFree(snapshot: DaySnapshot, state: inout DayState)
         -> [DayEffect]
     {
-        guard state.morningPlanWaiting, !isEvening(snapshot) else { return [] }
+        guard state.morningPlanWaiting, !snapshot.isEvening else { return [] }
         return planTheDayOrWait(snapshot: snapshot, state: &state)
     }
 
@@ -311,8 +267,8 @@ nonisolated enum DayEngine {
     /// after the step the owner started, if one is running: like a Step
     /// Cue, it doesn't interrupt a focus session.
     static func eveningIfDue(snapshot: DaySnapshot, state: inout DayState) -> [DayEffect] {
-        guard state.eveningWrapUpAt == nil, isEvening(snapshot),
-            focus(snapshot: snapshot, state: state) == nil
+        guard state.eveningWrapUpAt == nil, snapshot.isEvening,
+            Timeline(snapshot: snapshot, state: state).focus == nil
         else { return [] }
         return run(.eveningWrapUp, trigger: .eveningTime, snapshot: snapshot, state: &state)
     }
@@ -324,7 +280,7 @@ nonisolated enum DayEngine {
         guard state.nightReflectionAt == nil, state.running == nil,
             !state.deferred.contains(.nightReflection),
             let wrapUp = state.eveningWrapUpAt,
-            snapshot.now.timeIntervalSince(wrapUp) >= 30 * 60, isEvening(snapshot)
+            snapshot.now.timeIntervalSince(wrapUp) >= 30 * 60, snapshot.isEvening
         else { return [] }
         return run(
             .nightReflection, trigger: .night, snapshot: snapshot, state: &state,
@@ -349,7 +305,7 @@ nonisolated enum DayEngine {
         let sinceStart = (snapshot.minuteOfDay - settings.quietStartMinutes + 24 * 60) % (24 * 60)
         guard sinceStart < 60 else { return [] }
         state.windDownAt = snapshot.now
-        let tomorrow = TimelineBuilder.tomorrow(facts: snapshot.facts(state: state))
+        let tomorrow = Timeline(snapshot: snapshot, state: state).tomorrow
         var fields: [String: CompanionTraceValue] = [:]
         if let first = tomorrow.rows.first {
             fields["minutesUntil"] = .int(Int(first.start.timeIntervalSince(snapshot.now) / 60))
@@ -386,11 +342,6 @@ nonisolated enum DayEngine {
         return "Nothing is set for tomorrow yet. Rest well."
     }
 
-    static func isEvening(_ snapshot: DaySnapshot) -> Bool {
-        let minute = snapshot.minuteOfDay
-        return minute >= snapshot.settings.eveningMinutes || minute < 3 * 60
-    }
-
     /// A meeting the owner attended just ended (since the last tick).
     private static func meetingEnded(snapshot: DaySnapshot, state: inout DayState) -> [DayEffect] {
         guard let last = state.lastTickAt else { return [] }
@@ -400,24 +351,6 @@ nonisolated enum DayEngine {
         guard let meeting = ended.max(by: { $0.end < $1.end }) else { return [] }
         return breakpoint(
             awayFrom: meeting.start, trigger: .meetingEnded, snapshot: snapshot, state: &state)
-    }
-
-    // MARK: - Waiting
-
-    /// What is waiting on the owner, for the glyph: waiting agents, and the
-    /// open cards' items.
-    static func waitingCount(_ state: DayState, now: Date) -> Int {
-        // A card the owner took in waits on them no more.
-        let cards = state.openCards.filter { !$0.kept }.reduce(0) { count, card in
-            switch card.body {
-            case .eveningWrapUp(let wrapUp): count + wrapUp.leftovers.count
-            case .breakpoint(let breakpoint):
-                count + breakpoint.needsYou.filter { $0.kind != .agent }.count
-            case .triage(let triage): count + triage.raise.count
-            case .morningPlan, .reflection: count
-            }
-        }
-        return cards + state.agentsWaiting(now: now).count
     }
 
     // MARK: - Nudges

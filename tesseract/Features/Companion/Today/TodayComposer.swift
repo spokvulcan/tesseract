@@ -32,7 +32,6 @@ struct TodayComposer: View {
     /// After a question is sent: show the answer.
     let onAsk: () -> Void
 
-    @State private var holdingMic = false
     /// A task is being saved: ⌘↩ again saves it once.
     @State private var adding = false
     @State private var textHeight: CGFloat = 18
@@ -99,8 +98,7 @@ struct TodayComposer: View {
         .onAppear {
             voice.onVoiceTranscription = { [weak draft = draft] words in
                 guard let draft else { return }
-                let current = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                draft.text = current.isEmpty ? words : current + " " + words
+                draft.text = AgentVoiceInputController.joining(words, to: draft.text)
             }
         }
     }
@@ -178,18 +176,7 @@ struct TodayComposer: View {
             .font(actionIconFont)
             .frame(width: actionIconFrame, height: actionIconFrame)
             .contentShape(Circle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in
-                        guard !holdingMic else { return }
-                        holdingMic = true
-                        voice.start()
-                    }
-                    .onEnded { _ in
-                        holdingMic = false
-                        if voice.voiceState == .recording { voice.finishCapture() }
-                    }
-            )
+            .holdToTalk(voice)
             .disabled(!canUseVoice)
             .help(micHelp)
     }
@@ -303,6 +290,7 @@ struct TodayComposer: View {
 /// few seconds, with its undo). Never a stack of banners.
 private struct ComposerNotice: View {
     @Environment(Agenda.self) private var agenda
+    @Environment(CompanionRuntime.self) private var runtime
     @Environment(CaptureService.self) private var capture
     @Environment(DayThread.self) private var thread
     @Environment(AgentVoiceInputController.self) private var voice
@@ -336,7 +324,9 @@ private struct ComposerNotice: View {
             banner(icon: "exclamationmark.triangle", tint: .red, message: error) {
                 thread.chat.error = nil
             }
-        } else if let change = agenda.lastChange, Date().timeIntervalSince(change.at) < 15 {
+        } else if let change = agenda.lastChange,
+            runtime.now().timeIntervalSince(change.at) < 15
+        {
             banner(
                 icon: "checkmark.circle", tint: .accentColor, message: change.line,
                 actionTitle: "Undo", action: { Task { await capture.undo(change) } }

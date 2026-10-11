@@ -3,8 +3,8 @@
 //  tesseract
 //
 //  The **Operation Guard** — the single home for the monotonic-epoch *stale-result*
-//  protocol shared by the capture→transcribe→commit coordinators (today
-//  `DictationCoordinator` and **Voice Input** / `AgentVoiceInputController`). It exists
+//  protocol of the capture→transcribe→commit lifecycle (today the **Voice Capture
+//  Session**, which every push-to-talk surface takes from **Voice Capture**). It exists
 //  because the underlying recognizer may *ignore `Task` cancellation and return success
 //  anyway*, so cancelling the task cannot stop a stale transcription from committing —
 //  only a post-`await` epoch comparison can.

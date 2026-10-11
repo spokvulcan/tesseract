@@ -108,7 +108,8 @@ struct DFlash2SupportTests {
     @Test func draftDirectoryRequiresConfigAndWeights() throws {
         let root = try makeStorageRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let draftDir = root.appendingPathComponent(DFlash2Support.draftCacheSubdirectory)
+        // The folder the owner's download is in.
+        let draftDir = root.appendingPathComponent("incoai_Qwen3.8-27B-DFlash2")
 
         // Missing entirely.
         #expect(
@@ -154,11 +155,14 @@ struct DFlash2SupportTests {
     }
 
     @MainActor
-    @Test func draftCacheSubdirectoryMatchesDefinitionRule() {
-        // `DFlash2Support.draftCacheSubdirectory` duplicates the definition's
-        // `cacheSubdirectory` because the latter is MainActor-isolated; this
-        // pins them together.
-        let draft = ModelDefinition.withID(DFlash2Support.draftModelID)
-        #expect(draft?.cacheSubdirectory == DFlash2Support.draftCacheSubdirectory)
+    @Test func draftRepoMatchesTheCatalogEntry() throws {
+        // `DFlash2Support.draftRepo` spells out the draft entry's repo; this
+        // pins them together, and the folder it finds to the entry's.
+        let draft = try #require(ModelDefinition.withID(DFlash2Support.draftModelID))
+        #expect(draft.repoID == DFlash2Support.draftRepo)
+        let root = URL(fileURLWithPath: "/models")
+        #expect(
+            ModelDefinition.directory(forRepo: DFlash2Support.draftRepo, in: root)
+                == draft.directory(in: root))
     }
 }

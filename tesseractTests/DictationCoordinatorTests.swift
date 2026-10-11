@@ -2,12 +2,13 @@
 //  DictationCoordinatorTests.swift
 //  tesseractTests
 //
-//  Exercises `DictationCoordinator` as a thin composer over the **Voice Capture
-//  Session**: the `StopResult`/`Outcome` → **Overlay Feed** phase/beat mapping,
-//  the commit closure's effects (history write + auto-insert text injection with
-//  restore-clipboard), and `DictationError` mapping. The deep staleness/supersede
-//  races now live once in `VoiceCaptureSessionTests`, driven through the session's
-//  own interface — they are no longer duplicated here.
+//  Exercises `DictationCoordinator` as a thin presenter over its **Voice Capture
+//  Session**, built the way the composition root builds it (from **Voice
+//  Capture**): the session's phases, `StopResult` and `Outcome` → **Overlay
+//  Feed** phase/beat mapping, the commit's effects (history write + auto-insert
+//  text injection with restore-clipboard, the Correction Pair, the hand-off to
+//  the Lens), "insert anyway", and `DictationError` mapping. The deep
+//  staleness/supersede races live once in `VoiceCaptureSessionTests`.
 //
 //  Composes the engine-facing `Transcribing` seam over the *real*
 //  `TranscriptionEngine` with an `InMemorySpeechRecognizer` below it (or the
@@ -153,6 +154,31 @@ struct DictationCoordinatorTests {
         }
     }
 
+    /// A coordinator built the way the composition root builds it: its
+    /// session from **Voice Capture** over these stages.
+    private func makeCoordinator(
+        audioCapture: any AudioCapturing,
+        transcriptionEngine: any Transcribing,
+        textInjector: any TextInjecting,
+        history: any TranscriptionStoring,
+        settings: SettingsManager,
+        feed: DictationFeed,
+        proofreadPass: ProofreadPass? = nil,
+        pairs: CorrectionPairStore? = nil,
+        learnedWords: any LearnedWordApplying = NoLearnedWords(),
+        frontmostApp: @escaping @MainActor () -> TargetApp? = { nil }
+    ) -> DictationCoordinator {
+        DictationCoordinator(
+            session: makeVoiceCapture(
+                microphone: audioCapture, recognizer: transcriptionEngine,
+                isCaptureDumpEnabled: { settings.captureDumpEnabled }, learnedWords: learnedWords,
+                proofread: { text in await proofreadPass?.proofread(text) },
+                frontmostApp: frontmostApp
+            ).makeSession(),
+            textInjector: textInjector, history: history, settings: settings, feed: feed,
+            pairs: pairs, frontmostApp: frontmostApp)
+    }
+
     private func makeEngine(recognizer: InMemorySpeechRecognizer, bundle: URL) async throws
         -> TranscriptionEngine
     {
@@ -192,7 +218,7 @@ struct DictationCoordinatorTests {
             samples: [Float](repeating: 0.1, count: 16_000), sampleRate: 16_000, duration: 1.0)
         let injector = FakeTextInjector()
         let feed = DictationFeed()
-        let coordinator = DictationCoordinator(
+        let coordinator = makeCoordinator(
             audioCapture: capture, transcriptionEngine: engine, textInjector: injector,
             history: FakeTranscriptionStore(),
             settings: SettingsManager(store: InMemorySettingsStore()), feed: feed,
@@ -237,7 +263,7 @@ struct DictationCoordinatorTests {
         capture.cannedSnapshot = AudioData(
             samples: [Float](repeating: 0.1, count: 160_000), sampleRate: 16_000, duration: 10)
         let feed = DictationFeed()
-        let coordinator = DictationCoordinator(
+        let coordinator = makeCoordinator(
             audioCapture: capture, transcriptionEngine: engine, textInjector: FakeTextInjector(),
             history: FakeTranscriptionStore(),
             settings: SettingsManager(store: InMemorySettingsStore()), feed: feed,
@@ -266,7 +292,7 @@ struct DictationCoordinatorTests {
         capture.cannedSnapshot = AudioData(
             samples: [Float](repeating: 0.1, count: 8_000), sampleRate: 16_000, duration: 0.5)
         let feed = DictationFeed()
-        let coordinator = DictationCoordinator(
+        let coordinator = makeCoordinator(
             audioCapture: capture, transcriptionEngine: engine, textInjector: FakeTextInjector(),
             history: FakeTranscriptionStore(),
             settings: SettingsManager(store: InMemorySettingsStore()), feed: feed)
@@ -293,7 +319,7 @@ struct DictationCoordinatorTests {
         let feed = DictationFeed()
         let settings = SettingsManager(store: InMemorySettingsStore())
         settings.checkBeforePasting = setting
-        let coordinator = DictationCoordinator(
+        let coordinator = makeCoordinator(
             audioCapture: FakeAudioCapture(
                 cannedAudio: AudioData(samples: [0.1, 0.2], sampleRate: 16_000, duration: 2.0)),
             transcriptionEngine: engine, textInjector: injector,
@@ -358,7 +384,7 @@ struct DictationCoordinatorTests {
         let settings = SettingsManager(store: InMemorySettingsStore())
         let feed = DictationFeed()
 
-        let coordinator = DictationCoordinator(
+        let coordinator = makeCoordinator(
             audioCapture: capture,
             transcriptionEngine: engine,
             textInjector: injector,
@@ -414,7 +440,7 @@ struct DictationCoordinatorTests {
 
         // Below the 0.5s minimum.
         let audio = AudioData(samples: [0.1], sampleRate: 16_000, duration: 0.1)
-        let coordinator = DictationCoordinator(
+        let coordinator = makeCoordinator(
             audioCapture: FakeAudioCapture(cannedAudio: audio),
             transcriptionEngine: engine,
             textInjector: FakeTextInjector(),
@@ -443,7 +469,7 @@ struct DictationCoordinatorTests {
             cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0))
         capture.isCapturing = true  // the shared engine is already in use
 
-        let coordinator = DictationCoordinator(
+        let coordinator = makeCoordinator(
             audioCapture: capture,
             transcriptionEngine: ControllableTranscribing(),
             textInjector: FakeTextInjector(),
@@ -473,7 +499,7 @@ struct DictationCoordinatorTests {
 
         let store = FakeTranscriptionStore()
         let feed = DictationFeed()
-        let coordinator = DictationCoordinator(
+        let coordinator = makeCoordinator(
             audioCapture: FakeAudioCapture(
                 cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0)),
             transcriptionEngine: engine,
@@ -498,7 +524,7 @@ struct DictationCoordinatorTests {
     @Test
     func transcriptionFailureMapsToTranscriptionFailedError() async throws {
         let engine = ControllableTranscribing()
-        let coordinator = DictationCoordinator(
+        let coordinator = makeCoordinator(
             audioCapture: FakeAudioCapture(
                 cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0)),
             transcriptionEngine: engine,
@@ -540,7 +566,7 @@ struct DictationCoordinatorTests {
         let capture = FakeAudioCapture(
             cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0))
         let feed = DictationFeed()
-        let coordinator = DictationCoordinator(
+        let coordinator = makeCoordinator(
             audioCapture: capture,
             transcriptionEngine: engine,
             textInjector: FakeTextInjector(),
@@ -568,7 +594,7 @@ struct DictationCoordinatorTests {
         // Below the 0.5s minimum.
         let audio = AudioData(samples: [0.1], sampleRate: 16_000, duration: 0.1)
         let capture = FakeAudioCapture(cannedAudio: audio)
-        let coordinator = DictationCoordinator(
+        let coordinator = makeCoordinator(
             audioCapture: capture,
             transcriptionEngine: ControllableTranscribing(),
             textInjector: FakeTextInjector(),
@@ -595,7 +621,7 @@ struct DictationCoordinatorTests {
         let capture = FakeAudioCapture(
             cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0))
         let injector = FakeTextInjector()
-        let coordinator = DictationCoordinator(
+        let coordinator = makeCoordinator(
             audioCapture: capture,
             transcriptionEngine: engine,
             textInjector: injector,
@@ -625,7 +651,7 @@ struct DictationCoordinatorTests {
         let engine = ControllableTranscribing()
         let capture = FakeAudioCapture(
             cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0))
-        let coordinator = DictationCoordinator(
+        let coordinator = makeCoordinator(
             audioCapture: capture,
             transcriptionEngine: engine,
             textInjector: FakeTextInjector(),
@@ -685,7 +711,7 @@ struct DictationCoordinatorTests {
         let injector = FakeTextInjector()
         let store = FakeTranscriptionStore()
         let feed = DictationFeed()
-        let coordinator = DictationCoordinator(
+        let coordinator = makeCoordinator(
             audioCapture: FakeAudioCapture(
                 cannedAudio: AudioData(samples: [0.1, 0.2], sampleRate: 16_000, duration: 2.0)),
             transcriptionEngine: engine,
@@ -703,7 +729,6 @@ struct DictationCoordinatorTests {
         let expected = TranscriptionPostProcessor().process("hello world")
         #expect(feed.beat?.outcome == .rejected(raw: expected, reason: "garbled noise"))
         #expect(coordinator.state == .idle)  // passive: no error gate
-        #expect(coordinator.lastRejectedRaw == expected)
         #expect(store.entries.isEmpty)
         #expect(injector.injected.isEmpty)
 
@@ -712,7 +737,14 @@ struct DictationCoordinatorTests {
         #expect(injector.injected == [expected + " "])
         #expect(store.entries.count == 1)
         #expect(store.entries.first?.text == expected)
-        #expect(coordinator.lastRejectedRaw == nil)
+        // Committed like any take: the history keeps the take's length (it
+        // kept 0 s before the session owned "insert anyway").
+        #expect(store.entries.first?.duration == 2.0)
+
+        // The take is spent: a second press inserts nothing.
+        coordinator.insertRawAnyway()
+        for _ in 0..<100 { await Task.yield() }
+        #expect(injector.injected.count == 1)
     }
 
     /// "Insert raw anyway" runs detached from any commit flow, so a failed
@@ -731,7 +763,7 @@ struct DictationCoordinatorTests {
 
         let injector = FakeTextInjector()
         let feed = DictationFeed()
-        let coordinator = DictationCoordinator(
+        let coordinator = makeCoordinator(
             audioCapture: FakeAudioCapture(
                 cannedAudio: AudioData(samples: [0.1, 0.2], sampleRate: 16_000, duration: 2.0)),
             transcriptionEngine: engine,
@@ -787,7 +819,7 @@ struct DictationCoordinatorTests {
 
         let injector = FakeTextInjector()
         let store = FakeTranscriptionStore()
-        let coordinator = DictationCoordinator(
+        let coordinator = makeCoordinator(
             audioCapture: FakeAudioCapture(
                 cannedAudio: AudioData(samples: [0.1, 0.2], sampleRate: 16_000, duration: 2.0)),
             transcriptionEngine: engine,
@@ -844,7 +876,7 @@ struct DictationCoordinatorTests {
         let corrected = raw + " indeed"
         let store = FakeTranscriptionStore()
         let feed = DictationFeed()
-        let coordinator = DictationCoordinator(
+        let coordinator = makeCoordinator(
             audioCapture: FakeAudioCapture(
                 cannedAudio: AudioData(samples: [0.1, 0.2], sampleRate: 16_000, duration: 2.0)),
             transcriptionEngine: engine,
@@ -886,7 +918,7 @@ struct DictationCoordinatorTests {
 
         let store = FakeTranscriptionStore()
         let feed = DictationFeed()
-        let coordinator = DictationCoordinator(
+        let coordinator = makeCoordinator(
             audioCapture: FakeAudioCapture(
                 cannedAudio: AudioData(samples: [0.1, 0.2], sampleRate: 16_000, duration: 2.0)),
             transcriptionEngine: engine,
@@ -911,6 +943,7 @@ struct DictationCoordinatorTests {
         coordinator.insertRawAnyway()
 
         #expect(pairs.pair(withID: pair.id)?.flaggedWrong == true)
+        try await waitUntil { !store.entries.isEmpty }
         #expect(store.entries.first?.pairID == pair.id)
     }
 
@@ -924,7 +957,7 @@ struct DictationCoordinatorTests {
         )
         let capture = FakeAudioCapture(
             cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0))
-        let coordinator = DictationCoordinator(
+        let coordinator = makeCoordinator(
             audioCapture: capture,
             transcriptionEngine: engine,
             textInjector: FakeTextInjector(),
@@ -967,7 +1000,7 @@ struct DictationCoordinatorTests {
         let feed = DictationFeed()
         let terminal = TargetApp(bundleID: "com.apple.Terminal", name: "Terminal", pid: 7)
         let store = FakeTranscriptionStore()
-        let coordinator = DictationCoordinator(
+        let coordinator = makeCoordinator(
             audioCapture: FakeAudioCapture(
                 cannedAudio: AudioData(samples: [0.1, 0.2], sampleRate: 16_000, duration: 2.0)),
             transcriptionEngine: engine,
@@ -1023,7 +1056,7 @@ struct DictationCoordinatorTests {
         let engine = try await makeEngine(recognizer: recognizer, bundle: bundle)
         let injector = FakeTextInjector()
         let feed = DictationFeed()
-        let coordinator = DictationCoordinator(
+        let coordinator = makeCoordinator(
             audioCapture: FakeAudioCapture(
                 cannedAudio: AudioData(
                     samples: [Float](repeating: 0, count: 32_000), sampleRate: 16_000,
@@ -1062,7 +1095,7 @@ struct DictationCoordinatorTests {
         let injector = FakeTextInjector()
         let feed = DictationFeed()
         let store = FakeTranscriptionStore()
-        let coordinator = DictationCoordinator(
+        let coordinator = makeCoordinator(
             audioCapture: FakeAudioCapture(
                 cannedAudio: AudioData(samples: [0.1, 0.2], sampleRate: 16_000, duration: 2.0)),
             transcriptionEngine: engine, textInjector: injector,
@@ -1075,7 +1108,7 @@ struct DictationCoordinatorTests {
 
         coordinator.onHotkeyDown()
         coordinator.onHotkeyUp()
-        try await waitUntil { coordinator.lastRejectedRaw != nil }
+        try await waitUntil { feed.beat != nil }
         #expect(words.word(withID: id)?.totalCatches == 0)
         // A rejected take is not in the history until it is inserted anyway.
         #expect(store.entries.isEmpty)
@@ -1090,6 +1123,58 @@ struct DictationCoordinatorTests {
         #expect(store.entries.first?.text == "Open the Tesseract repo")
         #expect(store.entries.first?.catches == delivered.first?.catches)
         #expect(store.entries.first?.catches.first?.tokenStart == 2)
+    }
+
+    /// The app in front, as a test moves it.
+    @MainActor
+    final class FrontmostApp {
+        var app: TargetApp?
+    }
+
+    /// "Insert anyway" keeps the rejected take's own app, the one in front
+    /// when that take started, even after another take began in another app;
+    /// it pastes into the app in front now. (Before the session owned it, the
+    /// history kept whichever app the session's latest take started in.)
+    @Test
+    func insertingARejectedTakeAnywayKeepsTheTakesOwnApp() async throws {
+        let bundle = try makeFakeModelBundle()
+        defer { try? FileManager.default.removeItem(at: bundle) }
+        let recognizer = InMemorySpeechRecognizer(
+            result: TranscriptionResult(
+                text: "hello world", segments: [], language: "en", processingTime: 0))
+        let engine = try await makeEngine(recognizer: recognizer, bundle: bundle)
+        let notes = TargetApp(bundleID: "com.apple.Notes", name: "Notes", pid: 1)
+        let terminal = TargetApp(bundleID: "com.apple.Terminal", name: "Terminal", pid: 2)
+        let front = FrontmostApp()
+        front.app = notes
+        let feed = DictationFeed()
+        let store = FakeTranscriptionStore()
+        let coordinator = makeCoordinator(
+            audioCapture: FakeAudioCapture(
+                cannedAudio: AudioData(samples: [0.1, 0.2], sampleRate: 16_000, duration: 2.0)),
+            transcriptionEngine: engine, textInjector: FakeTextInjector(), history: store,
+            settings: SettingsManager(store: InMemorySettingsStore()), feed: feed,
+            proofreadPass: makeProofreadPass(replying: { _ in "REJECT: mumbling" }),
+            frontmostApp: { front.app })
+        var delivered: [DictatedTake] = []
+        coordinator.onTakeCommitted = { delivered.append($0) }
+
+        coordinator.onHotkeyDown()
+        coordinator.onHotkeyUp()
+        try await waitUntil { feed.beat != nil }
+        // Another take starts in Terminal, and is let go.
+        front.app = terminal
+        coordinator.onHotkeyDown()
+        coordinator.cancel()
+
+        coordinator.insertRawAnyway()
+        try await waitUntil { !delivered.isEmpty }
+
+        #expect(
+            store.entries.first?.app
+                == TranscriptionEntry.App(bundleID: "com.apple.Notes", name: "Notes"))
+        #expect(delivered.first?.app == notes)
+        #expect(delivered.first?.pastedInto == terminal)
     }
 
 }

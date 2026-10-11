@@ -20,17 +20,11 @@ struct HotkeyRegistration {
     var onShiftTap: (() -> Void)?
 }
 
+/// The **Hotkey Table**'s registrar in the app: listens for every global
+/// hotkey, from a CGEvent tap or, without Accessibility, NSEvent monitors,
+/// and fires each registration's actions through the **Hotkey Matcher**.
 @MainActor
-final class HotkeyManager: ObservableObject {
-    /// The dictation registration's id — dictation registers through the one
-    /// `registerHotkey` API like every other hotkey (audit #285 item 7; the
-    /// former `currentHotkey`/`onHotkeyDown` mirror was a second source of
-    /// truth for the press that starts everything).
-    static let dictationHotkeyID = "dictation"
-    /// The fix registration's id (⌃⌥Space by default): reopens the last take
-    /// in the **Lens** to fix a word.
-    static let fixLastTakeHotkeyID = "fixLastTake"
-
+final class HotkeyManager: ObservableObject, HotkeyRegistrar {
     @Published private(set) var isListening = false
     @Published private(set) var isUsingEventTap = false
 
@@ -44,13 +38,6 @@ final class HotkeyManager: ObservableObject {
     /// windows counts too; the caller allows for it. Deliberately not
     /// `@Published`: it changes on every keystroke system-wide.
     private(set) var inputCount = 0
-
-    /// The dictation registration's current combo — the gate read App
-    /// Bindings uses to skip no-op re-binds. Falls back to the default combo
-    /// until the registration lands at setup.
-    var currentDictationHotkey: KeyCombo {
-        registrations[Self.dictationHotkeyID]?.combo ?? .optionSpace
-    }
 
     private var registrations: [String: HotkeyRegistration] = [:] {
         didSet {
@@ -112,29 +99,14 @@ final class HotkeyManager: ObservableObject {
         }
     }
 
-    // MARK: - Multi-Hotkey Registration
+    // MARK: - Registration
 
-    func registerHotkey(
-        id: String, combo: KeyCombo, onDown: @escaping () -> Void, onUp: (() -> Void)? = nil,
-        onCancel: (() -> Void)? = nil, onShiftTap: (() -> Void)? = nil
-    ) {
-        registrations[id] = HotkeyRegistration(
-            id: id, combo: combo, onDown: onDown, onUp: onUp, onCancel: onCancel,
-            onShiftTap: onShiftTap)
-    }
-
-    func unregisterHotkey(id: String) {
-        registrations.removeValue(forKey: id)
-        matcher.forget(id: id)
-    }
-
-    func updateRegisteredHotkey(id: String, combo: KeyCombo) {
-        guard var reg = registrations[id] else { return }
-        reg = HotkeyRegistration(
-            id: id, combo: combo, onDown: reg.onDown, onUp: reg.onUp, onCancel: reg.onCancel,
-            onShiftTap: reg.onShiftTap)
-        registrations[id] = reg
-        matcher.forget(id: id)
+    /// Binds the registration's id, replacing what it had. A key held under
+    /// the old combo is forgotten, so its release never fires under the new
+    /// one.
+    func register(_ registration: HotkeyRegistration) {
+        registrations[registration.id] = registration
+        matcher.forget(id: registration.id)
     }
 
     // MARK: - Listening

@@ -8,7 +8,7 @@ extension ModelDownloadManager {
     /// Capability Memo**. Replaces the stranded `ModelVisionCapability` class.
     func isVisionCapable(_ id: String) -> Bool {
         if let cached = visionCache[id] { return cached }
-        guard isDownloaded(id), let directory = modelPath(for: id) else { return false }
+        guard let directory = usableDirectory(for: id) else { return false }
         let capable = ModelCatalog.isVisionCapable(directory: directory)
         visionCache[id] = capable
         return capable

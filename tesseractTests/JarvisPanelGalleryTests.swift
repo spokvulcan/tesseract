@@ -323,32 +323,41 @@ struct JarvisPanelGalleryTests {
             JarvisPanelController.height(forContent: 2000) == JarvisPanelController.size.height)
     }
 
-    @Test func thePlansStepsAreTheTasksItPlacedAmongTheEvents() async throws {
+    /// The plan's steps are the day's: its planned tasks among its events,
+    /// read from the same Timeline as Today's.
+    @Test func thePlansStepsAreTheTasksPlannedAmongTheEvents() async throws {
         let container = try await TodayFixture.morning.container()
-        let card = try #require(TodayFixture.morning.state.cards.first)
-        guard case .morningPlan(let plan) = card.body else {
-            Issue.record("expected a Morning Plan card")
-            return
-        }
-        let steps = PlanStep.ahead(
-            plan: plan, agenda: container.agenda, now: TodayFixture.morning.now)
+        let now = TodayFixture.morning.now
+        let steps = PlanStep.ahead(in: container.companionRuntime.timeline())
         #expect(
             steps.map(\.title) == [
                 "Answer mail", "Review PR #612", "Standup", "Lunch with Sam", "Write the cache ADR",
             ])
         #expect(steps.last?.kind == .task(isMustDo: true))
         // At 08:20, mail at 08:30 is due: the plan offers to start it.
+        #expect(PlanStep.startable(steps, now: now)?.reminderID == "mail")
+        #expect(PlanStep.startable(steps, now: now.addingTimeInterval(-15 * 60)) == nil)
+        // A task only due at a time, not in the plan, is not offered; nor is
+        // a step the owner started already.
+        func day(_ plan: [Step]) -> Timeline {
+            var state = TodayFixture.morning.state
+            state.plan = plan
+            return Timeline(
+                snapshot: DaySnapshot(
+                    now: now, settings: DaySettings(), agenda: container.agenda.snapshot,
+                    areas: container.agenda.areas, inboxListID: container.agenda.inbox?.id),
+                state: state)
+        }
+        let unplanned = PlanStep.ahead(in: day([]))
         #expect(
-            PlanStep.startable(steps, now: TodayFixture.morning.now)?.reminderID == "mail")
-        // A task only due at a time, not placed by the plan, is not offered.
-        var unplanned = plan
-        unplanned.placements = []
-        let bare = PlanStep.ahead(
-            plan: unplanned, agenda: container.agenda, now: TodayFixture.morning.now)
-        #expect(bare.allSatisfy { $0.reminderID == nil })
-        #expect(
-            PlanStep.startable(steps, now: TodayFixture.morning.now.addingTimeInterval(-15 * 60))
-                == nil)
+            unplanned.map(\.title) == [
+                "Standup", "Lunch with Sam", "Design review", "Пройти урок у Duolingo 💚",
+            ])
+        #expect(unplanned.map(\.reminderID) == [nil, nil, nil, nil])
+        let started = PlanStep.ahead(
+            in: day(TodayFixture.morning.state.plan.map { $0.started(at: $0.start) }))
+        #expect(started.map(\.title) == steps.map(\.title))
+        #expect(started.map(\.reminderID) == [nil, nil, nil, nil, nil])
     }
 
     /// Lay the panel out once to learn its height, as the panel does, then
@@ -367,7 +376,8 @@ struct JarvisPanelGalleryTests {
         func host(height: CGFloat) -> NSHostingView<some View> {
             NSHostingView(
                 rootView: JarvisPanelView(
-                    model: model, thread: container.dayThread, agenda: container.agenda,
+                    model: model, thread: container.dayThread,
+                    day: { container.companionRuntime.timeline() },
                     liveCard: { _ in nil }, close: {}, expand: {}, act: { _ in }, keep: {},
                     choose: { _ in }, send: {}, capture: {}, mic: {},
                     onContentHeight: { content = $0 }, now: { shown.now }

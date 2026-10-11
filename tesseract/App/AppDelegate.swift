@@ -17,17 +17,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var onOpenWindow: (() -> Void)?
     var onOpenSettings: (() -> Void)?
     private var hasSetupWithContainer = false
-    private var isRunningUnderTests: Bool {
-        ProcessEnvironment.isRunningTests
-    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Ensure only one instance of the app runs at a time. Headless
-        // harness runs (`--dflash2-bench` etc.) are exempt: a bench must be
-        // able to run next to an interactive instance.
-        if !TesseractApp.isHarnessLaunch {
+        // Only one instance of the app runs at a time; a test host and a
+        // harness run beside it (the Launch Mode, ADR-0095).
+        if LaunchMode.current.enforcesSingleInstance {
             ensureSingleInstance()
         }
+
+        // The next three move or clean the owner's data, so each runs only
+        // where the Launch Mode migrates it.
 
         // Un-sandbox cutover (#381, ADR-0047): carry the downloaded models over
         // from the retired container before anything reads the model path.
@@ -42,9 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Companion v2's clean start: the retired memory store and Mission
         // Control conversation go, and tasks.md moves out of the agent's
         // folder. Idempotent; before the conversation store first loads.
-        if !isRunningUnderTests {
-            RetiredCompanionData.cleanAtLaunch(trace: CompanionTrace())
-        }
+        RetiredCompanionData.cleanAtLaunch(trace: CompanionTrace())
 
         // Setup window lifecycle tracking
         setupWindowTracking()
@@ -83,10 +80,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func ensureSingleInstance() {
-        if isRunningUnderTests {
-            return
-        }
-
         let bundleID = Bundle.main.bundleIdentifier ?? "app.tesseract.agent"
         let runningApps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
 

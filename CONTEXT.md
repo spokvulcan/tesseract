@@ -66,9 +66,9 @@ How a request holds its full-attention KV once its prompt is prefilled: full
 precision, or TurboQuant (`turbo8v4`: 8-bit affine keys, `turbo0v4`: bf16 keys,
 both with 4-bit values). The KV Cache Compression setting picks it for a model
 that supports it (Qwen3.8-27B). It is a request fact and part of cache partition
-identity (ADR-0083): the prompt prefills unquantized, the cache converts after
-prefill (inside the iterator on a DFlash2 turn and on an **Unkeyed
-Completion**, where the iterator runs the prefill), and the turn's leaf
+identity (ADR-0083): the prompt prefills unquantized, the cache converts once
+where the request's **Decode Handover** says (the **Decode Start**'s rule;
+inside the iterator when the iterator runs the prefill), and the turn's leaf
 stores compressed layers that only a request of the same scheme restores.
 _Avoid_: kvBits (the unrelated affine quantization the product never sets), KV
 quantization (ambiguous between the two).
@@ -167,11 +167,14 @@ Admission carries out); admission tail (the retired hand-sequenced shape).
 **Snapshot Resolution**:
 The read side of the prefix cache: resolve a token path to the best usable
 snapshot, returning a hit or a miss. The read-side counterpart to **Snapshot
-Admission**; distinct from `restoreCache`, the later model-affine step that applies
-a resolved snapshot into a live cache (resolution picks *which*, restore
-*applies* it). Owned by the **Prefix Cache Manager** as its single read-side
-entry, never a free-standing module reaching back across the manager's mutation
-seam. The lookup-then-hydrate *choosing* — the Hydration Gate outcome, the
+Admission**; distinct from restore, the later model-affine step (the **Model
+Session**'s `restore` verb) that applies a resolved snapshot into a live cache
+(resolution picks *which*, restore *applies* it). Owned by the **Prefix Cache
+Manager** as its single read-side entry, never a free-standing module reaching
+back across the manager's mutation seam. A keyed turn's resolution returns its
+checkpoint plan too, made in its own hop against the settled tree and aligned
+to the hit, so no caller plans before resolution or without its alignment
+(`PlannedResolution`, ADR-0087 decision 6). The lookup-then-hydrate *choosing* — the Hydration Gate outcome, the
 promote-on-success vs typed-cleanup-on-failure fork, the gate-fallback shapes —
 now lives in a pure decision ladder (`SnapshotResolutionLadder`) the manager
 consults; ownership is unmoved, the manager still performs every effect (the
@@ -181,8 +184,8 @@ _Avoid_: a standalone "hydrator" module (the retired shape that reached back int
 the manager — resolution is manager-owned); a ladder holding references to the
 manager/tree/ledger/hydrating handle (the retired hydrator's shape again — the
 ladder takes plain facts, returns decision values); **Snapshot Hydrating** (a
-different concept: the off-main handle, not the choose step); restore/restoreCache
-(the apply step, not the choose step).
+different concept: the off-main handle, not the choose step); restore (the
+apply step, not the choose step).
 
 **Snapshot Hydrating**:
 The narrow off-main handle that **Snapshot Resolution** depends on to materialize
@@ -202,9 +205,11 @@ the request that extends that leaf takes the objects back as its live cache.
 A boundary turn's re-prefilled cache moves in the same way: it is the
 request's own by construction, so the capture takes it rather than copying it.
 Only at quiescent points; only for a leaf hit at its full offset that every
-layer can return from (**Leaf Rewind**); anything else restores by copy as
-before — except a check-out refused only for a pending full payload, which is
-worth the **Pending-Payload Wait** first.
+layer can return from (**Leaf Rewind**); only inside its scope, a text-only key
+space over unquantized KV that the MTP drafter did not decode, one rule the
+check-out and the leaf's capture both read (`CacheClaim.HandoffExclusion`);
+anything else restores by copy as before — except a check-out refused only for
+a pending full payload, which is worth the **Pending-Payload Wait** first.
 _Avoid_: copy-on-write restore (the alias ADR-0023 rejected — a handoff shares
 nothing between two owners); zero-copy (the SSD write still copies); cache
 sharing (one owner at a time, never two).
@@ -564,6 +569,19 @@ downloaded that the engine refuses to load.
 _Avoid_: "has weights" (one nested `.safetensors` is not a checkpoint), verify
 (that compares sizes against the hub listing, a separate step).
 
+**Usable Directory**:
+Where a model's files are once they are complete by its entry's **Model
+Completeness**, nil until then: the one answer a loader that needs a whole model
+asks (`ModelDownloadManager.usableDirectory(for:)`). Every model folder comes from
+one pure folder rule, `ModelDefinition.directory(forRepo:pathPrefix:in:)` — the
+repo's folder under the model store, beneath the entry's path prefix — which the
+downloads, status checks and deletes, the voice engine's checkpoint closure, the
+benchmark runner, the DFlash2 draft's detection and the phone's voice all apply. Whisper's dictation load keeps
+its own, stricter `WhisperModelContract`: the catalog is shared with the iPhone
+app and can't see it.
+_Avoid_: model path (the folder, complete or not), cache subdirectory (retired),
+checkpoint directory (one engine's word).
+
 **Retired Checkpoint**:
 A directory in the model store that an earlier catalog entry downloaded and
 that no entry lists or loads anymore. Removed once at launch, because the
@@ -577,7 +595,8 @@ _Avoid_: orphaned model, legacy download (both suggest the user chose it).
 
 _The Prefill Plan entry and the terms after it name the design ADR-0087
 proposes. Until it is built, plan application still derives the shape, the
-Capture Schedule, the split and the Maximum Advance inline._
+Capture Schedule, the split and the Maximum Advance inline. The Decode
+Handover and the Decode Start are built (ADR-0093)._
 
 **Prefill Plan**:
 Everything one keyed request's prefill does that is decidable before the
@@ -598,9 +617,30 @@ cache; restore, where the **Cache Claim** is asked for the resolved snapshot
 and a restore that yields no cache falls back to the planner's cold prefill
 (ADR-0069 amendment); or whole prompt, where the Speculation Plan's iterator
 prefills the whole prompt into a fresh cache.
-_Avoid_: restore mode (what the restore turned out to be, an execution
-report); opening, unqualified (the Companion's **Day Opening**); restore
+_Avoid_: restore mode (what the restore turned out to be: the **Turn
+Restore**); opening, unqualified (the Companion's **Day Opening**); restore
 shape (the five shapes are products of the opening and the forward).
+
+**Usable Restore**:
+The one rule for whether a snapshot can seed a prefill toward a target: it
+covers some of the target but not all of it, does not split an image run (so
+its **Position Anchor** is defined), and, when the prefill extends it as text
+alone, sits at or past the **Minimum Warm Offset**. The keyed turn's plan reads
+it with a residual that may carry images; the Leaf Admission Builder, the Leaf
+Store's boundary route, the **Speculative Canonical Prefill** and
+salvage-on-cancel read it with a text-only one (ADR-0094).
+_Avoid_: restore guard, boundary guards (the five spellings it replaced);
+cache hit (a hit can still be unusable).
+
+**Residual Prefill**:
+Restoring a snapshot a **Usable Restore** took — a **Prefix-View Checkpoint**
+through its **Backing Leaf** — and prefilling the rest of a leaf's path as text,
+for a producer that then stores the leaf: the Leaf Store's boundary route and
+the **Speculative Canonical Prefill**. A restore that throws drops the snapshot
+through the manager, the keyed turn's failed-restore policy (ADR-0094).
+_Avoid_: boundary re-prefill (one of its two producers); extension (the
+**Leaf Extension Admission** is an SSD payload form); re-prefill inside the
+**Leaf Admission** (it stays outside, ADR-0078).
 
 **Minimum Warm Offset**:
 The end of a request's last image run in its **Cache Key Space**, or zero for
@@ -650,16 +690,31 @@ checkpoint (the older name in ADR-0019, ADR-0064 and ADR-0068, and today's
 local); planned checkpoint.
 
 **Decode Handover**:
-Where a prefill hands the prompt to the decode iterator: autoregressive, where
-the app prefills the whole **Text Tail** and the standard iterator decodes from
-its last token; or speculative at a split, where the app's capturing prefill
-runs to the split and the **Speculation Plan**'s iterator prefills the rest. A
-keyed split never precedes the **Minimum Warm Offset**, so the iterator takes
-text only.
-Any generation path can name its own.
+Where a generation's prefill hands the prompt to the decode iterator, and so
+where the **KV Scheme** converts: standard, where the app prefilled all but the
+last prompt token and the cache converts before the iterator's first forward;
+speculative, where the **Speculation Plan**'s iterator prefills the rest from a
+split (or the whole prompt from zero) and converts before the prompt's final
+position; or preparing, where the app's iterator prefills the whole prompt and
+converts after it. The **Prefill Strategy** route, which prefills into a cache
+of its own and keeps no array of the app's, is no handover: it starts through
+its own small start. A keyed split never precedes the **Minimum Warm Offset**,
+so the iterator takes text only. Every generation path names its own
+(ADR-0093).
 _Avoid_: decode route, speculation route (route belongs to the **Prefill
 Strategy** and the **Completion Route**); decode handoff (handoff is the
 **Leaf Handoff**'s word for moving a leaf between owners).
+
+**Decode Start**:
+The one module that starts decode for every generation path whose cache the
+app holds: from the **Decode Handover** it builds the iterator through the
+**Model Session**'s verbs, converts the KV cache once where the handover needs
+it, hands the array decode advances to its owner, badges a speculative arm and
+starts the token loop (ADR-0093). The **Prefill Strategy** route, which owns
+its cache, has a start of its own with none of those steps.
+_Avoid_: iterator factory (it decides the conversion and the owner too);
+quantize step (the conversion is one of its decisions, not a step of its own);
+a session verb that starts decode (it sits above the seam, ADR-0016).
 
 **Maximum Advance**:
 How far one turn may grow its cache past what it restored: its new prompt
@@ -875,12 +930,37 @@ _Avoid_: request context, keyed turn; a fact re-derived at a call site (the
 defect class the value exists to end); the request's own image list as
 "text-only" (request intent, not instance truth).
 
+**Turn Restore**:
+How one keyed turn's cache actually opened, as plan application carried out
+its **Cache Opening**: cold; by **Leaf Handoff**, holding the lease; by copy,
+with the **Cache Claim**'s reason for not handing the leaf over and what a
+**Pending-Payload Wait** cost; or failed then cold, a planned restore that
+yielded no cache, so the turn re-planned cold. The one value every report of
+the turn reads: the `lookup` line, the `restored` phase of `requestMemory`,
+the `leafStore` report, and the stored leaf's source, which the
+**Active-Inference Reserve** prices a lane by (ADR-0069 amendment).
+_Avoid_: restore mode (its wire string, which reads `failedCopy` for the
+last); restore outcome (the claim's check-out answer, one input to it);
+**Cache Opening** (the plan's intent, decided before the check-out).
+
+**Turn Report**:
+One request's account of its cache, kept by its **Cache Claim**: the turn's
+**Turn Restore**, filed once by plan application; the trace tally; and the
+turn's one `leafStore` event — the Leaf Store phase's report once the phase
+begins, or the claim's **Leaf Rewind** for a turn that ends before it, which
+the claim reports to it rather than logging. The outputs that say how the
+turn's cache opened read the filed restore from it (ADR-0069 amendment).
+_Avoid_: leaf store report (the phase's account, one of its inputs); a flag
+the drive sets on the claim (the retired `enterLeafStorePhase`); turn record
+(the trace corpus's line, which it makes).
+
 **Completion Trace Accumulator**:
 The fold of one cache-aware **Server Completion**'s trace facts into the terminal
 trace record — the terminal-vs-recovered eviction tally paired with its correlated
 diagnostics emission (so tally and log lines cannot drift), the restored-offset
-rule, and the admitted-snapshot projections. The drive feeds facts; the value
-decides what the record contains.
+rule (the offset the **Turn Restore** restored, 0 when it restored nothing),
+and the admitted-snapshot projections. A turn's **Turn Report** carries its
+tally and the drive feeds facts; the value decides what the record contains.
 _Avoid_: telemetry store (the window-scoped event buffer); trace logger (it
 derives, the diagnostics context logs).
 
@@ -908,9 +988,8 @@ concept); widening it before a second consumer needs a member.
 The one script that starts a whole-prompt-from-zero generation over a **Model
 Session** for an agent chat turn: tokenize through the session's agent-edge verb (the **Conversation
 Render**'s agent edge when eligible, the processor otherwise), emit the lookup and prefill progress
-events, decode through the session's **Speculation Plan** when it has one, else run
-the **Prefill Strategy** route, start the token-event loop, wrap
-the handles. It is the **Model Session**'s second consumer (ADR-0016 amendment);
+events, hand the prompt to the **Decode Start** (the session's **Speculation Plan**
+when it has one, else the **Prefill Strategy** route), wrap the handles. It is the **Model Session**'s second consumer (ADR-0016 amendment);
 `LLMActor` keeps only the lifecycle around it. Never consults the prefix cache.
 _Avoid_: raw arm (the three retired `LLMActor` copies); standard path (the
 pre-cache name).
@@ -1621,10 +1700,13 @@ The sub-controllers that own their own state but never subscribe to agent events
 **Agent Run**.
 
 **Voice Input**:
-The agent chat composer's push-to-talk capture→transcribe→emit module: it composes
-the shared **Voice Capture Session**, hands transcribed text to the composer rather
-than sending, and keeps its errors local instead of on the shared banner. Distinct
-from the spine — it touches no `Agent` and no arbiter.
+A field's push-to-talk capture→transcribe→emit module — the agent composer's,
+Today's, the capture and Jarvis panels', the Onboarding Tour's: it presents a **Voice
+Capture Session** from **Voice Capture**, hands transcribed text to its surface rather
+than sending, and keeps its errors local instead of on the shared banner. Spoken words
+join the words already typed by one rule (after them, with one space), and one
+hold-to-talk gesture drives it. Distinct from the spine — it touches no `Agent` and no
+arbiter.
 _Avoid_: dictation (the separate global system-wide overlay — say "agent voice
 input"), mic controller, voice state machine.
 
@@ -1784,12 +1866,46 @@ reads as its card (its line, what it holds, its choices live while the day
 still holds the card), never as a system note.
 _Avoid_: dashboard, Mission Control (retired), home screen (unqualified).
 
+**Timeline**:
+The day as the owner lives it, read once from Reminders, Calendar and the Day
+Engine's state at one moment: events and tasks in time order on the Day Line,
+free time, the Now line, the Anytime tasks, then tomorrow — with what every
+surface asks of the day: the step under way, the next step, when to leave for
+an event, the Inbox's offers, what waits on the owner. Today draws it, the
+Jarvis Panel lists a plan's steps from it, the menu bar counts down from it,
+and the Day Engine reads its focus and tomorrow from it, so no two of them
+read the day two ways.
+_Avoid_: day model, schedule.
+
+**Step under way**:
+The one step the day is on, by one rule, the first that matches: a step the
+owner started whose slot holds now (inside a block of theirs, or over a
+meeting it runs into); a meeting under way; a block of the owner's own under
+way; a task whose slot or time holds now, not started. The Now Card leads with
+it, the Day Line tints its row alone, and while a started one runs the menu
+bar counts it down and no other Step Cue interrupts it.
+_Avoid_: current step, active step, focus (unqualified).
+
+**Meeting**:
+An event with other people invited, or a place to be (an appointment, a
+class): it ends a step five minutes before it, the time to leave for it does
+too, and under way it is the step under way over a block. Only one with other
+people keeps a Step Cue off the panel.
+_Avoid_: event (unqualified: a block is one too).
+
+**Block**:
+An event of the owner's own: no one else invited and nowhere to be ("Work",
+09:00–13:00). Steps happen in it: it ends none and moves none, and a step the
+owner starts inside it is the step under way. A plan still places nothing
+over it.
+_Avoid_: focus time, meeting.
+
 **Now Card**:
-The top of Today: the step the day is on (the meeting under way, the task
-whose slot is now — once the owner started it, how much of it is left, in
-words and a short bar that drains like a visual timer; not started (its cue
-closed, missed or answered by mistake), its time and Start now — a task
-that slid, free time and what fits
+The top of Today: the step the day is on (the step under way — one the owner
+started, how much of it is left, in words and a short bar that drains like a
+visual timer; the meeting or block under way; a task whose slot is now, not
+started (its cue closed, missed or answered by mistake), its time and Start
+now — the time to leave, a task that slid, free time and what fits
 in it, the next step, what's left, or a done day and how tomorrow starts —
 within half a day, how far off that is; in
 the evening it closes the day — what is still ahead tonight, else what got
@@ -1809,9 +1925,24 @@ _Avoid_: hero, focus card, "the card" (unqualified: each Moment makes a card).
 **Agenda**:
 Apple Reminders and Calendar as Tesseract reads and writes them: one port with
 an EventKit store and an in-memory store (the test host's, ADR-0073), and a
-facade that keeps today's snapshot and turns every write into a one-line
-confirmation with an undo. The single source of truth for tasks and plans.
+facade that keeps today's snapshot, turns every write into a one-line
+confirmation with an undo, and makes the day's changes by Reminders' rules for
+dates and series: the owner's today and tomorrow, a task's time of day kept
+when it moves, a repeating reminder never losing its date or given a new
+time. It answers for a repeating task's Occurrence that day. The single source
+of truth for tasks and plans.
 _Avoid_: tasks file (retired `tasks.md`), task store (Reminders is the store).
+
+**Occurrence**:
+One day's turn of a repeating reminder. Reminders keeps a repeating reminder as
+one item for its whole series, open on its next date: ticked off, the
+occurrence stays behind as a done copy of its own, and the series moves on.
+The day holds a repeating task by its series, and the Agenda answers for that
+day's occurrence: open, or done and when. One Tesseract ticked off, taken
+back by an undo or by unticking it, leaves Reminders as it was: the series
+back on that date, the copy gone. Any other untick opens again only the
+reminder unticked.
+_Avoid_: instance, the copy (it is how Reminders keeps a done occurrence).
 
 **Area**:
 A part of the owner's life a day spans — Work, a side project, Health, Life —
@@ -1854,9 +1985,7 @@ The day's one optional thing that matters most. It can sit anywhere in the day,
 even late; the owner moves or clears it with one click. Once it is done, the
 Now Card says so: what else fits is "a bonus", and the evening counts it
 ("the must-do among them"). A repeating one is done when that day's
-occurrence is: Reminders keeps the occurrence ticked off as a copy with an
-id of its own and moves the series on, and the day follows the copy, its
-slot and steps with it.
+Occurrence is; its slot and steps stay the series'.
 _Avoid_: focus (the day has several goals, not one focus), priority.
 
 **Nudge**:
@@ -1868,6 +1997,25 @@ its place, its own link or the invite's notes — so ten minutes ahead, or late,
 joining is one click. Reminders with a due time need none: they carry their own
 alarm, delivered by Reminders on every device.
 _Avoid_: wake (retired), alert (unqualified).
+
+**Time to leave**:
+When the owner sets off for an event in person, set by the Morning Plan from
+how long the way there takes. It stands while its event is on the calendar at
+the same time; the event moved or gone, it no longer applies. The way there is
+busy time: no free time is offered in it, and a step ends before it. When it
+comes, the Now Card says so and a Nudge rings.
+_Avoid_: departure (the code's word), travel time.
+
+**Step**:
+One task's slot in today's plan, and what became of it that day: cued at its
+start, started, checked in at its end, put off, cut short before a meeting. The
+plan holds one step per task. A step moved to a new start is cued anew, as if
+just planned there; one made longer or shorter checks in again at its new end;
+how often it was put off, and the minutes a meeting cut from it, go with it
+wherever it moves that day. A task taken off the plan and put back is a fresh
+step.
+_Avoid_: slot (a step's time alone), placement (a slot a plan or an offer
+proposes), task (the reminder itself).
 
 **Step Cue**:
 A planned step put on the Jarvis Panel when its slot starts and the owner is at
@@ -2124,7 +2272,8 @@ _Avoid_: flight recorder (the retired one it replaced).
 ### Voice capture
 
 **Operation Guard**:
-The shared stale-result protocol for the capture→transcribe→commit coordinators: a
+The stale-result protocol of the capture→transcribe→commit lifecycle (the **Voice
+Capture Session**'s): a
 monotonic epoch that advances on cancel and on each new operation, so a post-`await`
 epoch check can reject a result from a superseded operation. Distinct from `Task`
 cancellation — it catches a recognizer that ignores cancellation and returns success
@@ -2134,25 +2283,39 @@ cancellation token (it does not own `Task` cancellation), debounce, sequence num
 not Swift's `guard` statement — say "operation guard".
 
 **Operation Ticket**:
-The epoch snapshot a coordinator captures when it enters async work; its `isCurrent`
+The epoch snapshot a session captures when it enters async work; its `isCurrent`
 check, after each `await` resume, decides whether still-running work may commit.
 _Avoid_: operation ID, token (unqualified), snapshot (the prefix-cache concept).
 
+**Voice Capture**:
+The one module every push-to-talk surface takes its takes from — dictation, the
+composers, the capture and Jarvis panels, the **Voice Session**, the Onboarding
+Tour. Built once from the shared microphone and recognizer, the **Capture Dump**
+and its switch, the **Learned Words**, the **Proofread Pass** and the dictation
+language, every one required, it hands each surface its own **Voice Capture
+Session**, so no surface can build a take that skips a stage (ADR-0096). It also
+answers whether a take is open anywhere — listening, transcribing, proofreading —
+which the **Models section** reads.
+_Avoid_: voice service, capture factory, push-to-talk registry, the list of voice
+inputs (the hand-kept list it replaced).
+
 **Voice Capture Session**:
-The one concrete module that owns the push-to-talk capture→transcribe→commit
-lifecycle — the **Operation Guard** ticket discipline, the microphone-busy guard, the
-minimum-duration and empty-text guards, the silent-capture skip (a capture whose level
-never rose above silence is not transcribed), post-processing, the **Learned Words**
-(applied after the regex cleanup and before the **Proofread Pass**), the in-flight
-transcription `Task`, and cancellation — behind a small value-returning interface
-(`start`/`stop`/`transcribeAndCommit`/`cancel`), delivering clean text to a
-caller-injected commit closure. The microphone and the recognizer are shared, so
-`cancel` stops only the capture and the take this session started: a panel closing
-never cuts off dictation's. Composed *directly* by both `DictationCoordinator` and
-**Voice Input**, which keep only their own state, errors, sounds, and commit. Distinct
-from **Voice Input** (one caller, agent-composer presentation) and from the **Operation
-Guard** it composes (the epoch protocol alone).
-_Avoid_: coordinator (it is composed by the coordinators, not one), capture engine
+One surface's takes, from **Voice Capture**: the push-to-talk
+capture→transcribe→commit lifecycle — the **Operation Guard** ticket discipline, the
+microphone-busy guard, the minimum-duration and empty-text guards, the silent-capture
+skip (a capture whose level never rose above silence is not transcribed), the take's
+one text pipeline (the regex cleanup, then the **Learned Words**) for both the **Live
+Preview** and the final pass, the **Proofread Pass** as the take's proofreading
+phase, "Insert anyway" for a take the pass rejected, the in-flight transcription
+`Task`, and cancellation — behind a small value-returning interface
+(`start`/`stop`/`transcribeAndCommit`/`commitRejectedTake`/`cancel`), delivering the
+take's words to the surface's commit. Its phase says whether its take is open. The
+microphone and the recognizer are shared, so `cancel` stops only the capture and the
+take this session started: a panel closing never cuts off dictation's. Surfaces
+(`DictationCoordinator`, **Voice Input**, the voice session) keep only their commit,
+presentation, sounds and errors. Distinct from the **Operation Guard** it composes
+(the epoch protocol alone).
+_Avoid_: coordinator (surfaces present it; it is not one), capture engine
 (`AudioCaptureEngine`, the mic port below it), voice controller, session (unqualified).
 
 **Proofread Pass**:
@@ -2163,9 +2326,10 @@ Off by default and opt-in (ADR-0085): **Learned Words** are the corrector, and w
 on, the pass reads the text after them. Strictly fail-open: disabled, model not
 downloaded, the LLM generating (skip-when-busy — it *reads* whether the **LLM Gate**
 is held, never waits on it), budget overrun, or any error all commit the raw text
-unchanged. Runs inside the **Voice Capture Session**, so dictation and
-**Voice Input** both gain it; its word-level edits ride the commit, and a rejected
-take's raw text stays available for the **Lens**'s "Insert anyway".
+unchanged. Runs inside every **Voice Capture Session**, as the take's proofreading
+phase, so every surface gains it; its word-level edits ride the commit, and the
+session keeps a rejected take for the **Lens**'s "Insert anyway", which commits it
+like any take.
 _Avoid_: post-processing (the regex cleanup that always runs, pass or no pass),
 autocorrect, grammar check, second agent (it is a fixed-prompt pass, not an agent).
 
@@ -2323,6 +2487,20 @@ clipboard backup, paste injection (the Cmd+V is one step of the loan).
 
 ### Hotkey handling
 
+**Hotkey Table**:
+The app's global hotkeys, one row each: the setting that holds its combo, its
+default (the **Settings Catalogue**'s), its label in Settings, and what its key
+does — press, release, a spoiled one-key press, a ⇧ tap — by the name of an
+action the composition root supplies. It registers every row at launch and
+re-binds a row's key when its setting changes; the Hotkeys pane lists the same
+rows (a row can ask for a section of its own, as the Appshot gesture's does). Its
+rows mark the interrupt keys: while a **Voice Session** is active,
+Speak Selected Text and Talk to Tesseract interrupt it (**Barge-In**) instead
+of doing what they otherwise do. A registrar seam takes its bindings:
+`HotkeyManager` in the app, an in-memory peer in the tests.
+_Avoid_: hotkey registry, keymap, shortcut list, hotkey ids typed as strings
+(a row's id is its case).
+
 **Hotkey Matcher**:
 The pure fire-or-not decision for global hotkeys — normalized event + bindings +
 pressed-set in, fires plus suppression verdict out — implemented once and fed by
@@ -2395,7 +2573,8 @@ scheduler (no policy beyond FIFO).
 **Inference Arbiter**:
 The model-affine layer that composes the **LLM Gate** with the LLM's identity,
 holding the gate across both load and body so the loaded model cannot change under
-a running consumer, and the residency mirror Offload Model reads (LLM and voice).
+a running consumer, and the language model's holder for **Model Residency** (its
+offload waits its turn at the gate).
 Distinct from the gate below it (no model awareness) and from
 `ModelDownloadManager` (acquisition, not arbitration).
 _Avoid_: gate (the layer below), model manager (collides with
@@ -2417,6 +2596,21 @@ with whether it is loaded and what it is doing right now ("Jarvis · Triage",
 system's swap. Memory, not the GPU, is what the models share; this is where the
 owner sees it.
 _Avoid_: model manager (the Models page in Settings), activity monitor.
+
+**Model Residency**:
+The one module that knows which models are in memory, what each is doing, and how
+to free them. Each model's holder — the agent engine behind the **Inference
+Arbiter**, the speech engine's presenter, the transcription engine, the **Proofread
+Pass**, the recall embedder — reports to it as one row: the model it holds, whether
+that is loaded and what it is doing, and how Offload Model frees it (dictation's
+Whisper stays: always armed). The **Models section**, the Models page's in-memory
+mark and Offload Model all read it, so they can't disagree. Offload frees every
+model a holder lets go of at once, the language model after the running
+generation. Where a model's files are once usable is one answer too
+(`ModelDownloadManager.usableDirectory(for:)`), which the loaders of a complete
+model ask (Whisper keeps its own completeness contract).
+_Avoid_: residency mirror (the arbiter's retired `.llm`/`.tts` slots), model
+manager, slots, loaded models list (the page's retired `LoadedModels`).
 
 **Foreground Gate**:
 The phone's one switch between "GPU work may start" and "the app is leaving the
@@ -2448,7 +2642,7 @@ One admitted request's live generation inside the **Batch Engine** — its
 execution identity from admission to drain. One request is one lane for its
 whole completion; admitted lanes are FIFO-fair, never descheduled for a
 sibling.
-_Avoid_: slot (the arbiter's `.llm`/`.tts` co-residency unit, and oMLX's static
+_Avoid_: slot (the arbiter's retired `.llm`/`.tts` co-residency unit, and oMLX's static
 per-slot KV reservation — both different things), worker, stream (the wire
 concept), request (the HTTP envelope; a lane is its execution).
 
@@ -2855,11 +3049,34 @@ class; per-setting device checks (the tier answers them all, once).
 **App Bindings**:
 The module owning the app's launch sequence and every long-lived runtime subscription
 that carries a rule (model auto-load and hot-swap, lazy-reload guards, server
-reactions, hotkey rebinding, the single dictation-state fan-out) — the
-launch-time mirror of the teardown-owning termination coordinator. Distinct from the
-composition root, which stays pure wiring with no behaviour.
+reactions, the single dictation-state fan-out) — the launch-time mirror of the
+teardown-owning termination coordinator. Distinct from the composition root, which
+stays pure wiring with no behaviour, and from the **Hotkey Table**, which follows
+the hotkey settings itself.
 _Avoid_: app glue (pre-carve working name), setup() behaviour, launch coordinator,
 app services, a SwiftUI `Binding` (view data flow, unrelated).
+
+**Launch Mode**:
+What this process is, decided once from its arguments and environment: the
+owner's launch, a scratch launch, the unit tests' host, or a **Harness** — and
+the one module that answers what such a process may do: keep off the owner's
+data, run the owner's background work, which window to open at launch, post
+OS notifications, enforce a single instance, migrate the owner's data, play
+sounds. The environment decides first (a test host, then a scratch launch);
+only then do the arguments name a harness. Callers ask an answer, never the
+arguments, the environment or the mode's name (ADR-0095, extending ADR-0073).
+_Avoid_: process environment (the retired predicates it replaced), test mode,
+debug mode, run mode, "is running tests" (ask the answer the call site needs).
+
+**Harness**:
+A headless run the app makes instead of the owner's launch — a loaded-model
+bench, a parity check, a trace replay — selected by a launch flag and listed
+once in the harness table, with its label, where it keeps its `latest.log`,
+and how it runs. The table's order is precedence. A harness never runs the
+owner's background work and opens no window: it owns the GPU and the model it
+loads.
+_Avoid_: bench (one kind of harness), benchmark mode, test runner (the
+unit-test host is its own Launch Mode).
 
 **Settled Width**:
 The width a page lays out against — the detail column's width once the column

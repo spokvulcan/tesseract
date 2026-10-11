@@ -69,7 +69,10 @@ tesseract/
 │   ├── TesseractApp.swift       # SwiftUI App entry (Window scene)
 │   ├── AppDelegate.swift        # macOS lifecycle, single instance, window management
 │   ├── AppBindings.swift        # App Bindings: launch sequence + subscription rules
+│   ├── HotkeyTable.swift        # Hotkey Table: every global hotkey, registered and re-bound from its setting
+│   ├── ModelResidency.swift     # Model Residency: which models are in memory, what each does, Offload Model
 │   ├── AppTerminationCoordinator.swift # Teardown ordering (closure-struct steps)
+│   ├── Harness.swift            # The harness table: every headless bench and parity run, by flag (ADR-0095)
 │   └── DependencyContainer.swift# Composition root, pure wiring
 │
 ├── Core/                        # Shared services
@@ -81,12 +84,14 @@ tesseract/
 │   ├── Permissions/
 │   │   └── PermissionsManager.swift   # Mic & Accessibility checks
 │   ├── SettledWidth.swift       # Settled Width policy + modifier (pure value, unit-tested)
+│   ├── LaunchMode.swift         # Launch Mode: owner, scratch, test host or harness, and what each may do (ADR-0095)
 │   ├── StorageEnvironment.swift # Storage roots: the owner's, or per-process scratch under tests and in a scratch launch (ADR-0073)
+│   ├── VoiceCaptureSession.swift # Voice Capture: every surface's push-to-talk session, with every stage (ADR-0096)
 │   ├── ViewModifiers.swift      # Scoped dependency injection
 │   └── Logging.swift            # Unified logging (Log enum)
 │
 ├── Platform/                    # AppKit bridge code
-│   ├── HotkeyManager.swift           # Global hotkey listener (CGEventTap)
+│   ├── HotkeyManager.swift           # Global hotkey listener (CGEventTap): the Hotkey Table's registrar
 │   ├── ObjCExceptions.swift           # NSException → thrown error seam (wraps AVFAudio graph steps)
 │   ├── ObjCExceptionCatcher.h/.m      # The one Objective-C file: the @try behind ObjCExceptions
 │   ├── TextInjector.swift             # Clipboard-based paste injection
@@ -99,7 +104,7 @@ tesseract/
 │
 ├── Features/                    # Feature modules
 │   ├── Dictation/
-│   │   ├── DictationCoordinator.swift # Thin composer over Voice Capture Session
+│   │   ├── DictationCoordinator.swift # Thin presenter over its Voice Capture Session: feed, commit, sounds
 │   │   ├── DictationFeed.swift        # Overlay Feed: phases, beats, Live Preview, hold, meter
 │   │   ├── Proofread/                 # Proofread Pass (ADR-0034): policy, verdicts, MLX adapter
 │   │   ├── Corrections/               # Correction Pair flywheel (#289): value + bounded store
@@ -134,8 +139,9 @@ tesseract/
 │   │   ├── AgentFactory.swift         # Bootstrap: packages, tools, prompt
 │   │   ├── LLMActor.swift             # MLX LLM inference actor
 │   │   ├── Speculation.swift          # Speculation: resident drafters + the per-request Speculation Plan (ADR-0079)
+│   │   ├── DecodeStart.swift          # Decode Start: every path's decode start, the one KV Scheme conversion rule (ADR-0093)
 │   │   ├── LLMGate.swift              # One LLM generation at a time, FIFO (ADR-0081)
-│   │   ├── InferenceArbiter.swift     # LLM gate + model identity + residency facade
+│   │   ├── InferenceArbiter.swift     # LLM gate + model identity; the language model's holder for Model Residency
 │   │   ├── Core/                      # Agent loop, state reducer, accumulator
 │   │   ├── Tools/                     # Built-in + extension tools
 │   │   ├── Commands/                  # Slash command registry + parser
@@ -145,7 +151,8 @@ tesseract/
 │   ├── Companion/                     # Jarvis: the owner's day (ADR-0080)
 │   │   ├── Agenda/                    # Reminders + Calendar port (EventKit, in-memory), facade, tools, Areas
 │   │   ├── Capture/                   # Capture parser, capture door, hotkey panel
-│   │   ├── Engine/                    # Day Engine (pure decider), Delivery Ladder, governor, nudges
+│   │   ├── Day/                       # The day read once: the Timeline, its facts, meetings, blocks and times to leave, Waiting on You, the Day Key
+│   │   ├── Engine/                    # Day Engine (pure decider), the Step, Delivery Ladder, governor, nudges
 │   │   ├── Moments/                   # Moments, cards, prompts, card parsing, fallbacks
 │   │   ├── Thread/                    # Day Thread: one conversation per day on its own agent; pictures seen in their turn; moments read back
 │   │   ├── Loop/                      # Companion runtime: gather → decide → perform, day state
@@ -165,18 +172,21 @@ tesseract/
 │   │   ├── CompletionRoute.swift      # Pure cache-aware vs standard decision
 │   │   ├── ServerCompletion.swift     # Actor-confined cache-aware execution module
 │   │   ├── CacheClaim.swift          # Cache Claim: a request's lane, pins and Leaf Lease; check-out, check-in, rewind; one conclusion (ADR-0069)
+│   │   ├── TurnRestore.swift         # Turn Restore: how a keyed turn's cache opened; every report of the turn reads it (ADR-0069)
+│   │   ├── TurnReport.swift          # Turn Report: the filed Turn Restore, the trace tally, the turn's one leafStore event (ADR-0069)
 │   │   ├── LeafLease.swift           # Scalar lease identity, shared tree/writer exclusion, exact recurrent rewind
 │   │   ├── PrefixCacheManager.swift   # Radix-tree KV snapshot cache (RAM tier)
 │   │   ├── SSDSnapshotStore.swift     # SSD tier: writer queue + body I/O
 │   │   ├── SnapshotLedger.swift       # SSD tier: manifest/budget/LRU authority
 │   │   ├── SnapshotPayload.swift      # Snapshot Payload: a snapshot's SSD byte form, built by Deferred Payload Extraction
-│   │   ├── PrefillPlanner.swift       # Tokenizer-affine pre-prefill decisions
+│   │   ├── PrefillPlanner.swift       # Tokenizer-affine pre-prefill decisions; the Usable Restore rule (ADR-0094)
 │   │   ├── RequestKeyingPhase.swift   # Request Keying: a request's keys and facts, derived once (Keyed Request, ADR-0070)
 │   │   ├── ConversationRender.swift   # Conversation Render module: the one chat-template application, Emitted Path Resolve, Generation Prompt probe
 │   │   ├── LeafStorePhase.swift       # Leaf Store phase: fast path vs boundary path (+Report, +Executors)
 │   │   ├── LeafAdmission.swift        # Leaf Admission: the one way a leaf enters the prefix cache (ADR-0078)
 │   │   ├── LeafStoreCounters.swift    # Boundary-turn tally by reason, logged at unload
 │   │   ├── LeafAdmissionBuilder.swift # GPU-free leaf-snapshot routing
+│   │   ├── ResidualPrefill.swift      # Residual Prefill: restore a prefix, extend it as text; the failed-restore policy (ADR-0094)
 │   │   ├── LiveLeafCapture.swift      # Pure fast-path eligibility (live vs boundary)
 │   │   ├── EmittedPathIndex.swift     # Emitted Path Index: rendered-bytes hash → fed ids per fingerprint (ADR-0063)
 │   │   ├── EmittedPathResolve.swift   # Resolve composition + per-request Emitted Path telemetry
@@ -314,15 +324,18 @@ Task { [weak self] in
 
 The app's long-lived runtime subscriptions *with a rule* (selected
 speech-to-text model auto-load and hot-swap, the lazy LLM reload guard, the
-server enable/port reactions, hotkey re-binding, the dictation-phase rule that
-mirrors the menu bar) live in **App Bindings** (`App/AppBindings.swift`), which
+server enable/port reactions, the dictation-phase rule that mirrors the menu
+bar) live in **App Bindings** (`App/AppBindings.swift`), which
 also owns the launch ordering: start the speech surfaces, install every
 subscription, then run the initial dictation-model load as an owned child
 task so the HTTP server never waits on a model load. Effects leave
 through a closure-struct the composition root wires —
 the launch mirror of `AppTerminationCoordinator`'s teardown steps — which makes
 every rule hermetically testable (`AppBindingsTests`). See `CONTEXT.md` → App
-composition.
+composition. The hotkeys follow their settings in the **Hotkey Table**
+(`App/HotkeyTable.swift`): one row per global hotkey, registered at launch
+through the registrar seam (`HotkeyManager`) and re-bound when its combo
+changes (`HotkeyTableTests` press keys on an in-memory registrar).
 
 ### Settings Persistence
 
@@ -420,7 +433,7 @@ playback**):
   rows and the frames' loudness into word starts, which the stream carries as
   `SpeechEvent.words`. The
   app-side `SpeechEnginePresenter` is the `@Observable @MainActor` residency
-  mirror for views and the arbiter — a presenter, not a facade: orchestration
+  mirror for views and Model Residency — a presenter, not a facade: orchestration
   lives in the package engine. It follows the Readiness the engine publishes,
   so a reload the engine starts by itself, for an utterance on a session that
   outlived Offload Model, shows as loaded too.
@@ -433,7 +446,7 @@ playback**):
   clock; pacing reads the head itself.
 
 ```
-DictationCoordinator ─(Transcribing)→ TranscriptionEngine ─(SpeechRecognizer)→ adapter
+VoiceCaptureSession ──(Transcribing)→ TranscriptionEngine ─(SpeechRecognizer)→ adapter
 SpeechCoordinator   ───────────────→  SpeechEngine (pkg)  ─(SpeechSynthesizing)→ adapter
 SpeechCoordinator   ──(AudioPlayback)────────────────────────────────────────→ adapter
                        engine/coordinator-facing        actor engine          model-facing port
@@ -463,7 +476,7 @@ parameters.
 .injectDependencies(from: container)
 // Expands to:
 //   .injectCoreDependencies(...)       — settings, permissions, container
-//   .injectDictationDependencies(...)  — coordinator, engine, history, pairs, Learned Words, audio, fixInLens
+//   .injectDictationDependencies(...)  — coordinator, Voice Capture, engine, history, pairs, Learned Words, audio, fixInLens
 //   .injectSpeechDependencies(...)     — coordinator, engine presenter
 //   .injectAgentDependencies(...)      — coordinator, engine, conversation store
 //   .injectModelDependencies(...)      — download manager, inference arbiter
@@ -474,7 +487,7 @@ The main window's `ContentView` applies the core scope at its root and each page
 
 AppKit consumers (MenuBarManager, panel controllers) receive dependencies via constructor injection — they cannot use `@Environment`.
 
-Under a test runner (the app is the unit-test host) the container keeps everything it stores in a scratch directory per test process, through `StorageEnvironment`, and its settings in memory, and the host opens no windows (ADR-0073). The model folder is the one location left in place.
+The container picks its adapters from the **Launch Mode** (`Core/LaunchMode.swift`, ADR-0095), decided once per process: the owner's launch, a scratch launch, the unit-test host, or a harness from the table in `App/Harness.swift`. Under a test runner (the app is the unit-test host) and in a scratch launch, everything it stores goes to a scratch directory per process, through `StorageEnvironment`, and its settings, Agenda, Profile and day state stay in memory (ADR-0073). The model folder is the one location left in place. The test host and a harness open no windows and run none of the owner's background work: `setup()` returns before the bootstrap.
 
 ---
 
@@ -524,6 +537,14 @@ Qwen3.5-family checkpoint, the DFlash2 draft beside Qwen3.8-27B): `LLMActor`'s
 load attaches them, the Model Session carries them, and each request asks for a
 **Speculation Plan**. The Server Completion and the Raw Generation Start read the
 same plan, and the session builds its iterator from it (ADR-0079).
+
+**Decode Start**: every generation path — the keyed turn (standard, or
+speculative at a split), the keyed whole-prompt arm, the Unkeyed Completion and
+both Raw Generation Start arms — starts decode through `DecodeStart`
+(ADR-0093). The path names its **Decode Handover**; the Decode Start picks the
+Model Session verb, converts the KV cache once where that handover needs it,
+hands the decoded array to its owner (a leased leaf's cache adopts it), badges a
+speculative arm and starts the token loop.
 `DFlash2Support` and `MTPDrafterSupport` keep the per-family detection, pairing
 and loading. The Qwen3.5 vision class runs the text class's engine, so the
 DFlash2 draft pairs with a vision load too, and image-bearing requests speculate:
@@ -565,17 +586,30 @@ cache, so chat turns, the Companion's moments, HTTP requests, `/compact`,
 reloads and offload take turns at the **LLM Gate**. `LLMGate` is the pure FIFO
 mechanism (atomic handoff, cancellation-safe); `InferenceArbiter` composes it with
 the LLM's identity (load, reload-on-mismatch) in `withLLM`, so the model cannot
-change under a running generation, and mirrors residency (`.llm`/`.tts`) for
-Offload Model. Speech, dictation, the proofreader and the embedder never take the
+change under a running generation; its `offloadLLM` waits its turn at the gate.
+Speech, dictation, the proofreader and the embedder never take the
 gate: MLX's process-wide evaluation lock keeps concurrent use safe, so a voice
 reply interleaves with a generation instead of waiting for it. Whisper's audio
 encoder runs on the GPU too, and a generation slows while it decodes (ADR-0086).
 The proofreader still *skips* while the LLM generates (ADR-0034), so a dictation
 never waits.
 LLM consumers depend on the single-member `InferenceArbitrating` seam; tests
-inject `InMemoryInferenceArbiter`. The menu bar's Models section shows what is
-loaded and what each model is doing, with the app's memory. Vocabulary:
-CONTEXT.md → LLM gate.
+inject `InMemoryInferenceArbiter`. **Model Residency** (`App/ModelResidency.swift`)
+is the one place that knows which models are in memory: each model's holder (the
+agent engine behind the arbiter, the speech engine's presenter, the transcription
+engine, the Proofread Pass, the `RecallEmbedder`) reports to it as one row, in
+`App/DependencyContainer+ModelResidency.swift` — the model, whether it is loaded and
+what it is doing, and how to free it. The menu bar's Models section, the Models
+page's in-memory mark and Offload Model all read it; Offload frees every model a
+holder lets go of, at once, the language model after the running generation. A
+loader that needs a whole model asks one answer for its files,
+`ModelDownloadManager.usableDirectory(for:)` (the **Usable Directory**), and every
+model folder comes from one pure folder rule,
+`ModelDefinition.directory(forRepo:pathPrefix:in:)`, which the voice engine's
+off-main checkpoint closure and the DFlash2 draft's detection apply too; Whisper
+keeps its own stricter
+`WhisperModelContract`.
+Vocabulary: CONTEXT.md → LLM gate.
 
 ### 6. HTTP Server and Prefix Cache
 
@@ -613,7 +647,20 @@ replay allocated multi-gigabyte synthetic arrays and blocked MainActor
 pressure response and SSD demotion remain active. Each keyed request holds one
 Cache Claim (`CacheClaim`, ADR-0069): its reserve lane, its Restore Pins and,
 after a Leaf Handoff, its Leaf Lease, concluded exactly once inside the
-request's LLM gate turn. Vocabulary: CONTEXT.md → Prefix cache snapshot
+request's LLM gate turn. A keyed turn's resolution returns its checkpoint
+plan (`PlannedResolution`), and dropping a snapshot that failed to restore
+returns the re-plan, so the manager keeps that order rather than plan
+application (ADR-0087 amendment). Its check-out answer and what the restore yielded
+are the turn's one Turn Restore (`TurnRestore`), which the `lookup` line, the
+memory phases, the `leafStore` report and the leaf's reserve source all read;
+plan application files it in the claim's Turn Report (`TurnReport`), which
+also carries the trace tally and logs the turn's one `leafStore` event, a
+rewind the claim reports to it included.
+Whether a snapshot can seed a prefill is one rule,
+the Usable Restore (`PrefillPlanner.usableRestore`), read by the keyed turn's
+plan and every re-prefill; the Leaf Store's boundary route and the Speculative
+Canonical Prefill restore a prefix and extend it through `ResidualPrefill`, and
+a restore that throws drops its snapshot on every path (ADR-0094). Vocabulary: CONTEXT.md → Prefix cache snapshot
 lifecycle, SSD snapshot ledger, Prefill orchestration, Eviction tuning.
 Verification gates: docs/testing.md → Loaded-model verification.
 An image request takes the same arm: `RequestKeyingPhase` prepares it (the
@@ -660,7 +707,44 @@ Cards reach the owner through the **Delivery Ladder**: the glyph, the **Jarvis
 Panel** (`Platform/GlassPanel.swift`, a borderless non-activating panel over
 `NSGlassEffectView`), a banner, or voice. The day's plan keeps its own time:
 when a planned slot starts and the owner is at the Mac, the engine puts it on
-the panel as a **Step Cue** (`DayEngine+Steps`), built by code. The system prompt carries no time;
+the panel as a **Step Cue** (`DayEngine+Steps`), built by code. The plan is a
+list of **Steps** (`Step`, ADR-0091): a task's slot and its life that day —
+cued, started, checked in, put off, cut short — each part bound to the
+step's start, its end or its task, so moving a step is one operation that
+keeps what goes with it.
+
+The day is read once (ADR-0091): `Timeline(snapshot:state:)`
+(`Features/Companion/Day/`) projects the Agenda's snapshot and the day's
+state into `DayFacts` — what a moment is asked about — and the Timeline —
+the Day Line's rows, free time, tomorrow — and answers what every surface
+asks: the **Step under way** (one rule, `UnderWay`), the next step, when to
+leave for an event, the Inbox's offers, Waiting on You, the menu bar's
+clock. Today draws it (`CompanionRuntime.timeline(at:)`, one call), the Now
+Card is a decision table on it (`NowCardBuilder`), the Jarvis Panel lists a
+plan's steps from it, and the engine reads its focus, next step and tomorrow
+from it. How time is taken is said once (`DayFacts+Time`): an event is a
+meeting (other people, or a place) or a block of the owner's own, and a
+time to leave stands while its event does; the Day Line's free time, a
+step's boundaries and a plan's placements are each a named composition of
+that.
+
+Every owner action — a card's, a cue's, a button on Today — comes in
+through `CompanionRuntime.act` and is decided by the engine; what it changes
+in Reminders the Agenda makes (`Agenda.apply`,
+`Features/Companion/Agenda/Agenda+Changes.swift`), with Reminders' rules for
+dates and series in that one place, and the runtime only performs. The day
+holds a repeating task by its series, and the Agenda answers for that day's
+**Occurrence** (ADR-0092, `Features/Companion/Agenda/Agenda+Occurrences.swift`):
+open, or done, the copy Reminders kept, read by one rule. Only an
+occurrence the Agenda ticked off itself is taken back as one (the copy goes,
+the series is back on its date); any other untick opens just the reminder
+it names. The in-memory store does what the Mac's stores do where the day
+can tell: a done copy and the series moved on, an event's id naming its
+start. Views read the time from the runtime's clock. The Jarvis Panel
+keeps what it shows (a card by id, read live from the day's state; a cue; the
+Done it says; a Break Cue); the engine keeps which cue it put there
+(`cueOnPanel`, `breakCuedAt`), so one taken down unanswered — under a card,
+by a quit, with the Companion off — is cued again. The system prompt carries no time;
 every user message carries a stored **Now Tag**. Other apps' banners are sorted
 by code on arrival (`NotificationSources`: a person, an app's news, or noise —
 the system's banners and games, recognised by `AppIdentityResolver`), so only
@@ -752,26 +836,31 @@ the retired pill (`requestFocus(pairID:)` and `focusEntryID` on
 
 ```
 1. User presses hotkey (Option+Space)
-   └─► HotkeyManager.onHotkeyDown()
+   └─► HotkeyManager → the Hotkey Table's dictation row
        └─► DictationCoordinator.startRecording()
-           ├─► AudioCaptureEngine.startCapture()
-           └─► Live Preview pump (ADR-0086), 300 ms after each decode lands
-               ├─► LivePreviewAssembler: the audio since the last confirmed segment
-               ├─► TranscriptionEngine.transcribePartial → TranscriptionResult
-               ├─► all but the last two segments confirmed; the rest is the tail
-               └─► regex cleanup + Learned Words → DictationFeed → Lens (listening)
+           └─► VoiceCaptureSession.start(preview:)
+               ├─► AudioCaptureEngine.startCapture()
+               └─► Live Preview pump (ADR-0086), 300 ms after each decode lands
+                   ├─► LivePreviewAssembler: the audio since the last confirmed segment
+                   ├─► TranscriptionEngine.transcribePartial → TranscriptionResult
+                   ├─► all but the last two segments confirmed; the rest is the tail
+                   └─► the take's text pipeline (regex cleanup + Learned Words)
+                       → DictationFeed → Lens (listening)
    Shift tapped while the key is held
-   └─► HotkeyManager onShiftTap → DictationCoordinator.shiftTapped(): the take will wait
+   └─► the dictation row's ⇧ → DictationCoordinator.shiftTapped(): the take will wait
 
 2. User releases hotkey
    └─► DictationCoordinator.stopRecordingAndProcess()
-       ├─► the preview pump and its decode in flight are cancelled
-       ├─► AudioCaptureEngine.stopCapture() → AudioData
-       └─► TranscriptionEngine.transcribe(audioData): the full pass over the whole take
-           └─► SpeechRecognizer port → WhisperKit inference → TranscriptionResult
+       └─► VoiceCaptureSession.stop()
+           ├─► the preview pump and its decode in flight are cancelled
+           ├─► AudioCaptureEngine.stopCapture() → AudioData
+           └─► transcribeAndCommit: TranscriptionEngine.transcribe(audioData), the
+               full pass over the whole take
+               └─► SpeechRecognizer port → WhisperKit inference → TranscriptionResult
 
-3. Post-processing
-   └─► TranscriptionPostProcessor → Learned Words → Proofread Pass (opt-in)
+3. Post-processing, in the session, then dictation's commit
+   └─► the take's text pipeline (TranscriptionPostProcessor → Learned Words)
+       → Proofread Pass (opt-in; the take's proofreading phase)
        ├─► TranscriptionHistory.add: the text, its catches and the app
        ├─► TextInjector.inject() (not for a held take)
        │   ├─► Copy to clipboard
@@ -800,9 +889,12 @@ the retired pill (`requestFocus(pairID:)` and `focusEntryID` on
                    reopens, the reopen starts from the fixed text
 ```
 
-A silent capture stops before step 2's transcription. Learned Words apply inside
-the Voice Capture Session, so Voice Input and the Companion's captures gain them
-too.
+A silent capture stops before step 2's transcription. Every push-to-talk surface
+takes its session from **Voice Capture** (ADR-0096), built once with every stage, so
+Voice Input, the voice session's captures and the Onboarding Tour gain the Learned
+Words, the Capture Dump and the Proofread Pass too. "Insert anyway" on a take the
+Proofread Pass rejected is the session's: it commits the take through dictation's
+own commit, like a take that landed.
 
 ### Audio Format Pipeline
 

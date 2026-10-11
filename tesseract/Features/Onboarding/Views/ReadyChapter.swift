@@ -74,7 +74,7 @@ struct ReadyChapter: View {
                 .font(OnboardingType.body)
                 .foregroundStyle(.secondary)
                 .frame(width: 110, alignment: .leading)
-            Text(ModelDefinition.withID(id)?.displayName ?? id)
+            Text(ModelDefinition.displayName(of: id))
                 .font(OnboardingType.body.weight(.medium))
             Spacer(minLength: 0)
             modelStatusChip(for: id)

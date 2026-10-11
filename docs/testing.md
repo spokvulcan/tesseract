@@ -269,6 +269,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/ManagedGenerationDriverTests \
   -only-testing:tesseractTests/ReasoningEffortTests \
   -only-testing:tesseractTests/RawGenerationStartTests \
+  -only-testing:tesseractTests/DecodeStartTests \
   -only-testing:tesseractTests/SpeculationPlanTests \
   -only-testing:tesseractTests/SpeculationResidencyTests \
   -only-testing:tesseractTests/SpeculativeDecodeToyTests \
@@ -296,6 +297,8 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/CacheClaimTests \
   -only-testing:tesseractTests/ServerCompletionExitMatrixTests \
   -only-testing:tesseractTests/ServerCompletionRestoreFallbackTests \
+  -only-testing:tesseractTests/TurnRestoreTests \
+  -only-testing:tesseractTests/TurnReportTests \
   -only-testing:tesseractTests/TokenRadixTreeTests \
   -only-testing:tesseractTests/StablePrefixDetectorTests \
   -only-testing:tesseractTests/PrefixCacheManagerTests \
@@ -344,9 +347,13 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/AudioPlaybackTests \
   -only-testing:tesseractTests/StreamingSchedulerTests
 
-# Dictation and Learned Words (ADR-0085/0086; quit the app first, its capture
-# engine starves test hosts): the Voice Capture Session (Learned Words after the
-# regex cleanup, the silent-capture skip, every caller), the regex cleanup, the
+# Dictation and Learned Words (ADR-0085/0086/0096; quit the app first, its capture
+# engine starves test hosts): Voice Capture and its sessions (Learned Words after the
+# regex cleanup, the silent-capture skip, every stage on every surface, the Live
+# Preview and the take reading the same, "insert anyway" committing like any take
+# and keeping the take's own app, one open take across surfaces, a cancel never
+# cutting off another surface's transcription; Voice Input's spoken words joining
+# typed ones), the regex cleanup, the
 # Correction Pair store and the gold mark a fix gives, the sounds-alike key, take
 # tokens, matching and the Learned Word store (exceptions per app, ordinary words
 # not learned, Forget and Undo), the fix (target by sound on real mishearings,
@@ -354,7 +361,9 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # confirmation rule, decoding from the last confirmed segment over a scripted
 # recognizer, release cancelling the preview), ⇧ holding a take and the Check
 # Before Pasting setting, the Lens state (listening, landing, a held take pasted
-# or kept), putting a fix back in the app, the hotkeys, and paste. The repo has
+# or kept), putting a fix back in the app, the hotkeys (the Hotkey Table: every
+# row bound from its setting, a changed setting moving its key, the interrupt
+# keys in a voice session), and paste. The repo has
 # no snapshot suites: the Lens views are covered by LensViewRenderTests, which
 # hosts each state the way the panel does (as MainWindowPageTests hosts the
 # pages) and checks it fits the card, with no pixel comparison;
@@ -382,6 +391,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/LivePreviewAssemblerTests \
   -only-testing:tesseractTests/LensSettleTests \
   -only-testing:tesseractTests/HotkeyMatcherTests \
+  -only-testing:tesseractTests/HotkeyTableTests \
   -only-testing:tesseractTests/TextInjectorTests \
   -only-testing:tesseractTests/AgentVoiceInputControllerTests \
   -only-testing:tesseractTests/SoundAlikeTests \
@@ -425,13 +435,15 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # loop — no flags must exit 2 while the OS still hangs, --unfocusable must exit 0):
 swift run --package-path tools/overlay-focus-hang-lab overlay-focus-hang-lab --unfocusable
 
-# App bindings, image input, integrations, and model-selection seams (and the
-# Models page's in-memory mark):
+# App bindings, image input, integrations, and model-selection seams (and Model
+# Residency: what each holder reports is what the menu's Models section shows and
+# the Models page marks, Offload frees every holder that lets go of its model, at
+# once, the language model after its generation, and a model's usable directory):
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
   -skipPackagePluginValidation \
   -only-testing:tesseractTests/AppBindingsTests \
   -only-testing:tesseractTests/SettingsManagerModelSelectionTests \
-  -only-testing:tesseractTests/LoadedModelsTests \
+  -only-testing:tesseractTests/ModelResidencyTests \
   -only-testing:tesseractTests/ImageInputAvailabilityTests \
   -only-testing:tesseractTests/ImageIngestTests \
   -only-testing:tesseractTests/ImagePreviewSetTests \
@@ -454,10 +466,14 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # (still the day that is ending until 04:00), the completion the EventKit
 # store hands its Reminders fetch (nonisolated, delivered off the main thread;
 # no store is touched), capture and the one-key hotkey,
-# the Timeline (tomorrow after today, without today's must-do star, and the
-# small hours past midnight), the Now Card (its decision table, the Inbox's
-# slot offers, how long a card's line stays fresh, the time left of the step
-# under way), a title's links read short (LinkedTitleTests), a calendar named
+# the Timeline, the day's one read (ADR-0091), from fixture snapshots and
+# states (tomorrow after today, without today's must-do star, and the small
+# hours past midnight; the step under way by its one rule — a started step
+# inside a block reads the same on the Now Card, the Day Line, the menu bar
+# and the engine, a meeting under way beats a block —; a time to leave only
+# while its event stands; the Inbox), the Now Card (its decision table on the
+# Timeline, the Inbox's slot offers, how long a card's line stays fresh, the
+# time left of the step under way), a title's links read short (LinkedTitleTests), a calendar named
 # by its address reads as its domain (AgendaCalendarLabelTests), Today
 # rendered with the app's wiring over fixture days (one deep in a slot, its
 # time left draining) at a wide, a regular and a phone width
@@ -468,23 +484,33 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # once, and never while away, quiet, in a call, a game or a meeting, or over a
 # panel that is up — what came due meanwhile is cued late once the owner can
 # see it; a started step's check-in at its end, which no other start
-# interrupts; and what each choice does), the wind-down (one banner as quiet
+# interrupts; and what each choice does; a step moved by a new plan keeping
+# how often it was put off, one taken off the plan and put back starting
+# afresh), the day's saved state (a day saved while each step's life lived
+# in maps beside the plan loads into its steps), the wind-down (one banner as quiet
 # hours begin with the owner at the Mac), the Jarvis Panel's content over
 # fixture cards at the height it fits them (the plan's steps, the wrap-up's
 # leftovers; TEST_RUNNER_PANEL_GALLERY_DIR=<dir> writes the PNGs), the menu
 # bar's clock beside the glyph (a started step's time left, the next event or
 # time to leave in its last half hour; the same directory gets its PNGs), one
-# day walked through the engine signal by signal where those rules meet (the
-# plan, a cue started, an absence and the late check-in, the must-do put off
-# and started small, the clock, the evening),
-# a repeating task ticked off (the day follows its done occurrence: the
-# must-do done, the step in its slot, its pace; the in-memory store keeps the
-# copy and moves the series on, as Reminders does), a task re-dated from
+# day walked through the engine signal by signal where those rules meet, the
+# in-memory Agenda making each change it asks for (the plan, a cue started,
+# an absence and the late check-in, the must-do put off and started small,
+# the clock, the evening),
+# a repeating task ticked off (ADR-0092: the day keeps the series and the
+# Agenda answers for its occurrence — the must-do done, the step in its slot,
+# its pace, Today's Chat's plan; the in-memory store keeps the copy and moves
+# the series on, as Reminders does; one the Agenda ticked off, overdue ones
+# too, taken back by Undo, by unticking the task or its copy, leaves
+# Reminders as it was; a one-off of its name, a copy ticked off elsewhere and
+# a series moved since are only opened again), a task re-dated from
 # Today, by the runtime's clock and never moving a repeating reminder's series
 # by accident (Tomorrow is the Step Cue's, at its own time of day; Move to
 # Today is a one-off task's; Later on a repeating reminder is a step half an
-# hour on, cued then; through Today's actions, the runtime and the in-memory
-# Agenda),
+# hour on, cued then; Later or Let go on a repeating leftover skips it to
+# tomorrow at its time — the Agenda's rules for dates and series; a tick on
+# Today goes through the engine like a card's Done; through Today's actions,
+# the runtime and the in-memory Agenda),
 # cards and prompts, the Day Thread's store, a moment's turn read back for
 # Today's Chat (ThreadMomentTests: every request names its moment, the line
 # from its card, the card it made found in the day's state, the Day Opening
@@ -526,7 +552,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/AgendaTimeTests \
   -only-testing:tesseractTests/CaptureParserTests \
   -only-testing:tesseractTests/NudgePlannerTests \
-  -only-testing:tesseractTests/TimelineBuilderTests \
+  -only-testing:tesseractTests/TimelineTests \
   -only-testing:tesseractTests/NowCardTests \
   -only-testing:tesseractTests/LinkedTitleTests \
   -only-testing:tesseractTests/TodayGalleryTests \
@@ -561,11 +587,17 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # Every main-window page opens with the app's own wiring, and test runs stay
 # off the owner's data (ADR-0073). A page missing an environment dependency
 # crashes the host: the result shows "Crash" on that page's case.
+# LaunchModeTests pins the Launch Mode (ADR-0095): the mode the arguments and
+# environment decide (the environment first), what each mode may do (every
+# harness skips the owner's background work and opens no window), and the
+# harness table (unique flags, the harnesses bench.sh starts winning over
+# --benchmark, which alone exits 0 on failure):
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
   -skipPackagePluginValidation \
   -only-testing:tesseractTests/MainWindowPageTests \
   -only-testing:tesseractTests/StorageEnvironmentTests \
-  -only-testing:tesseractTests/TelemetryEnvironmentTests
+  -only-testing:tesseractTests/TelemetryEnvironmentTests \
+  -only-testing:tesseractTests/LaunchModeTests
 
 # Run all tests:
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
@@ -586,14 +618,16 @@ or Caches without going through `StorageEnvironment`.
 A scratch launch (`scripts/dev.sh dev --scratch`) gives the running app the
 same data choices, with its windows open, so a change to a page or a panel can
 be tried by hand, or driven by an agent, without the owner's data: scratch
-storage, settings at their defaults with onboarding done, the in-memory
+storage, settings at their defaults, the main window open (never the
+Welcome window: the Launch Mode decides it, `LaunchModeTests`), the in-memory
 Agenda, and no OS notifications (`CompanionNotifierTests`). Each launch starts
 empty.
 
 For a validation run that must not load models, prefix the command with
-`TEST_RUNNER_XCTestSessionIdentifier=prefix-cache-unit-tests`. The existing
-test-host detector makes `DependencyContainer.setup()` return before app
-bootstrap, including Whisper and proofreader prewarms. Use an explicit suite
+`TEST_RUNNER_XCTestSessionIdentifier=prefix-cache-unit-tests`. That variable
+makes the process a test host (the Launch Mode, ADR-0095), so
+`DependencyContainer.setup()` returns before app bootstrap, including Whisper
+and proofreader prewarms. Use an explicit suite
 allowlist (the prefix-cache block above plus touched suites) after checking its
 fixtures, rather than the broad target. The prefix block's `Real` suites load
 tokenizer files, not model weights. Leave corpus and allocation opt-ins unset.
@@ -613,6 +647,21 @@ decoding. The MTP iterator can't run on the toy (its head reads the target's
 hidden states), so a presence-only drafter that traps if engaged
 (`Speculation.inactiveMTP`) pins where MTP must stay off. `DFlash2SupportTests`
 and `MTPDrafterSupportTests` keep the per-family detection, geometry and pairing.
+
+The **Decode Start** (ADR-0093) has one table, `DecodeStartTests`: every
+Decode Handover (standard, speculative at a split and from zero, preparing)
+and both arms of the Prefill Strategy route's own start × no KV Scheme and
+`turbo8v4` × no penalties, the
+app's output-only presence and a prompt-seeded frequency penalty, on the toy
+Model Session. Each row reads the verbs the handover called, the decoded text
+(the toy's one-hot logits let a penalty above 10 replace a token, so the text
+shows which penalties applied and what seeded them), the cache form the
+prompt's last token and the first decode step ran over (`ToyForwardForms`),
+the badge, and the array the owner keeps. The toy's DFlash2 verify moves only
+full-precision rows, so the speculative rows decode without a scheme;
+`aSpeculativeHandoverReadsTheConvertedArrayBack` builds both speculative
+kinds over `turbo8v4` and checks the owner keeps the iterator's converted
+array, stopping before decode.
 
 The **Generation Prompt** (ADR-0070) is covered at three levels.
 `GenerationPromptProbeTests` measures a fake template of every shape the probe

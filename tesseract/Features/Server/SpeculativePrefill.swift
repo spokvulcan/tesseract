@@ -164,12 +164,12 @@ nonisolated enum SpeculativeCanonicalPrefill {
     /// Run one speculative pass to completion or preemption. Cancellation is
     /// observed before every stage and between prefill chunks; a preempted
     /// pass settles (admitting partial progress past the capture threshold,
-    /// dropping anything less) and releases the container actor within ~one
+    /// dropping anything less) and releases the Model Session within ~one
     /// chunk plus at most one RAM-only capture. Runs off-actor (like the
-    /// drive task); every model-affine step hops through `container.perform`.
+    /// drive task); every model-affine step enters its own Model Session.
     static func run(
         seed: Seed,
-        container: ModelContainer,
+        sessions: any ModelSessionProviding,
         prefixCache: PrefixCacheManager
     ) async {
         // The pass holds a copy-only **Cache Claim** of its own: it pins
@@ -177,13 +177,13 @@ nonisolated enum SpeculativeCanonicalPrefill {
         // and lets both go when the scope concludes, preempted or not.
         await CacheClaim.withCopyOnlyClaim(context: seed.diagnostics, prefixCache: prefixCache) {
             claim in
-            await run(seed: seed, container: container, prefixCache: prefixCache, claim: claim)
+            await run(seed: seed, sessions: sessions, prefixCache: prefixCache, claim: claim)
         }
     }
 
     private static func run(
         seed: Seed,
-        container: ModelContainer,
+        sessions: any ModelSessionProviding,
         prefixCache: PrefixCacheManager,
         claim: CopyOnlyClaim
     ) async {
@@ -252,22 +252,17 @@ nonisolated enum SpeculativeCanonicalPrefill {
         // 3. Resolve the restore boundary against the live tree — usually
         // the canonical leaf admitted moments ago, but whatever Snapshot
         // Resolution surfaces works (a shallower hit just re-prefills more).
-        // Driven inside `container.perform` so an SSD `loadSync` stays
+        // Driven inside a Model Session so an SSD `loadSync` stays
         // off-MainActor (ADR-0001).
         if Task.isCancelled {
             logPreempted(diagnostics, prefilledTokens: 0, residualTokens: 0)
             return
         }
-        let transientBoundary = seed.transientBoundary.flatMap { view in
-            // The whole-state checkpoint belongs to its original key path.
-            // A rewritten future path may use it only through that prefix.
-            guard view.isPrefixView, view.tokenOffset >= seed.request.keySpace.minimumWarmOffset,
-                seed.request.keySpace.keyPath.count >= view.tokenOffset,
-                admitPath.starts(with: seed.request.keySpace.keyPath.prefix(view.tokenOffset))
-            else { return Optional<HybridCacheSnapshot>.none }
-            return view
-        }
-        let resolved = await container.perform { _ in
+        // The whole-state checkpoint belongs to its original key path. A
+        // rewritten future path may use it only through that prefix.
+        let transientBoundary = ResidualPrefill.matchingView(
+            seed.transientBoundary, for: admitPath, keySpace: seed.request.keySpace)
+        let resolved = await sessions.withSession { _ in
             await prefixCache.resolve(
                 tokens: admitPath,
                 promptTokenCount: admitPath.count,
@@ -283,13 +278,14 @@ nonisolated enum SpeculativeCanonicalPrefill {
                 interruption: { Task.isCancelled }
             ).lookup
         }
-        // The boundary guards mirror the canonical-leaf arm: a usable
-        // boundary is inside the path and past the image prefix (the
-        // residual doubles as the reprefill input, so it must be image-free).
+        // The usable-restore rule with a text-only residual, as the
+        // canonical-leaf arm reads it: a usable boundary is inside the path
+        // and past the image prefix (the residual doubles as the reprefill
+        // input, so it must be image-free).
         guard let boundary = resolved.snapshot,
-            boundary.tokenOffset > 0,
-            boundary.tokenOffset < admitPath.count,
-            boundary.tokenOffset >= seed.request.keySpace.minimumWarmOffset
+            case .success(let point) = PrefillPlanner.usableRestore(
+                offset: boundary.tokenOffset, target: admitPath.count,
+                keySpace: seed.request.keySpace, residual: .textOnly)
         else {
             diagnostics.logSkip(
                 stage: "speculativePrefill",
@@ -298,74 +294,71 @@ nonisolated enum SpeculativeCanonicalPrefill {
             )
             return
         }
-        let anchorDelta: Int?
-        if seed.request.seedsPositionAnchor {
-            guard let delta = seed.request.keySpace.positionAnchorDelta(upTo: boundary.tokenOffset)
-            else {
-                diagnostics.logSkip(
-                    stage: "speculativePrefill",
-                    reason: "boundary-splits-image-run",
-                    extraFields: [("offset", "\(boundary.tokenOffset)")]
-                )
-                return
-            }
-            anchorDelta = delta
-        } else {
-            anchorDelta = nil
-        }
+        let base = ResidualPrefill.Base(
+            snapshot: boundary, backingLeaf: resolved.backingLeaf, point: point, path: admitPath)
 
-        // 4. Restore, then chunked extension prefill. One `container.perform`
-        // per chunk with a cancellation check between chunks, so a preempting
-        // generation acquires the container actor within ~one chunk; the
-        // synchronous per-chunk `eval` keeps that bound real (no pipelined
-        // work outliving the perform that enqueued it).
-        let residual = Array(admitPath[boundary.tokenOffset...])
+        // 4. Restore, then the chunked Residual Prefill. One Model Session
+        // per chunk with a cancellation check between chunks, so a
+        // preempting generation enters its session within ~one chunk; each
+        // chunk is evaluated, checked, before its session ends (no pipelined
+        // work outliving the session that enqueued it, and an MLX failure
+        // throws).
+        let residualCount = admitPath.count - point.offset
         let warm = WarmState()
         let prefillStart = Date.timeIntervalSinceReferenceDate
 
-        let restoreOK = await container.perform { context in
-            do {
-                let session = ContextBackedModelSession(context: context)
-                warm.cache = try session.restore(boundary, backingLeaf: resolved.backingLeaf)
-                for layer in warm.cache { layer.reserveCapacity(admitPath.count) }
-                return true
+        let failure = await sessions.withSession { session -> ResidualPrefill.Failure? in
+            do throws(ResidualPrefill.Failure) {
+                warm.cache = try await ResidualPrefill.restore(
+                    base, partitionKey: seed.request.facts.partitionKey,
+                    prefixCache: prefixCache, diagnostics: diagnostics, in: session)
+                return nil
             } catch {
-                warm.failure = error.localizedDescription
-                return false
+                return error
             }
         }
-        guard restoreOK else {
+        if let failure {
             diagnostics.logSkip(
                 stage: "speculativePrefill",
                 reason: "restore-failed",
                 level: .warning,
-                extraFields: [("error", warm.failure ?? "unknown")]
+                extraFields: [("error", failure.underlying.localizedDescription)]
             )
             return
         }
 
         let stepSize = max(seed.request.facts.prefillStepSize, 1)
-        while warm.consumed < residual.count, !Task.isCancelled {
-            let range = warm.consumed..<min(warm.consumed + stepSize, residual.count)
-            await container.perform { context in
-                // Both model classes take a batched 2D chunk (PrefillExecutor
-                // adds the batch axis the same way for 1D-prepare LLMs).
-                let input = LMInput.Text(
-                    tokens: MLXArray(residual[range].map { Int32($0) })
-                        .expandedDimensions(axis: 0),
-                    mask: nil
+        let seedsPositionAnchor = seed.request.seedsPositionAnchor
+        let tokenNDim = seed.request.facts.tokenNDim
+        let storedForm = seed.request.facts.partitionKey.kvScheme
+        while warm.consumed < residualCount, !Task.isCancelled {
+            let range = warm.consumed..<min(warm.consumed + stepSize, residualCount)
+            // A chunk that passed the loop's check runs to its end, as the
+            // pass's chunks always have: a preemption that lands while it
+            // waits for its session stops the pass at the next check, not
+            // before this chunk. Detached, the claim's conclusion's way, so
+            // the pass's cancellation does not reach the prefill's own check.
+            let chunk = await Task.detached {
+                try await sessions.withSession { session in
+                    warm.chunkState = try ResidualPrefill.prefill(
+                        warm.cache, path: admitPath,
+                        range: (point.offset + range.lowerBound)..<(point.offset + range.upperBound),
+                        state: warm.consumed == 0
+                            ? point.initialState(seedsPositionAnchor: seedsPositionAnchor)
+                            : warm.chunkState,
+                        prefillStepSize: stepSize, tokenNDim: tokenNDim,
+                        evalPolicy: .checkedSynchronous, storedForm: storedForm, in: session)
+                }
+            }.result
+            if case .failure(let error) = chunk {
+                diagnostics.logSkip(
+                    stage: "speculativePrefill",
+                    reason: "prefill-threw",
+                    level: .warning,
+                    extraFields: [("error", error.localizedDescription)]
                 )
-                let initialState =
-                    warm.consumed == 0
-                    ? anchorDelta.map { PositionAnchor.seededState(ropeDelta: $0) }
-                    : warm.chunkState
-                let output = context.model(
-                    input,
-                    cache: warm.cache,
-                    state: initialState
-                )
-                warm.chunkState = output.state
-                eval(warm.cache)
+                warm.cache = []
+                return
             }
             warm.consumed += range.count
         }
@@ -377,7 +370,7 @@ nonisolated enum SpeculativeCanonicalPrefill {
             // entry's wait bounded.
             await settlePreemption(
                 seed: seed,
-                container: container,
+                sessions: sessions,
                 prefixCache: prefixCache,
                 admitPath: admitPath,
                 boundaryOffset: boundary.tokenOffset,
@@ -396,7 +389,7 @@ nonisolated enum SpeculativeCanonicalPrefill {
             storedTokens: admitPath,
             warm: warm,
             seed: seed,
-            container: container,
+            sessions: sessions,
             prefixCache: prefixCache,
             boundaryOffset: boundary.tokenOffset,
             prefillSeconds: prefillSeconds,
@@ -405,7 +398,7 @@ nonisolated enum SpeculativeCanonicalPrefill {
         Memory.clearCache()
     }
 
-    /// Settle a preempted pass before it yields the container: progress at
+    /// Settle a preempted pass before it yields the Model Session: progress at
     /// or above `minimumPreemptCaptureTokens` is admitted as a partial leaf
     /// (the chunk loop keeps the warm cache exactly chunk-aligned to the
     /// admit path, so no trim is needed), anything less is dropped. The
@@ -416,7 +409,7 @@ nonisolated enum SpeculativeCanonicalPrefill {
     /// inside its awaited window would be free-then-reallocate.
     private static func settlePreemption(
         seed: Seed,
-        container: ModelContainer,
+        sessions: any ModelSessionProviding,
         prefixCache: PrefixCacheManager,
         admitPath: [Int],
         boundaryOffset: Int,
@@ -441,7 +434,7 @@ nonisolated enum SpeculativeCanonicalPrefill {
             storedTokens: Array(admitPath[0..<offset]),
             warm: warm,
             seed: seed,
-            container: container,
+            sessions: sessions,
             prefixCache: prefixCache,
             boundaryOffset: boundaryOffset,
             prefillSeconds: Date.timeIntervalSinceReferenceDate - prefillStart,
@@ -463,7 +456,7 @@ nonisolated enum SpeculativeCanonicalPrefill {
         storedTokens: [Int],
         warm: WarmState,
         seed: Seed,
-        container: ModelContainer,
+        sessions: any ModelSessionProviding,
         prefixCache: PrefixCacheManager,
         boundaryOffset: Int,
         prefillSeconds: TimeInterval,
@@ -480,7 +473,7 @@ nonisolated enum SpeculativeCanonicalPrefill {
             prefixCache: prefixCache,
             diagnostics: diagnostics
         )
-        await container.perform { context in
+        await sessions.withSession { session in
             defer {
                 warm.cache = []
                 warm.chunkState = nil
@@ -489,7 +482,7 @@ nonisolated enum SpeculativeCanonicalPrefill {
             // before the admission existed (ADR-0078).
             let outcome = await admission.admit(
                 .lent(warm.cache),
-                in: ContextBackedModelSession(context: context),
+                in: session,
                 labels: .speculativeCanonicalPrefill(preempted: preempted)
             )
             guard case .admitted(let admitted) = outcome, admitted.survived else { return }
@@ -506,15 +499,14 @@ nonisolated enum SpeculativeCanonicalPrefill {
         }
     }
 
-    /// Mutable model-affine state carried across the per-chunk
-    /// `container.perform` hops. Only the one speculative task touches it,
-    /// and every mutation happens inside a `perform` (Metal-affine scope) —
-    /// the box launders the actor hop, never shares.
+    /// Mutable model-affine state carried across the per-chunk Model
+    /// Sessions. Only the one speculative task touches it, and every mutation
+    /// happens inside a session (Metal-affine scope) — the box launders the
+    /// hop, never shares.
     private final class WarmState: @unchecked Sendable {
         var cache: [any KVCache] = []
         var chunkState: LMOutput.State?
         var consumed = 0
-        var failure: String?
     }
 
     private static func logPreempted(

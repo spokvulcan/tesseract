@@ -6,37 +6,27 @@
 import Carbon.HIToolbox
 import SwiftUI
 
-/// The Hotkeys pane (#213): every global hotkey in one section, the Appshot
-/// gesture with its reset, and the Screen Recording permission it depends on.
+/// The Hotkeys pane (#213): every row of the **Hotkey Table** — the global
+/// hotkeys in one section, the Appshot gesture in its own — and the Screen
+/// Recording permission Appshots depend on.
 struct HotkeysSettingsPane: View {
-    @Environment(SettingsManager.self) private var settings
     @EnvironmentObject private var container: DependencyContainer
 
+    /// The rows listed together: a row with a section of its own has it below.
+    private var globalHotkeys: [GlobalHotkey] {
+        GlobalHotkey.allCases.filter { !$0.row.hasOwnSettingsSection }
+    }
+
     var body: some View {
-        @Bindable var settings = settings
         Form {
             Section("Global Hotkeys") {
-                HotkeyRecorderRow(label: "Dictation Push-to-Talk", combo: $settings.hotkey)
-                HotkeyRecorderRow(
-                    label: "Fix Last Take", combo: $settings.fixHotkey,
-                    resetTo: .controlOptionSpace, resetLabel: "Reset to ⌃⌥Space",
-                    help:
-                        "Reopens the last dictated take so you can fix a word by typing the one you meant."
-                )
-                HotkeyRecorderRow(label: "Speak Selected Text", combo: $settings.ttsHotkey)
-                HotkeyRecorderRow(label: "Talk to Tesseract", combo: $settings.agentHotkey)
-                HotkeyRecorderRow(
-                    label: "Capture to Reminders", combo: $settings.captureHotkey,
-                    resetTo: .rightOption, resetLabel: "Reset to Right ⌥")
+                ForEach(globalHotkeys, id: \.self) {
+                    HotkeyRecorderRow(hotkey: $0)
+                }
             }
 
             Section {
-                HotkeyRecorderRow(
-                    label: "Capture Frontmost Window",
-                    combo: $settings.appshotHotkey,
-                    resetTo: .doubleCommand,
-                    resetLabel: "Reset to ⌘⌘"
-                )
+                HotkeyRecorderRow(hotkey: .appshot)
             } header: {
                 Text("Appshot")
             } footer: {
@@ -76,23 +66,26 @@ struct HotkeysSettingsPane: View {
     }
 }
 
-/// One hotkey recorder line: current combo, Change/Cancel, optional reset —
-/// the single generic row that replaced the four copy-pasted recorder
-/// sections of the retired Preferences page.
+/// One hotkey recorder line: the row's label, its current combo,
+/// Change/Cancel, and, where the row offers one, a reset to its default once
+/// it differs — the single generic row that replaced the four copy-pasted
+/// recorder sections of the retired Preferences page.
 struct HotkeyRecorderRow: View {
+    @Environment(SettingsManager.self) private var settings
     @EnvironmentObject private var container: DependencyContainer
-    let label: String
-    @Binding var combo: KeyCombo
-    var resetTo: KeyCombo?
-    var resetLabel: String = "Reset"
-    /// Effect-first help under the row, for a hotkey whose label alone
-    /// doesn't say what it does.
-    var help: String?
+    let hotkey: GlobalHotkey
     @State private var isRecording = false
+
+    private var row: HotkeyRow { hotkey.row }
+
+    private var combo: KeyCombo {
+        get { settings[keyPath: row.combo] }
+        nonmutating set { settings[keyPath: row.combo] = newValue }
+    }
 
     var body: some View {
         HStack {
-            Text(label)
+            Text(row.label)
             Spacer()
 
             if isRecording {
@@ -114,15 +107,15 @@ struct HotkeyRecorderRow: View {
             .accessibilityHint(
                 isRecording ? "Cancel recording new hotkey" : "Record a new hotkey")
 
-            if let resetTo, combo != resetTo {
-                Button(resetLabel) {
-                    combo = resetTo
+            if row.offersReset, combo != row.defaultCombo {
+                Button(row.resetLabel) {
+                    combo = row.defaultCombo
                 }
                 .buttonStyle(.bordered)
             }
         }
 
-        if let help {
+        if let help = row.help {
             Text(help)
                 .font(.footnote)
                 .foregroundStyle(.secondary)

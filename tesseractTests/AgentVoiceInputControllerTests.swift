@@ -2,13 +2,15 @@
 //  AgentVoiceInputControllerTests.swift
 //  tesseractTests
 //
-//  Tests the **Voice Input** module as a thin composer over the **Voice Capture
-//  Session** — no `Agent`, no arbiter, no conversation store. Asserts the
-//  caller-specific behavior: emit-on-commit via `onVoiceTranscription`, the
-//  `AgentVoiceState` mapping, and that errors stay local to `voiceState`. The deep
-//  staleness/supersede race (a late success after cancel committing nothing) now
-//  lives once in `VoiceCaptureSessionTests`. Uses the engine-facing
-//  `ControllableTranscribing` double so a success is delivered deterministically.
+//  Tests the **Voice Input** module as a thin presenter over a **Voice Capture
+//  Session** from **Voice Capture** — no `Agent`, no arbiter, no conversation
+//  store. Asserts the surface-specific behavior: emit-on-commit via
+//  `onVoiceTranscription`, the `AgentVoiceState` mapping, that errors stay local
+//  to `voiceState`, that its takes run every stage, and the one rule for spoken
+//  words joining typed ones. The deep staleness/supersede race (a late success
+//  after cancel committing nothing) lives once in `VoiceCaptureSessionTests`.
+//  Uses the engine-facing `ControllableTranscribing` double so a success is
+//  delivered deterministically.
 //
 
 import Foundation
@@ -29,13 +31,13 @@ struct AgentVoiceInputControllerTests {
 
     private func makeController(
         capture: FakeAudioCapture,
-        engine: ControllableTranscribing
+        engine: ControllableTranscribing,
+        proofread: @escaping @MainActor (String) async -> ProofreadVerdict? = { _ in nil }
     ) -> AgentVoiceInputController {
         AgentVoiceInputController(
-            audioCapture: capture,
-            transcriptionEngine: engine,
-            settings: SettingsManager(store: InMemorySettingsStore())
-        )
+            session: makeVoiceCapture(
+                microphone: capture, recognizer: engine, proofread: proofread
+            ).makeSession())
     }
 
     // MARK: - Emit, not send
@@ -80,19 +82,9 @@ struct AgentVoiceInputControllerTests {
         )
         let capture = FakeAudioCapture(
             cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0))
-        let controller = AgentVoiceInputController(
-            audioCapture: capture,
-            transcriptionEngine: engine,
-            settings: SettingsManager(store: InMemorySettingsStore()),
-            proofreadPass: ProofreadPass(
-                isEnabled: { true },
-                isLLMBusy: { false },
-                modelDirectory: { URL(fileURLWithPath: "/tmp/proofread-model") },
-                loadModel: { _ in },
-                runModel: { _, _ in "REJECT: garbled noise" },
-                unloadModel: {}
-            )
-        )
+        let controller = makeController(
+            capture: capture, engine: engine,
+            proofread: { _ in .rejected(reason: "garbled noise") })
         let emitted = CallbackRecorder()
         let rejected = CallbackRecorder()
         controller.onVoiceTranscription = { emitted.record($0) }
@@ -128,16 +120,61 @@ struct AgentVoiceInputControllerTests {
         #expect(engine.isAwaiting == false)
     }
 
-    // MARK: - Fail safe when dependencies are missing
+    // MARK: - Every stage, on every surface (ADR-0085 §2, ADR-0096)
 
-    /// With no capture/transcription dependencies the controller has no session, so
-    /// `start()` fails safe with a local "not available" error rather than
-    /// half-working.
-    @Test func startWithoutDependenciesSurfacesUnavailableError() {
-        let controller = AgentVoiceInputController()
+    /// A Voice Input's take runs every stage of the module it came from — the
+    /// Capture Dump, the Learned Words, the Proofread Pass — whichever surface
+    /// holds it. The Onboarding Tour's included: there is no other way to
+    /// build one.
+    @Test func aVoiceInputsTakeRunsEveryStage() async throws {
+        let engine = ControllableTranscribing(
+            result: TranscriptionResult(
+                text: "ask cloud", segments: [], language: "en", processingTime: 0))
+        let capture = FakeAudioCapture(
+            cannedAudio: AudioData(
+                samples: [0.1, 0.2], sampleRate: 16_000, duration: 2.0,
+                raw: RawCapture(samples: [0.3], sampleRate: 48_000, voiceProcessed: true)))
+        let dump = FakeCaptureDump()
+        let words = LearnedWordStore(
+            directory: FileManager.default.temporaryDirectory
+                .appendingPathComponent("voice-input-learned-\(UUID().uuidString)"))
+        let id = try #require(words.learn(heard: "cloud", meant: "Claude")?.wordID)
+        let proofread = CallbackRecorder()
+        let controller = AgentVoiceInputController(
+            session: makeVoiceCapture(
+                microphone: capture, recognizer: engine, captureDump: dump, learnedWords: words,
+                proofread: { text in
+                    proofread.record(text)
+                    return nil
+                }
+            ).makeSession())
+        let emitted = CallbackRecorder()
+        controller.onVoiceTranscription = { emitted.record($0) }
 
         controller.start()
+        controller.finishCapture()
+        while !engine.isAwaiting { await Task.yield() }
+        engine.completeWithSuccess()
+        await observe(until: { !emitted.values.isEmpty })
 
-        #expect(controller.voiceState == .error("Voice input not available"))
+        #expect(dump.saved.count == 1)
+        #expect(proofread.values == ["Ask Claude"])
+        #expect(emitted.values == ["Ask Claude"])
+        #expect(words.word(withID: id)?.totalCatches == 1)
+    }
+
+    // MARK: - Spoken words join typed words
+
+    /// One rule for every field: spoken words follow the words already typed
+    /// with one space between, or stand alone in an empty field.
+    @Test func spokenWordsJoinTypedWords() {
+        #expect(AgentVoiceInputController.joining("call Anna", to: "") == "call Anna")
+        #expect(AgentVoiceInputController.joining("call Anna", to: "  \n") == "call Anna")
+        #expect(
+            AgentVoiceInputController.joining("call Anna", to: "Tomorrow:")
+                == "Tomorrow: call Anna")
+        #expect(
+            AgentVoiceInputController.joining("call Anna", to: " Tomorrow: \n")
+                == "Tomorrow: call Anna")
     }
 }

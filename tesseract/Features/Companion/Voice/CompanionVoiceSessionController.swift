@@ -37,6 +37,8 @@ final class CompanionVoiceSessionController {
 
     // MARK: - Dependencies
 
+    /// The session's takes, from **Voice Capture**: every stage, the
+    /// Proofread Pass included.
     private let capture: VoiceCaptureSession
     private let meterLevel: @MainActor () -> Float
     private let meterSpectrum: @MainActor () -> [Float]
@@ -51,7 +53,6 @@ final class CompanionVoiceSessionController {
     private let overlay: CompanionVoicePrototype
     private let recorder: CompanionTrace
     private let settings: SettingsManager
-    private let proofreadPass: ProofreadPass?
 
     /// Fired once on the session's active→idle edge — the dialogue ledger's
     /// "the dialogue ended" trigger (ADR-0046 #372). Settable post-
@@ -82,8 +83,7 @@ final class CompanionVoiceSessionController {
         currentConversationID: @escaping @MainActor () -> UUID?,
         overlay: CompanionVoicePrototype,
         recorder: CompanionTrace,
-        settings: SettingsManager,
-        proofreadPass: ProofreadPass?
+        settings: SettingsManager
     ) {
         self.capture = capture
         self.meterLevel = meterLevel
@@ -98,7 +98,6 @@ final class CompanionVoiceSessionController {
         self.overlay = overlay
         self.recorder = recorder
         self.settings = settings
-        self.proofreadPass = proofreadPass
     }
 
     // MARK: - Entry / exit
@@ -253,17 +252,10 @@ final class CompanionVoiceSessionController {
         case .silent:
             return .takeUnusable(reason: "silent")
         case .audio(let audio, _):
-            let language = settings.language
-            var proofread: (@MainActor (String) async -> ProofreadVerdict?)?
-            if let pass = proofreadPass {
-                proofread = { text in await pass.proofread(text) }
-            }
             Task { [weak self] in
                 guard let self else { return }
-                let outcome = await self.capture.transcribeAndCommit(
-                    audio, language: language, proofread: proofread
-                ) { [weak self] text, _ in
-                    self?.dispatch(.turnTranscribed(text))
+                let outcome = await self.capture.transcribeAndCommit(audio) { [weak self] words in
+                    self?.dispatch(.turnTranscribed(words.text))
                 }
                 switch outcome {
                 case .committed, .superseded:

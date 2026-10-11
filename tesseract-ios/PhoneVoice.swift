@@ -67,7 +67,7 @@ final class PhoneVoice {
         let trimming = TrimmingModelFetching(base: fetching, trims: ModelDefinition.phoneVoiceTrims)
         let downloads = ModelDownloadManager(
             fetching: trimming, definitions: [ModelDefinition.phoneVoice])
-        let checkpoint = downloads.modelPath(for: ModelDefinition.phoneVoice.id)!
+        let checkpoint = downloads.directory(for: ModelDefinition.phoneVoice)
         self.fetching = fetching
         self.trimming = trimming
         self.downloads = downloads
@@ -256,10 +256,8 @@ final class PhoneVoice {
     }
 
     private func updateProgress() {
-        guard let directory = downloads.modelPath(for: model.id), let repo = model.repoID else {
-            return
-        }
-        let finished = Self.size(of: directory)
+        guard let repo = model.repoID else { return }
+        let finished = Self.size(of: downloads.directory(for: model))
         let total = Int64(trimming.listedBytes[repo] ?? 0)
         state = .downloading(received: finished + fetching.activity.received, total: total)
     }

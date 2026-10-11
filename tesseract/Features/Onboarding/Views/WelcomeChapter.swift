@@ -81,7 +81,7 @@ struct ModelPickCard: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    Text(chosen?.displayName ?? controller.chosenAgentModelID)
+                    Text(ModelDefinition.displayName(of: controller.chosenAgentModelID))
                         .font(OnboardingType.body)
                         .fontWeight(.semibold)
                     if let size = chosen?.sizeDescription {
