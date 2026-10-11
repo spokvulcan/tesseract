@@ -61,7 +61,7 @@ struct BudgetDrainDiagnosticsTests {
         let manager = PrefixCacheManager(
             memoryBudgetBytes: leafBytes * 100, pressureSource: pressure)
         admitLeaves(manager)
-        manager.cumulativeCountersResetForTesting()
+        manager.testSeam().resetCumulativeCounters()
 
         let events = systemEvents { pressure.send(.critical) }
 
@@ -86,7 +86,7 @@ struct BudgetDrainDiagnosticsTests {
             tree.admit(node: node, ref: ref)
             tree.commitRef(node: node, expectedID: ref.snapshotID)
         }
-        manager.cumulativeCountersResetForTesting()
+        manager.testSeam().resetCumulativeCounters()
 
         let events = systemEvents { pressure.send(.warning) }
 

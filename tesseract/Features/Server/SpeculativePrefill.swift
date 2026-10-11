@@ -307,7 +307,7 @@ nonisolated enum SpeculativeCanonicalPrefill {
         let warm = WarmState()
         let prefillStart = Date.timeIntervalSinceReferenceDate
 
-        let restored = await sessions.withSession { session -> ResidualPrefill.Failure? in
+        let failure = await sessions.withSession { session -> ResidualPrefill.Failure? in
             do throws(ResidualPrefill.Failure) {
                 warm.cache = try await ResidualPrefill.restore(
                     base, partitionKey: seed.request.facts.partitionKey,
@@ -317,12 +317,12 @@ nonisolated enum SpeculativeCanonicalPrefill {
                 return error
             }
         }
-        if let restored {
+        if let failure {
             diagnostics.logSkip(
                 stage: "speculativePrefill",
                 reason: "restore-failed",
                 level: .warning,
-                extraFields: [("error", restored.underlying.localizedDescription)]
+                extraFields: [("error", failure.underlying.localizedDescription)]
             )
             return
         }

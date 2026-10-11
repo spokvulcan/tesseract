@@ -2378,9 +2378,8 @@ final class PrefixCacheManager {
     /// **Budget Floor** protected (every drop demoting via **Snapshot
     /// Demotion** where backing is available); a regrowth just raises
     /// the budget — the cache refills naturally on subsequent
-    /// admissions. Invoked by the injected `MemoryPressureSource`;
-    /// callable directly by tests through the in-memory peer or
-    /// as-is.
+    /// admissions. Invoked by the injected `MemoryPressureSource`, which
+    /// the suites drive through its in-memory peer.
     private func applyMemoryPressure(_ level: MemoryPressureLevel) {
         let floor = floorContents().bytes
         let previous = budgetBand.currentBytes
@@ -3219,21 +3218,21 @@ final class PrefixCacheManager {
                 tokens: tokens, stablePrefixOffset: stablePrefixOffset,
                 partitionKey: partitionKey)
         }
-    }
 
-    /// Test-only: zero the lifetime counters so a scenario can assert
-    /// deltas from a known baseline.
-    func cumulativeCountersResetForTesting() {
-        cumulativeCounters = PromptCacheCumulativeCounters()
-    }
+        /// Zero the lifetime counters so a scenario can assert deltas from a
+        /// known baseline.
+        func resetCumulativeCounters() {
+            manager.cumulativeCounters = PromptCacheCumulativeCounters()
+        }
 
-    /// Test-only: inject an in-memory **Snapshot Hydrating** peer so the
-    /// SSD-hydration composition in `resolve` (retry cap, clear-on-fail vs
-    /// promote-on-success ordering) is assertable through this manager's own
-    /// interface without a loaded model, a temp directory, or the concrete
-    /// `SSDSnapshotStore`. Production leaves this unset.
-    func setSnapshotHydratingForTesting(_ handle: (any SnapshotHydrating)?) {
-        store.setHydratingOverrideForTesting(handle)
+        /// Inject an in-memory **Snapshot Hydrating** peer so the
+        /// SSD-hydration composition in `resolve` (retry cap, clear-on-fail
+        /// vs promote-on-success ordering) is assertable through the
+        /// manager's own interface without a loaded model, a temp directory,
+        /// or the concrete `SSDSnapshotStore`. Production leaves it unset.
+        func setSnapshotHydrating(_ handle: (any SnapshotHydrating)?) {
+            manager.store.setHydratingOverrideForTesting(handle)
+        }
     }
 
     // MARK: - Measured-seconds estimators

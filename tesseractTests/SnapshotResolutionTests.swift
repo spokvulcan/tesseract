@@ -349,7 +349,7 @@ import MLXLMCommon
     @Test func resolveHydratesAnSSDHitAndPromotesIt() async {
         let manager = makeManager()
         let peer = InMemorySnapshotHydrating()
-        manager.setSnapshotHydratingForTesting(peer)
+        manager.testSeam().setSnapshotHydrating(peer)
         let path = [1, 2, 3, 4, 5, 6, 7, 8]
         let ref = plantSSDOnly(manager, path: path, offset: 8)
         peer.programSuccess(id: ref.snapshotID, body: makeSnapshot(offset: 8))
@@ -381,7 +381,7 @@ import MLXLMCommon
     @Test func resolveRetriesAfterAFailedHydrationUntilAShallowerNodeSucceeds() async {
         let manager = makeManager()
         let peer = InMemorySnapshotHydrating()
-        manager.setSnapshotHydratingForTesting(peer)
+        manager.testSeam().setSnapshotHydrating(peer)
         // A chain of state-5 nodes at increasing depth. Inserted shallow→deep
         // so each extends the path without disturbing the prior ref.
         let ref4 = plantSSDOnly(manager, path: [1, 2, 3, 4], offset: 4)
@@ -414,7 +414,7 @@ import MLXLMCommon
     @Test func resolveSurfacesAMissAfterThreeConsecutiveHydrationFailures() async {
         let manager = makeManager()
         let peer = InMemorySnapshotHydrating()
-        manager.setSnapshotHydratingForTesting(peer)
+        manager.testSeam().setSnapshotHydrating(peer)
         let ref4 = plantSSDOnly(manager, path: [1, 2, 3, 4], offset: 4)
         let ref6 = plantSSDOnly(manager, path: [1, 2, 3, 4, 5, 6], offset: 6)
         let ref8 = plantSSDOnly(manager, path: [1, 2, 3, 4, 5, 6, 7, 8], offset: 8)
@@ -438,7 +438,7 @@ import MLXLMCommon
     @Test func resolveStopsAClearStormAtTheRetryCap() async {
         let manager = makeManager()
         let peer = InMemorySnapshotHydrating()
-        manager.setSnapshotHydratingForTesting(peer)
+        manager.testSeam().setSnapshotHydrating(peer)
         // Five state-5 nodes on the path — more than the cap. All fail.
         let path: [Int] = Array(1...10)
         let ref2 = plantSSDOnly(manager, path: Array(path[0..<2]), offset: 2)
@@ -462,7 +462,7 @@ import MLXLMCommon
     @Test func resolveFallsBackToAShallowerResidentBodyAfterAFailedHydration() async {
         let manager = makeManager()
         let peer = InMemorySnapshotHydrating()
-        manager.setSnapshotHydratingForTesting(peer)
+        manager.testSeam().setSnapshotHydrating(peer)
         // A RAM-resident body at offset 4, then a deeper state-5 node at 8.
         let ramPath = [1, 2, 3, 4]
         manager.admit(
@@ -494,7 +494,7 @@ import MLXLMCommon
     @Test func aFailedHydrationCallsNeitherRecordHitNorPromote() async {
         let manager = makeManager()
         let peer = InMemorySnapshotHydrating()
-        manager.setSnapshotHydratingForTesting(peer)
+        manager.testSeam().setSnapshotHydrating(peer)
         let path = [1, 2, 3, 4]
         let ref = plantSSDOnly(manager, path: path, offset: 4)
         peer.programFailure(id: ref.snapshotID)

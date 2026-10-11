@@ -300,7 +300,9 @@ the rest of this ADR:
    `restoreSnapshotRef`, `evictToFitBudget`, `applyMemoryPressure` and
    `budgetFloorBytes` run only inside the manager's sequences. The suites
    reach the ones they drive through `testSeam()`, which
-   scripts/test-only-code.allow lists with its reason. `LookupResult.restoreCache()`,
+   scripts/test-only-code.allow lists with its reason; the counter reset and
+   the Snapshot Hydrating override, once `ForTesting` methods on the manager,
+   are on the seam too. `LookupResult.restoreCache()`,
    dead in production since every restore goes through the Model Session's
    `restore` verb, is deleted; the suites restore through the snapshot.
 

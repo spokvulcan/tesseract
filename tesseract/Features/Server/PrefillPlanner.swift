@@ -301,7 +301,7 @@ nonisolated enum PrefillPlanner {
     ///   snapshot is restored and the remainder is continued *through* the
     ///   image, chunked. The `minimumWarmOffset` clamp survives only as the
     ///   no-valid-restore fallback (the cold `else`);
-    /// - the restore guard is the usable-restore rule with a residual that
+    /// - whether the hit restores is the usable-restore rule with a residual that
     ///   may carry images, which rejects an offset that splits a placeholder
     ///   run (a corrupt boundary);
     /// - a usable restore carries its **Position Anchor** rope delta;
