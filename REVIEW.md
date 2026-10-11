@@ -20,7 +20,8 @@ Reserve **Important** for:
   work finished" before a positive check, when the work leaves the main actor
   (an actor hop, a `Task.sleep`, a detached task); a suite that computes for
   seconds without `@Suite(.cpuBound)`. SwiftLint already rejects wall-clock
-  budgets and `for … where … { await Task.yield() }` waits.
+  budgets, `for … where … { await Task.yield() }` waits, and a semaphore,
+  group or condition outside `ParkingGate`.
 - Security and sandbox escapes (PathSandbox, entitlements)
 - Assertions that pass on wrong output: `contains(fixtureText)` over generated
   text (a prompt, a summary, a render) holds with garbage around the fixture,

@@ -516,7 +516,7 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
     /// only once: compaction never makes the next turn pay two whole-body
     /// copies.
     @MainActor
-    @Test func theNextTurnAfterACompactionGrowsTheBodyAtMostOnce() async throws {
+    @Test(.parksPoolThreads) func theNextTurnAfterACompactionGrowsTheBodyAtMostOnce() async throws {
         let tokenizer = ToySequencingTokenizer()
         let first = Self.conversation([.init(role: .user, content: "Hi")])
         let long = Self.conversation([
@@ -714,7 +714,8 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
     /// chunks must admit the completed progress as a RAM-only leaf and
     /// release the in-flight start, so a re-sent request resumes from the
     /// salvaged offset instead of the restore floor.
-    @Test func cancelMidPrefillSalvagesProgressAndReleasesTheStart() async throws {
+    @Test(.parksPoolThreads) func cancelMidPrefillSalvagesProgressAndReleasesTheStart() async throws
+    {
         let tokenizer = ToySequencingTokenizer()
         let longContent = String(repeating: "a", count: 4000)
         let conversation = Self.conversation([
@@ -768,7 +769,7 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
     /// Abort during the drive (decode underway): the stream must end, the
     /// registry slot must be released to the drain, and nothing may be
     /// admitted for the aborted turn — a re-sent request starts cold.
-    @Test func abortDuringDriveReleasesSlotAndAdmitsNothing() async throws {
+    @Test(.parksPoolThreads) func abortDuringDriveReleasesSlotAndAdmitsNothing() async throws {
         let tokenizer = ToySequencingTokenizer()
         let conversation = Self.conversation([
             HTTPPrefixCacheMessage(role: .user, content: "Hi")

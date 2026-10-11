@@ -56,7 +56,7 @@ struct ServerCompletionDrainTests {
         return (fixture, gate, handle, scriptedText)
     }
 
-    @Test
+    @Test(.parksPoolThreads)
     func drainCancelsAndAwaitsTheActiveCompletion() async throws {
         let (fixture, gate, handle, scriptedText) = try await Self.gatedLiveCompletion()
 
@@ -83,7 +83,7 @@ struct ServerCompletionDrainTests {
         #expect(text.utf8.count < scriptedText.utf8.count)
     }
 
-    @Test
+    @Test(.parksPoolThreads)
     func concurrentDrainsBothAwaitTheActiveCompletion() async throws {
         let (fixture, gate, _, _) = try await Self.gatedLiveCompletion()
 
@@ -142,7 +142,7 @@ struct ServerCompletionDrainTests {
         await fixture.drain()
     }
 
-    @Test
+    @Test(.parksPoolThreads)
     func staleFinishDoesNotDropANewerSlot() async throws {
         let (fixture, gate, handle, scriptedText) = try await Self.gatedLiveCompletion()
 
@@ -234,7 +234,7 @@ struct ServerCompletionDrainTests {
         return (fixture, gate)
     }
 
-    @Test
+    @Test(.parksPoolThreads)
     func drainCancelsAndAwaitsTheSpeculativePrefill() async throws {
         let (fixture, gate) = try await Self.gatedLiveSpeculativePass()
 
@@ -252,7 +252,7 @@ struct ServerCompletionDrainTests {
         #expect(await drainFinished.get())
     }
 
-    @Test
+    @Test(.parksPoolThreads)
     func staleSpeculativeFinishDoesNotDropANewerSlot() async throws {
         let (fixture, gate) = try await Self.gatedLiveSpeculativePass()
 
@@ -273,7 +273,7 @@ struct ServerCompletionDrainTests {
         #expect(await drainFinished.get())
     }
 
-    @Test
+    @Test(.parksPoolThreads)
     func preemptAwaitsTheSpeculativePrefillSettle() async throws {
         let (fixture, gate) = try await Self.gatedLiveSpeculativePass()
 

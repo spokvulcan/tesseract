@@ -1,6 +1,7 @@
 import Foundation
 import MLX
 import MLXLMCommon
+import Testing
 
 @testable import Tesseract_Agent
 
@@ -232,9 +233,11 @@ enum PrefixCacheTestFixtures {
     }
 }
 
-/// Test-only gate for pausing `SSDSnapshotStore`'s detached writer (via
-/// `writerDrainPreludeForTesting`) until a test has finished building
-/// the pending-queue state it wants to assert against.
+/// Test-only async latch: `wait()` suspends until `open()`, holding no
+/// thread. Pauses `SSDSnapshotStore`'s detached writer (via
+/// `writerDrainPreludeForTesting`) until a test has finished building the
+/// pending-queue state it wants to assert against, or holds a model session
+/// a test has taken.
 actor DrainGate {
     private var isOpen = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
@@ -278,15 +281,19 @@ extension TryEnqueueResult {
 /// merely queued, which is the distinction `pendingPayloadProgress`
 /// draws and the bounded pending-payload wait (#523) turns on.
 ///
-/// The gate is a semaphore because `SnapshotPayload.materialize()` is
-/// synchronous on the writer's task; the wait is bounded so a regression
-/// cannot hang the suite.
-nonisolated final class BlockingMaterializer: @unchecked Sendable {
-    private let gate = DispatchSemaphore(value: 0)
+/// `SnapshotPayload.materialize()` is synchronous on the writer's task, a
+/// pool thread, so the writer parks on a ``ParkingGate``: the test takes
+/// `@Test(.parksPoolThreads)`.
+nonisolated final class BlockingMaterializer: Sendable {
+    private let gate: ParkingGate
+
+    init(sourceLocation: SourceLocation = #_sourceLocation) {
+        gate = ParkingGate(sourceLocation: sourceLocation)
+    }
 
     /// Let the parked materializer finish. Safe to call before the writer
-    /// has reached the gate — the signal is remembered.
-    func release() { gate.signal() }
+    /// has reached the gate — the release is remembered.
+    func release() { gate.open() }
 
     /// Wrap `inner` so the host copy parks before reading its layers.
     /// Everything `inner` retains — for a full payload, the body's own
@@ -300,7 +307,7 @@ nonisolated final class BlockingMaterializer: @unchecked Sendable {
             extending: inner.extending,
             totalBytes: inner.totalBytes,
             materialize: {
-                _ = gate.wait(timeout: .now() + 5)
+                gate.park()
                 return inner.layers
             })
     }
@@ -314,7 +321,7 @@ nonisolated final class BlockingMaterializer: @unchecked Sendable {
             checkpointType: .leaf,
             totalBytes: bytes,
             materialize: {
-                _ = gate.wait(timeout: .now() + 5)
+                gate.park()
                 return [
                     SnapshotPayload.LayerPayload(
                         className: "KVCache",

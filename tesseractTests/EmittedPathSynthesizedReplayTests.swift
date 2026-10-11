@@ -35,7 +35,7 @@ struct EmittedPathSynthesizedReplayTests {
 
     // MARK: - Cases
 
-    @Test(arguments: [false, true])
+    @Test(.parksPoolThreads, arguments: [false, true])
     func cancelledWarmPrefillReturnsTheLeaseAndReleasesRequestPins(drain: Bool) async throws {
         let gate = ForwardGate(threshold: 0, armed: false)
         let session = Session(onForward: gate.onForward)
@@ -99,7 +99,8 @@ struct EmittedPathSynthesizedReplayTests {
         Task.immediate { await fixture.module.drainActiveCompletion(on: actor) }
     }
 
-    @Test func cancelledPartialTurnRewindsAndResendHitsTheOriginalLeaf() async throws {
+    @Test(.parksPoolThreads)
+    func cancelledPartialTurnRewindsAndResendHitsTheOriginalLeaf() async throws {
         let request = Self.conversation([
             Self.user("hi"), Self.assistant("hello world"), Self.user("more"),
         ])

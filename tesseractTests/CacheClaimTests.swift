@@ -298,7 +298,8 @@ struct CacheClaimTests {
             tokens: stored + [9], materializing: materializing)
     }
 
-    @Test func aPayloadThatMaterializesWithinTheBoundIsWaitedOutIntoAHandoff() async throws {
+    @Test(.parksPoolThreads)
+    func aPayloadThatMaterializesWithinTheBoundIsWaitedOutIntoAHandoff() async throws {
         let scene = try makePendingLeafScene(label: "claim-wait-hit", wait: .seconds(5))
         defer { try? FileManager.default.removeItem(at: scene.root) }
         #expect(await waitUntil { scene.progress() == .inProgress })
@@ -321,7 +322,8 @@ struct CacheClaimTests {
         await scene.store.flush()
     }
 
-    @Test func aPayloadStillPendingAfterTheBoundCopiesAndReportsTheWaitedTime() async throws {
+    @Test(.parksPoolThreads)
+    func aPayloadStillPendingAfterTheBoundCopiesAndReportsTheWaitedTime() async throws {
         let bound = Duration.milliseconds(80)
         let scene = try makePendingLeafScene(label: "claim-wait-miss", wait: bound)
         defer { try? FileManager.default.removeItem(at: scene.root) }
@@ -346,7 +348,7 @@ struct CacheClaimTests {
         await scene.store.flush()
     }
 
-    @Test func aQueuedPayloadIsNotWaitedForAndCopiesAtOnce() async throws {
+    @Test(.parksPoolThreads) func aQueuedPayloadIsNotWaitedForAndCopiesAtOnce() async throws {
         let gate = DrainGate()
         let scene = try makePendingLeafScene(
             label: "claim-wait-queued", wait: .seconds(5),
@@ -375,7 +377,8 @@ struct CacheClaimTests {
     /// The waited time and the precise refusal ride beside the copy reason
     /// on the events a request's telemetry is read through — the reason
     /// keeps its name and its value.
-    @Test func theRefusalAndTheWaitedTimeRideTheCopyReasonThroughTelemetry() async throws {
+    @Test(.parksPoolThreads)
+    func theRefusalAndTheWaitedTimeRideTheCopyReasonThroughTelemetry() async throws {
         let bound = Duration.milliseconds(80)
         let scene = try makePendingLeafScene(label: "claim-wait-telemetry", wait: bound)
         defer { try? FileManager.default.removeItem(at: scene.root) }

@@ -194,13 +194,15 @@ struct MCPClientTests {
 
     // MARK: - Cancellation
 
+    /// The server answers ten minutes on, long past the suite's one-minute
+    /// limit, so the call can only end on the cancel: no clock to read.
     @Test
     func callToolCancellationPropagates() async throws {
         let fixture = ScriptedMCPServer(
             tools: [.init(name: "slow")],
             onCall: { _, _ in
                 var outcome = ScriptedMCPServer.CallOutcome()
-                outcome.delayMillis = 5_000
+                outcome.delayMillis = 600_000
                 return outcome
             })
         await fixture.start()
@@ -210,17 +212,17 @@ struct MCPClientTests {
         try await client.initialize()
 
         let signal = CancellationToken()
-        let clock = ContinuousClock()
-        let start = clock.now
         Task {
             try? await Task.sleep(for: .milliseconds(100))
             signal.cancel()
         }
-        await #expect(throws: (any Error).self) {
+        let error = await #expect(throws: MCPClientError.self) {
             _ = try await client.callTool(name: "slow", arguments: [:], signal: signal)
         }
-        // Returns promptly on cancel, not after the 5s server delay.
-        #expect(clock.now - start < .seconds(2))
+        guard case .cancelled? = error else {
+            Issue.record("expected MCPClientError.cancelled, got \(String(describing: error))")
+            return
+        }
     }
 
     /// Thread-safe progress sink (the callback fires off the MainActor).
