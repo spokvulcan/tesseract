@@ -89,6 +89,26 @@ final class DependencyContainer: ObservableObject {
         )
     }
 
+    /// Every push-to-talk made so far, one per surface: the Models section's
+    /// Dictation row reads their takes from here, so a surface built with
+    /// `makeVoiceInput()` is never left out of it.
+    private(set) var voiceInputs: [AgentVoiceInputController] = []
+
+    /// A surface's own push-to-talk on the shared mic, Whisper and Proofread
+    /// Pass, registered in `voiceInputs`.
+    private func makeVoiceInput() -> AgentVoiceInputController {
+        let voiceInput = AgentVoiceInputController(
+            audioCapture: audioCaptureEngine,
+            transcriptionEngine: transcriptionEngine,
+            settings: settingsManager,
+            proofreadPass: proofreadPass,
+            captureDump: captureDumpStore,
+            learnedWords: learnedWordStore
+        )
+        voiceInputs.append(voiceInput)
+        return voiceInput
+    }
+
     /// The only thing in the app that watches for the *absence* of a person:
     /// presence for the Companion's moments.
     lazy var idleMonitor = IdleMonitor()
@@ -163,14 +183,7 @@ final class DependencyContainer: ObservableObject {
         trace: companionTrace)
     lazy var captureService = CaptureService(agenda: agenda)
     /// The capture panel's own push-to-talk, separate from the composer's.
-    lazy var captureVoiceInput = AgentVoiceInputController(
-        audioCapture: audioCaptureEngine,
-        transcriptionEngine: transcriptionEngine,
-        settings: settingsManager,
-        proofreadPass: proofreadPass,
-        captureDump: captureDumpStore,
-        learnedWords: learnedWordStore
-    )
+    lazy var captureVoiceInput = makeVoiceInput()
     lazy var capturePanel = CapturePanelController(
         capture: captureService, voice: captureVoiceInput)
     lazy var companionNotifier: CompanionNotifier = {
@@ -258,23 +271,9 @@ final class DependencyContainer: ObservableObject {
     lazy var frontmostApp = FrontmostAppTracker()
     lazy var powerMonitor = PowerMonitor()
     /// The Jarvis panel's own push-to-talk.
-    lazy var panelVoiceInput = AgentVoiceInputController(
-        audioCapture: audioCaptureEngine,
-        transcriptionEngine: transcriptionEngine,
-        settings: settingsManager,
-        proofreadPass: proofreadPass,
-        captureDump: captureDumpStore,
-        learnedWords: learnedWordStore
-    )
+    lazy var panelVoiceInput = makeVoiceInput()
     /// Today's composer's own push-to-talk.
-    lazy var todayVoiceInput = AgentVoiceInputController(
-        audioCapture: audioCaptureEngine,
-        transcriptionEngine: transcriptionEngine,
-        settings: settingsManager,
-        proofreadPass: proofreadPass,
-        captureDump: captureDumpStore,
-        learnedWords: learnedWordStore
-    )
+    lazy var todayVoiceInput = makeVoiceInput()
     /// The floating card rung: the Breakpoint card in a Siri-style glass panel.
     lazy var jarvisPanel: JarvisPanelController = JarvisPanelController(
         thread: dayThread, voice: panelVoiceInput, agenda: agenda,
@@ -415,14 +414,7 @@ final class DependencyContainer: ObservableObject {
     // derived from agent events. Constructed here — not in the views — because
     // cross-cutting surfaces need them too (Appshot stages into the Composer
     // Draft; the push-to-talk hotkey drives voice input).
-    lazy var agentVoiceInput = AgentVoiceInputController(
-        audioCapture: audioCaptureEngine,
-        transcriptionEngine: transcriptionEngine,
-        settings: settingsManager,
-        proofreadPass: proofreadPass,
-        captureDump: captureDumpStore,
-        learnedWords: learnedWordStore
-    )
+    lazy var agentVoiceInput = makeVoiceInput()
     lazy var composerDraft = ComposerDraftController(conversationImages: { [agent] in
         agent.state.messages.flatMap { $0.transcriptImages }
     })
