@@ -13,7 +13,8 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 PROJECT="$PROJECT_DIR/tesseract.xcodeproj"
 SCHEME="tesseract"
 CONFIGURATION="Release"
-DERIVED_DATA_GLOB="$HOME/Library/Developer/Xcode/DerivedData/tesseract-*"
+# This checkout's DerivedData and products dir (every worktree has its own).
+. "$PROJECT_DIR/scripts/lib/checkout.sh"
 # The app is not sandboxed (ADR-0047), so FileManager.temporaryDirectory is
 # the real per-user temp dir, not the container tmp.
 BENCH_DIR="$(getconf DARWIN_USER_TEMP_DIR)tesseract-debug/benchmark"
@@ -59,10 +60,7 @@ set -- ${FILTERED_ARGS[@]+"${FILTERED_ARGS[@]}"}
 # dirs picked hours-old binaries, #165), and each worktree has its own, so
 # --no-build never runs another checkout's build.
 resolve_app() {
-    PRODUCTS_DIR=$(xcodebuild -project "${1:-$PROJECT}" -scheme "$SCHEME" \
-        -configuration "$CONFIGURATION" -destination 'platform=macOS' \
-        -skipPackagePluginValidation -showBuildSettings 2>/dev/null \
-        | awk -F' = ' '/[[:space:]]BUILT_PRODUCTS_DIR =/{print $2; exit}')
+    PRODUCTS_DIR=$(built_products_dir "${1:-$PROJECT}" "$SCHEME" "$CONFIGURATION")
     APP="$PRODUCTS_DIR/Tesseract Agent.app"
 }
 
@@ -76,7 +74,7 @@ show_build_failure() {
 }
 
 # Clean stale module cache on config switch to avoid "Unable to find module dependency" errors
-DERIVED_DATA=$(ls -d $DERIVED_DATA_GLOB 2>/dev/null | head -1)
+DERIVED_DATA=$(checkout_derived_data "$PROJECT" || true)
 if [ -n "$DERIVED_DATA" ]; then
     LAST_CONFIG=""
     [ -f "$DERIVED_DATA/.last_config" ] && LAST_CONFIG=$(cat "$DERIVED_DATA/.last_config")
@@ -96,7 +94,7 @@ BUILD_OUTPUT=$(xcodebuild build -project "$PROJECT" -scheme "$SCHEME" \
     # Auto-recover from stale module cache
     if echo "$BUILD_OUTPUT" | grep -q "Unable to find module dependency"; then
         echo "Detected stale module cache. Cleaning and retrying..."
-        DERIVED_DATA=$(ls -d $DERIVED_DATA_GLOB 2>/dev/null | head -1)
+        DERIVED_DATA=$(checkout_derived_data "$PROJECT" || true)
         [ -n "$DERIVED_DATA" ] && rm -rf "$DERIVED_DATA/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules" 2>/dev/null
         xcodebuild -resolvePackageDependencies -project "$PROJECT" -scheme "$SCHEME" 2>&1 | grep -E "^(error:|Resolved)" || true
         BUILD_OUTPUT=$(xcodebuild build -project "$PROJECT" -scheme "$SCHEME" \
@@ -116,7 +114,7 @@ BUILD_OUTPUT=$(xcodebuild build -project "$PROJECT" -scheme "$SCHEME" \
 }
 echo "$BUILD_OUTPUT" | grep -E "^(\*\* BUILD)" || true
 # Stamp the configuration
-DERIVED_DATA=$(ls -d $DERIVED_DATA_GLOB 2>/dev/null | head -1)
+DERIVED_DATA=$(checkout_derived_data "$PROJECT" || true)
 [ -n "$DERIVED_DATA" ] && echo "$CONFIGURATION" > "$DERIVED_DATA/.last_config"
 echo "Build succeeded."
 

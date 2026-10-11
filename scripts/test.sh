@@ -91,19 +91,8 @@ while True:
 ' "$SLOTS" "$@"
 }
 
-# This checkout's DerivedData: Xcode's default location, whose info.plist
-# names the project it belongs to (worktrees each get their own).
-derived_data() {
-    local dir
-    for dir in "$HOME"/Library/Developer/Xcode/DerivedData/tesseract-*; do
-        [ -f "$dir/info.plist" ] || continue
-        if [ "$(plutil -extract WorkspacePath raw "$dir/info.plist" 2>/dev/null)" = "$PROJECT" ]; then
-            echo "$dir"
-            return 0
-        fi
-    done
-    return 1
-}
+# This checkout's DerivedData (worktrees each get their own).
+. "$PROJECT_DIR/scripts/lib/checkout.sh"
 
 if [ "$SKIP_BUILD" = 0 ]; then
     BUILD_LOG="$(mktemp -t tesseract-build-for-testing)"
@@ -117,7 +106,7 @@ if [ "$SKIP_BUILD" = 0 ]; then
 fi
 [ "$BUILD_ONLY" = 0 ] || exit 0
 
-DERIVED_DATA="$(derived_data)" || {
+DERIVED_DATA="$(checkout_derived_data "$PROJECT")" || {
     echo "No DerivedData for $PROJECT: run without --no-build first." >&2
     exit 1
 }
