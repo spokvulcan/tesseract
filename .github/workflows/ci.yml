@@ -76,11 +76,18 @@ jobs:
           key: spm-${{ runner.os }}-${{ hashFiles('tesseract.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: spm-${{ runner.os }}-
 
+      # The compilation cache from this job's last run: every compile whose
+      # inputs haven't changed replays from it (scripts/ci-xcodebuild.sh).
+      - name: Restore the compilation cache
+        uses: actions/cache/restore@v5
+        with:
+          path: DerivedData/CompilationCache.noindex
+          key: compilation-cache-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: compilation-cache-${{ github.job }}-
+
       - name: Build (Release)
         run: |
-          set -o pipefail
-          FILTER="cat"; command -v xcbeautify >/dev/null && FILTER="xcbeautify"
-          xcodebuild build \
+          scripts/ci-xcodebuild.sh build \
             -project tesseract.xcodeproj \
             -scheme tesseract \
             -configuration Release \
@@ -88,8 +95,14 @@ jobs:
             -derivedDataPath DerivedData \
             -skipPackagePluginValidation \
             CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY=- \
-            2>&1 | "$FILTER"
+            CODE_SIGN_IDENTITY=-
+
+      - name: Save the compilation cache
+        if: ${{ !cancelled() }}
+        uses: actions/cache/save@v5
+        with:
+          path: DerivedData/CompilationCache.noindex
+          key: compilation-cache-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   # The iPhone app (tesseract-ios, ADR-0084): built for any iOS device,
   # unsigned. No tests run on a device; the shared code's suites run in the
@@ -120,19 +133,30 @@ jobs:
           key: spm-${{ runner.os }}-${{ hashFiles('tesseract.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: spm-${{ runner.os }}-
 
+      - name: Restore the compilation cache
+        uses: actions/cache/restore@v5
+        with:
+          path: DerivedData/CompilationCache.noindex
+          key: compilation-cache-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: compilation-cache-${{ github.job }}-
+
       - name: Build (Release, iOS)
         run: |
-          set -o pipefail
-          FILTER="cat"; command -v xcbeautify >/dev/null && FILTER="xcbeautify"
-          xcodebuild build \
+          scripts/ci-xcodebuild.sh build \
             -project tesseract.xcodeproj \
             -scheme tesseract-ios \
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -derivedDataPath DerivedData \
             -skipPackagePluginValidation \
-            CODE_SIGNING_ALLOWED=NO \
-            2>&1 | "$FILTER"
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Save the compilation cache
+        if: ${{ !cancelled() }}
+        uses: actions/cache/save@v5
+        with:
+          path: DerivedData/CompilationCache.noindex
+          key: compilation-cache-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   test:
     name: test
@@ -163,7 +187,9 @@ jobs:
       # Tests must run in Debug: Release lacks ENABLE_TESTABILITY for
       # @testable imports. They run in parallel, as the scheme and every local
       # run do, so a race that shows only in parallel fails here too
-      # (docs/testing.md → Parallel runs share one test host).
+      # (docs/testing.md → Parallel runs share one test host). This build
+      # stays outside the compilation cache, whose replayed compiles write no
+      # index data, so its index stays whole.
       - name: Build for testing (Debug)
         run: |
           set -o pipefail
