@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.19.1](https://github.com/spokvulcan/tesseract/compare/v1.19.0...v1.19.1) (2026-10-11)
+
+
+### Bug Fixes
+
+* **menubar:** VoiceOver reads the menu-bar clock; the unused System Prompt Inspector goes ([#641](https://github.com/spokvulcan/tesseract/issues/641)) ([0408946](https://github.com/spokvulcan/tesseract/commit/04089467557069bcd27626b95ec1200f60891f94))
+
+
+### Code Refactoring
+
+* one home per rule — the day's one read model, one Decode Start, one Launch Mode, and nine more deepenings ([#638](https://github.com/spokvulcan/tesseract/issues/638)) ([6a58913](https://github.com/spokvulcan/tesseract/commit/6a58913731d4d7d406fc0abe842253e2ffb79738))
+
+
+### Tests
+
+* tests that park a pool thread take turns, and CI stops a hung run with its stacks ([#642](https://github.com/spokvulcan/tesseract/issues/642)) ([449d2be](https://github.com/spokvulcan/tesseract/commit/449d2be322fb49cd000bb2f371857fa1ab1aedef))
+
+
+### Continuous Integration
+
+* the Release builds replay unchanged compiles from the last run ([#643](https://github.com/spokvulcan/tesseract/issues/643)) ([2b35de0](https://github.com/spokvulcan/tesseract/commit/2b35de032ea5ad45b1d67e35b7a68bb78ba48972))
+
+
+### Miscellaneous Chores
+
+* **dev:** gate runs keep their own captures, the test-only scan reads the build's index, Swift formats on write ([#640](https://github.com/spokvulcan/tesseract/issues/640)) ([e81ae41](https://github.com/spokvulcan/tesseract/commit/e81ae41fb6d545ac25f02a616698b1607a217794))
+
 ## [1.19.0](https://github.com/spokvulcan/tesseract/compare/v1.18.0...v1.19.0) (2026-10-11)
 
 
