@@ -176,4 +176,9 @@ change, on the same Debug configuration:
   started logs `not-idle`, one that wins logs its probe and
   `below-residual-threshold` — which went both ways between the two runs
   (4–8 lines per comparison) and follows the machine's load: the `main`
-  runs shared it with other builds.
+  runs shared it with other builds. A later run of `main` under the later
+  load lands in the branch's range and compares with it both ways
+  (ADR-0094's As built).
+- `scripts/dflash2-bench.sh`'s full-stream run, from `main`'s build and the
+  branch's final commit: both arms' streams and round accounting identical
+  (ADR-0094's As built).

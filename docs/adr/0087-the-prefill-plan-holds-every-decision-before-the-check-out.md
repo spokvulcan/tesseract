@@ -310,6 +310,7 @@ the Leaf Store releases a boundary turn's Backing Leaf after the canonical
 leaf is admitted. Moving them into the manager would carry effects across the
 claim's seam for no second caller.
 
-No diagnostics line changes. `SnapshotResolutionTests.aKeyedResolutionCarriesItsPlanAndADropPlansItAgain`
+No diagnostics line changes (the loaded-model gates are in ADR-0094's As
+built). `SnapshotResolutionTests.aKeyedResolutionCarriesItsPlanAndADropPlansItAgain`
 drives both returns through the manager's interface, and replaces
 `PrefixCacheManagerTests.planCheckpointsWithAlignToIncludesAlignmentCheckpoint`.

@@ -1,6 +1,6 @@
 # ADR-0094: One usable-restore rule decides every restore; one Residual Prefill restores a prefix and extends it
 
-- Status: Accepted (built; loaded-model gates in ADR-0093's As built and below)
+- Status: Accepted (built; loaded-model gates in As built below)
 - Date: 2026-10-11
 - Builds: ADR-0087 decision 7's named usable-restore rule ("so that a later
   caller which restores a prefix and extends it — the Leaf Store's boundary
@@ -115,3 +115,47 @@ Each is pinned by a test; nothing else changes.
   salvage's pure gate takes a key space.
 - Adding a restore-and-extend producer is a `ResidualPrefill.Base` and two
   calls; it inherits the failed-restore policy.
+
+## As built (2026-10-11)
+
+Measured on the machine of ADR-0093's As built (MacBook Pro, Apple M3 Max,
+48 GB, macOS 27.0.1), Debug configuration, with ADR-0093's diagnostics method.
+The branch's final commit (c25f74a4) carries this ADR, ADR-0069's Turn Restore
+amendment and its two declared fixes, and ADR-0087's amendment on the
+manager's call order; its gates against `main` (fa438b35):
+
+- `prefix-cache-e2e` on `qwen3.5-4b-paro`: 38 of 38, the check lines and the
+  32 decode lines identical; 0 of 1,959 in-order diagnostics lines differ.
+  The same held after this ADR alone, and after the Turn Restore with both
+  fixes.
+- The same e2e on `qwen3.8-27b` with its DFlash2 draft: 38 of 38, the 32
+  acceptance lines identical, 0 of 2,020 in-order lines differ. With
+  `TESSERACT_E2E_KV_SCHEME=turbo8v4`: 37 of 38 with `main`'s own
+  `requestP3` failure on both sides, the 32 lines identical, 0 of 2,018.
+- `hybrid-cache-correctness`: 12 of 12, every restore bitwise, the summary
+  identical.
+- The Completion Trace Log records each run appended (33 per run) carry the
+  same restored offsets, hit tokens and rewinds on both sides: no e2e turn
+  falls back or plans a hit cold, so neither declared fix shows there, and no
+  e2e restore fails, so neither does this ADR's drop.
+- `scripts/dflash2-bench.sh`'s run (travel fixture, 192 tokens, width 8,
+  `--bench-check`) from each commit's build: `dflash2-compare.py
+  --require-identity` reports both arms' streams and round accounting
+  identical (145 of 321 drafts accepted in 46 rounds), each matching AR's
+  full stream; 22.9 against 22.8 tok/s AR and 73.3 against 73.3 DFlash2, one
+  run each. The bench drives the vendor iterators directly, so it guards
+  that path; the app's DFlash2 path is the 27B e2e's acceptance lines.
+- The other-task lines differ only by the Speculative Canonical Prefill's
+  scheduling race (9 or 10 lines per comparison), plus, on 27B, whether the
+  last request's one-second-later memory sample lands before the run ends. A
+  fresh run of `main` under the later load logged `not-idle` 20 times of
+  31, against 25 in the two earlier `main` runs and 20 to 23 on the branch,
+  and compares with the final commit both ways, so the race follows the
+  machine's load, not the change.
+
+The whole target passes on the final commit (3,653 tests, 7 skipped), as does
+`scripts/check.sh`. `ServerCompletion.swift` went from 2,755 lines on `main`
+to 2,617; `SpeculativePrefill.swift` from 534 to 520; `ResidualPrefill.swift`
+is 193 and `TurnRestore.swift` 98. `PrefixCacheManager.swift` grew from 3,278
+to 3,387 with the planned resolution, the re-planning drop and the test
+seam's forwarders.

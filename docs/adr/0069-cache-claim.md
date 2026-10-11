@@ -354,8 +354,9 @@ the drive patched afterwards. The stored leaf's source matched the string.
    **Active-Inference Reserve** prices a lane by, all take it in place of the
    string. The generation value and the Leaf Store's context carry it. The
    claim's own rewind report says `handoff` through it.
-3. **Byte-identical.** No line changes with this step. The two projections
-   that had drifted are fixed in their own declared steps below.
+3. **Byte-identical.** No line changes with this step (the loaded-model gates
+   are in ADR-0094's As built). The two projections that had drifted are
+   fixed in their own declared steps below.
 
 `TurnRestoreTests` is the projection table: every outcome against its wire
 mode, its memory facts, its fallback flag and its `leafStore` fields, and the
