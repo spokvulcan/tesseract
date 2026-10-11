@@ -1754,12 +1754,6 @@ _Avoid_: image paste (one delivery of several), mixed text+image paste (retired 
 the sidecar text of an Image Gesture is never inserted), drop handling (delivery
 mechanism, not the concept).
 
-**System Prompt Inspector**:
-The system-prompt transparency module: it renders the *already-assembled* prompt
-into raw ChatML plus a token count, on demand. Distinct from the prompt builder,
-which assembles the prompt; this only inspects it.
-_Avoid_: prompt builder (assembles; this inspects), token counter.
-
 **Command Palette**:
 The slash-command popup module: registry, filtering, selection, and autocomplete for
 the *presentation* of slash commands. Distinct from command execution (which stays

@@ -48,7 +48,6 @@ resetWriteRecording       # InMemorySettingsStore, the settings test double
 # Planned or in progress.
 deserialize               # HybridCacheSnapshot: the safetensors reader the SSD writer is to switch to (SSDSnapshotStore header)
 HybridCacheSnapshot.serialize # its writer, deserialize's pair, for the same switch
-AgentSystemPromptInspector.fetchRawSystemPrompt # the System Prompt Inspector, kept for a future settings surface (#184)
 applyAgain                # LearnedWordStore: Catch slice 1 (#615), not yet called by the app
 takeWaits                 # CheckBeforePasting: Catch slice 2 (#616), not yet called by the app
 

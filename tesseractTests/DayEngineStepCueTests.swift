@@ -504,6 +504,32 @@ struct DayEngineStepCueTests {
             MenuBarClockText.tooltip(leave, now: now) == "Leave for Climbing at 11:12 — in 12 min")
     }
 
+    /// VoiceOver hears the tooltip's sentence in words, after what the glyph
+    /// shows: the status item reads as one element.
+    @Test func theMenuBarSaysItsClockInWordsToVoiceOver() {
+        let now = Self.local(11, 0)
+        let focus = MenuBarClock(
+            kind: .focus, title: "Write to the case worker", until: Self.local(11, 25))
+        #expect(
+            MenuBarClockText.spoken(focus, now: now) == "Write to the case worker, 25 minutes left")
+        let event = MenuBarClock(kind: .event, title: "Design review", until: Self.local(11, 12))
+        #expect(MenuBarClockText.spoken(event, now: now) == "Design review at 11:12, in 12 minutes")
+        let leave = MenuBarClock(kind: .leave, title: "Climbing", until: Self.local(11, 12))
+        #expect(
+            MenuBarClockText.spoken(leave, now: now) == "Leave for Climbing at 11:12, in 12 minutes"
+        )
+        #expect(MenuBarClockText.spokenTime(1) == "1 minute")
+        #expect(MenuBarClockText.spokenTime(60) == "1 hour")
+        #expect(MenuBarClockText.spokenTime(125) == "2 hours 5 minutes")
+        #expect(
+            MenuBarClockText.accessibilityLabel(
+                activity: "Tesseract Agent — recording", clock: focus, now: now)
+                == "Tesseract Agent — recording. Write to the case worker, 25 minutes left")
+        #expect(
+            MenuBarClockText.accessibilityLabel(activity: "Tesseract Agent", clock: nil, now: now)
+                == "Tesseract Agent")
+    }
+
     // MARK: The menu bar's clock
 
     @Test func theMenuBarCountsDownTheStartedStep() {

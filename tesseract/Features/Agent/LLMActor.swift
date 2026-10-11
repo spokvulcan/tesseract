@@ -411,40 +411,6 @@ actor LLMActor {
         return await container.perform { context in !(context.model is any LLMModel) }
     }
 
-    /// Renders messages and tools through the Jinja chat template, returning the exact
-    /// ChatML string the model receives as input (including `<|im_start|>`, tool definitions, etc.).
-    func formatRawPrompt(
-        messages: [[String: any Sendable]],
-        tools: [ToolSpec]?
-    ) async throws -> String {
-        guard let container = modelContainer else {
-            throw AgentEngineError.modelNotLoaded
-        }
-        return try await container.perform { context in
-            let tokens = try context.tokenizer.applyChatTemplate(
-                messages: messages, tools: tools
-            )
-            return context.tokenizer.decode(tokenIds: tokens, skipSpecialTokens: false)
-        }
-    }
-
-    /// Formats and returns the raw ChatML string along with its token count in a single actor hop.
-    func formatRawPromptWithCount(
-        messages: [[String: any Sendable]],
-        tools: [ToolSpec]?
-    ) async throws -> (text: String, tokenCount: Int) {
-        guard let container = modelContainer else {
-            throw AgentEngineError.modelNotLoaded
-        }
-        return try await container.perform { context in
-            let tokens = try context.tokenizer.applyChatTemplate(
-                messages: messages, tools: tools
-            )
-            let text = context.tokenizer.decode(tokenIds: tokens, skipSpecialTokens: false)
-            return (text, tokens.count)
-        }
-    }
-
     /// Releases the model from memory: drains the **Server Completion**
     /// module's active completion (cancel-and-await, so no in-flight server
     /// request can touch model state during teardown), then drops the module
