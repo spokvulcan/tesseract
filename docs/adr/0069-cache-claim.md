@@ -364,7 +364,7 @@ stored leaf's source for every path. The whole-completion suites
 (`ServerCompletionRestoreFallbackTests`, `CacheClaimTests`) still check that
 plan application produces the outcome.
 
-Not built in this step, and taken up below: one home for the handoff scope,
+Not built in this step, and taken up in the sections below: one home for the handoff scope,
 which the check-out, the Leaf Admission's move and the Leaf Store's copy
 reason each spelled; one per-turn report, grown from the **Completion Trace
 Accumulator**, that renders every output from the Turn Restore; the claim
@@ -487,3 +487,22 @@ turn that ends before the Leaf Store phase after a Pending-Payload Wait that
 ended in a handoff, and on no other, the `leafStore path=rewind` event gains
 `copyWaitMs`, as the same turn's `lookup` line and any phase report already
 carry. Pinned by `TurnReportTests.aRewindAfterAWaitedHandoffReportsTheWait`.
+
+### An Unkeyed Completion reports no lookup
+
+The Unkeyed Completion's generation value carried a stand-in
+`lookupReason: .missNoEntries` for a lookup it never made. Its lookup reason
+is now absent (`nil`), and its Turn Report stays trivial: no restore filed
+(`.cold`), no trace record (the accumulator makes none for an unkeyed turn,
+and its restored-offset rule reads an absent reason as nothing restored), and
+the Leaf Store phase's one `leafStore` is its `unkeyed-completion` skip. No
+diagnostics line changes. Two `Log.agent` lines, which are not diagnostics
+events, now print the request's cache reason where they printed the lookup
+reason: `unkeyed(<reason>)` on an unkeyed turn instead of the stand-in
+`missNoEntries`, and the same text as before on a keyed one. Pinned by the
+nil row of `CompletionTraceAccumulatorTests.restoredOffsetIsWhatTheTurnRestored`.
+
+The drive's remaining keyed-or-unkeyed branches (the tuner's request record,
+the trace's key path, the emitted-path summary) read Request Keying's outcome,
+not the turn's cache account, so the report does not absorb them and they
+stay.

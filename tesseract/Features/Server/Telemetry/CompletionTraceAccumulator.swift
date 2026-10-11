@@ -29,7 +29,8 @@ nonisolated struct CompletionTraceAccumulator: Sendable {
         let partitionDigest: String
         let unkeyedReason: CacheKeySpace.UnkeyedReason?
         let keyPath: [Int]
-        let lookupReason: PrefixCacheManager.LookupReason
+        /// `nil` for an Unkeyed Completion, which never looked up.
+        let lookupReason: PrefixCacheManager.LookupReason?
         /// How the turn's cache opened: whether the hit was restored.
         let restore: TurnRestore
         let restoredFromSSD: Bool
@@ -50,9 +51,9 @@ nonisolated struct CompletionTraceAccumulator: Sendable {
     /// cache and fell back cold. The one home for the rule (previously
     /// derived inline at the record-build site).
     static func restoredOffset(
-        for lookupReason: PrefixCacheManager.LookupReason, restore: TurnRestore
+        for lookupReason: PrefixCacheManager.LookupReason?, restore: TurnRestore
     ) -> Int {
-        guard restore.restored, case .hit(let offset, _, _) = lookupReason else { return 0 }
+        guard restore.restored, case .hit(let offset, _, _)? = lookupReason else { return 0 }
         return offset
     }
 

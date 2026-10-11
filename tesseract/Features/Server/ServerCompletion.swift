@@ -60,8 +60,9 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     var promptTokenCount: Int { facts.promptTokenCount }
     /// Number of leading tokens skipped because the cache already covered them.
     let skippedPrefillTokens: Int
-    /// Lookup outcome classification, surfaced for in-app observability.
-    let lookupReason: PrefixCacheManager.LookupReason
+    /// Lookup outcome classification, surfaced for in-app observability;
+    /// `nil` for an **Unkeyed Completion**, which never looked anything up.
+    let lookupReason: PrefixCacheManager.LookupReason?
     /// Shared-prefix length in tokens between the request and the best cache entry.
     let sharedPrefixLength: Int
     /// The turn's maximum advance (`CacheClaim.maximumAdvance`): the
@@ -105,7 +106,8 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     /// The wire string for `Diagnostics.cacheReason`: the lookup outcome, or
     /// the unkeyed degradation when the request never reached the lookup.
     var cacheReasonDescription: String {
-        keying.unkeyedReason.map { "unkeyed(\($0.rawValue))" } ?? String(describing: lookupReason)
+        keying.unkeyedReason.map { "unkeyed(\($0.rawValue))" }
+            ?? lookupReason.map { String(describing: $0) } ?? "none"
     }
     /// Validated mid-prefill checkpoint admission, if any checkpoints survived
     /// extraction-edge path validation.
@@ -902,7 +904,7 @@ nonisolated final class ServerCompletion {
                     + "cached=\(mlxStart.skippedPrefillTokens)/"
                     + "\(mlxStart.promptTokenCount) "
                     + "sharedPrefix=\(mlxStart.sharedPrefixLength) "
-                    + "lookup=\(mlxStart.lookupReason) "
+                    + "lookup=\(mlxStart.cacheReasonDescription) "
                     + "restoreMs=\(String(format: "%.1f", mlxStart.restoreMs * 1000)) "
                     + "prefillMs=\(String(format: "%.1f", mlxStart.prefillMs * 1000))"
             )
@@ -969,7 +971,7 @@ nonisolated final class ServerCompletion {
                         + "libraryParsedToolCalls=\(outcome.diagnostics.libraryParsedToolCalls) "
                         + "cachedTokens=\(mlxStart.skippedPrefillTokens)/"
                         + "\(mlxStart.promptTokenCount) "
-                        + "lookupReason=\(mlxStart.lookupReason) "
+                        + "lookupReason=\(mlxStart.cacheReasonDescription) "
                         + "parserInsideThink=\(parserState.insideThinkBlock) "
                         + "parserThinkClosed=\(parserState.thinkBlockClosed) "
                         + "parserBufferLen=\(parserState.bufferLen) "
@@ -2284,7 +2286,7 @@ nonisolated final class ServerCompletion {
             hydrationSeconds: 0,
             restoredFromSSD: false,
             skippedPrefillTokens: 0,
-            lookupReason: .missNoEntries,
+            lookupReason: nil,
             sharedPrefixLength: 0,
             maximumAdvance: CacheClaim.maximumAdvance(
                 newPromptTokens: fullTokenCount, outputCeiling: parameters.maxTokens,
