@@ -98,25 +98,30 @@ nonisolated enum RawGenerationStart {
                 restoresPrefix: false,
                 storedLeaf: nil
             ))
-        // No reference outlives the Decode Start's conversion: it hands back
-        // the array the iterator advances.
-        var cache: [any KVCache] = []
-        let handover: DecodeHandover
+        let stream: AsyncStream<RawGeneration>
+        let completion: Task<Void, Never>
         if let speculation {
-            cache = try session.newCache(parameters: parameters)
+            // No reference outlives the Decode Start's conversion: it hands
+            // back the array the iterator advances.
+            var cache = try session.newCache(parameters: parameters)
             for layer in cache { layer.reserveCapacity(promptTokenCount) }
-            handover = .speculative(
-                speculation, input: prepared, prefilledPrefixTokens: 0, positionDelta: 0)
+            let decode = try DecodeStart.make(
+                .speculative(
+                    speculation, input: prepared, prefilledPrefixTokens: 0, positionDelta: 0),
+                cache: &cache, session: session, parameters: parameters)
+            prefill.prefillMs = (Date.timeIntervalSinceReferenceDate - prefillStarted) * 1000
+            (stream, completion) = decode.startLoop(
+                promptTokenCount: promptTokenCount, session: session, tools: tools,
+                generatedTokens: nil)
+            await decode.reportPrefillFinished(prefill, to: progressHandler)
         } else {
-            handover = .prefillStrategy(prepared)
+            let decode = try PrefillStrategyDecodeStart(
+                prepared, session: session, parameters: parameters)
+            prefill.prefillMs = (Date.timeIntervalSinceReferenceDate - prefillStarted) * 1000
+            (stream, completion) = decode.startLoop(
+                promptTokenCount: promptTokenCount, session: session, tools: tools)
+            await progressHandler?(.prefillFinished(prefill))
         }
-        let decode = try DecodeStart.make(
-            handover, cache: &cache, session: session, parameters: parameters)
-        prefill.prefillMs = (Date.timeIntervalSinceReferenceDate - prefillStarted) * 1000
-        let (stream, completion) = decode.startLoop(
-            promptTokenCount: promptTokenCount, session: session, tools: tools,
-            generatedTokens: nil)
-        await decode.reportPrefillFinished(prefill, to: progressHandler)
         return HTTPServerRawGenerationStart(
             stream: stream,
             generationPrompt: generationPrompt,

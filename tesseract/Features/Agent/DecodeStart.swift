@@ -26,28 +26,25 @@ nonisolated enum DecodeHandover {
     /// zero) or the model's own, and converts the cache once it holds the
     /// whole prompt.
     case preparing(LMInput, prepare: ((LMInput, [any KVCache], Int?) throws -> PrepareResult)?)
-    /// The **Prefill Strategy** route (ADR-0044) prefills the whole prompt
-    /// into a cache of its own, chunked or single-shot, and builds the
-    /// vendor iterator, which applies the parameters' KV plan itself.
-    case prefillStrategy(LMInput)
 }
 
 /// **Decode Start** (CONTEXT.md → Prefill orchestration; ADR-0093): the one
-/// module that starts decode for every generation path — the keyed turn
-/// (standard, or speculative at a split), the keyed whole-prompt arm, the
-/// Unkeyed Completion and both arms of the Raw Generation Start. From the
-/// **Decode Handover** it builds the iterator through the Model Session's
-/// existing verbs, converts the KV cache once where that handover needs it,
-/// hands the array decode advances to its owner, badges a speculative arm
-/// and starts the token loop.
+/// module that starts decode for every generation path whose cache the app
+/// holds — the keyed turn (standard, or speculative at a split), the keyed
+/// whole-prompt arm, the Unkeyed Completion and the Raw Generation Start's
+/// speculative arm. From the **Decode Handover** it builds the iterator
+/// through the Model Session's existing verbs, converts the KV cache once
+/// where that handover needs it, hands the array decode advances to its
+/// owner, badges a speculative arm and starts the token loop. The Raw
+/// Generation Start's other arm keeps no cache of the app's and starts
+/// through `PrefillStrategyDecodeStart`.
 ///
 /// The conversion rule lives here and nowhere else (ADR-0083): a standard
 /// handover converts before its iterator, so the iterator converts nothing;
-/// an iterator that prefills (speculative, preparing, the Prefill Strategy
-/// route) converts at the end of its own prefill, and the array it advances
-/// is read back. Affine `kvBits` applies only where the app quantizes
-/// before the iterator or the route's own plan does: no iterator past the
-/// app's prefill applies it (ADR-0006, ADR-0007).
+/// an iterator that prefills (speculative, preparing) converts at the end
+/// of its own prefill, and the array it advances is read back. Affine
+/// `kvBits` applies only where the app quantizes before the iterator: no
+/// iterator past the app's prefill applies it (ADR-0006, ADR-0007).
 ///
 /// Built and started inside one Model Session. Starts its loop once.
 nonisolated final class DecodeStart {
@@ -56,19 +53,17 @@ nonisolated final class DecodeStart {
     /// ordinarily.
     let arm: SpeculativeArm?
 
-    /// The array decode advances, after any conversion; `nil` on the
-    /// Prefill Strategy route, whose vendor iterator keeps its own.
-    private let decoded: [any KVCache]?
+    /// The array decode advances, after any conversion.
+    private let decoded: [any KVCache]
 
     private var iterator: Iterator?
 
     private enum Iterator {
         case stateThreaded(StateThreadedTokenIterator)
         case speculative(SpeculativeDecodeIterator)
-        case vendor(TokenIterator)
     }
 
-    private init(arm: SpeculativeArm?, decoded: [any KVCache]?, iterator: Iterator) {
+    private init(arm: SpeculativeArm?, decoded: [any KVCache], iterator: Iterator) {
         self.arm = arm
         self.decoded = decoded
         self.iterator = iterator
@@ -79,8 +74,6 @@ nonisolated final class DecodeStart {
     /// request's own, KV plan included; each verb gets the part that is
     /// still its to apply. On return `cache` is the array decode advances:
     /// the caller's reference never keeps the layers a conversion replaced.
-    /// The Prefill Strategy route allocates its cache itself, so `cache`
-    /// stays empty there.
     static func make(
         _ handover: DecodeHandover,
         cache: inout [any KVCache],
@@ -109,10 +102,6 @@ nonisolated final class DecodeStart {
                 input, cache: cache, parameters: iteratorParameters, prepare: prepare)
             cache = iterator.cache
             return DecodeStart(arm: nil, decoded: cache, iterator: .stateThreaded(iterator))
-        case .prefillStrategy(let input):
-            precondition(cache.isEmpty, "the Prefill Strategy route allocates its own cache")
-            let iterator = try session.makeRawDecodeIterator(input, parameters: parameters)
-            return DecodeStart(arm: nil, decoded: nil, iterator: .vendor(iterator))
         }
     }
 
@@ -120,9 +109,6 @@ nonisolated final class DecodeStart {
     /// which adopts it (a conversion may have replaced its attention
     /// entries), or a new owner for a cache the request holds outright.
     func cacheOwner(lease: FinalGenerationCache?) -> FinalGenerationCache {
-        guard let decoded else {
-            preconditionFailure("the Prefill Strategy route keeps its cache to itself")
-        }
         guard let lease else { return FinalGenerationCache(decoded) }
         lease.adopt(decoded)
         return lease
@@ -141,8 +127,8 @@ nonisolated final class DecodeStart {
         await progressHandler?(.prefillFinished(prefill))
     }
 
-    /// Start the app-owned token loop over the iterator. The vendor
-    /// iterator keeps upstream's loop, which records no generated ids.
+    /// Start the app-owned token loop over the iterator, badged with the
+    /// speculative arm it decodes with.
     func startLoop(
         promptTokenCount: Int,
         session: any ModelSession,
@@ -151,29 +137,47 @@ nonisolated final class DecodeStart {
     ) -> (AsyncStream<RawGeneration>, Task<Void, Never>) {
         guard let iterator else { preconditionFailure("a Decode Start starts its loop once") }
         self.iterator = nil
-        let configuration = session.configuration
-        let tokenizer = session.tokenizer
-        switch iterator {
-        case .stateThreaded(let iterator):
-            return TokenGenerationLoop.start(
-                promptTokenCount: promptTokenCount, modelConfiguration: configuration,
-                tokenizer: tokenizer, iterator: iterator, tools: tools,
-                generatedTokens: generatedTokens)
-        case .speculative(.mtp(let iterator)):
-            return TokenGenerationLoop.start(
-                promptTokenCount: promptTokenCount, modelConfiguration: configuration,
-                tokenizer: tokenizer, iterator: iterator, tools: tools,
-                generatedTokens: generatedTokens, speculativeArm: .mtp)
-        case .speculative(.dflash2(let iterator)):
-            return TokenGenerationLoop.start(
-                promptTokenCount: promptTokenCount, modelConfiguration: configuration,
-                tokenizer: tokenizer, iterator: iterator, tools: tools,
-                generatedTokens: generatedTokens, speculativeArm: .dflash2)
-        case .vendor(let iterator):
-            precondition(generatedTokens == nil, "upstream's loop records no generated ids")
-            return TokenGenerationLoop.start(
-                promptTokenCount: promptTokenCount, modelConfiguration: configuration,
-                tokenizer: tokenizer, iterator: iterator, tools: tools)
+        let arm = arm
+        func loop(
+            _ iterator: consuming some TokenIteratorProtocol & SendableMetatype
+        ) -> (AsyncStream<RawGeneration>, Task<Void, Never>) {
+            TokenGenerationLoop.start(
+                promptTokenCount: promptTokenCount, modelConfiguration: session.configuration,
+                tokenizer: session.tokenizer, iterator: iterator, tools: tools,
+                generatedTokens: generatedTokens, speculativeArm: arm)
         }
+        switch iterator {
+        case .stateThreaded(let iterator): return loop(iterator)
+        case .speculative(.mtp(let iterator)): return loop(iterator)
+        case .speculative(.dflash2(let iterator)): return loop(iterator)
+        }
+    }
+}
+
+/// The Raw Generation Start's arm without a Speculation Plan: the **Prefill
+/// Strategy** route (ADR-0044). Its vendor iterator prefills the whole prompt
+/// into a cache of its own, chunked or single-shot, and applies the
+/// parameters' KV plan itself, so this start hands no array to an owner,
+/// converts nothing and records no generated ids; upstream's loop runs the
+/// iterator. What the **Decode Start** does that this route must not is
+/// therefore not in its interface at all.
+nonisolated final class PrefillStrategyDecodeStart {
+    private var iterator: TokenIterator?
+
+    /// Build the vendor iterator over `input` with the request's own
+    /// parameters, KV plan included.
+    init(_ input: LMInput, session: any ModelSession, parameters: GenerateParameters) throws {
+        iterator = try session.makeRawDecodeIterator(input, parameters: parameters)
+    }
+
+    /// Start upstream's token loop over the iterator, once.
+    func startLoop(
+        promptTokenCount: Int, session: any ModelSession, tools: [ToolSpec]?
+    ) -> (AsyncStream<RawGeneration>, Task<Void, Never>) {
+        guard let iterator else { preconditionFailure("a decode start starts its loop once") }
+        self.iterator = nil
+        return TokenGenerationLoop.start(
+            promptTokenCount: promptTokenCount, modelConfiguration: session.configuration,
+            tokenizer: session.tokenizer, iterator: iterator, tools: tools)
     }
 }

@@ -618,15 +618,19 @@ hidden states), so a presence-only drafter that traps if engaged
 and `MTPDrafterSupportTests` keep the per-family detection, geometry and pairing.
 
 The **Decode Start** (ADR-0093) has one table, `DecodeStartTests`: every
-Decode Handover (standard, speculative at a split and from zero, preparing,
-both Prefill Strategy arms) × no KV Scheme and `turbo8v4` × no penalties, the
+Decode Handover (standard, speculative at a split and from zero, preparing)
+and both arms of the Prefill Strategy route's own start × no KV Scheme and
+`turbo8v4` × no penalties, the
 app's output-only presence and a prompt-seeded frequency penalty, on the toy
 Model Session. Each row reads the verbs the handover called, the decoded text
 (the toy's one-hot logits let a penalty above 10 replace a token, so the text
 shows which penalties applied and what seeded them), the cache form the
 prompt's last token and the first decode step ran over (`ToyForwardForms`),
 the badge, and the array the owner keeps. The toy's DFlash2 verify moves only
-full-precision rows, so the speculative rows run without a scheme.
+full-precision rows, so the speculative rows decode without a scheme;
+`aSpeculativeHandoverReadsTheConvertedArrayBack` builds both speculative
+kinds over `turbo8v4` and checks the owner keeps the iterator's converted
+array, stopping before decode.
 
 The **Generation Prompt** (ADR-0070) is covered at three levels.
 `GenerationPromptProbeTests` measures a fake template of every shape the probe
