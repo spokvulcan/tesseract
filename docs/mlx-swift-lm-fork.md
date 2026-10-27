@@ -32,6 +32,124 @@ the parked Gemma 4 12B multimodal stack (audio encoder + encoder-free
 `gemma4_unified` processor + suppress_tokens) that tesseract draft PR #359
 pins; it rejoins this table's carry list only if that experiment is revived.
 
+## Current pin (2026-10-27)
+
+Base: upstream `main` @ `3d066d3` (mlx-swift 0.33.0, #720), 50 commits past
+the 2026-10-03 base `9afc3b5`. Branch `pin-upstream-mlx-swift` is rebuilt on
+it with the whole stack the app pinned: the 2026-10-03 carries and everything
+since on `perf/goal-2026-10-08`. The outgoing tips are tagged
+`pin-tip/2026-10-27-01ccea2` (the branch) and `pin-tip/2026-10-27-a5ce452`
+(the app's gitlink, on `perf/goal-2026-10-08`). The app pins the new tip,
+`3294d2b`.
+
+What upstream brought: **our #625 merged** verbatim; #632 closed in favor of
+component-aware checkpoint loading (#679, #580: on-demand components, a
+model's `excludedCheckpointNamespaces`); Qwen 3.8 (#545: `qwen3_8*` model
+types, explicit `layer_types`, Qwen 3.8 MTP); the GDN q/k L2-norm eps fix
+(#633: `1e-6 / headDim` in `rmsNorm`, which matches the reference l2norm);
+last-token logits for prefill (#614, `nextTokenLogits`); compiled decode for
+the Qwen 3.5 VLM language model (#662); a ChatSession cache fork (#641, with
+`TurboQuantKVCache.copy()` and `innerState()`); KV cache memory in
+`KVCacheStatus` (#639); generation observability (#640, #714); suppress
+tokens (#412); exact prefix rewinds in rotating caches (#622); streaming
+detokenizers from tokenizers (#619); the MLX buffer cache cleared after each
+prefill chunk (#710); upstream's `MLXLogger` (#702); an NVFP4 global-scale
+guard in projection fusion (#705); mlx-swift 0.33.0 (#720); and model,
+parser and test changes.
+
+How the carry moved:
+
+- mlx-swift stays on the fork (0.31.6 base; `docs/mlx-core-fork.md`).
+  Upstream now requires 0.33.0. Three fork-only commits keep the base
+  building on the pinned mlx-swift, each dropping when the pin reaches the
+  version named:
+  - `ac2a609` [`576cfb0`] `Stream()` instead of `Stream.defaultStream`
+    (0.32), now also in a test line #663 added.
+  - `926711b` (new) `fix(deps): keep the @Sendable compile overloads on the
+    pinned mlx-swift` restores `CompileOverloads.swift` and the overloads in
+    `CompiledTrace.swift` that #720 deleted because 0.33 ships its own. On
+    0.31.6 a body that captures a Module would otherwise build again.
+  - `3294d2b` (new) `fix(deps): drop the NVFP4 global-scale guard on the
+    pinned mlx-swift` reverts #705: 0.31.6 has no
+    `QuantizedLinear.globalScale`, so no projection can carry one.
+- Dropped: `4f66a6a` (merged as #625); `3feb7d4` and `00306ea`, the key-prefix
+  shard selection. An embedded MTP head now excludes the target's
+  namespaces (`Qwen35CheckpointPolicy`, #679), so the loader reads headers
+  only for the target's tensors and the head's own bytes.
+- #633's eps reaches our code paths too: the fused GDN conv + norm kernel
+  (`6c84e6c`, also with the tree's `windows` in `bece565`), the split q/k
+  norm and DFlash2's `normalizedQK` (`d8b2a24`). Qwen 3.5 / 3.8 outputs
+  and cache digests therefore differ from the 2026-10-08 pin's, as they do
+  upstream.
+- `567fa9e` [`59fa2c1`] (the vision class on the text engine) took #545,
+  #679 and #614 into the vision class: the vision tower loads on first use
+  (`Qwen35Vision`, `onDemandComponents`); the warm-cache anchor is the first
+  full-attention layer of the resolved `layer_types`, or the first layer when
+  none is (`anchorCacheOffset`); a cold single-pass prefill projects only the
+  last row (`lastTokenOnly` on `Qwen35TextModel`'s positioned forward, which
+  `nextTokenLogits` now uses too); `newCache` validates the KV cache plan
+  first (#622). #662's compiled decode lived in the VLM's own
+  `Qwen35Language.Model`, which this carry replaces with the text engine, so
+  it goes with that class, along with its tests (`Qwen35VLMCompiledDecodeTests`,
+  the VLM trace tests in `Qwen35FusedGDNProjectionTests`). `Qwen38Tests`
+  checks the VLM text configuration through the text model.
+- `dd72a39` [`56fa499`] drops its own `copy()` and `innerState()` for #641's,
+  which copy only the rows the cache holds and include `keyCalibScale`.
+- `a733d2b` [`4f53dd3`]: `KVCacheSimple` and `QuantizedKVCache` copies start
+  their own allocation growth instead of the source's doubled step. #641's
+  `testForkWithHistoryKeepsOnlyTheSharedPrefixOnceItResponds` caught a fork
+  that grew to 22 + 2,048 rows.
+- `fdd811d` [`d61e1b9`] also makes upstream's new `TokenIterator`
+  conformance public; `c70a398` [`f8bc9b4`] registers beside the `qwen3_8`
+  types, and the Hadamard `sanitize` overrides throw as their bases now do.
+- Everything else cherry-picked clean and re-hashed.
+
+Not measured: #710's per-chunk `Memory.clearCache()` on prefill speed. The
+fork reserves the prompt's KV rows up front (`a733d2b`), so prefill frees
+no outgrown cache buffers, only the chunk's scratch.
+
+Validation at `3294d2b`: serialized `MLXLMTests` ran XCTest 874 (12
+skipped) and Swift Testing 1,245 tests in 108 suites; the app builds in
+Release, and `tesseractTests` passes (3,703 tests, 7 skipped). Two XCTest
+cases fail, and they fail the same way on the pinned mlx-swift with no carry
+applied (upstream `3d066d3` with only `ac2a609`, `926711b`, `3294d2b` and the
+pin): `Gemma4FusionTests.testScalarSoftcapOnCPU` and
+`testScalarSoftcapPreservesEveryFiniteLowPrecisionValue`, the fused Gemma 4
+softcap against `tanh(x / cap) * cap` bit for bit. They are left failing. An
+earlier whole-suite run also failed `testSameInputStackingReleasesEachBlockBeforeTheNext`
+by 32 bytes over its `2 * blockBytes` bound (10,485,792 bytes); it passed on
+the final run.
+
+Carried on top of `3d066d3`, in order (old hash in brackets; the
+2026-09-15 table and the sections since describe each):
+
+| Commit | What | Upstream status |
+| --- | --- | --- |
+| `5340bf4` [`997fa3a`] | mlx-swift fork pin | Permanent local |
+| `ac2a609` [`576cfb0`] | `Stream()` for the pinned mlx-swift | Permanent local until mlx-swift 0.32 |
+| `937d4d4` [`6b2e8e6`] | ChatTemplateRendering (C25) | Not filed |
+| `d8b2a24` [`92e300b`] | DFlash2 | PR #607, open |
+| `fdd811d` [`d61e1b9`] | GenerationFinalizingTokenIterator public | Permanent local |
+| `2fe2855` [`b672912`] | mlx-swift pin to `6058402` | Permanent local |
+| `6c84e6c` `624eb06` `8d799e2` [`8bc9780` `f6ffbde` `dc0ca71`] | Qwen 3.5 fusions | Follow-ups to #607 |
+| `f596431` `06fec93` `b4cbcfb` [`5e13bd8` `9181b05` `f5daea3`] | DFlash2 drafter kernels and dtype fix | Follow-ups to #607 |
+| `c70a398` `6f4d16d` `483cb47` [`f8bc9b4` `54a8cbb` `b69e1cb`] | Hadamard-rotated checkpoints and stacking | PR #630, open (stacking held back) |
+| `a733d2b` [`4f53dd3`] | Cache capacity reservation | Prepared, not filed |
+| `1433385` [`b72340f`] | Verify-trace compile state | Rest merged as #631 |
+| `1044549` [`069d9ae`] | Stacking frees each block | On #607's branch |
+| `bcc235e` `ade8a4d` [`5712f02` `eced762`] | Sibling-cycle citations, trace label style | With #631's follow-up |
+| `d297ffb` [`97dcda8`] | WHT encode determinism test | Kernel half merged as #650 |
+| `34e0e97` [`a0f7740`] | TurboQuant GQA decode | Not filed |
+| `7e69b4e` [`01ccea2`] | mlx-swift pin to `2d1bd1b` | Permanent local |
+| `dd72a39` `2afac34` `7be0ba1` `924eddf` [`56fa499` `13695bd` `86a5267` `56ccc88`] | TurboQuant under DFlash2 | Not filed; depends on #607 |
+| `7f98dee` `52f5466` `484a3a3` `e0ddc0f` `4a8f490` [`0eee3cc` `a4ed063` `d0ed0be` `cba1803` `109c6a8`] | TurboQuant optimization loop | Not filed |
+| `c35424c` `fad07ce` [`f2f8d22` `97615e9`] | mlx-swift pins to `1bb678a`, `db60fb7` | Permanent local |
+| `567fa9e` `a3b6e63` [`59fa2c1` `1563459`] | Vision class on the text engine, DocC links | Not filed; depends on #607 |
+| `b106090` `b8c60ae` `bece565` `e535b8a` `d17a53b` `d8eee89` [`efe2a16` `b0bb588` `c0e5216` `d12e9ef` `a363526` `6c23b42`] | DFlash2 tree verification | Not filed; depends on #607 |
+| `fc995d2` [`a5ce452`] | mlx-swift pin to `3425495` | Permanent local |
+| `926711b` (new) | `@Sendable` compile overloads for the pinned mlx-swift | Permanent local until mlx-swift 0.33 |
+| `3294d2b` (new) | NVFP4 global-scale guard reverted | Permanent local until mlx-swift 0.32 |
+
 ## DFlash2 tree verification: a chain with leaf siblings (2026-10-08)
 
 The gitlink advances from `1563459` to `efe2a16` (with the speed ruler,
@@ -280,7 +398,7 @@ on the rerun, and its random models are unseeded, so it is recorded as a
 flake, not this carry. Upstream: not filed; the verify half depends on #607
 (DFlash2).
 
-## Current pin (2026-10-03)
+## Pin of 2026-10-03 (superseded 2026-10-27)
 
 Base: upstream `main` @ `9afc3b5` (seven commits past tag 3.32.3), 14
 commits past the 2026-09-15 base `c6446cf`. Branch `pin-upstream-mlx-swift`

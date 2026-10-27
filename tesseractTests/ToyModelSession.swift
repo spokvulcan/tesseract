@@ -910,6 +910,8 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
 /// Presence-only drafter for requests whose plan must select ordinary
 /// decoding. Any attempt to use the MTP path fails at the model boundary.
 nonisolated final class InactiveMTPDrafter: Module, MTPDrafterModel {
+    func isCompatible(with target: any LanguageModel) -> Bool { true }
+
     func draftBlock(
         target: any LanguageModel,
         lastToken: MLXArray,
