@@ -40,7 +40,7 @@ it with the whole stack the app pinned: the 2026-10-03 carries and everything
 since on `perf/goal-2026-10-08`. The outgoing tips are tagged
 `pin-tip/2026-10-27-01ccea2` (the branch) and `pin-tip/2026-10-27-a5ce452`
 (the app's gitlink, on `perf/goal-2026-10-08`). The app pins the new tip,
-`3294d2b`.
+`aeb4da1`.
 
 What upstream brought: **our #625 merged** verbatim; #632 closed in favor of
 component-aware checkpoint loading (#679, #580: on-demand components, a
@@ -72,6 +72,13 @@ How the carry moved:
   - `3294d2b` (new) `fix(deps): drop the NVFP4 global-scale guard on the
     pinned mlx-swift` reverts #705: 0.31.6 has no
     `QuantizedLinear.globalScale`, so no projection can carry one.
+  - `aeb4da1` (new) `test(deps): skip two Gemma 4 softcap bit-identity
+    tests on the pinned mlx-swift` (below).
+- `49fd16a` (new) fixes the DocC links and parameter lists the tree
+  verification left unresolved (a private kernel factory, joint `keys,
+  values` and `depths, slots` entries, a cross-module link without its
+  `temperature:` label). DocC with warnings as errors had failed MLXLMCommon
+  and MLXLLM since the 2026-10-08 pin (tesseract #626's CI).
 - Dropped: `4f66a6a` (merged as #625); `3feb7d4` and `00306ea`, the key-prefix
   shard selection. An embedded MTP head now excludes the target's
   namespaces (`Qwen35CheckpointPolicy`, #679), so the loader reads headers
@@ -121,11 +128,16 @@ clear and 0.55 GB without. Upstream's clear stays.
 Validation at `3294d2b`: serialized `MLXLMTests` ran XCTest 874 (12
 skipped) and Swift Testing 1,245 tests in 108 suites; the app builds in
 Release, and `tesseractTests` passes (3,703 tests, 7 skipped). Two XCTest
-cases fail, and they fail the same way on the pinned mlx-swift with no carry
+cases failed, and they fail the same way on the pinned mlx-swift with no carry
 applied (upstream `3d066d3` with only `ac2a609`, `926711b`, `3294d2b` and the
 pin): `Gemma4FusionTests.testScalarSoftcapOnCPU` and
 `testScalarSoftcapPreservesEveryFiniteLowPrecisionValue`, the fused Gemma 4
-softcap against `tanh(x / cap) * cap` bit for bit. They are left failing. An
+softcap against `tanh(x / cap) * cap` bit for bit. `aeb4da1` skips them. At
+`aeb4da1` DocC passes for the five engine targets. On CI's runners two
+DFlash2 bit-identity tests still fail, as they have since tesseract #625 and
+#626 (they pass on the development machine):
+`testRMSNormResidualIsBitwiseExact` and
+`testDFlash2TreeAttentionMatchesTheChainKernel`. An
 earlier whole-suite run also failed `testSameInputStackingReleasesEachBlockBeforeTheNext`
 by 32 bytes over its `2 * blockBytes` bound (10,485,792 bytes); it passed on
 the final run.
@@ -159,6 +171,8 @@ Carried on top of `3d066d3`, in order (old hash in brackets; the
 | `fc995d2` [`a5ce452`] | mlx-swift pin to `3425495` | Permanent local |
 | `926711b` (new) | `@Sendable` compile overloads for the pinned mlx-swift | Permanent local until mlx-swift 0.33 |
 | `3294d2b` (new) | NVFP4 global-scale guard reverted | Permanent local until mlx-swift 0.32 |
+| `49fd16a` (new) | DocC links and parameters of the tree verification | Not filed; depends on #607 |
+| `aeb4da1` (new) | Gemma 4 softcap bit-identity tests skipped | Permanent local until mlx-swift 0.32 |
 
 ## DFlash2 tree verification: a chain with leaf siblings (2026-10-08)
 
