@@ -87,6 +87,48 @@ struct AgentGenerateParametersTests {
     }
 
     @MainActor
+    @Test func lfm3IdsMapToTheCardsGeneralProfile() {
+        // LFM3 and LFM3-VL cards: temperature 0.1, top_k 50, repetition
+        // penalty 1.1, and no top_p cut (the app's default would cut at 0.95).
+        for id in ["lfm3-1.7b", "lfm3-vl-2b"] {
+            let params = AgentGenerateParameters.forModel(id)
+            #expect(params.temperature == 0.1, "\(id)")
+            #expect(params.topP == 1.0, "\(id)")
+            #expect(params.topK == 50, "\(id)")
+            #expect(params.minP == 0.0, "\(id)")
+            #expect(params.repetitionPenalty == 1.1, "\(id)")
+            #expect(params.presencePenalty == nil, "\(id)")
+        }
+    }
+
+    @MainActor
+    @Test func lfm3AudioIdsDecodeTextGreedily() {
+        // LFM3-Audio ships greedy text decoding (`generation_config.json`:
+        // temperature 0, top_k 1, repetition penalty 1.0).
+        for id in ["lfm3-audio-2b", "lfm3-audio-2b-8bit"] {
+            let params = AgentGenerateParameters.forModel(id)
+            #expect(params.temperature == 0, "\(id)")
+            #expect(params.repetitionPenalty == nil, "\(id)")
+            #expect(params.presencePenalty == nil, "\(id)")
+        }
+    }
+
+    /// The prefix rules are matched against the catalog's own ids, so an id
+    /// renamed in the catalog cannot fall through to the default preset.
+    @MainActor
+    @Test func everyLFM3CatalogEntryGetsAnLFM3Preset() {
+        let ids = ModelDefinition.all.map(\.id).filter { $0.hasPrefix("lfm3") }
+        #expect(ids.count == 4)
+        for id in ids {
+            let expected: AgentGenerateParameters =
+                id.hasPrefix("lfm3-audio") ? .lfm3Audio : .lfm3
+            let params = AgentGenerateParameters.forModel(id)
+            #expect(params.temperature == expected.temperature, "\(id)")
+            #expect(params.repetitionPenalty == expected.repetitionPenalty, "\(id)")
+        }
+    }
+
+    @MainActor
     @Test func qwen36ThinkingPresetHasNoPresencePenalty() {
         #expect(AgentGenerateParameters.qwen36Thinking.temperature == 0.6)
         #expect(AgentGenerateParameters.qwen36Thinking.topP == 0.95)
@@ -176,6 +218,19 @@ struct AgentGenerateParametersTests {
     }
 
     @MainActor
+    @Test func lfm3MathSTEMMatchesSpec() {
+        // The LFM3 card's math and STEM profile; it drops the general
+        // profile's repetition penalty.
+        let out = SamplingPreset.lfm3MathSTEM.apply(to: .lfm3)
+        #expect(out.temperature == 1.0)
+        #expect(out.topP == 0.95)
+        #expect(out.topK == 20)
+        #expect(out.minP == 0.0)
+        #expect(out.presencePenalty == nil)
+        #expect(out.repetitionPenalty == nil)
+    }
+
+    @MainActor
     @Test func presetPreservesNonSamplingFields() {
         var base = AgentGenerateParameters.default
         base.maxTokens = 131_072
@@ -198,7 +253,7 @@ struct AgentGenerateParametersTests {
         let presets: [SamplingPreset] = [
             .qwenThinkingGeneral, .qwenThinkingCoding,
             .qwenInstructGeneral, .qwenInstructReasoning,
-            .nanbeigeAgentic, .nanbeigeChatReasoning,
+            .nanbeigeAgentic, .nanbeigeChatReasoning, .lfm3MathSTEM,
         ]
         for preset in presets {
             var base = AgentGenerateParameters.default

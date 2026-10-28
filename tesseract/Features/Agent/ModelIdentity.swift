@@ -140,6 +140,12 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// models and unrecognized families.
     let imageKeying: ImageKeying?
 
+    /// Whether the checkpoint takes image input in a family the app serves
+    /// images for — the **Vision-Capable Model** rule. The Qwen3.5 vision
+    /// variant also has `imageKeying`; LFM3-VL (`lfm3_vl`) does not, so its
+    /// image-bearing requests are served as **Unkeyed Completions**.
+    let declaresImageInput: Bool
+
     /// Build the identity from a model directory, reading `config.json` and
     /// `chat_template.jinja` **exactly once each**. The directory-based
     /// constructor is the module-facing interface; total and non-throwing.
@@ -189,6 +195,7 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
             configJSON: configJSON
         )
         self.imageKeying = Self.interpretImageKeying(configJSON: configJSON)
+        self.declaresImageInput = Self.interpretDeclaresImageInput(configJSON: configJSON)
     }
 
     // MARK: - Interpretation (pure)
@@ -223,13 +230,16 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     }
 
     /// Interpret each declared flag's template-default value from the shape of
-    /// the template's own test. Two shapes read as default-`true`:
+    /// the template's own test. Three shapes read as default-`true`:
     /// - `<flag> is false` (Nanbeige4.2) — the branch only changes the render
     ///   on an explicit `false`, so an absent kwarg means enabled.
     /// - `<flag> is undefined or <flag> is true` (Qwen3.8) — the enabling
     ///   branch fires when the kwarg is absent.
+    /// - `<flag> | default(true)` (LFM3's `enable_thinking`) — the filter
+    ///   names the value an absent kwarg takes.
     /// The Qwen3.6 shape (`<flag> is defined and <flag> is true`) defaults to
-    /// `false`, as does a bare truthiness test, where an absent kwarg is falsy.
+    /// `false`, as do `| default(false)` and a bare truthiness test, where an
+    /// absent kwarg is falsy.
     private static func interpretTemplateFlagDefaults(
         scannableTemplate: String?,
         declaredFlags: Set<TemplateRenderFlag>
@@ -243,9 +253,12 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
                 let undefinedOrTruePattern =
                     "(?<![A-Za-z0-9_])" + name + "\\s+is\\s+undefined\\s+or\\s+"
                     + name + "\\s+is\\s+true(?![A-Za-z0-9_])"
+                let defaultFilterTruePattern =
+                    "(?<![A-Za-z0-9_])" + name + "\\s*\\|\\s*default\\(\\s*[Tt]rue\\s*\\)"
                 let defaultsTrue =
                     matches(pattern: isFalsePattern, in: scannable)
                     || matches(pattern: undefinedOrTruePattern, in: scannable)
+                    || matches(pattern: defaultFilterTruePattern, in: scannable)
                 return (flag, defaultsTrue)
             })
     }
@@ -457,6 +470,19 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
             imagePadTokenId: root["image_token_id"] as? Int ?? 248_056,
             spatialMergeSize: visionConfig["spatial_merge_size"] as? Int ?? 2
         )
+    }
+
+    /// Image input is a family fact plus a `vision_config` block: the Qwen3.5
+    /// vision variant (the image-keying rule) and LFM3-VL. A family is
+    /// listed only once its images run end to end in the app, so an empty
+    /// `vision_config` on a text checkpoint (LFM3, LFM3-Audio) declares
+    /// nothing.
+    private static func interpretDeclaresImageInput(configJSON: [String: Any]?) -> Bool {
+        guard let root = configJSON,
+            let architecture = baseArchitecture(configJSON: root),
+            root["vision_config"] is [String: Any]
+        else { return false }
+        return architecture.hasPrefix("qwen3_5") || architecture == "lfm3_vl"
     }
 }
 

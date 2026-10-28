@@ -118,6 +118,53 @@ struct ModelCatalogTests {
         #expect(ModelCatalog.isVisionCapable(directory: textDir) == false)
     }
 
+    /// LFM3-VL takes images; LFM3 and LFM3-Audio ship an empty
+    /// `vision_config` and do not.
+    @Test func visionRuleCoversLFM3VLOnly() throws {
+        let vlDir = try makeModelDir(
+            config: #"{ "model_type": "lfm3_vl", "vision_config": { "spatial_merge_size": 2 } }"#)
+        let textDir = try makeModelDir(config: #"{ "model_type": "lfm3", "vision_config": {} }"#)
+        let audioDir = try makeModelDir(
+            config: #"{ "model_type": "lfm3_audio", "vision_config": {} }"#)
+        defer {
+            for dir in [vlDir, textDir, audioDir] { try? FileManager.default.removeItem(at: dir) }
+        }
+
+        #expect(ModelCatalog.isVisionCapable(directory: vlDir) == true)
+        #expect(ModelCatalog.isVisionCapable(directory: textDir) == false)
+        #expect(ModelCatalog.isVisionCapable(directory: audioDir) == false)
+    }
+
+    // MARK: - LFM3 entries
+
+    /// The four LiquidAI MLX checkpoints, all served as agent models (the
+    /// app has no audio path yet, so LFM3-Audio chats in text), each with
+    /// its card's context length.
+    @Test func lfm3EntriesNameLiquidAIsMLXCheckpoints() throws {
+        let expected: [String: (repo: String, context: Int)] = [
+            "lfm3-1.7b": ("LiquidAI/LFM3-1.7B-MLX-4bit", 262_144),
+            "lfm3-vl-2b": ("LiquidAI/LFM3-VL-2B-MLX-4bit", 128_000),
+            "lfm3-audio-2b-8bit": ("LiquidAI/LFM3-Audio-2B-MLX-8bit", 32_768),
+            "lfm3-audio-2b": ("LiquidAI/LFM3-Audio-2B-MLX-4bit", 32_768),
+        ]
+        for (id, facts) in expected {
+            let entry = try #require(ModelDefinition.withID(id))
+            #expect(entry.repoID == facts.repo, "\(id)")
+            #expect(entry.contextLength == facts.context, "\(id)")
+            #expect(entry.category == .agent, "\(id)")
+            #expect(entry.pathPrefix == nil, "\(id)")
+            #expect(entry.requiredExtension == "safetensors", "\(id)")
+        }
+    }
+
+    /// Every other entry keeps the 262,144 the pinned compaction window
+    /// assumes.
+    @Test func everyNonLFM3EntryAdvertisesTheNativeQwenWindow() {
+        for entry in ModelDefinition.all where !entry.id.hasPrefix("lfm3") {
+            #expect(entry.contextLength == 262_144, "\(entry.id)")
+        }
+    }
+
     // MARK: - Voice Engine entry
 
     /// The entry downloads the checkpoint `SpeechEngine` is built with, with

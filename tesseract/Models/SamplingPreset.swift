@@ -33,6 +33,8 @@ enum SamplingPreset: String, CaseIterable, Identifiable, Sendable {
     case nanbeigeAgentic
     /// Nanbeige4.2 chat/reasoning profile (the model's generation_config).
     case nanbeigeChatReasoning
+    /// LFM3's math and STEM profile (the model card's second profile).
+    case lfm3MathSTEM
 
     var id: String { rawValue }
 
@@ -46,6 +48,7 @@ enum SamplingPreset: String, CaseIterable, Identifiable, Sendable {
         case .greedySpeculative: "Greedy (Speculative)"
         case .nanbeigeAgentic: "Nanbeige – Agentic"
         case .nanbeigeChatReasoning: "Nanbeige – Chat/Reasoning"
+        case .lfm3MathSTEM: "LFM3 – Math & STEM"
         }
     }
 
@@ -67,6 +70,8 @@ enum SamplingPreset: String, CaseIterable, Identifiable, Sendable {
             "temp 1.0, top_p 0.95, top_k 20, no penalties — Nanbeige4.2 recommendation for agentic tool use."
         case .nanbeigeChatReasoning:
             "temp 0.6, top_p 0.95, top_k 20, no penalties — Nanbeige4.2 recommendation for chat and reasoning."
+        case .lfm3MathSTEM:
+            "temp 1.0, top_p 0.95, top_k 20, no penalties — LFM3 recommendation for math and science."
         }
     }
 
@@ -133,6 +138,11 @@ enum SamplingPreset: String, CaseIterable, Identifiable, Sendable {
         case .nanbeigeChatReasoning:
             return Overrides(
                 temperature: 0.6, topP: 0.95, topK: 20, minP: 0.0,
+                presencePenalty: nil, repetitionPenalty: nil
+            )
+        case .lfm3MathSTEM:
+            return Overrides(
+                temperature: 1.0, topP: 0.95, topK: 20, minP: 0.0,
                 presencePenalty: nil, repetitionPenalty: nil
             )
         }

@@ -71,6 +71,13 @@ struct ModelDefinition: Identifiable, Sendable {
     var companionFiles: [CompanionFile] = []
     /// When the entry's directory counts as downloaded.
     var completeness: ModelCompleteness = .anyRequiredFile
+    /// The prompt plus output tokens the model's card supports, which
+    /// `/v1/models` and the client integrations advertise. Compaction does
+    /// not read it yet: it keeps the 262,144 every Qwen entry has.
+    var contextLength = ModelDefinition.defaultContextLength
+
+    /// 262,144: every Qwen, Nanbeige and Ornith checkpoint's native window.
+    nonisolated static let defaultContextLength = 262_144
 
     /// The model store's directory name under Application Support. Every
     /// model family (agent, TTS, ASR) stores here, and users' existing
@@ -430,6 +437,61 @@ extension ModelDefinition {
             ),
             sizeDescription: "~21 GB",
             dependencies: []
+        ),
+        ModelDefinition(
+            id: "lfm3-1.7b",
+            displayName: "LFM3-1.7B (MLX 4-bit)",
+            description:
+                "Small, fast agent from Liquid AI: short convolutions with sliding-window and global attention. Tool calling, thinking on by default, 256K context. Not for agentic coding or long multi-step reasoning.",
+            category: .agent,
+            source: .huggingFace(
+                repo: "LiquidAI/LFM3-1.7B-MLX-4bit",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~1.0 GB",
+            dependencies: []
+        ),
+        ModelDefinition(
+            id: "lfm3-vl-2b",
+            displayName: "LFM3-VL-2B (MLX 4-bit)",
+            description:
+                "Small vision-language model from Liquid AI on the LFM3 backbone: images at native resolution, documents, charts and app screens. Thinking on by default, 128K context. Not for coding or long conversations.",
+            category: .agent,
+            source: .huggingFace(
+                repo: "LiquidAI/LFM3-VL-2B-MLX-4bit",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~1.6 GB",
+            dependencies: [],
+            contextLength: 128_000
+        ),
+        ModelDefinition(
+            id: "lfm3-audio-2b-8bit",
+            displayName: "LFM3-Audio-2B (MLX 8-bit)",
+            description:
+                "Speech model from Liquid AI on the LFM3 backbone (speech in; text or speech out), at the recommended precision. The app chats with it in text for now. 32K context.",
+            category: .agent,
+            source: .huggingFace(
+                repo: "LiquidAI/LFM3-Audio-2B-MLX-8bit",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~2.5 GB",
+            dependencies: [],
+            contextLength: 32_768
+        ),
+        ModelDefinition(
+            id: "lfm3-audio-2b",
+            displayName: "LFM3-Audio-2B (MLX 4-bit)",
+            description:
+                "The smallest LFM3-Audio pack; it loses some accuracy against the 8-bit one. The app chats with it in text for now. 32K context.",
+            category: .agent,
+            source: .huggingFace(
+                repo: "LiquidAI/LFM3-Audio-2B-MLX-4bit",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~1.8 GB",
+            dependencies: [],
+            contextLength: 32_768
         ),
     ]
 

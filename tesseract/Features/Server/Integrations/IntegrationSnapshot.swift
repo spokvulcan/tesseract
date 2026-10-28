@@ -23,6 +23,8 @@ nonisolated struct IntegrationSnapshot: Equatable, Sendable {
         let id: String
         let displayName: String
         let visionCapable: Bool
+        /// The catalog entry's, the same value `/v1/models` reports as
+        /// `max_context_length`.
         let contextLength: Int
     }
 
@@ -36,10 +38,6 @@ nonisolated struct IntegrationSnapshot: Equatable, Sendable {
 }
 
 nonisolated enum IntegrationSnapshotBuilder {
-
-    /// Context length advertised per model — the same value `/v1/models`
-    /// reports as `max_context_length`.
-    static let contextLength = 262_144
 
     static func build(
         definitions: [ModelDefinition],
@@ -55,7 +53,7 @@ nonisolated enum IntegrationSnapshotBuilder {
                     id: definition.id,
                     displayName: definition.displayName,
                     visionCapable: isVisionCapable(definition.id),
-                    contextLength: contextLength
+                    contextLength: definition.contextLength
                 )
             }
         let defaultModelID =

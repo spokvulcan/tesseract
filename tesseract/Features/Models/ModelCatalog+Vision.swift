@@ -10,10 +10,10 @@ import Foundation
 extension ModelCatalog {
 
     /// The **Vision-Capable Model** rule: the checkpoint on disk declares
-    /// image input — the Qwen3.5 family with a `vision_config` block (via
-    /// `ModelIdentity`). Pure given its input; memoization is the caller's —
-    /// the download manager holds the per-id cache.
+    /// image input — the Qwen3.5 family or LFM3-VL with a `vision_config`
+    /// block (via `ModelIdentity`). Pure given its input; memoization is the
+    /// caller's — the download manager holds the per-id cache.
     nonisolated static func isVisionCapable(directory: URL) -> Bool {
-        ModelIdentity(directory: directory).imageKeying != nil
+        ModelIdentity(directory: directory).declaresImageInput
     }
 }
