@@ -24,7 +24,7 @@ tesseract.xcodeproj
 Pin branches are append-only and a base change gets a new dated branch (the
 mlx-core rule): `pin-tesseract` (base 1.3.3, head `08933b6`) stays for the
 historical tesseract pins; `pin-tesseract-2026-09-15` (base 1.3.4, head
-`fe95f0a`) is what the app builds. The 1.3.3 → 1.3.4 delta (revision
+`c99afdf`) is what the app builds. The 1.3.3 → 1.3.4 delta (revision
 support in `AutoTokenizer.from(pretrained:)`, `Sendable` on the Hub types,
 the swift-jinja 2.4.2 floor, a sampling fix for vocabularies over 65,536
 entries) touches none of the carried files; all four rebased clean.
@@ -36,7 +36,7 @@ entries) touches none of the carried files; all four rebased clean.
 | `8025d3d` (was `63edf42`) `feat(tokenizers): expose renderChatTemplate` | Splits the render half of `applyChatTemplate` into a public `renderChatTemplate` (pure refactor, byte-identical output; public default impl keeps third-party conformers compiling). Enables the C25 render+token cache | Not filed (queued — owner go-ahead) |
 | `fd1a169` (was `a524093`) `perf(tokenizers): byte-native BPE inner loop + byte-keyed lookup tables` | Same serial algorithm, same merge order, byte-identical output on byte-level BPE vocabs: byte-range symbols in one UTF-8 buffer instead of per-scalar Strings and per-merge concats; open-addressed byte-keyed rank/id tables (FNV-1a + full byte-compare) instead of String-keyed dictionary probes. 1.22×/1.21×/1.20× encode at 32K/8K/128; 88/88 corpus items byte-identical (experiments-ledger C24). **Narrows the merge-table match semantics — see the semantics note below; the commit message's "byte-identical output" claim is scoped to byte-level vocabs.** Adds ~20 MB resident per loaded tokenizer (the byte tables sit alongside `bpeRanks`/`tokensToIds`, both still live) | Not filed (queued — owner go-ahead) |
 | `d1f7ba1` (was `0033bc7`) `fix(tokenizers): C24 review round — eager byte tables, correct semantics note` | Replaces the lazy double-checked-locked `byteTablesCache` with a `let` built in `init` (the unlocked fast-path read had no acquire semantics — a reader on a weakly-ordered core could see the published pointer before the table's array buffers); corrects the `BytePairTables` doc comment, which claimed byte-exactness was equivalent to what it replaced; bounds the leading-byte scalar-width walk against a malformed buffer. No behavior change on well-formed input | Not filed (queued — owner go-ahead) |
-| `fe95f0a` (was `08933b6`) `fix(tokenizers): render tojson the way transformers does` | Installs a `tojson` filter in the `renderChatTemplate` context (a filter provided through the environment wins over swift-jinja's built-in): no `\/` escaping and `ensure_ascii` off by default, as in transformers' `json.dumps(ensure_ascii=False)`; sorted keys and compact separators are kept because values arrive as unordered Swift dictionaries and sorted keys keep a render stable across launches. swift-jinja's built-in wrote `<\/style>` and `—` into every tool-call argument rendered from a container, so the canonical re-render of a finished turn was not the text the model emitted and **Live Leaf Capture** fell back to a re-prefill. One offline test in `ChatTemplateTests` | swift-jinja issue [#71](https://github.com/huggingface/swift-jinja/issues/71) listed all four divergences from transformers. Our PR [#72](https://github.com/huggingface/swift-jinja/pull/72) (slash escaping) merged 2026-09-07 and upstream's [#74](https://github.com/huggingface/swift-jinja/pull/74) did the rest: swift-jinja 2.5.0+ renders `tojson` as `json.dumps(ensure_ascii=False, sort_keys=False)` with `", "` / `": "` separators and insertion-ordered keys, and the app graph resolves 2.5.1 since 2026-09-15. **The carry stays for a different reason now**: transformers' defaults are insertion order and spaced separators, but the values reach the template as unordered Swift dictionaries, so only sorted keys give a render that is stable across launches, and the app's canonical tool-call form (`HTTPPrefixCacheToolCall`) is sorted-and-compact. Dropping the carry means either an ordered dictionary through the whole message path or a `jsonDumpsOptions` policy with `sortKeys` on the render environment — a smaller carry, not filed. The filter still wins over the 2.5.1 built-in (the `ChatTemplateTests` case passes on 2.5.1) |
+| `fe95f0a` (was `08933b6`) `fix(tokenizers): render tojson the way transformers does`, then `c99afdf` `fix(tokenizers): render tojson with swift-jinja's json.dumps; drop the override` | Net: no carry. `fe95f0a` installed a `JSONEncoder` `tojson` in the `renderChatTemplate` context (a context filter wins over swift-jinja's built-in) to stop the built-in's `<\/style>` and `\u2014` escapes, which broke the canonical re-render of tool-call arguments; it kept sorted keys and compact separators. Once swift-jinja 2.5.0 rendered `tojson` as transformers does (`json.dumps(ensure_ascii=False)`: `", "` / `": "`, no escapes, Python floats), the override was the only thing still rendering `{"type":"string"}`, `2` for `2.0` and `"k" : v` when indented, in every tools block the models read. `c99afdf` removes it and raises the swift-jinja floor to 2.5.0. Sorted keys were never the override's to keep: `Value(any:)` sorts a Swift dictionary's keys, and the built-in keeps a value's order, so a caller passing Jinja values keeps theirs; the app passes its tools that way, as the `additionalContext` entry `tools` (ADR-0098). Two offline tests in `ChatTemplateTests` | swift-jinja issue [#71](https://github.com/huggingface/swift-jinja/issues/71) listed the divergences; our PR [#72](https://github.com/huggingface/swift-jinja/pull/72) (slash escaping) and upstream's [#74](https://github.com/huggingface/swift-jinja/pull/74) fixed them in 2.5.0. Nothing left to file |
 
 ### Merge-table semantics note (read before filing upstream)
 
@@ -66,9 +66,9 @@ so expect the question.
 ## Pin state
 
 `Vendor/tesseract-speech`'s `Package.swift` and `Package.resolved` pin
-`fe95f0ad9d13fdc8bf3b19848ae200e8550a875c` — the head of
-`pin-tesseract-2026-09-15`, so the app tree resolves and builds all four
-carries on the 1.3.4 base. Appending to the pin branch does
+`c99afdf6866817284af2061054557fca885a4fda` — the head of
+`pin-tesseract-2026-09-15`, so the app tree resolves and builds the three
+carries left on the 1.3.4 base. Appending to the pin branch does
 not move the app: the pin is an exact revision, and every append needs this same
 two-file edit.
 
@@ -88,6 +88,17 @@ confirmed at the new head with a diff against `0033bc7` equal to the fork commit
 and the replay gate (three ~3k-token tool prompts with emoji, dashes and slashes,
 reconstructed from the 2026-09-06 Pi session) re-run against the built tree with
 every previously divergent `write` turn stored live and zero duplicated graphemes.
+
+Moved 2026-10-28 (`fe95f0a` → `c99afdf`, ADR-0098): resolved locally from the
+fork working copy before the push, the DerivedData checkout confirmed clean at
+`c99afdf`, the whole app test target green on it with `ToolPromptParityTests`
+token-identical to transformers 5.21 on Qwen3.5, Qwen3.8, LFM3 and LFM3-Audio,
+and the fork's `ChatTemplateTests` passing (16 of 16). `--tokenize-cache-bench`
+PASS on Qwen3.5-4B-PARO and Qwen3.8-27B-PARO with 0 token mismatches / 0 parity
+failures / 0 path failures; a render costs about 0.3 ms more with the bench's 40
+tools. On Qwen3.8 the C25 hit path is slower than the fused baseline (41 ms
+against 37 ms per hit turn); it was before the move too (43 against 35 on a
+Release build of `2e070312`).
 
 ## Per-iteration workflow
 

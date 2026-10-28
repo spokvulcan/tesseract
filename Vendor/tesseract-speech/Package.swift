@@ -18,7 +18,7 @@ let package = Package(
         // this is the package's only declarer in the app graph (the app and
         // MLXLMCommon import Tokenizers through it). Scheme:
         // docs/swift-transformers-fork.md.
-        .package(url: "https://github.com/spokvulcan/swift-transformers", revision: "fe95f0ad9d13fdc8bf3b19848ae200e8550a875c"),
+        .package(url: "https://github.com/spokvulcan/swift-transformers", revision: "c99afdf6866817284af2061054557fca885a4fda"),
     ],
     targets: [
         // Qwen3-TTS inference, first-party since ADR-0071 (absorbed from

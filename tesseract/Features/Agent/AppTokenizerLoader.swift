@@ -87,7 +87,8 @@ private nonisolated struct LoadedTokenizer: MLXLMCommon.ChatTemplateRendering, B
     ) throws -> [Int] {
         do {
             return try upstream.applyChatTemplate(
-                messages: messages, tools: tools, additionalContext: additionalContext)
+                messages: messages, tools: tools,
+                additionalContext: Self.context(additionalContext, orderedTools: tools))
         } catch Tokenizers.TokenizerError.missingChatTemplate {
             throw MLXLMCommon.TokenizerError.missingChatTemplate
         }
@@ -99,9 +100,23 @@ private nonisolated struct LoadedTokenizer: MLXLMCommon.ChatTemplateRendering, B
     ) throws -> String {
         do {
             return try upstream.renderChatTemplate(
-                messages: messages, tools: tools, additionalContext: additionalContext)
+                messages: messages, tools: tools,
+                additionalContext: Self.context(additionalContext, orderedTools: tools))
         } catch Tokenizers.TokenizerError.missingChatTemplate {
             throw MLXLMCommon.TokenizerError.missingChatTemplate
         }
+    }
+
+    /// The template context's `tools` replaced by the tools in transformers'
+    /// key order (``ChatTemplateTools``): the tokenizer converts `tools` with
+    /// every key sorted, and an `additionalContext` entry replaces it. `tools`
+    /// itself still selects a `tool_use` template.
+    private static func context(
+        _ additionalContext: [String: any Sendable]?, orderedTools tools: [[String: any Sendable]]?
+    ) throws -> [String: any Sendable]? {
+        guard let tools else { return additionalContext }
+        var context = additionalContext ?? [:]
+        context["tools"] = try ChatTemplateTools.value(tools)
+        return context
     }
 }

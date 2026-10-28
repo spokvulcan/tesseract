@@ -8,17 +8,16 @@ import MLXLMCommon
 /// loop validates required parameters against it *before* dispatch
 /// (`AgentLoop.executeToolCalls`); top-level property types/descriptions/enums
 /// feed the model's tool spec. Nested object schemas flatten to their declared
-/// `type` — the same shape the built-in tools use.
+/// `type` — the same shape the built-in tools use. The decoded JSON has no key
+/// order, so the properties come sorted, the same on every connection.
 nonisolated enum MCPSchemaDecoder {
     static func decode(_ value: JSONValue) -> JSONSchema {
         let object = value.asObject ?? [:]
         let type = object["type"]?.asString ?? "object"
         let required = (object["required"]?.asArray ?? []).compactMap { $0.asString }
-        var properties: [String: PropertySchema] = [:]
-        for (key, propertyValue) in object["properties"]?.asObject ?? [:] {
-            properties[key] = decodeProperty(propertyValue)
-        }
-        return JSONSchema(type: type, properties: properties, required: required)
+        let properties = (object["properties"]?.asObject ?? [:]).sorted { $0.key < $1.key }
+            .map { (name: $0.key, schema: decodeProperty($0.value)) }
+        return JSONSchema(type: type, orderedProperties: properties, required: required)
     }
 
     private static func decodeProperty(_ value: JSONValue) -> PropertySchema {
