@@ -69,7 +69,9 @@ that supports it (Qwen3.8-27B). It is a request fact and part of cache partition
 identity (ADR-0083): the prompt prefills unquantized, the cache converts once
 where the request's **Decode Handover** says (the **Decode Start**'s rule;
 inside the iterator when the iterator runs the prefill), and the turn's leaf
-stores compressed layers that only a request of the same scheme restores.
+stores compressed layers that only a request of the same scheme restores. A
+**Leaf Extension Admission**'s worth-it gate weighs those layers at full
+precision, so a scheme keeps the turn boundaries full precision keeps.
 _Avoid_: kvBits (the unrelated affine quantization the product never sets), KV
 quantization (ambiguous between the two).
 

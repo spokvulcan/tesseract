@@ -753,7 +753,9 @@ attention against bf16 SDPA, and `testWarmChunk` a prefill chunk over a
 compressed cache (`TEST_RUNNER_TURBOQUANT_DECODE_BENCH_CHUNKS=64,512,1024`).
 
 App side: `TurboQuantSnapshotTests` (capture, restore, move, prefix views,
-the Stored Form, the SSD round trip), `SpeculationPlanTests` (a scheme keeps
+the Stored Form, the SSD round trip, the extension worth-it gate weighing the
+scheme's attention at full precision, and a base and suffix segment composing
+into the leaf), `SpeculationPlanTests` (a scheme keeps
 DFlash2 and refuses MTP), `RequestFactsTests` and `SnapshotManifestTests`
 (the scheme in the partition key, digest and meta), `DecodeStartTests` (where
 each Decode Handover converts, relative to the prompt's last token, and that
@@ -772,7 +774,12 @@ turn, the request after it (the picture now a line) and the one after that.
 The picture's turn must restore the thread before it; the request after must
 restore as far (the boundary the picture turn's leaf extended, from SSD by
 Chain-Prefix Restore) and nothing past the picture; the one after must restore
-the whole request before it. It runs last in a full e2e, or alone:
+the whole request before it. That boundary exists only if the picture turn's
+leaf extends: its suffix is 89.94% of the full payload on the 27B and 89.40%
+on the 4B, against the worth-it gate's 90% (a KV Scheme's attention weighs at
+full precision, ADR-0083). Past the gate the leaf writes full, deletes the
+boundary, and the request after restores the system checkpoint. It runs last
+in a full e2e, or alone:
 
 ```bash
 TESSERACT_E2E_ONLY=day-thread-pictures scripts/dev.sh prefix-cache-e2e --bench-model-id qwen3.5-4b-paro

@@ -317,7 +317,8 @@ nonisolated extension SnapshotPayload {
     /// estimated suffix payload exceeds this fraction of the full
     /// payload (a model whose layers are mostly non-sliceable, or a
     /// near-root base), the leaf admits full — a "delta" that rivals
-    /// the full write buys chain complexity for nothing.
+    /// the full write buys chain complexity for nothing. A **KV
+    /// Scheme**'s attention weighs at full precision here.
     static let extensionMaxSuffixFraction = 0.9
 
     /// The validated, worth-it extension for `snapshot`, or `nil` when
@@ -326,9 +327,19 @@ nonisolated extension SnapshotPayload {
     /// ``HybridCacheSnapshot/LayerState/Kind``, derived at capture; a
     /// whole-state layer (recurrent, rotating, chunked, or an attention
     /// layer the shape guard kept whole) counts whole.
+    ///
+    /// `storedForm` is the partition's **KV Scheme**. It compresses the
+    /// attention and leaves the whole-state layers as they are, so the
+    /// attention weighs at full precision (`KVScheme.fullPrecisionRatio`)
+    /// and a scheme leaf extends where a full-precision leaf of the same
+    /// turn would. Weighed by its stored bytes, the compressed attention
+    /// left the recurrent state to decide: a short thread's leaf admitted
+    /// full, and the full write deleted the base boundary a later
+    /// divergent request restores from (ADR-0083, amendment 2026-10-28).
     private static func validatedExtension(
         _ extending: SnapshotExtension?,
-        for snapshot: HybridCacheSnapshot
+        for snapshot: HybridCacheSnapshot,
+        storedForm: KVScheme?
     ) -> SnapshotExtension? {
         guard let extending,
             extending.baseOffset > 0,
@@ -340,13 +351,16 @@ nonisolated extension SnapshotPayload {
         let suffixFraction =
             Double(snapshot.tokenOffset - extending.baseOffset)
             / Double(snapshot.tokenOffset)
+        let attentionWeight = storedForm?.fullPrecisionRatio ?? 1
         for layer in snapshot.layers {
             let layerBytes = layer.state.reduce(0) { $0 + $1.nbytes }
-            fullBytes += layerBytes
             switch layer.kind {
             case .sliceableAttention:
-                suffixBytes += Int(Double(layerBytes) * suffixFraction)
+                let weighed = Double(layerBytes) * attentionWeight
+                fullBytes += Int(weighed)
+                suffixBytes += Int(weighed * suffixFraction)
             case .wholeState:
+                fullBytes += layerBytes
                 suffixBytes += layerBytes
             }
         }
@@ -363,15 +377,17 @@ nonisolated extension SnapshotPayload {
     /// the SSD writer's task. Callable from the MainActor too (**Snapshot
     /// Demotion**'s extractor passes no extension, so that path reads
     /// shapes only): the arrays are evaluated deep copies, never live
-    /// model state.
+    /// model state. `storedForm` is the partition's KV Scheme, which the
+    /// extension's worth-it gate weighs.
     static func extract(
         _ snapshot: HybridCacheSnapshot,
-        extending: SnapshotExtension? = nil
+        extending: SnapshotExtension? = nil,
+        storedForm: KVScheme? = nil
     ) -> SnapshotPayload {
-        deferred(for: snapshot, extending: extending).payload
+        deferred(for: snapshot, extending: extending, storedForm: storedForm).payload
     }
 
-    /// `extract(_:extending:)` together with the box of arrays the
+    /// `extract(_:extending:storedForm:)` together with the box of arrays the
     /// payload still owes the SSD writer. What a pending payload retains
     /// is a memory-safety claim (ADR-0064: an extension payload retains
     /// no body array) that only a physical-address comparison can check,
@@ -388,10 +404,12 @@ nonisolated extension SnapshotPayload {
     /// arrays: copying them is what the deferral exists to avoid.
     static func deferred(
         for snapshot: HybridCacheSnapshot,
-        extending: SnapshotExtension? = nil
+        extending: SnapshotExtension? = nil,
+        storedForm: KVScheme? = nil
     ) -> (payload: SnapshotPayload, owed: DeferredLayers) {
         precondition(!snapshot.isPrefixView, "a view payload requires its Backing Leaf")
-        let activeExtension = validatedExtension(extending, for: snapshot)
+        let activeExtension = validatedExtension(
+            extending, for: snapshot, storedForm: storedForm)
         return deferred(
             for: snapshot, layers: snapshot.layers, extending: activeExtension, detaching: false)
     }
