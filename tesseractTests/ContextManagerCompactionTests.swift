@@ -92,16 +92,62 @@ struct ContextManagerCompactionTests {
         #expect((tail.last as? AssistantMessage)?.content == Self.recentAssistant.content)
     }
 
-    /// The update-prompt branch runs once a prior summary exists. It must
-    /// still go through the same injected seam — no other path is allowed.
-    @Test func compactUsesUpdatePromptOnceSummaryExistsStillViaInjectedSummarize() async throws {
+    /// The update-prompt branch runs when the conversation compacted before:
+    /// it starts with its own summary. It must still go through the same
+    /// injected seam — no other path is allowed — and carry that summary
+    /// once, even when another conversation compacted in between.
+    @Test func compactingAConversationAgainUpdatesItsOwnSummary() async throws {
         let manager = ContextManager(settings: .small)
         let recorder = SummarizeRecorder()
         let counter = CallCounter()
         let summarize: @Sendable (String) async throws -> String = { prompt in
             let n = await counter.increment()
             await recorder.record(prompt)
-            return n == 1 ? "initial" : "updated"
+            return n == 2 ? "summary of B" : "summary of A"
+        }
+
+        let conversationA = try await manager.compact(
+            messages: Self.overBudgetMessages(),
+            window: Self.window,
+            summarize: summarize
+        )
+        // Another conversation compacts on the same manager in between.
+        _ = try await manager.compact(
+            messages: Self.turns(4, tokens: 1_000),
+            window: Self.window,
+            summarize: summarize
+        )
+        // A grows by two turns, then compacts again.
+        _ = try await manager.compact(
+            messages: conversationA + Self.turns(2, tokens: 1_000),
+            window: Self.window,
+            summarize: summarize
+        )
+
+        let prompts = await recorder.prompts
+        try #require(prompts.count == 3)
+        #expect(prompts[0].contains("Summarize the following conversation history"))
+        // A's second compaction is the update variant carrying A's summary
+        // once, as the summary to update, and never B's.
+        let update = prompts[2]
+        #expect(update.contains("Update the following summary"))
+        #expect(update.contains("Previous summary:\nsummary of A\n"))
+        #expect(update.components(separatedBy: "summary of A").count - 1 == 1)
+        #expect(!update.contains("summary of B"))
+        #expect(update.contains(Self.recentUser.content))
+    }
+
+    /// A conversation that never compacted gets the first-time prompt after
+    /// another one compacted: one manager compacts every chat conversation
+    /// and the Day Thread, and none of them updates another's summary.
+    @Test func aFreshConversationGetsTheFirstTimePrompt() async throws {
+        let manager = ContextManager(settings: .small)
+        let recorder = SummarizeRecorder()
+        let counter = CallCounter()
+        let summarize: @Sendable (String) async throws -> String = { prompt in
+            let n = await counter.increment()
+            await recorder.record(prompt)
+            return n == 1 ? "summary of A" : "summary of B"
         }
 
         _ = try await manager.compact(
@@ -110,17 +156,16 @@ struct ContextManagerCompactionTests {
             summarize: summarize
         )
         _ = try await manager.compact(
-            messages: Self.overBudgetMessages(),
+            messages: Self.turns(4, tokens: 1_000),
             window: Self.window,
             summarize: summarize
         )
 
         let prompts = await recorder.prompts
-        #expect(prompts.count == 2)
-        #expect(prompts[0].contains("Summarize the following conversation history"))
-        // The second call must be the update variant carrying the first summary.
-        #expect(prompts[1].contains("Update the following summary"))
-        #expect(prompts[1].contains("initial"))
+        try #require(prompts.count == 2)
+        #expect(prompts[1].contains("Summarize the following conversation history"))
+        #expect(!prompts[1].contains("Update the following summary"))
+        #expect(!prompts[1].contains("summary of A"))
     }
 
     /// A summarize failure must not be silently swallowed by compact. The
