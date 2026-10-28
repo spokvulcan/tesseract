@@ -190,10 +190,33 @@ struct AgentGenerateParameters: Sendable, Codable {
         topK: 20
     )
 
+    /// LFM3 and LFM3-VL general profile (chat, tool use, agents), from the
+    /// model cards: temperature 0.1, top_k 50, repetition penalty 1.1, no
+    /// top_p cut. The penalty looks back over the default 20 tokens, as the
+    /// MLX card's `make_logits_processors(repetition_penalty=1.1)` does. The
+    /// cards' math and STEM profile is `SamplingPreset.lfm3MathSTEM`.
+    /// See: https://huggingface.co/LiquidAI/LFM3-1.7B
+    static let lfm3 = AgentGenerateParameters(
+        temperature: 0.1,
+        topP: 1.0,
+        topK: 50,
+        repetitionPenalty: 1.1
+    )
+
+    /// LFM3-Audio's text output: greedy, as its `generation_config.json`
+    /// ships it (temperature 0, top_k 1, no penalty). Speech output has its
+    /// own audio sampling, which the text path never reads.
+    static let lfm3Audio = AgentGenerateParameters(
+        temperature: 0,
+        topP: 1.0
+    )
+
     /// Returns the recommended parameters for a given model ID.
     static func forModel(_ modelID: String) -> AgentGenerateParameters {
         if modelID.contains("opus-distill") { return .qwen3OpusDistill }
         if modelID.contains("thinking") { return .qwen3Thinking }
+        if modelID.hasPrefix("lfm3-audio") { return .lfm3Audio }
+        if modelID.hasPrefix("lfm3") { return .lfm3 }
         if modelID.hasPrefix("nanbeige") { return .nanbeige42 }
         if modelID.hasPrefix("ornith-9b") { return .ornith9b }
         if modelID.hasPrefix("ornith-35b") { return .ornith35b }

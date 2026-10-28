@@ -436,6 +436,49 @@ struct ModelIdentityTests {
         #expect(ModelIdentity(configJSON: nil, chatTemplate: nil).imageKeying == nil)
     }
 
+    // MARK: - Image input
+
+    /// LFM3-VL takes images without image keying: its image requests are
+    /// served unkeyed. The Qwen3.5 vision variant takes them with keying.
+    @Test func imageInputCoversLFM3VLWithoutKeying() {
+        let lfm3VL = ModelIdentity(
+            configJSON: [
+                "model_type": "lfm3_vl",
+                "image_token_id": 125_030,
+                "vision_config": ["spatial_merge_size": 2],
+            ],
+            chatTemplate: nil
+        )
+        #expect(lfm3VL.declaresImageInput)
+        #expect(lfm3VL.imageKeying == nil)
+
+        let qwenVL = ModelIdentity(
+            configJSON: ["model_type": "qwen3_5", "vision_config": [String: Any]()],
+            chatTemplate: nil
+        )
+        #expect(qwenVL.declaresImageInput)
+        #expect(qwenVL.imageKeying != nil)
+    }
+
+    /// LFM3 and LFM3-Audio ship an empty `vision_config`; text checkpoints
+    /// and unlisted vision families declare no image input.
+    @Test func imageInputIsAFamilyFactNotAnyVisionConfig() {
+        for modelType in ["lfm3", "lfm3_audio", "llava"] {
+            let identity = ModelIdentity(
+                configJSON: ["model_type": modelType, "vision_config": [String: Any]()],
+                chatTemplate: nil
+            )
+            #expect(!identity.declaresImageInput, "\(modelType)")
+        }
+        #expect(
+            !ModelIdentity(configJSON: ["model_type": "lfm3_vl"], chatTemplate: nil)
+                .declaresImageInput)
+        #expect(
+            !ModelIdentity(configJSON: ["model_type": "qwen3_5"], chatTemplate: nil)
+                .declaresImageInput)
+        #expect(!ModelIdentity(configJSON: nil, chatTemplate: nil).declaresImageInput)
+    }
+
     // MARK: - Fixtures
 
     /// Write `config.json` (when non-nil) into a fresh temp directory.

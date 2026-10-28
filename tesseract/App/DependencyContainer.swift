@@ -998,8 +998,8 @@ final class DependencyContainer: ObservableObject {
                             id: definition.id,
                             type: "llm",
                             owned_by: "tesseract",
-                            max_context_length: 262_144,
-                            loaded_context_length: isLoaded ? 262_144 : nil,
+                            max_context_length: definition.contextLength,
+                            loaded_context_length: isLoaded ? definition.contextLength : nil,
                             state: isLoaded ? "loaded" : "available"
                         )
                     }

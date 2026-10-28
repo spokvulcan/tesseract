@@ -69,7 +69,9 @@ that supports it (Qwen3.8-27B). It is a request fact and part of cache partition
 identity (ADR-0083): the prompt prefills unquantized, the cache converts once
 where the request's **Decode Handover** says (the **Decode Start**'s rule;
 inside the iterator when the iterator runs the prefill), and the turn's leaf
-stores compressed layers that only a request of the same scheme restores.
+stores compressed layers that only a request of the same scheme restores. A
+**Leaf Extension Admission**'s worth-it gate weighs those layers at full
+precision, so a scheme keeps the turn boundaries full precision keeps.
 _Avoid_: kvBits (the unrelated affine quantization the product never sets), KV
 quantization (ambiguous between the two).
 
@@ -174,7 +176,11 @@ Manager** as its single read-side entry, never a free-standing module reaching
 back across the manager's mutation seam. A keyed turn's resolution returns its
 checkpoint plan too, made in its own hop against the settled tree and aligned
 to the hit, so no caller plans before resolution or without its alignment
-(`PlannedResolution`, ADR-0087 decision 6). The lookup-then-hydrate *choosing* — the Hydration Gate outcome, the
+(`PlannedResolution`, ADR-0087 decision 6). Its hit stops short of the whole
+prompt, whose last token the turn prefills to decode: on a repeat of a prompt
+whose leaf covers all of it (LFM3's generation prompt ends in the `<think>` the
+next turn's render continues), the turn restores the deepest snapshot before
+the leaf instead of prefilling cold. The lookup-then-hydrate *choosing* — the Hydration Gate outcome, the
 promote-on-success vs typed-cleanup-on-failure fork, the gate-fallback shapes —
 now lives in a pure decision ladder (`SnapshotResolutionLadder`) the manager
 consults; ownership is unmoved, the manager still performs every effect (the
@@ -481,10 +487,13 @@ in-actor `nil` return (a retired pattern), degraded mode (unqualified).
 ### Vision capability and mode
 
 **Vision-Capable Model**:
-A model whose on-disk config declares image input (the Qwen3.5-family
-`vision_config`); text-only checkpoints do not. Fixed for a downloaded model —
-distinct from **Vision Mode**, which is whether that capability is currently
-loaded. Every **PARO Checkpoint** in the catalog declares image input.
+A model whose on-disk config declares image input in a family the app serves
+images for: the Qwen3.5 family or LFM3-VL, with a `vision_config`. Text-only
+checkpoints do not, an empty `vision_config` included (LFM3, LFM3-Audio). Fixed
+for a downloaded model — distinct from **Vision Mode**, which is whether that
+capability is currently loaded. Every **PARO Checkpoint** in the catalog
+declares image input. LFM3-VL has no image keying, so its image-bearing
+requests are **Unkeyed Completions**.
 _Avoid_: "vision model" (ambiguous with the loaded container), "multimodal" (there
 is no audio/video input path), "supports images" as a per-request flag, Text-Only
 Override (retired by ADR-0089: no catalog entry withholds the image input its

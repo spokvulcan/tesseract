@@ -55,16 +55,20 @@ struct IntegrationSnapshotBuilderTests {
         #expect(snapshot.models.first { $0.id == "text-model" }?.visionCapable == false)
     }
 
-    @Test func contextLengthMirrorsTheModelsEndpoint() throws {
+    /// Each model advertises its catalog entry's context length, as
+    /// `/v1/models` does: a client never plans past a 32K model's window.
+    @Test func contextLengthIsTheCatalogEntrys() throws {
         let snapshot = IntegrationSnapshotBuilder.build(
-            definitions: [agentDefinition(id: "a")],
-            statuses: ["a": .downloaded(sizeOnDisk: 1)],
+            definitions: [
+                agentDefinition(id: "a"), agentDefinition(id: "short", contextLength: 32_768),
+            ],
+            statuses: ["a": .downloaded(sizeOnDisk: 1), "short": .downloaded(sizeOnDisk: 1)],
             selectedAgentModelID: "a",
             port: 8321,
             isVisionCapable: { _ in false }
         )
 
-        #expect(snapshot.models.first?.contextLength == 262_144)
+        #expect(snapshot.models.map(\.contextLength) == [262_144, 32_768])
     }
 
     // MARK: - Default model
@@ -111,7 +115,9 @@ struct IntegrationSnapshotBuilderTests {
 
     // MARK: - Fixtures
 
-    private func agentDefinition(id: String) -> ModelDefinition {
+    private func agentDefinition(
+        id: String, contextLength: Int = ModelDefinition.defaultContextLength
+    ) -> ModelDefinition {
         ModelDefinition(
             id: id,
             displayName: "Display \(id)",
@@ -119,7 +125,8 @@ struct IntegrationSnapshotBuilderTests {
             category: .agent,
             source: .huggingFace(repo: "fixture/\(id)", requiredExtension: "safetensors"),
             sizeDescription: "",
-            dependencies: []
+            dependencies: [],
+            contextLength: contextLength
         )
     }
 

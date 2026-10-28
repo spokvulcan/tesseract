@@ -266,6 +266,42 @@ import MLXLMCommon
         await handOver.withClaim { _ in }
     }
 
+    /// A keyed turn must prefill its prompt's last token to decode, so a leaf
+    /// covering the whole prompt cannot seed it. LFM3 stores one on every
+    /// turn: its generation prompt ends in the `<think>` the next turn's
+    /// render continues. A repeat of the same prompt restores the deepest
+    /// snapshot short of it instead of prefilling cold; the shared prefix is
+    /// still measured over the whole prompt, and a plain lookup still finds
+    /// the leaf.
+    @Test func aKeyedResolutionStopsShortOfAWholePromptLeaf() async throws {
+        let manager = makeManager()
+        let request = Array(1...300)
+        manager.admit(
+            SnapshotAdmission.checkpoints(
+                fullPromptTokens: request,
+                candidates: [.ramOnly(makeSnapshot(offset: 100, type: .system))],
+                partitionKey: key)!)
+        manager.admit(
+            SnapshotAdmission.leaf(
+                storedTokens: request, snapshot: makeSnapshot(offset: 300),
+                storage: .ramOnly, partitionKey: key)!)
+        let context = diagnostics
+        let (planned, handOver) = await CacheClaim.withRequestClaim(
+            context: context, prefixCache: manager,
+            sessions: ToyModelSessionProvider(model: ToyLanguageModel(script: [1, 2])),
+            memory: nil, tripwire: .standard
+        ) { claim in
+            await manager.resolve(
+                tokens: request, promptTokenCount: request.count, partitionKey: key,
+                modelFingerprint: nil, diagnostics: context, planningFrom: 100, for: claim)
+        }
+        #expect(planned.resolved.lookup.snapshotTokenOffset == 100)
+        #expect(planned.resolved.lookup.sharedPrefixLength == request.count)
+        await handOver.withClaim { _ in }
+
+        #expect(manager.lookup(tokens: request, partitionKey: key).snapshotTokenOffset == 300)
+    }
+
     // MARK: - Without hydration (passthrough)
 
     @Test func resolveSurfacesAMissWithoutHydrationWhenNothingIsCached() async {

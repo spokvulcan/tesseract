@@ -58,8 +58,8 @@ struct GenerationPromptCatalogRealTests {
     enum Family {
         /// Qwen3.5-0.8B: a closed empty block unless thinking is asked for.
         case thinksWhenAsked
-        /// Qwen3.5, Qwen3.8 and Bonsai 2 (the Qwen3.8 template): an open
-        /// block, a closed empty one with thinking off.
+        /// Qwen3.5, Qwen3.8, Bonsai 2 (the Qwen3.8 template), LFM3 and
+        /// LFM3-VL: an open block, a closed empty one with thinking off.
         case thinksByDefault
         case measuresOnly
     }
@@ -67,7 +67,9 @@ struct GenerationPromptCatalogRealTests {
     @MainActor
     static func family(of id: String) -> Family {
         if id == ModelDefinition.defaultProofreadModelID { return .thinksWhenAsked }
-        if ["qwen3.5-", "qwen3.8-", "bonsai-2-"].contains(where: id.hasPrefix) {
+        if ["qwen3.5-", "qwen3.8-", "bonsai-2-", "lfm3-1.7b", "lfm3-vl-"].contains(
+            where: id.hasPrefix)
+        {
             return .thinksByDefault
         }
         return .measuresOnly
