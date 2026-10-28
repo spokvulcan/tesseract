@@ -148,7 +148,9 @@ final class ChatSession {
     private let settings: SettingsManager?
     private let speechCoordinator: SpeechCoordinator?
     private let contextManager: ContextManager?
-    private let contextWindow: Int
+    /// The room `/compact` compacts in, read when it runs: the selected
+    /// model's window, with the thread's ceiling in the Day Thread's chat.
+    private let compactionWindow: @MainActor () -> CompactionWindow
     private let summarize: (@Sendable (String) async throws -> String)?
     /// The slash-command registry, provided by the view-owned Command Palette
     /// leaf so parsing here can never drift from the popup's listing.
@@ -188,7 +190,9 @@ final class ChatSession {
         settings: SettingsManager? = nil,
         speechCoordinator: SpeechCoordinator? = nil,
         contextManager: ContextManager? = nil,
-        contextWindow: Int = 262_144,
+        compactionWindow: @MainActor @escaping () -> CompactionWindow = {
+            CompactionWindow(contextLength: ModelDefinition.defaultContextLength)
+        },
         summarize: (@Sendable (String) async throws -> String)? = nil,
         commandRegistry: @MainActor @escaping () -> SlashCommandRegistry = {
             SlashCommandRegistry()
@@ -207,7 +211,7 @@ final class ChatSession {
         self.settings = settings
         self.speechCoordinator = speechCoordinator
         self.contextManager = contextManager
-        self.contextWindow = contextWindow
+        self.compactionWindow = compactionWindow
         self.summarize = summarize
         self.commandRegistry = commandRegistry
         self.skillExecution = skillExecution
@@ -721,11 +725,10 @@ final class ChatSession {
             return
         }
 
-        let contextWindow = self.contextWindow
-        agentRun.runUnderGate { [agent] in
+        agentRun.runUnderGate { [agent, compactionWindow] in
             await agent.forceCompact(
                 contextManager: contextManager,
-                contextWindow: contextWindow,
+                window: compactionWindow(),
                 summarize: summarize
             )
         }

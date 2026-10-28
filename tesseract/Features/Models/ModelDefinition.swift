@@ -72,8 +72,8 @@ struct ModelDefinition: Identifiable, Sendable {
     /// When the entry's directory counts as downloaded.
     var completeness: ModelCompleteness = .anyRequiredFile
     /// The prompt plus output tokens the model's card supports, which
-    /// `/v1/models` and the client integrations advertise. Compaction does
-    /// not read it yet: it keeps the 262,144 every Qwen entry has.
+    /// `/v1/models` and the client integrations advertise, and the window the
+    /// agent's compaction works in while the model is selected.
     var contextLength = ModelDefinition.defaultContextLength
 
     /// 262,144: every Qwen, Nanbeige and Ornith checkpoint's native window.
@@ -499,6 +499,12 @@ extension ModelDefinition {
     /// catalog doesn't list it.
     static func displayName(of id: String) -> String {
         withID(id)?.displayName ?? id
+    }
+
+    /// A model's context window: its catalog entry's, or the default when
+    /// the catalog doesn't list it.
+    static func contextLength(of id: String) -> Int {
+        withID(id)?.contextLength ?? defaultContextLength
     }
 
     static func withID(_ id: String) -> ModelDefinition? {

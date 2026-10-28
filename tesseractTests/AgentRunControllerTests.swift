@@ -223,7 +223,8 @@ struct AgentRunControllerTests {
 
         run.runUnderGate { [agent] in
             await agent.forceCompact(
-                contextManager: contextManager, contextWindow: 5_000, summarize: summarize)
+                contextManager: contextManager, window: CompactionWindow(contextLength: 5_000),
+                summarize: summarize)
         }
 
         #expect(run.isGenerating == true)  // eager, synchronous
@@ -259,7 +260,8 @@ struct AgentRunControllerTests {
 
         run.runUnderGate { [agent] in
             await agent.forceCompact(
-                contextManager: contextManager, contextWindow: 5_000, summarize: summarize)
+                contextManager: contextManager, window: CompactionWindow(contextLength: 5_000),
+                summarize: summarize)
         }
 
         // The completion-based clear: `/compact` owns its busy-flag lifecycle by

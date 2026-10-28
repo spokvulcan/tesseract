@@ -16,6 +16,8 @@ nonisolated struct CompactionSettings: Sendable {
     /// recent verbatim. Reserve is sized for the common interactive output
     /// length; raise it toward 81,920 if long-form generations from the agent
     /// chat (not the HTTP server) start getting truncated by compaction.
+    /// A window under 56,384 tokens fits it in proportion: LFM3-Audio's 32,768
+    /// compacts past 23,247 tokens and keeps 11,623.
     static let standard = CompactionSettings(
         enabled: true,
         reserveTokens: 16_384,
@@ -29,6 +31,47 @@ nonisolated struct CompactionSettings: Sendable {
         reserveTokens: 2_048,
         keepRecentTokens: 1_024
     )
+
+    /// The smallest window these thresholds fit as set: the reserve plus twice
+    /// the recent tail, so a conversation that compacted grows by a tail's
+    /// worth before it compacts again. A smaller window scales the reserve
+    /// and the tail down in proportion.
+    var smallestWindow: Int { reserveTokens + 2 * keepRecentTokens }
+
+    /// The reserve in a window of `contextLength` tokens: as set, or scaled
+    /// down in proportion in a window under `smallestWindow`.
+    func reserveTokens(in contextLength: Int) -> Int {
+        guard contextLength < smallestWindow else { return reserveTokens }
+        return reserveTokens * contextLength / smallestWindow
+    }
+
+    /// The estimated tokens past which a conversation compacts in `window`:
+    /// the window less its reserve, or the ceiling when that comes first.
+    func compactionPoint(in window: CompactionWindow) -> Int {
+        let point = window.contextLength - reserveTokens(in: window.contextLength)
+        return min(point, window.ceiling ?? point)
+    }
+
+    /// The newest tokens a compaction in `window` keeps verbatim: as set, but
+    /// never more than half the compaction point, so the next compaction is
+    /// at least a tail's growth away.
+    func keepRecentTokens(in window: CompactionWindow) -> Int {
+        min(keepRecentTokens, compactionPoint(in: window) / 2)
+    }
+}
+
+// MARK: - CompactionWindow
+
+/// The room one conversation compacts in: the selected model's context window
+/// and, for the Day Thread, its ceiling. Callers read it at every check, so a
+/// model picked between turns compacts in its own window.
+nonisolated struct CompactionWindow: Sendable, Equatable {
+    /// The model's context window in tokens: its catalog entry's
+    /// `contextLength`.
+    var contextLength: Int
+    /// The estimated tokens past which the conversation compacts even with
+    /// room left in the window (the Day Thread's ceiling), or nil.
+    var ceiling: Int?
 }
 
 // MARK: - ContextManager
@@ -48,10 +91,11 @@ actor ContextManager {
 
     // MARK: - Should Compact
 
-    /// Returns true when estimated context tokens exceed the usable budget.
-    func shouldCompact(contextTokens: Int, contextWindow: Int) -> Bool {
+    /// Returns true when estimated context tokens pass the compaction point
+    /// in `window`.
+    func shouldCompact(contextTokens: Int, window: CompactionWindow) -> Bool {
         guard settings.enabled else { return false }
-        return contextTokens > contextWindow - settings.reserveTokens
+        return contextTokens > settings.compactionPoint(in: window)
     }
 
     // MARK: - Compact
@@ -61,18 +105,20 @@ actor ContextManager {
     ///
     /// - Parameters:
     ///   - messages: Current conversation messages.
-    ///   - contextWindow: Total context window size in tokens.
+    ///   - window: The room the conversation compacts in, which sets how
+    ///     much of its tail stays verbatim.
     ///   - summarize: Async closure that sends a prompt to the LLM and returns the summary text.
     /// - Returns: Compacted message array.
     func compact(
         messages: [any AgentMessageProtocol],
-        contextWindow: Int,
+        window: CompactionWindow,
         summarize: (String) async throws -> String
     ) async throws -> [any AgentMessageProtocol] {
         guard messages.count > 1 else { return messages }
 
         // 1. Find the cut point
-        let cutIndex = findCutPoint(messages: messages)
+        let cutIndex = findCutPoint(
+            messages: messages, keepRecentTokens: settings.keepRecentTokens(in: window))
         guard cutIndex > 0 else { return messages }
 
         let oldMessages = Array(messages[..<cutIndex])
@@ -111,14 +157,14 @@ actor ContextManager {
     /// Walking backward ensures we keep *at least* `keepRecentTokens` worth of
     /// recent messages — the cut may include more than the minimum if needed to
     /// avoid splitting a tool-call/tool-result pair.
-    private func findCutPoint(messages: [any AgentMessageProtocol]) -> Int {
+    private func findCutPoint(messages: [any AgentMessageProtocol], keepRecentTokens: Int) -> Int {
         var accumulated = 0
         var candidateIndex = messages.count
 
         // Walk backward, accumulating tokens
         for i in stride(from: messages.count - 1, through: 0, by: -1) {
             accumulated += TokenEstimator.estimate(messages[i])
-            if accumulated >= settings.keepRecentTokens {
+            if accumulated >= keepRecentTokens {
                 candidateIndex = i
                 break
             }
@@ -238,23 +284,25 @@ actor ContextManager {
 
 /// Creates a `ContextTransformConfig` that plugs the compaction system into the
 /// agent loop. The returned closure checks whether compaction should run and
-/// executes it when needed.
+/// executes it when needed. It reads `window` at every check, so a model
+/// picked between turns compacts in its own window.
 ///
 /// The `summarize` closure is injected so callers can route compaction through
 /// the shared inference path without coupling compaction to a concrete engine.
 nonisolated func makeCompactionTransform(
     contextManager: ContextManager,
-    contextWindow: Int,
+    window: @escaping @Sendable () async -> CompactionWindow,
     summarize: @escaping @Sendable (String) async throws -> String
 ) -> ContextTransformConfig {
     ContextTransformConfig(
         reason: .compaction,
         transform: { messages, _ in
             let tokens = TokenEstimator.estimateTotal(messages)
+            let current = await window()
             guard
                 await contextManager.shouldCompact(
                     contextTokens: tokens,
-                    contextWindow: contextWindow
+                    window: current
                 )
             else {
                 return ContextTransformResult(
@@ -264,7 +312,7 @@ nonisolated func makeCompactionTransform(
             do {
                 let compacted = try await contextManager.compact(
                     messages: messages,
-                    contextWindow: contextWindow,
+                    window: current,
                     summarize: summarize
                 )
                 return ContextTransformResult(

@@ -20,6 +20,10 @@ enum AgentFactory {
     ///
     /// `convertToLlm` is how the conversation reads to the model; the Day
     /// Thread's keeps only the latest turn's pictures (ADR-0090).
+    ///
+    /// `compactionWindow` is the room the conversation compacts in, read at
+    /// every check: the chat's is the selected model's window, the Day
+    /// Thread's adds its ceiling.
     @MainActor
     static func makeAgent(
         inferenceService: ServerInferenceService,
@@ -30,7 +34,7 @@ enum AgentFactory {
         settingsManager: SettingsManager,
         gating: ToolGating,
         mcpToolsExtension: MCPToolsExtension? = nil,
-        compactionWindow: Int = 262_144,
+        compactionWindow: @escaping @MainActor @Sendable () -> CompactionWindow,
         convertToLlm: @escaping @Sendable ([any AgentMessageProtocol]) -> [LLMMessage] =
             defaultConvertToLlm
     ) -> Agent {
@@ -80,9 +84,10 @@ enum AgentFactory {
             agentRoot: agentRoot.path
         )
 
-        // 7. Build compaction transform. The provider live-reads settings so a
+        // 7. Build compaction transform. The providers live-read settings so a
         // runtime change to the selected model takes effect on the very next
-        // inference call without rebuilding the agent.
+        // inference call without rebuilding the agent: its parameters, and the
+        // window compaction checks against.
         let parametersProvider: @MainActor @Sendable () -> AgentGenerateParameters = {
             [settingsManager] in
             settingsManager.makeAgentGenerateParameters()
@@ -90,7 +95,7 @@ enum AgentFactory {
 
         let compactionTransform = makeCompactionTransform(
             contextManager: contextManager,
-            contextWindow: compactionWindow,
+            window: { await compactionWindow() },
             summarize: makeSummarizeClosure(
                 inferenceService: inferenceService,
                 parametersProvider: parametersProvider
