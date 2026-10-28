@@ -104,9 +104,19 @@ How the carry moved:
   types, and the Hadamard `sanitize` overrides throw as their bases now do.
 - Everything else cherry-picked clean and re-hashed.
 
-Not measured: #710's per-chunk `Memory.clearCache()` on prefill speed. The
-fork reserves the prompt's KV rows up front (`a733d2b`), so prefill frees
-no outgrown cache buffers, only the chunk's scratch.
+#710's per-chunk `Memory.clearCache()` runs only where prefill goes through
+`LLMModel.prepare`: the Raw Generation Start without a Speculation Plan, and
+the unkeyed completion. The app's own chunked driver (`PrefillExecutor`)
+bypasses it, and the DFlash2 iterator has its own loop, which already clears
+between chunks. The fork reserves the prompt's KV rows up front (`a733d2b`),
+so the clear frees only each chunk's scratch. An A/B on loaded Qwen3.8-27B
+(MLX 4-bit) at 8,192 tokens in 1,024-token chunks, toggled in process by a
+temporary switch, ABBA over four rounds with a bf16 SDPA reference: clear
+38.58 s median (n = 8), keep 39.07 s. The per-round paired difference ran from
++2.4% to −5.6% and averaged zero, while the reference drifted from 9.5 to
+13.7 ms, so no effect shows above a few percent. Peak active memory is the
+same (17.03 GB); the buffer pool after prefill holds 0.30–0.55 GB with the
+clear and 0.55 GB without. Upstream's clear stays.
 
 Validation at `3294d2b`: serialized `MLXLMTests` ran XCTest 874 (12
 skipped) and Swift Testing 1,245 tests in 108 suites; the app builds in
