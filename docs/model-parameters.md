@@ -4,7 +4,8 @@ The numbers we keep looking up: context windows, recommended output
 lengths, sampling presets, thinking defaults, and what each checkpoint
 ships. One row per catalog entry (`tesseract/Features/Models/ModelDefinition.swift`),
 sourced from the official model cards and the checkpoint `config.json` /
-`generation_config.json` on disk. Last verified **2026-09-17**.
+`generation_config.json` on disk. Last verified **2026-09-17**; the LFM3 rows
+**2026-10-28**.
 
 Two columns matter when they disagree:
 
@@ -29,11 +30,31 @@ Two columns matter when they disagree:
 | `nanbeige4.2-3b-8bit` | [Nanbeige/Nanbeige4.2-3B](https://huggingface.co/Nanbeige/Nanbeige4.2-3B) | 4B total / 3B non-embedding, looped (22 layers × 2) | `nanbeige` | 22 | affine 8-bit, group 64 | on | 65,536 agentic / 131,072 reasoning+chat | `nanbeige42` |
 | `ornith-9b` | [deepreinforce-ai/Ornith-1.0-9B](https://huggingface.co/deepreinforce-ai/Ornith-1.0-9B) | 9B dense (Qwen3.5 post-train) | `qwen3_5` | 32 | affine 6-bit, group 64 | on | card gives none (examples use 512) | `ornith9b` |
 | `ornith-35b` | [deepreinforce-ai/Ornith-1.0-35B](https://huggingface.co/deepreinforce-ai/Ornith-1.0-35B) | 35B MoE (Qwen3.5-A3B post-train) | `qwen3_5_moe` | 40 | affine 4-bit, group 64 | on | card gives none (examples use 512 / 2,048 tool calls) | `ornith35b` |
+| `lfm3-1.7b` | [LiquidAI/LFM3-1.7B](https://huggingface.co/LiquidAI/LFM3-1.7B) | 1.73B dense hybrid | `lfm3` | 24: 13 short conv, 5 sliding-window, 6 global attention | affine 4-bit, group 64 | on | card gives none (examples use 2,048; MLX card 16,384) | `lfm3` |
+| `lfm3-vl-2b` | [LiquidAI/LFM3-VL-2B](https://huggingface.co/LiquidAI/LFM3-VL-2B) | 1.92B: 1.73B LFM3 + 164M vision encoder + 25M projector | `lfm3_vl` | 24 (as LFM3) | affine 4-bit, group 32, embeddings 8-bit, quantization-aware distilled | on | card gives none (examples use 16,384) | `lfm3` |
+| `lfm3-audio-2b-8bit` | [LiquidAI/LFM3-Audio-2B](https://huggingface.co/LiquidAI/LFM3-Audio-2B) | 2B: LFM3 backbone, audio encoder, depth decoder, codec | `lfm3_audio` | 24 (as LFM3) | affine 8-bit, group 64; audio parts bf16 | none in the template | ASR 1,024 (MLX card 2,048) | `lfm3Audio` |
+| `lfm3-audio-2b` | [LiquidAI/LFM3-Audio-2B](https://huggingface.co/LiquidAI/LFM3-Audio-2B) | as above | `lfm3_audio` | 24 (as LFM3) | affine 4-bit, group 64; embedding and the Q4_K_M-upgraded v / down projections 6-bit; audio parts bf16 | none in the template | ASR 1,024 (MLX card 2,048) | `lfm3Audio` |
 
-**Context window: 262,144 tokens natively for every model above** (checkpoint
-`max_position_embeddings`, no `rope_scaling`). The Qwen cards describe YaRN
-extension to about 1,000,000 tokens; the app does not enable it and
-`ChatSession` / `AgentFactory` pin `contextWindow` at 262,144.
+**Context window: 262,144 tokens natively for every Qwen, Nanbeige and Ornith
+model above** (checkpoint `max_position_embeddings`, no `rope_scaling`). The
+Qwen cards describe YaRN extension to about 1,000,000 tokens; the app does not
+enable it and `ChatSession` / `AgentFactory` pin `contextWindow` at 262,144.
+
+The LFM3 family differs (cards, "input + output"):
+
+| Catalog id | Card | `max_position_embeddings` |
+| --- | --- | --- |
+| `lfm3-1.7b` | 256K | 262,144 |
+| `lfm3-vl-2b` | 128K | 128,000 (`text_config`) |
+| `lfm3-audio-2b(-8bit)` | **32K** | 128,000 (`lfm`, the backbone) |
+
+Each catalog entry carries its card's length (`ModelDefinition.contextLength`:
+262,144, 128,000 for LFM3-VL, 32,768 for LFM3-Audio), which `/v1/models`
+reports as `max_context_length` and the client integrations write as the
+model's limit. The compaction window is still the pinned 262,144 for every
+model, so an LFM3-VL or LFM3-Audio conversation is not compacted before it
+passes its own limit. Making the window follow the selected model (and the Day
+Thread's ceiling with it) is open work.
 
 ## Sampling, per family
 
@@ -166,6 +187,61 @@ between families and modes, so it gets its own column.
 - The cards give no output-length recommendation; their examples use 512
   (basic) and 2,048 (tool calls). The 35B checkpoint has `vision_config`;
   the 9B does not.
+
+### LFM3 (1.7B, VL-2B, Audio-2B)
+
+| Mode | temperature | top_p | top_k | min_p | repetition_penalty |
+| --- | --- | --- | --- | --- | --- |
+| General: chat, tool use, agents, coding (1.7B card) | 0.1 | — | 50 | — | 1.1 |
+| Math & STEM (1.7B card) | 1.0 | 0.95 | 20 | — | — |
+| VL-2B card | 0.1 | 1.0 | 50 | 0.0 | 1.1 |
+| Audio-2B text (`generation_config.json`) | 0 (greedy) | — | 1 | — | 1.0 |
+| **App `lfm3`** (1.7B, VL-2B) | 0.1 | 1.0 | 50 | 0.0 | 1.1, last 20 tokens |
+| **App `lfm3MathSTEM`** sampling preset | 1.0 | 0.95 | 20 | 0.0 | none |
+| **App `lfm3Audio`** (both Audio packs) | 0 (greedy) | 1.0 | — | 0.0 | none |
+
+- The penalty looks back over the last 20 tokens, mlx-lm's default window,
+  which the MLX card's `make_logits_processors(repetition_penalty=1.1)` uses;
+  transformers applies it over the whole sequence.
+- LFM3 and LFM3-VL think by default: the generation prompt opens `<think>`,
+  and `enable_thinking: false` renders a closed empty block. Turns before the
+  last user message lose their reasoning unless `preserve_thinking` (default
+  off). The templates set both flags with Jinja's `default` filter, which
+  Model Identity reads as the template default. The Audio template has only
+  `preserve_thinking` and opens no think block; its card prefills `<think>`
+  (reason) or `<think></think>` (answer directly) for text replies, which the
+  app does not.
+- Tool calls are XML (`<tool_call><function=…><parameter=…>`), a superset of
+  `qwen3_coder`; the vendor declares `.xmlFunction`. Deferred tools
+  (`defer_loading`) are a template feature the app doesn't use.
+- LFM3-VL takes images at native resolution in 32-pixel steps; the vendor's
+  processor caps an image at 1,280 language tokens (the checkpoint allows
+  16,384). Video is not wired. It is a Vision-Capable Model without Image
+  Keying: a request with an image is an Unkeyed Completion (the whole prompt
+  prefilled, no prefix-cache lookup or admission), a text request uses the
+  prefix cache as usual.
+- LFM3-Audio is served as a text chat model; the voice pipeline does not use
+  it ([research](research/2026-10-28-lfm3-audio-voice-pipeline.md)). As an
+  agent it is the weakest of the three: in scratch-launch chats (2026-10-28,
+  both packs, the 8-bit one downloaded through the Models page) it answered
+  after valid tool calls, but its first call named a skill as a tool and
+  ended at `<|text_end|>`, an end-of-sequence token in its
+  `generation_config.json`, before `</tool_call>`, so the parser dropped it.
+  Its speech output samples with `audio_temperature` 1.0, `audio_top_k`
+  128 and `audio_repetition_penalty` 1.1 over 4,096 frames, at 24 kHz in
+  80 ms codec frames. The MLX cards recommend the 8-bit pack; the 4-bit one
+  loses some accuracy.
+- Cache layout: a `MambaCache` per short convolution (its offset stays 0), a
+  `RotatingKVCache` of 256 tokens per sliding-window layer, a `KVCacheSimple`
+  per global layer: 12 KB per token in bf16 (6 layers × 4 KV heads × 128 dims
+  × keys and values × 2 bytes). A snapshot carries the rings whole, and a leaf
+  holding a ring is never checked out by move (`.rotating`), so warm turns
+  restore by copy. The correctness harness's restores are bitwise on all three
+  (2026-10-28); its trim-drift check is logged, not gated, for a model with a
+  ring, which keeps trimmed tokens. No MTP head, no DFlash2 draft, no KV
+  Scheme.
+- Measured in the fork (Release, M3 Max, 4-bit): text decode about 228 tok/s,
+  prefill about 3,640 tok/s; speech about 104 frames/s, 8× real time.
 
 ## Speculative decoding
 

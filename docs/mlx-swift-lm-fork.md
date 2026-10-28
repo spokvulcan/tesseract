@@ -40,9 +40,12 @@ it with the whole stack the app pinned: the 2026-10-03 carries and everything
 since on `perf/goal-2026-10-08`. The outgoing tips are tagged
 `pin-tip/2026-10-27-01ccea2` (the branch) and `pin-tip/2026-10-27-a5ce452`
 (the app's gitlink, on `perf/goal-2026-10-08`). The app pinned the new tip,
-`aeb4da1`, and now pins `5b088d9`, two commits past it on branch
+`aeb4da1`, then `5b088d9`, two commits past it on branch
 `fix/vendor-test-runner-gpu` (fast-forward; `pin-upstream-mlx-swift`
-unchanged): the fixes for the two tests CI's runner failed (below).
+unchanged): the fixes for the two tests CI's runner failed (below). It now
+pins `c2613f7`, three commits past that (fast-forward again): LFM3, LFM3-VL
+and LFM3-Audio on branch `feat/lfm3-on-5b088d9`, and their DocC fixes, which
+ride `feat/lfm3-vl-video` under its video commit (below).
 
 What upstream brought: **our #625 merged** verbatim; #632 closed in favor of
 component-aware checkpoint loading (#679, #580: on-demand components, a
@@ -177,6 +180,9 @@ Carried on top of `3d066d3`, in order (old hash in brackets; the
 | `aeb4da1` (new) | Gemma 4 softcap bit-identity tests skipped | Permanent local until mlx-swift 0.32 |
 | `299ff2e` (new) | Tree attention routed by MLX's GPU class | Not filed; depends on #607 |
 | `5b088d9` (new) | Fused RMSNorm squares the stored residual sum | Follow-up to #607 |
+| `edba223` (new) | LFM3, LFM3-VL and LFM3-Audio | Not filed |
+| `07628d3` (new) | Text-only LFM3-VL and LFM3-Audio prompts decode | Not filed |
+| `c2613f7` (new) | LFM3 DocC links and parameter | Not filed |
 
 ### CI's runner GPU and the two DFlash2 tests (2026-10-28)
 
@@ -208,6 +214,38 @@ Both tests caught code that was wrong there, so both are fixed, not gated:
 
 Validation at `5b088d9`: serialized `MLXLMTests` on the M3 Max ran XCTest
 874 (14 skipped) and Swift Testing 1,245 tests in 108 suites, all passing.
+
+### LFM3, LFM3-VL and LFM3-Audio (2026-10-28)
+
+Branch `feat/lfm3-on-5b088d9`, two commits on `5b088d9` (fast-forward). They
+were written on `aeb4da1` as `08c1d2e` and `c27b315` and cherry-picked
+unchanged; they share no files with `299ff2e` and `5b088d9`. The pin is one
+commit further, `c2613f7`, on branch `feat/lfm3-vl-video` (the LFM3-VL video
+work, whose `595b243` sits on top).
+
+- `edba223` `feat(lfm3): add LFM3, LFM3-VL and LFM3-Audio`. LFM3-1.7B
+  (`lfm3`: gated short convolutions, sliding-window and global attention),
+  LFM3-VL-2B (`lfm3_vl`: images, prefix-cache splits as for Qwen-VL, no video
+  yet) and LFM3-Audio-2B (`lfm3_audio`: speech input, text output through the
+  standard generation path, speech output through `LFM3AudioGenerator` and
+  `LFM3AudioCodec`). In float32 the three match mlx-vlm 230fc30 on LiquidAI's
+  4-bit checkpoints to 1e-4, with identical greedy text and speech codes;
+  `tools/generate_lfm3_fixtures.py` makes the opt-in checkpoint tests'
+  fixtures.
+- `07628d3` `fix(lfm3): decode text-only LFM3-VL and LFM3-Audio prompts`.
+  Their processors batch the prompt, `[1, L]`. With no image or clip,
+  `prepare` handed that to the language model, which returns a short prompt
+  for the iterator to step, and the iterator's own batch axis made the short
+  convolution trap. The app's one-token warmup after a load crashed both
+  models. `textOnlyDecode()` in `LFM3VLTests` and `LFM3AudioTests` covers it.
+- `c2613f7` `docs(lfm3): fix the DocC links and parameter the LFM3 port left
+  unresolved`. `LFM3Audio` and `LFM3VL` linked `LanguageModel` and
+  `LFM3Model`, which live in other modules, and `LFM3AudioGenerator`'s init
+  left `model` undocumented. DocC with warnings as errors (vendor-test's
+  `--docs`) failed MLXVLM on all three.
+
+Validation at `07628d3`: the 37 tests of `LFM3Tests`, `LFM3VLTests` and
+`LFM3AudioTests` pass on the M3 Max.
 
 ## DFlash2 tree verification: a chain with leaf siblings (2026-10-08)
 

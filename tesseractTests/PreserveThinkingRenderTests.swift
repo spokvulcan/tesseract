@@ -73,6 +73,39 @@ struct PreserveThinkingRenderTests {
         }
     }
 
+    @Test func defaultFilterShapeReadsTheValueItNames() {
+        // LFM3 sets each flag through Jinja's `default` filter: thinking on
+        // and preservation off unless the request says otherwise.
+        let identity = ModelIdentity(
+            configJSON: nil,
+            chatTemplate: """
+                {%- set preserve_thinking = preserve_thinking | default(false) -%}
+                {%- set enable_thinking = enable_thinking | default(true) -%}
+                {%- if enable_thinking -%}<think>{%- else -%}<think></think>{%- endif -%}
+                """
+        )
+        #expect(identity.declaredTemplateFlags == [preserveFlag, .enableThinking])
+        #expect(identity.templateFlagDefaults == [preserveFlag: false, .enableThinking: true])
+    }
+
+    @Test func thinkingOffOnADefaultFilterTemplateEmitsTheKwarg() {
+        // Read as default-off, `enable_thinking: false` would emit nothing
+        // and the template would still open a think block.
+        let identity = ModelIdentity(
+            configJSON: nil,
+            chatTemplate: "{%- set enable_thinking = enable_thinking | default(true) -%}"
+        )
+        func resolve(_ enableThinking: Bool) -> TemplateRenderContext {
+            TemplateRenderContext.resolve(
+                requestKwargs: [TemplateRenderFlag.enableThinking.rawValue: enableThinking],
+                appDesired: [:],
+                declaredFlags: identity.declaredTemplateFlags,
+                templateDefaults: identity.templateFlagDefaults)
+        }
+        #expect(resolve(false).kwargs == [.enableThinking: false])
+        #expect(resolve(true).kwargs.isEmpty)
+    }
+
     @Test func invertedPolarityEmitsTheKwargOnlyWhenStripping() {
         let declared: Set<TemplateRenderFlag> = [preserveFlag]
         let preserveByDefault: [TemplateRenderFlag: Bool] = [preserveFlag: true]

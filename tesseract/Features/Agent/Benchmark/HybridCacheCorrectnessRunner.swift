@@ -684,6 +684,13 @@ final class HybridCacheCorrectnessRunner {
         var argmaxStableAt1 = false
         var trimmedLayerCount = 0
         var sawTrimmable = false
+        // A sliding-window ring (LFM3's) keeps the trimmed tokens, as its
+        // short convolutions do, so the simulated state is far from any
+        // production state: check-out refuses a leaf holding a ring and the
+        // turn restores it by copy, exactly. Logged, not gated.
+        let holdsRing = try context.model.newCache(parameters: nil).contains {
+            $0 is RotatingKVCache
+        }
 
         for trimAmount in trimSweep {
             let n = tokens.count
@@ -735,6 +742,14 @@ final class HybridCacheCorrectnessRunner {
                 true,
                 "no trimmable layers in this model — skipped",
                 ["  trimSweep=\(trimSweep) trimmableLayers=0"]
+            )
+        }
+        if holdsRing {
+            return (
+                true,
+                "characterized only — a ring keeps trimmed tokens and is never rewound; "
+                    + "trim=1 argmaxStable=\(argmaxStableAt1) trimmedLayers=\(trimmedLayerCount)",
+                lines
             )
         }
         return (
