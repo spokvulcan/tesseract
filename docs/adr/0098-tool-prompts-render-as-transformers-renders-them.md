@@ -1,7 +1,6 @@
 # ADR-0098: Tool prompts render as transformers renders them
 
-- Status: Proposed (built; accepted once `c99afdf` is pushed to the fork's
-  `pin-tesseract-2026-09-15` and the change is reviewed)
+- Status: Accepted
 - Date: 2026-10-28
 - Supersedes: the `tojson` carry of `docs/swift-transformers-fork.md`
   (`fe95f0a`), dropped by `c99afdf`
@@ -97,7 +96,7 @@ block given a title, a start and an end.
 
 ## As built
 
-- swift-transformers `c99afdf` on `pin-tesseract-2026-09-15` (removes
+- swift-transformers `c99afdf`, the head of `pin-tesseract-2026-09-15` (removes
   `ChatTemplateFilters.swift`, swift-jinja ≥ 2.5.0, two offline tests); the
   app resolves swift-jinja 2.5.1.
 - `ChatTemplateTools.swift`, `AppTokenizerLoader.swift`,

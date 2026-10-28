@@ -98,7 +98,8 @@ PASS on Qwen3.5-4B-PARO and Qwen3.8-27B-PARO with 0 token mismatches / 0 parity
 failures / 0 path failures; a render costs about 0.3 ms more with the bench's 40
 tools. On Qwen3.8 the C25 hit path is slower than the fused baseline (41 ms
 against 37 ms per hit turn); it was before the move too (43 against 35 on a
-Release build of `2e070312`).
+Release build of `2e070312`). Pushed the same day; a fresh resolve from GitHub,
+with no dependency cache, checks out `c99afdf`.
 
 ## Per-iteration workflow
 
