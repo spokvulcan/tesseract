@@ -360,6 +360,8 @@ final class ChatSession {
     // MARK: - The assistant stream fold
 
     private func fold(_ event: AssistantMessageEvent) {
+        forwardReplyText(event)
+
         // Only the Open Tool Call's own start/deltas sustain the writing
         // phase; any other event means the call committed (`toolcallEnd`) or
         // was retracted without an event of its own (text/thinking opening
@@ -493,6 +495,24 @@ final class ChatSession {
     private func clearLiveState() {
         livePart = nil
         liveMessage = nil
+    }
+
+    /// The reply's visible text, to the voice session as it is written: what
+    /// a text part opens with, its deltas, then its end — the same text its
+    /// Live Part shows. Thinking and tool calls never reach it.
+    private func forwardReplyText(_ event: AssistantMessageEvent) {
+        guard let voiceReplyTextHandler else { return }
+        switch event {
+        case .textStart(let index, let partial):
+            let opening = textOfPart(at: index, in: partial)
+            if !opening.isEmpty { voiceReplyTextHandler(.delta(opening)) }
+        case .textDelta(_, let delta, _):
+            voiceReplyTextHandler(.delta(delta))
+        case .textEnd:
+            voiceReplyTextHandler(.partEnded)
+        default:
+            break
+        }
     }
 
     private func textOfPart(at index: Int, in message: AssistantMessage) -> String {
@@ -876,6 +896,19 @@ final class ChatSession {
     /// last assistant text. Returning true consumes the reply — the session
     /// speaks it and runs auto-listen — and suppresses `autoSpeakIfEnabled`.
     @ObservationIgnored var voiceReplyHandler: ((String?) -> Bool)?
+
+    /// A piece of the reply's visible text as the model writes it.
+    enum ReplyText: Equatable, Sendable {
+        /// Text a text part opened with, or a delta of it.
+        case delta(String)
+        /// The text part closed: a tool call, or the message's end, follows.
+        case partEnded
+    }
+
+    /// The voice session's live reply hook (ADR-0097): the reply's visible
+    /// text as the model writes it, so Jarvis speaks while he writes.
+    /// `voiceReplyHandler` still closes the reply on `agentEnd`.
+    @ObservationIgnored var voiceReplyTextHandler: ((ReplyText) -> Void)?
 
     private func lastAssistantText() -> String? {
         for item in items.reversed() {

@@ -485,10 +485,16 @@ final class DependencyContainer: ObservableObject {
             stageToComposer: { [composerDraft] text in
                 composerDraft.restore(text: text, images: [])
             },
+            // The reply speaks as it is written (ADR-0097).
             speak: { [weak self] text, onDone in
-                self?.speechCoordinator.speakText(text, showsOverlay: false, onSuccess: onDone)
+                self?.speechCoordinator.startStreamedSpeech(text, onSuccess: onDone)
             },
+            speakMore: { [weak self] text in
+                self?.speechCoordinator.appendStreamedSpeech(text)
+            },
+            finishSpeaking: { [weak self] in self?.speechCoordinator.finishStreamedSpeech() },
             stopSpeaking: { [weak self] in self?.speechCoordinator.stop() },
+            cancelReply: { [weak self] in self?.chatSession.cancelGeneration() },
             speechState: { [weak self] in self?.speechCoordinator.state ?? .idle },
             currentConversationID: { [weak self] in
                 self?.agentConversationStore.currentConversation?.id
@@ -501,6 +507,9 @@ final class DependencyContainer: ObservableObject {
         // and the auto-listen loop; autoSpeak stays the chat-only path.
         chatSession.voiceReplyHandler = { [weak controller] text in
             controller?.replyCompleted(text) ?? false
+        }
+        chatSession.voiceReplyTextHandler = { [weak controller] piece in
+            controller?.replyText(piece)
         }
         builtVoiceSession = controller
         return controller

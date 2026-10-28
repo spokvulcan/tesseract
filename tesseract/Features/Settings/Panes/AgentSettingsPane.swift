@@ -131,6 +131,10 @@ struct AgentSettingsPane: View {
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
+            // ADR-0097: the silence that closes a turn grows with it.
+            .help(
+                "A short turn ends after \(VoiceEndpointer.Config.shortTurn.formatted()) s of silence; the wait grows to this as you keep talking."
+            )
             HStack {
                 Text("Session Silence Timeout")
                 Slider(value: $settings.companionVoiceSessionTimeout, in: 10...90, step: 5)

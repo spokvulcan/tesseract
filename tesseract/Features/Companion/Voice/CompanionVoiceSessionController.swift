@@ -46,8 +46,15 @@ final class CompanionVoiceSessionController {
     private let inputDead: @MainActor () -> Bool
     private let sendMessage: @MainActor (String) -> Void
     private let stageToComposer: @MainActor (String) -> Void
+    /// The reply's speech (ADR-0097): `speak` starts it with its first piece
+    /// and takes the callback for when it has played out, `speakMore` queues
+    /// later pieces, `finishSpeaking` says no more will come.
     private let speak: @MainActor (String, @escaping @MainActor @Sendable () -> Void) -> Void
+    private let speakMore: @MainActor (String) -> Void
+    private let finishSpeaking: @MainActor () -> Void
     private let stopSpeaking: @MainActor () -> Void
+    /// Stops the agent's generation of the reply.
+    private let cancelReply: @MainActor () -> Void
     private let speechState: @MainActor () -> SpeechState
     private let currentConversationID: @MainActor () -> UUID?
     private let overlay: CompanionVoicePrototype
@@ -78,7 +85,10 @@ final class CompanionVoiceSessionController {
         sendMessage: @escaping @MainActor (String) -> Void,
         stageToComposer: @escaping @MainActor (String) -> Void,
         speak: @escaping @MainActor (String, @escaping @MainActor @Sendable () -> Void) -> Void,
+        speakMore: @escaping @MainActor (String) -> Void,
+        finishSpeaking: @escaping @MainActor () -> Void,
         stopSpeaking: @escaping @MainActor () -> Void,
+        cancelReply: @escaping @MainActor () -> Void,
         speechState: @escaping @MainActor () -> SpeechState,
         currentConversationID: @escaping @MainActor () -> UUID?,
         overlay: CompanionVoicePrototype,
@@ -92,7 +102,10 @@ final class CompanionVoiceSessionController {
         self.sendMessage = sendMessage
         self.stageToComposer = stageToComposer
         self.speak = speak
+        self.speakMore = speakMore
+        self.finishSpeaking = finishSpeaking
         self.stopSpeaking = stopSpeaking
+        self.cancelReply = cancelReply
         self.speechState = speechState
         self.currentConversationID = currentConversationID
         self.overlay = overlay
@@ -116,14 +129,21 @@ final class CompanionVoiceSessionController {
         dispatch(.exit(reason: reason))
     }
 
-    // MARK: - The reply hook (ChatSession's agentEnd calls this)
+    // MARK: - The reply hooks (ChatSession's stream and agentEnd call these)
+
+    /// The reply's visible text as the model writes it (ADR-0097).
+    func replyText(_ piece: ChatSession.ReplyText) {
+        guard isActive else { return }
+        switch piece {
+        case .delta(let text): dispatch(.replyText(text))
+        case .partEnded: dispatch(.replyPartEnded)
+        }
+    }
 
     /// Returns true when the session consumed the reply (suppresses the
-    /// chat's own autoSpeak).
+    /// chat's own autoSpeak) — a cut-short reply's end included.
     func replyCompleted(_ text: String?) -> Bool {
-        guard isActive, phase == .awaitingReply || phase == .transcribing else {
-            return false
-        }
+        guard machine.wantsReply else { return false }
         dispatch(.replyArrived(text))
         return true
     }
@@ -213,10 +233,11 @@ final class CompanionVoiceSessionController {
         case .feedState(let state):
             overlay.feed.setState(feedState(state))
         case .presentSpokenReply(let text):
-            overlay.feed.settle(role: .companion, text: text)
             overlay.feed.beginSpokenLine(text)
             overlay.feed.revealAll()
             overlay.feed.setState(.speaking)
+        case .settleCompanionLine(let text):
+            overlay.feed.settle(role: .companion, text: text)
         case .settleOwnerLine(let text):
             overlay.feed.settle(role: .owner, text: text)
         case .openCapture:
@@ -230,8 +251,14 @@ final class CompanionVoiceSessionController {
             return finishTake()
         case .speak(let text):
             speak(text) { [weak self] in self?.dispatch(.speechDone) }
+        case .speakMore(let text):
+            speakMore(text)
+        case .finishSpeaking:
+            finishSpeaking()
         case .stopSpeaking:
             stopSpeaking()
+        case .cancelReply:
+            cancelReply()
         case .send(let text):
             sendMessage(text)
         case .stageToComposer(let text):

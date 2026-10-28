@@ -143,6 +143,33 @@ struct ChatSessionTests {
         #expect(committed.stopReason == .toolUse)
     }
 
+    /// ADR-0097: the voice session hears the reply's visible text as it is
+    /// written — every text delta and each text part's end, never thinking
+    /// or tool calls.
+    @Test func theVoiceHookHearsVisibleTextAsItIsWritten() {
+        let session = makeChatSession()
+        var heard: [ChatSession.ReplyText] = []
+        session.voiceReplyTextHandler = { heard.append($0) }
+        var builder = AssistantPartsBuilder()
+
+        session.handle(.agentStart)
+        let start = builder.snapshot()
+        session.handle(.messageStart(message: start))
+        session.handle(.messageUpdate(message: start, event: .start(partial: start)))
+
+        drive(session, &builder, .thinkStart)
+        drive(session, &builder, .thinking("pondering"))
+        drive(session, &builder, .thinkEnd)
+        drive(session, &builder, .text("Let me"))
+        drive(session, &builder, .text(" check."))
+        drive(session, &builder, .toolCall(GenerationFixtures.toolCall(name: "read_file")))
+
+        #expect(heard.contains(.partEnded))
+        let text = heard.compactMap { if case .delta(let t) = $0 { t } else { nil } }.joined()
+        #expect(text == "Let me check.")
+        #expect(heard.last == .partEnded)
+    }
+
     // MARK: - Tool execution and results
 
     @Test func toolExecutionDrivesRunPhaseAndResultLinksByCallID() {

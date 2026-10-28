@@ -2420,8 +2420,10 @@ not the page), word list.
 
 **Voice Session**:
 Voice as a mode of the one conversation, never a separate surface: an
-auto-listen loop — listen, capture, transcribe, send, speak the reply — whose
-spoken and typed turns share one persisted message stream. Half-duplex: the
+auto-listen loop — listen, capture, transcribe, send, speak the reply as it is
+written — whose spoken and typed turns share one persisted message stream. A
+turn closes on a silence that grows with it: 1.0 s after a short turn, the
+End-of-Speech Silence Setting after a long one (ADR-0097). Half-duplex: the
 microphone is never open while speech plays — the reply, or anything else
 read aloud — and it opens again once it stops (ADR-0082). Entered from the
 overlay or the chat toggle; left by dismissal, staging to the composer,
@@ -2437,9 +2439,18 @@ capture retry backoff. It folds events (ticks, the barge-in, the reply,
 transcription outcomes) into ordered effect values the controller performs;
 time, the mic level and the capture engine's dead-input flag are inputs, and
 capture start results return as events, so even the retry backoff is machine
-judgment. The endpointer is its sub-state (ADR-0042, ADR-0082).
+judgment. The endpointer and the **Reply Speech Buffer** are its sub-state
+(ADR-0042, ADR-0082, ADR-0097).
 _Avoid_: controller (the performer above it), state machine (unqualified),
 tick handler, **Voice Session** (the product concept, not this module).
+
+**Reply Speech Buffer**:
+Jarvis's reply as the model writes it, cut into what the voice can speak:
+whole sentences, never one half written. The first sentence starts the voice
+and later ones queue behind it; a text part that closes before a tool call is
+complete as it stands. Thinking and tool calls never reach it (ADR-0097).
+_Avoid_: chunker, sentence splitter (the engine's Segmenter cuts text it is
+handed; this decides when text may be handed over).
 
 **Barge-In**:
 The owner interrupting speech during a **Voice Session** — the reply, or other
@@ -2447,7 +2458,8 @@ speech holding the mic closed — by a key press (the Talk to Tesseract or
 Speak Selected Text hotkey while a session is active) or a click on the
 speaking line, never by voice: the mic is closed while anything speaks. The
 speech stops at once and for good, then the mic opens for the owner's turn
-behind the short deaf grace that follows all speech.
+behind the short deaf grace that follows all speech. A reply still being
+written is cancelled too, and the rest of it dropped (ADR-0097).
 _Avoid_: interruption (unqualified), voice barge-in / Soft Barge / pause-on-barge
 (the retired open-mic stages), Substance Gate / Session Directive (the removed
 word gates).
