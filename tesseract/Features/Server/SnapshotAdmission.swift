@@ -240,25 +240,28 @@ nonisolated extension SnapshotAdmission.Storage {
     /// `extending` carries the **Leaf Extension Admission** base (the deepest
     /// SSD-backed ancestor leaf, from `PrefixCacheManager.extensionBase`). The
     /// payload carries only the suffix past it when that suffix is worth
-    /// writing (see `SnapshotPayload.extensionMaxSuffixFraction`); `nil`
-    /// (every checkpoint, and a leaf with no usable base) admits the whole
-    /// body. Building the payload detaches arrays on the calling thread, so
-    /// call this inside the Model Session.
+    /// writing (see `SnapshotPayload.extensionMaxSuffixFraction`), weighed
+    /// with the partition's KV Scheme (`storedForm`); `nil` (every
+    /// checkpoint, and a leaf with no usable base) admits the whole body.
+    /// Building the payload detaches arrays on the calling thread, so call
+    /// this inside the Model Session.
     static func intent(
         for snapshot: HybridCacheSnapshot,
         ssdEnabled: Bool,
-        extending: SnapshotExtension? = nil
+        extending: SnapshotExtension? = nil,
+        storedForm: KVScheme? = nil
     ) -> SnapshotAdmission.Storage {
         guard ssdEnabled else { return .ramOnly }
         if snapshot.isPrefixView { return .viewSSD }
-        return .ramAndSSD(SnapshotPayload.extract(snapshot, extending: extending))
+        return .ramAndSSD(
+            SnapshotPayload.extract(snapshot, extending: extending, storedForm: storedForm))
     }
 }
 
 nonisolated extension SnapshotAdmission {
     /// Pair each checkpoint captured during prefill with its storage intent,
     /// at the extraction edge. Same Metal-affinity contract as
-    /// ``Storage/intent(for:ssdEnabled:extending:)``: call it inside the
+    /// ``Storage/intent(for:ssdEnabled:extending:storedForm:)``: call it inside the
     /// Model Session, before the admission crosses to the MainActor.
     static func checkpointCandidates(
         _ snapshots: [HybridCacheSnapshot],

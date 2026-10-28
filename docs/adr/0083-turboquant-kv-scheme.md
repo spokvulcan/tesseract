@@ -163,3 +163,63 @@ decode step is the first forward over the compressed form), and in the Prefill
 Strategy route. The decoded array is read back and adopted into its owner in
 the same module. `DecodeStartTests` pins every handover's conversion point on
 the toy; the Unkeyed Completion's own scheme test is folded into that table.
+
+## Amendment (2026-10-28): the extension worth-it gate weighs the scheme's attention at full precision
+
+A leaf with an SSD-backed base writes only its suffix past that base when the
+suffix is at most 90% of the full payload (ADR-0010's worth-it gate).
+Otherwise it writes full, and the full write deletes the base at its commit,
+so the base's boundary stops being a Chain-Prefix Restore point (ADR-0012).
+The gate summed each layer's stored bytes. A scheme compresses only the
+attention, so the recurrent state, which every segment carries whole,
+decided alone. On Qwen3.8-27B the 48 GatedDeltaNet layers hold
+153.9 MB of float32 state, and the attention adds 25,856 bytes a token under
+`turbo8v4` (bf16: 65,536). No `turbo8v4` leaf shorter than 662 tokens could
+extend, whatever its suffix, and a turn that added a third of its leaf needed
+1,051 (`turbo0v4`: 415 and 660; full precision: 261 and 415).
+
+The `turbo8v4` prefix-cache e2e made no extension in the whole run, where
+the full-precision run makes four. Its Step P3 (ADR-0090), the request after
+a picture's turn, restored the 177-token system checkpoint instead of the
+thread before the picture at 280: the picture turn's 434-token leaf weighed
+95.6% by its stored bytes, and its full write deleted the 280 leaf.
+
+**Decision.** The gate weighs a scheme partition's attention at full
+precision (`KVScheme.fullPrecisionRatio`); `LeafAdmission` hands the payload
+builder the partition's Stored Form. A scheme leaf extends where the
+full-precision leaf of the same turn would. What a kept boundary saves (the
+prefill up to it) and what it costs (the whole-state copy its segment keeps)
+are the same in both forms; only the attention's bytes shrink. Without a
+scheme the gate's arithmetic is unchanged.
+
+Rejected:
+
+- Keeping the base when the gate admits full (`preserved` instead of
+  `deferredDelete`). The base's whole segment would sit beside a full write
+  that repeats its prefix: more disk than the extension for the same restore
+  point, the duplicate-on-supersede ADR-0012 rejected.
+- Leaving the whole-state layers out of the gate for every model. That
+  changes ADR-0010's rule for every hybrid model at short context, a decision
+  of its own; the scheme needs only the scheme's weight.
+
+**Consequences.** A scheme partition now keeps a short conversation's turn
+boundaries and their whole-state copies on SSD as a full-precision one does,
+and its chains carry TurboQuant suffix segments where before they held one
+full segment. The full-precision runs pass this gate narrowly: Step P2's leaf
+extends at 89.94% of its full payload on the 27B and 89.40% on the 4B PARO,
+so a picture turn 18 tokens longer on the 27B would write full and P3 would
+fall back to the system checkpoint again, now in both forms.
+
+`TurboQuantSnapshotTests` pins the rule: a scheme leaf whose stored bytes are
+over the gate extends where the same turn's full-precision leaf does, and its
+suffix segment composes with the base's segment into the leaf, bitwise.
+
+**As built** (Qwen3.8-27B 4-bit, Debug, M3 Max 48 GB, the gate set of
+`docs/prefix-cache-testing.md` on 7002c1fd and on the change). The `turbo8v4`
+e2e passes all 38 checks, with four extensions and the full-precision run's
+supersessions (four transferred, six deleted). Step P reads 244/0, 398/280,
+439/280 with one hydration and 524/475 tokens prompt/restored, the 27B
+full-precision column of ADR-0090. Against the base run it differs only there:
+the four supersessions, P3's restore and its DFlash2 acceptance (19/82, was
+21/70). The full-precision 27B and 4B PARO e2e and `--hybrid-cache-correctness`
+compare identical to their base runs (`scripts/gate-compare.py`).
