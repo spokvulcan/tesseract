@@ -70,8 +70,8 @@ identity (ADR-0083): the prompt prefills unquantized, the cache converts once
 where the request's **Decode Handover** says (the **Decode Start**'s rule;
 inside the iterator when the iterator runs the prefill), and the turn's leaf
 stores compressed layers that only a request of the same scheme restores. A
-**Leaf Extension Admission**'s worth-it gate weighs those layers at full
-precision, so a scheme keeps the turn boundaries full precision keeps.
+**Leaf Extension Admission**'s worth-it gate counts their tokens, not their
+bytes, so a scheme keeps the turn boundaries full precision keeps.
 _Avoid_: kvBits (the unrelated affine quantization the product never sets), KV
 quantization (ambiguous between the two).
 
@@ -398,8 +398,9 @@ A leaf **Snapshot Admission** whose SSD payload carries only the suffix past its
 base — the deepest SSD-backed ancestor leaf it supersedes — so a turn's write
 scales with new tokens, not conversation length. On acceptance the base's
 **Segment Chain** *transfers* to the new leaf rather than being deleted; a
-near-full suffix admits full instead, and a lost base degrades the leaf to
-RAM-only until the next turn self-heals with a full write.
+near-root base (under a tenth of the leaf's tokens) or a body with nothing to
+slice admits full instead, and a lost base degrades the leaf to RAM-only until
+the next turn self-heals with a full write.
 _Avoid_: delta admission (the design-phase working name); incremental write;
 suffix write-through.
 

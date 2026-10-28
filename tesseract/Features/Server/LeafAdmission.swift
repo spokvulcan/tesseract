@@ -212,8 +212,7 @@ nonisolated struct LeafAdmission: Sendable {
 
         let payloadStart = Date.timeIntervalSinceReferenceDate
         let storage = SnapshotAdmission.Storage.intent(
-            for: leaf, ssdEnabled: reachesSSD, extending: extensionBase,
-            storedForm: partitionKey.kvScheme)
+            for: leaf, ssdEnabled: reachesSSD, extending: extensionBase)
         let payloadSeconds = Date.timeIntervalSinceReferenceDate - payloadStart
         var payloadFacts = ["ssdPayloadMode": "none", "ssdPayloadArrayBytes": "0"]
         if case .ramAndSSD(let payload) = storage {

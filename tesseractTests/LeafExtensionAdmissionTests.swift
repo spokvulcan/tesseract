@@ -122,6 +122,24 @@ struct LeafExtensionExtractionTests {
         return HybridCacheSnapshot.capture(cache: [mamba], offset: tokenOffset, type: .leaf)!
     }
 
+    /// A hybrid body whose whole-state layer outweighs its attention, as the
+    /// 27B's recurrent state outweighs a short thread's attention: 17,920
+    /// bytes of Mamba state beside 128 bytes a token of KV.
+    private func makeHybridSnapshot(tokenOffset: Int) -> HybridCacheSnapshot {
+        let count = 1 * 2 * tokenOffset * 8
+        let kv = KVCacheSimple()
+        kv.state = [
+            MLXArray((0..<count).map { Float($0) }).reshaped([1, 2, tokenOffset, 8]),
+            MLXArray((0..<count).map { Float($0) + 0.5 }).reshaped([1, 2, tokenOffset, 8]),
+        ]
+        let mamba = MambaCache()
+        mamba.state = [
+            MLXArray.zeros([1, 3, 128]),
+            MLXArray.zeros([1, 8, 16, 32]),
+        ]
+        return HybridCacheSnapshot.capture(cache: [kv, mamba], offset: tokenOffset, type: .leaf)!
+    }
+
     private func sliceData(
         _ array: MLXArray, from base: Int, to offset: Int
     ) -> Data {
@@ -153,8 +171,8 @@ struct LeafExtensionExtractionTests {
     }
 
     @Test func nonSliceableLayersRideWhole() throws {
-        // The KV layer dominates the byte total so the worth-it gate
-        // passes; the small Mamba layer must still ride whole.
+        // The base holds a third of the leaf's tokens, so the worth-it
+        // gate passes; the Mamba layer must still ride whole.
         let kv = KVCacheSimple()
         kv.state = [
             MLXArray.ones([1, 2, 6, 64]),
@@ -183,9 +201,9 @@ struct LeafExtensionExtractionTests {
     }
 
     @Test func worthItGateFallsBackToFullWhenSavingsTooSmall() throws {
-        // Suffix would be 19/20 = 95% of the full payload — past the
-        // 90% gate, so the extension is abandoned and the payload
-        // admits full.
+        // A near-root base: the suffix holds 19 of the leaf's 20 tokens,
+        // past the 90% gate, so the extension is abandoned and the
+        // payload admits full.
         let snapshot = makeSliceableSnapshot(tokenOffset: 20)
         let extending = SnapshotExtension(baseSnapshotID: "base-3", baseOffset: 1)
 
@@ -197,9 +215,52 @@ struct LeafExtensionExtractionTests {
         #expect(layer.state.allSatisfy { $0.shape == [1, 2, 20, 8] })
     }
 
+    /// The gate counts the sliceable attention's tokens, not the stored
+    /// bytes (ADR-0010, amendment 2026-10-28). A base holding a tenth of a
+    /// hybrid leaf's tokens extends, though the Mamba layer riding whole
+    /// makes the suffix segment nearly the full payload's size, so the base
+    /// boundary stays a Chain-Prefix Restore point.
+    @Test func aHybridLeafExtendsFromABaseHoldingATenthOfItsTokens() throws {
+        let snapshot = makeHybridSnapshot(tokenOffset: 20)
+        let extending = SnapshotExtension(baseSnapshotID: "base-6", baseOffset: 2)
+
+        let payload = SnapshotPayload.extract(snapshot, extending: extending)
+
+        #expect(payload.extending == extending)
+        // Weighed by stored bytes the suffix is 98.75% of the full payload.
+        let full = SnapshotPayload.extract(snapshot)
+        #expect(
+            Double(payload.totalBytes)
+                > SnapshotPayload.extensionMaxSuffixFraction * Double(full.totalBytes))
+        let kvLayer = try #require(payload.layers.first)
+        #expect(kvLayer.suffixBaseOffset == 2)
+        for (arrayPayload, original) in zip(kvLayer.state, snapshot.layers[0].state) {
+            #expect(arrayPayload.shape == [1, 2, 18, 8])
+            #expect(arrayPayload.data == sliceData(original, from: 2, to: 20))
+        }
+        let mambaLayer = try #require(payload.layers.last)
+        #expect(mambaLayer.suffixBaseOffset == nil)
+        #expect(mambaLayer.state.map(\.shape) == [[1, 3, 128], [1, 8, 16, 32]])
+    }
+
+    /// Near-root: a base under a tenth of the hybrid leaf's tokens admits
+    /// the leaf full.
+    @Test func aHybridLeafAdmitsFullFromABaseUnderATenthOfItsTokens() throws {
+        let snapshot = makeHybridSnapshot(tokenOffset: 20)
+        let extending = SnapshotExtension(baseSnapshotID: "base-7", baseOffset: 1)
+
+        let payload = SnapshotPayload.extract(snapshot, extending: extending)
+
+        #expect(payload.extending == nil)
+        #expect(payload.layers.allSatisfy { $0.suffixBaseOffset == nil })
+        let kvLayer = try #require(payload.layers.first)
+        #expect(kvLayer.state.allSatisfy { $0.shape == [1, 2, 20, 8] })
+    }
+
     @Test func worthItGateFallsBackToFullWhenNothingIsSliceable() throws {
         // Every layer rides whole, so an "extension" would re-write
-        // 100% of the bytes — the gate must reject it.
+        // 100% of the bytes, though the base holds half the tokens —
+        // the gate must reject it.
         let snapshot = makeMambaOnlySnapshot(tokenOffset: 64)
         let extending = SnapshotExtension(baseSnapshotID: "base-4", baseOffset: 32)
 
