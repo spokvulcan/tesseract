@@ -7,6 +7,8 @@
   ADR-0070 (Request Keying), ADR-0078 (Leaf Admission)
 - Amended by: ADR-0093 (2026-10-11: one Decode Start owns where each path
   converts; see the amendment at the end)
+- Its amendment of 2026-10-28 is superseded by ADR-0010's amendment of the
+  same day (the extension worth-it gate counts tokens)
 
 ## Context
 
@@ -223,3 +225,10 @@ full-precision column of ADR-0090. Against the base run it differs only there:
 the four supersessions, P3's restore and its DFlash2 acceptance (19/82, was
 21/70). The full-precision 27B and 4B PARO e2e and `--hybrid-cache-correctness`
 compare identical to their base runs (`scripts/gate-compare.py`).
+
+**Superseded the same day** by ADR-0010's amendment 2026-10-28. The gate now
+counts the sliceable attention's tokens, so neither the whole-state layers nor
+a scheme's precision enter it, and the `storedForm` plumbing above is removed.
+`TurboQuantSnapshotTests` keeps both tests without the scheme argument. The
+decision test now expects the stored leaf to extend from the gate alone,
+though its stored bytes are still over 90% of the full payload.

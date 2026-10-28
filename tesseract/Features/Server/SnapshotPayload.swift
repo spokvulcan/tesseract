@@ -313,61 +313,43 @@ nonisolated struct SnapshotPayload: Sendable {
 // MARK: - Building a payload (Deferred Payload Extraction)
 
 nonisolated extension SnapshotPayload {
-    /// Worth-it gate for a **Leaf Extension Admission**: when the
-    /// estimated suffix payload exceeds this fraction of the full
-    /// payload (a model whose layers are mostly non-sliceable, or a
-    /// near-root base), the leaf admits full — a "delta" that rivals
-    /// the full write buys chain complexity for nothing. A **KV
-    /// Scheme**'s attention weighs at full precision here.
+    /// Worth-it gate for a **Leaf Extension Admission**: when the suffix
+    /// past the base holds more than this fraction of the leaf's tokens
+    /// (a near-root base), the leaf admits full. It counts tokens, not
+    /// stored bytes. An extension always writes less than the full leaf,
+    /// and what it keeps is the base boundary as a **Chain-Prefix
+    /// Restore** point, for one more copy of the whole-state layers on
+    /// SSD (ADR-0010, amendment 2026-10-28).
     static let extensionMaxSuffixFraction = 0.9
 
     /// The validated, worth-it extension for `snapshot`, or `nil` when
     /// the payload should admit full. Pure metadata arithmetic — no
     /// array bytes move here. Which layers would slice is each layer's
-    /// ``HybridCacheSnapshot/LayerState/Kind``, derived at capture; a
+    /// ``HybridCacheSnapshot/LayerState/Kind``, derived at capture. A
+    /// body with no sliceable-attention layer admits full: its segment
+    /// would repeat the whole body. Otherwise the gate weighs the
+    /// sliceable attention alone. Its arrays all span the leaf's tokens,
+    /// so its share past the base is the suffix's share of the tokens. A
     /// whole-state layer (recurrent, rotating, chunked, or an attention
-    /// layer the shape guard kept whole) counts whole.
-    ///
-    /// `storedForm` is the partition's **KV Scheme**. It compresses the
-    /// attention and leaves the whole-state layers as they are, so the
-    /// attention weighs at full precision (`KVScheme.fullPrecisionRatio`)
-    /// and a scheme leaf extends where a full-precision leaf of the same
-    /// turn would. Weighed by its stored bytes, the compressed attention
-    /// left the recurrent state to decide: a short thread's leaf admitted
-    /// full, and the full write deleted the base boundary a later
-    /// divergent request restores from (ADR-0083, amendment 2026-10-28).
+    /// layer the shape guard kept whole) rides whole in either form and
+    /// does not enter it, nor does a **KV Scheme**'s precision. Counted
+    /// whole, a hybrid model's recurrent state decided alone at short
+    /// context, and the full write deleted the base boundary a divergent
+    /// request restores from.
     private static func validatedExtension(
         _ extending: SnapshotExtension?,
-        for snapshot: HybridCacheSnapshot,
-        storedForm: KVScheme?
+        for snapshot: HybridCacheSnapshot
     ) -> SnapshotExtension? {
         guard let extending,
             extending.baseOffset > 0,
-            extending.baseOffset < snapshot.tokenOffset
+            extending.baseOffset < snapshot.tokenOffset,
+            snapshot.layers.contains(where: { $0.kind == .sliceableAttention })
         else { return nil }
 
-        var fullBytes = 0
-        var suffixBytes = 0
         let suffixFraction =
             Double(snapshot.tokenOffset - extending.baseOffset)
             / Double(snapshot.tokenOffset)
-        let attentionWeight = storedForm?.fullPrecisionRatio ?? 1
-        for layer in snapshot.layers {
-            let layerBytes = layer.state.reduce(0) { $0 + $1.nbytes }
-            switch layer.kind {
-            case .sliceableAttention:
-                let weighed = Double(layerBytes) * attentionWeight
-                fullBytes += Int(weighed)
-                suffixBytes += Int(weighed * suffixFraction)
-            case .wholeState:
-                fullBytes += layerBytes
-                suffixBytes += layerBytes
-            }
-        }
-        guard fullBytes > 0,
-            Double(suffixBytes) <= extensionMaxSuffixFraction * Double(fullBytes)
-        else { return nil }
-        return extending
+        return suffixFraction <= extensionMaxSuffixFraction ? extending : nil
     }
 
     /// Build the SSD payload for `snapshot` — **Deferred Payload
@@ -377,17 +359,15 @@ nonisolated extension SnapshotPayload {
     /// the SSD writer's task. Callable from the MainActor too (**Snapshot
     /// Demotion**'s extractor passes no extension, so that path reads
     /// shapes only): the arrays are evaluated deep copies, never live
-    /// model state. `storedForm` is the partition's KV Scheme, which the
-    /// extension's worth-it gate weighs.
+    /// model state.
     static func extract(
         _ snapshot: HybridCacheSnapshot,
-        extending: SnapshotExtension? = nil,
-        storedForm: KVScheme? = nil
+        extending: SnapshotExtension? = nil
     ) -> SnapshotPayload {
-        deferred(for: snapshot, extending: extending, storedForm: storedForm).payload
+        deferred(for: snapshot, extending: extending).payload
     }
 
-    /// `extract(_:extending:storedForm:)` together with the box of arrays the
+    /// `extract(_:extending:)` together with the box of arrays the
     /// payload still owes the SSD writer. What a pending payload retains
     /// is a memory-safety claim (ADR-0064: an extension payload retains
     /// no body array) that only a physical-address comparison can check,
@@ -397,19 +377,17 @@ nonisolated extension SnapshotPayload {
     /// detached here, on the Metal-affine caller, by the layer's kind: a
     /// sliceable-attention layer's suffix past the base is sliced into
     /// its own contiguous device buffer, and every whole-state layer
-    /// (recurrent, rotating, chunked — small next to the attention
-    /// suffix) is deep-copied whole, all evaluated in one sync, so the
-    /// later host view can borrow contiguous storage and never references
-    /// the body it was built from. A full payload retains the body's own
-    /// arrays: copying them is what the deferral exists to avoid.
+    /// (recurrent, rotating, chunked) is deep-copied whole, all evaluated
+    /// in one sync, so the later host view can borrow contiguous storage
+    /// and never references the body it was built from. A full payload
+    /// retains the body's own arrays: copying them is what the deferral
+    /// exists to avoid.
     static func deferred(
         for snapshot: HybridCacheSnapshot,
-        extending: SnapshotExtension? = nil,
-        storedForm: KVScheme? = nil
+        extending: SnapshotExtension? = nil
     ) -> (payload: SnapshotPayload, owed: DeferredLayers) {
         precondition(!snapshot.isPrefixView, "a view payload requires its Backing Leaf")
-        let activeExtension = validatedExtension(
-            extending, for: snapshot, storedForm: storedForm)
+        let activeExtension = validatedExtension(extending, for: snapshot)
         return deferred(
             for: snapshot, layers: snapshot.layers, extending: activeExtension, detaching: false)
     }

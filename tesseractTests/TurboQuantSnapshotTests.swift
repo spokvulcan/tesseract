@@ -245,12 +245,13 @@ struct TurboQuantSnapshotTests {
         #expect(Self.bytes(restored) == Self.bytes(live))
     }
 
-    /// The extension worth-it gate weighs a scheme's attention at full
-    /// precision (ADR-0083, amendment 2026-10-28), so a scheme leaf extends
-    /// its base where the same turn's full-precision leaf does. Here the
-    /// recurrent state is five times the compressed attention and the base
-    /// holds half the rows: weighed by its stored bytes the suffix is 92% of
-    /// the leaf, over the gate, and the full write would delete the base.
+    /// The extension worth-it gate counts the attention's tokens, not its
+    /// stored bytes (ADR-0010, amendment 2026-10-28), so a scheme leaf
+    /// extends its base where the same turn's full-precision leaf does. Here
+    /// the recurrent state is five times the compressed attention and the
+    /// base holds half the rows. Weighed by its stored bytes the suffix is
+    /// 92% of the leaf, which the byte rule refused, and its full write
+    /// deleted the base.
     @Test(arguments: KVScheme.allCases)
     func aSchemeLeafExtendsWhereAFullPrecisionLeafWould(_ scheme: KVScheme) throws {
         let rows = 64
@@ -271,9 +272,12 @@ struct TurboQuantSnapshotTests {
         let base = SnapshotExtension(baseSnapshotID: "base", baseOffset: rows / 2)
 
         #expect(SnapshotPayload.extract(fullPrecision, extending: base).extending == base)
-        #expect(SnapshotPayload.extract(stored, extending: base).extending == nil)
-        let payload = SnapshotPayload.extract(stored, extending: base, storedForm: scheme)
+        let payload = SnapshotPayload.extract(stored, extending: base)
         #expect(payload.extending == base)
+        #expect(
+            Double(payload.totalBytes)
+                > SnapshotPayload.extensionMaxSuffixFraction
+                * Double(SnapshotPayload.extract(stored).totalBytes))
         #expect(payload.layers[0].suffixBaseOffset == rows / 2)
     }
 
@@ -322,8 +326,7 @@ struct TurboQuantSnapshotTests {
         let leaf = try #require(
             HybridCacheSnapshot.capture(cache: [live], offset: 128, type: .leaf))
         let suffix = SnapshotPayload.extract(
-            leaf, extending: SnapshotExtension(baseSnapshotID: "base", baseOffset: 120),
-            storedForm: scheme)
+            leaf, extending: SnapshotExtension(baseSnapshotID: "base", baseOffset: 120))
         #expect(suffix.extending?.baseOffset == 120)
         let ref = try #require(enqueue(suffix, id: "leaf", offset: 128))
         await store.flushAsync()

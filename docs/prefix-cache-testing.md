@@ -753,9 +753,9 @@ attention against bf16 SDPA, and `testWarmChunk` a prefill chunk over a
 compressed cache (`TEST_RUNNER_TURBOQUANT_DECODE_BENCH_CHUNKS=64,512,1024`).
 
 App side: `TurboQuantSnapshotTests` (capture, restore, move, prefix views,
-the Stored Form, the SSD round trip, the extension worth-it gate weighing the
-scheme's attention at full precision, and a base and suffix segment composing
-into the leaf), `SpeculationPlanTests` (a scheme keeps
+the Stored Form, the SSD round trip, a scheme leaf extending where the
+full-precision leaf does, and a base and suffix segment composing into the
+leaf), `SpeculationPlanTests` (a scheme keeps
 DFlash2 and refuses MTP), `RequestFactsTests` and `SnapshotManifestTests`
 (the scheme in the partition key, digest and meta), `DecodeStartTests` (where
 each Decode Handover converts, relative to the prompt's last token, and that
@@ -775,9 +775,9 @@ The picture's turn must restore the thread before it; the request after must
 restore as far (the boundary the picture turn's leaf extended, from SSD by
 Chain-Prefix Restore) and nothing past the picture; the one after must restore
 the whole request before it. That boundary exists only if the picture turn's
-leaf extends: its suffix is 89.94% of the full payload on the 27B and 89.40%
-on the 4B, against the worth-it gate's 90% (a KV Scheme's attention weighs at
-full precision, ADR-0083). Past the gate the leaf writes full, deletes the
+leaf extends, which it does while the thread before the picture holds a tenth
+of the leaf's tokens (ADR-0010, amendment 2026-10-28): 280 of 434 on the 27B,
+204 of 353 on the 4B. Under a tenth the leaf writes full, deletes the
 boundary, and the request after restores the system checkpoint. It runs last
 in a full e2e, or alone:
 
