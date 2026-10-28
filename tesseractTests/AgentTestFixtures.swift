@@ -160,6 +160,39 @@ enum GenerationFixtures {
     ]
 }
 
+/// The cache-aware arm of a Day Thread's inference service, recording each
+/// conversation a moment sends and answering with a card.
+final class RecordingCompletionStarter: ServerCompletionStarting, @unchecked Sendable {
+    private let recorded = Locked<[HTTPPrefixCacheConversation]>([])
+    var calls: [HTTPPrefixCacheConversation] { recorded.value }
+
+    func startServerCompletion(
+        modelID: String, conversation: HTTPPrefixCacheConversation, toolSpecs: [ToolSpec]?,
+        parameters: AgentGenerateParameters, renderContext: TemplateRenderContext,
+        progressHandler: ServerInferenceProgressHandler?
+    ) async throws -> HTTPServerGenerationStart {
+        recorded.value.append(conversation)
+        return HTTPServerGenerationStart(
+            stream: GenerationFixtures.eventStream([.text(#"{"line": "Welcome back."}"#)]),
+            cachedTokenCount: 0)
+    }
+}
+
+/// The managed arm: a Day Thread request is always cache-aware here.
+final class UnusedManagedInference: ManagedInferenceStarting {
+    struct Unused: Error {}
+
+    func startPromptInference(prompt: String, parameters: AgentGenerateParameters) throws
+        -> HTTPServerGenerationStart
+    { throw Unused() }
+
+    func startChatInference(
+        systemPrompt: String, messages: [LLMMessage], toolSpecs: [ToolSpec]?,
+        parameters: AgentGenerateParameters, renderContext: TemplateRenderContext,
+        progressHandler: ServerInferenceProgressHandler?
+    ) throws -> HTTPServerGenerationStart { throw Unused() }
+}
+
 /// A seeded RNG, so "random" is reproducible (splitmix64).
 nonisolated struct SeededGenerator: RandomNumberGenerator {
     private var state: UInt64

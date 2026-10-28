@@ -2185,7 +2185,8 @@ the Areas, today's agenda, last night's carry-over note and first draft of the
 day); moments append a
 request and a card; the owner's Today chat appends too, with any **Shown
 Pictures**. A new day (at 04:00)
-starts a new thread; within a day compaction runs only past its ceiling.
+starts a new thread; within a day compaction runs only past its ceiling, or
+sooner when the selected model's window is smaller.
 _Avoid_: Mission Control, standing conversation (both retired).
 
 **Shown Picture**:

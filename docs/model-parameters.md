@@ -38,7 +38,7 @@ Two columns matter when they disagree:
 **Context window: 262,144 tokens natively for every Qwen, Nanbeige and Ornith
 model above** (checkpoint `max_position_embeddings`, no `rope_scaling`). The
 Qwen cards describe YaRN extension to about 1,000,000 tokens; the app does not
-enable it and `ChatSession` / `AgentFactory` pin `contextWindow` at 262,144.
+enable it.
 
 The LFM3 family differs (cards, "input + output"):
 
@@ -51,10 +51,29 @@ The LFM3 family differs (cards, "input + output"):
 Each catalog entry carries its card's length (`ModelDefinition.contextLength`:
 262,144, 128,000 for LFM3-VL, 32,768 for LFM3-Audio), which `/v1/models`
 reports as `max_context_length` and the client integrations write as the
-model's limit. The compaction window is still the pinned 262,144 for every
-model, so an LFM3-VL or LFM3-Audio conversation is not compacted before it
-passes its own limit. Making the window follow the selected model (and the Day
-Thread's ceiling with it) is open work.
+model's limit. The agent's compaction works in the same window: the chat, its
+`/compact` and the Day Thread read the selected model's `contextLength` at
+every check (`CompactionWindow`), so a model picked between turns compacts in
+its own window.
+
+`CompactionSettings.standard` reserves 16,384 tokens and keeps the newest
+20,000 verbatim. A window of 56,384 tokens or more (the reserve plus twice the
+tail) takes them as set; a smaller one scales both down in proportion, and
+the tail never passes half the point where compaction runs:
+
+| Window | Compacts past (estimated tokens) | Keeps verbatim |
+| --- | --- | --- |
+| 262,144 (Qwen, LFM3-1.7B) | 245,760 | 20,000 |
+| 128,000 (LFM3-VL) | 111,616 | 20,000 |
+| 32,768 (LFM3-Audio) | 23,247 | 11,623 |
+
+The estimate counts the conversation's messages at about 4 characters a
+token. The system prompt and tool schemas (about 4,200 tokens on LFM3) come
+out of the reserve, which leaves a 32K model about 5,000 tokens for its reply
+at the compaction point. The Day Thread compacts past its ceiling (64,000 by
+default) or the window's own point, whichever comes first: 23,247 with
+LFM3-Audio selected. A ceiling under 40,000 keeps half of itself, not 20,000,
+so the thread no longer compacts again on every turn.
 
 ## Sampling, per family
 

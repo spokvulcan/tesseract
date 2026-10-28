@@ -7,7 +7,8 @@
 //  Areas, today's agenda and last night's carry-over); each moment appends
 //  its request and Jarvis's card; the owner's own Today messages go into the
 //  same thread. A new day starts a new thread — the normal compaction point —
-//  and within a day compaction runs only past the thread's ceiling.
+//  and within a day compaction runs only past the thread's ceiling, or
+//  sooner when the selected model's window is smaller.
 //
 //  It runs on its own agent with the same system prompt and tools as every
 //  chat, so every moment and every Today turn reuses one cached prefix, and
@@ -138,16 +139,19 @@ final class DayThread {
             agent: agent, conversationStore: store, arbiter: arbiter, toolRegistry: toolRegistry,
             settings: settings, speechCoordinator: speechCoordinator,
             contextManager: contextManager,
-            contextWindow: Self.compactionWindow(ceiling: settings.companionThreadCeilingTokens),
+            compactionWindow: { [settings] in Self.compactionWindow(settings: settings) },
             summarize: summarize,
             restoreComposerDraft: restoreDraft,
             foldsMoments: true)
     }
 
-    /// Compaction triggers when the thread passes its ceiling: the window is
-    /// the ceiling plus the compactor's reserve.
-    static func compactionWindow(ceiling: Int) -> Int {
-        max(ceiling, 8_000) + CompactionSettings.standard.reserveTokens
+    /// The room the thread compacts in now: the selected model's window, with
+    /// the thread's ceiling (8K at least). Compaction triggers when the thread
+    /// passes the ceiling, or sooner when the model's window fills first.
+    static func compactionWindow(settings: SettingsManager) -> CompactionWindow {
+        CompactionWindow(
+            contextLength: ModelDefinition.contextLength(of: settings.selectedAgentModelID),
+            ceiling: max(settings.companionThreadCeilingTokens, 8_000))
     }
 
     var isChatBusy: Bool { chat.isGenerating }
@@ -297,12 +301,13 @@ final class DayThread {
     }
 
     private func compactIfPastCeiling() async {
-        let ceiling = settings.companionThreadCeilingTokens
+        let window = Self.compactionWindow(settings: settings)
         let before = TokenEstimator.estimateTotal(agent.state.messages)
-        guard before > ceiling else { return }
+        guard await contextManager.shouldCompact(contextTokens: before, window: window) else {
+            return
+        }
         await agent.forceCompact(
-            contextManager: contextManager,
-            contextWindow: Self.compactionWindow(ceiling: ceiling), summarize: summarize)
+            contextManager: contextManager, window: window, summarize: summarize)
         chat.adoptAgentMessages()
         let after = TokenEstimator.estimateTotal(agent.state.messages)
         trace.record(

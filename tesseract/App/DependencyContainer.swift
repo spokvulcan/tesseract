@@ -140,6 +140,13 @@ final class DependencyContainer: ObservableObject {
     lazy var extensionHost = ExtensionHost()
     lazy var packageRegistry = PackageRegistry()
     lazy var contextManager = ContextManager(settings: .standard)
+    /// The room the agent chat compacts in: the selected model's window, read
+    /// at every check so a model picked between turns compacts in its own.
+    lazy var chatCompactionWindow: @MainActor @Sendable () -> CompactionWindow = {
+        [settingsManager] in
+        CompactionWindow(
+            contextLength: ModelDefinition.contextLength(of: settingsManager.selectedAgentModelID))
+    }
     lazy var newToolRegistry: ToolRegistry = {
         let registry = ToolRegistry(sandbox: agentSandbox, extensionHost: extensionHost)
         // The agenda tools ride every conversation, Companion on or off:
@@ -182,9 +189,9 @@ final class DependencyContainer: ObservableObject {
         return notifier
     }()
     /// The Day Thread's own agent: the same system prompt and tools as every
-    /// chat (one cached prefix), compacting only past the thread's ceiling.
-    /// It sees a picture in the turn it's shown, a line in its place after
-    /// (ADR-0090).
+    /// chat (one cached prefix), compacting only past the thread's ceiling,
+    /// or sooner when the selected model's window is smaller. It sees a
+    /// picture in the turn it's shown, a line in its place after (ADR-0090).
     lazy var dayAgent: Agent = AgentFactory.makeAgent(
         inferenceService: serverInferenceService,
         packageRegistry: packageRegistry,
@@ -194,8 +201,9 @@ final class DependencyContainer: ObservableObject {
         settingsManager: settingsManager,
         gating: ToolGating(webAccessEnabled: settingsManager.webAccessEnabled),
         mcpToolsExtension: mcpClientManager.toolsExtension,
-        compactionWindow: DayThread.compactionWindow(
-            ceiling: settingsManager.companionThreadCeilingTokens),
+        compactionWindow: { [settingsManager] in
+            DayThread.compactionWindow(settings: settingsManager)
+        },
         convertToLlm: DayThreadPictures.llmMessages
     )
     lazy var dayThread = DayThread(
@@ -328,7 +336,8 @@ final class DependencyContainer: ObservableObject {
         contextManager: contextManager,
         settingsManager: settingsManager,
         gating: ToolGating(webAccessEnabled: settingsManager.webAccessEnabled),
-        mcpToolsExtension: mcpClientManager.toolsExtension
+        mcpToolsExtension: mcpClientManager.toolsExtension,
+        compactionWindow: chatCompactionWindow
     )
     // HTTP Server
     lazy var httpServer = HTTPServer(port: HTTPServer.clampedPort(settingsManager.serverPort))
@@ -427,7 +436,7 @@ final class DependencyContainer: ObservableObject {
             settings: settingsManager,
             speechCoordinator: speechCoordinator,
             contextManager: contextManager,
-            contextWindow: 262_144,
+            compactionWindow: chatCompactionWindow,
             summarize: internalCompletion,
             commandRegistry: { [commandPalette] in commandPalette.commandRegistry },
             skillExecution: SkillExecution(

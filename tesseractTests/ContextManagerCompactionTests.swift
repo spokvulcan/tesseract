@@ -44,7 +44,7 @@ struct ContextManagerCompactionTests {
         [oldUser, oldAssistant, recentUser, recentAssistant]
     }
 
-    private static let contextWindow = 5_000
+    private static let window = CompactionWindow(contextLength: 5_000)
 
     // MARK: - Direct compact() seam
 
@@ -64,7 +64,7 @@ struct ContextManagerCompactionTests {
 
         let compacted = try await manager.compact(
             messages: Self.overBudgetMessages(),
-            contextWindow: Self.contextWindow,
+            window: Self.window,
             summarize: summarize
         )
 
@@ -106,12 +106,12 @@ struct ContextManagerCompactionTests {
 
         _ = try await manager.compact(
             messages: Self.overBudgetMessages(),
-            contextWindow: Self.contextWindow,
+            window: Self.window,
             summarize: summarize
         )
         _ = try await manager.compact(
             messages: Self.overBudgetMessages(),
-            contextWindow: Self.contextWindow,
+            window: Self.window,
             summarize: summarize
         )
 
@@ -134,7 +134,7 @@ struct ContextManagerCompactionTests {
         await #expect(throws: SummarizeFailure.self) {
             _ = try await manager.compact(
                 messages: Self.overBudgetMessages(),
-                contextWindow: Self.contextWindow,
+                window: Self.window,
                 summarize: summarize
             )
         }
@@ -155,7 +155,7 @@ struct ContextManagerCompactionTests {
 
         let transform = makeCompactionTransform(
             contextManager: manager,
-            contextWindow: Self.contextWindow,
+            window: { [window = Self.window] in window },
             summarize: summarize
         )
 
@@ -184,7 +184,7 @@ struct ContextManagerCompactionTests {
 
         let transform = makeCompactionTransform(
             contextManager: manager,
-            contextWindow: Self.contextWindow,
+            window: { [window = Self.window] in window },
             summarize: summarize
         )
 
@@ -214,7 +214,7 @@ struct ContextManagerCompactionTests {
 
         let transform = makeCompactionTransform(
             contextManager: manager,
-            contextWindow: Self.contextWindow,
+            window: { [window = Self.window] in window },
             summarize: summarize
         )
 
@@ -245,7 +245,7 @@ struct ContextManagerCompactionTests {
 
         let transform = makeCompactionTransform(
             contextManager: manager,
-            contextWindow: Self.contextWindow,
+            window: { [window = Self.window] in window },
             summarize: summarize
         )
 
@@ -291,7 +291,7 @@ struct ContextManagerCompactionTests {
                 CoreMessage.user(asked), Self.oldAssistant, Self.recentUser,
                 Self.recentAssistant,
             ],
-            contextWindow: Self.contextWindow,
+            window: Self.window,
             summarize: summarize
         )
 
@@ -301,5 +301,122 @@ struct ContextManagerCompactionTests {
         #expect(prompt.hasSuffix("Assistant: \(Self.oldAssistant.text)"))
         #expect(!prompt.contains("ContentPart"))
         #expect(!prompt.contains(Self.recentUser.content))
+    }
+
+    // MARK: - The selected model's window
+
+    /// `count` turns, user and assistant in turn, of `tokens` estimated tokens
+    /// each, every one its own letter ("a", "b", …).
+    private static func turns(_ count: Int, tokens: Int) -> [any AgentMessageProtocol] {
+        (0..<count).map { index in
+            let text = String(
+                repeating: Character(UnicodeScalar(UInt8(97 + index))), count: tokens * 4)
+            let turn: any AgentMessageProtocol =
+                index.isMultiple(of: 2)
+                ? UserMessage(content: text) : AssistantMessage(content: text)
+            return turn
+        }
+    }
+
+    /// Qwen's 262,144-token window, and LFM3-VL's 128,000, keep the standard
+    /// thresholds as set: compaction past the window less 16,384, with 20,000
+    /// recent tokens kept.
+    @Test func largeWindowsKeepTheStandardThresholds() {
+        let standard = CompactionSettings.standard
+        let qwen = CompactionWindow(contextLength: 262_144)
+        #expect(standard.compactionPoint(in: qwen) == 245_760)
+        #expect(standard.keepRecentTokens(in: qwen) == 20_000)
+        let vision = CompactionWindow(contextLength: 128_000)
+        #expect(standard.compactionPoint(in: vision) == 111_616)
+        #expect(standard.keepRecentTokens(in: vision) == 20_000)
+        #expect(standard.reserveTokens(in: standard.smallestWindow) == standard.reserveTokens)
+    }
+
+    /// LFM3-Audio's 32,768-token window fits the standard thresholds in
+    /// proportion. As set, it would compact past 16,384 tokens and keep
+    /// 20,000: no cut point until the conversation passed 20,000, then a
+    /// compaction every turn.
+    @Test func aSmallWindowFitsTheStandardThresholdsInProportion() {
+        let standard = CompactionSettings.standard
+        let audio = CompactionWindow(contextLength: 32_768)
+        #expect(standard.reserveTokens(in: audio.contextLength) == 9_521)
+        #expect(standard.compactionPoint(in: audio) == 23_247)
+        #expect(standard.keepRecentTokens(in: audio) == 11_623)
+    }
+
+    /// Past a 32K window's compaction point the transform compacts once and
+    /// keeps the newest turns verbatim, and the compacted conversation has
+    /// room to grow: the next turn's check leaves it alone.
+    @Test func aSmallWindowCompactsOnceAndKeepsARecentTail() async throws {
+        let manager = ContextManager(settings: .standard)
+        let recorder = SummarizeRecorder()
+        let summarize: @Sendable (String) async throws -> String = { prompt in
+            await recorder.record(prompt)
+            return "## Goal\ncompacted"
+        }
+        let transform = makeCompactionTransform(
+            contextManager: manager,
+            window: { CompactionWindow(contextLength: 32_768) },
+            summarize: summarize
+        )
+        // Twelve 2,000-token turns: 24,000 tokens, past the 23,247 point.
+        let turns = Self.turns(12, tokens: 2_000)
+
+        let compacted = await transform.transform(turns, nil)
+
+        #expect(compacted.didMutate)
+        #expect(compacted.messages.first is CompactionSummaryMessage)
+        // The six newest turns, 12,000 tokens, cover the 11,623 kept.
+        let tail = Array(compacted.messages.dropFirst())
+        #expect(tail.count == 6)
+        #expect((tail.first as? UserMessage)?.content == (turns[6] as? UserMessage)?.content)
+        #expect(TokenEstimator.estimateTotal(tail) == 12_000)
+
+        let next = await transform.transform(
+            compacted.messages + Self.turns(1, tokens: 2_000), nil)
+        #expect(!next.didMutate)
+        #expect(await recorder.prompts.count == 1)
+    }
+
+    /// The transform reads its window at every check: a conversation that
+    /// fits Qwen's window compacts once the owner picks a 32K model.
+    @Test func theTransformReadsTheWindowAtEveryCheck() async throws {
+        let manager = ContextManager(settings: .standard)
+        let recorder = SummarizeRecorder()
+        let summarize: @Sendable (String) async throws -> String = { prompt in
+            await recorder.record(prompt)
+            return "## Goal\ncompacted"
+        }
+        let selected = Locked(CompactionWindow(contextLength: 262_144))
+        let transform = makeCompactionTransform(
+            contextManager: manager,
+            window: { selected.value },
+            summarize: summarize
+        )
+        let turns = Self.turns(12, tokens: 2_000)
+
+        let underQwen = await transform.transform(turns, nil)
+        #expect(!underQwen.didMutate)
+
+        selected.value = CompactionWindow(contextLength: 32_768)
+        let underAudio = await transform.transform(turns, nil)
+        #expect(underAudio.didMutate)
+        #expect(await recorder.prompts.count == 1)
+    }
+
+    /// A ceiling (the Day Thread's) compacts before the window's own point
+    /// but never after it, and the tail stays at most half the point: a
+    /// 20,000 ceiling keeps 10,000, so it does not compact again every turn.
+    @Test func aCeilingComesFirstButNeverPastTheWindow() {
+        let standard = CompactionSettings.standard
+        let thread = CompactionWindow(contextLength: 262_144, ceiling: 64_000)
+        #expect(standard.compactionPoint(in: thread) == 64_000)
+        #expect(standard.keepRecentTokens(in: thread) == 20_000)
+        let small = CompactionWindow(contextLength: 32_768, ceiling: 64_000)
+        #expect(standard.compactionPoint(in: small) == 23_247)
+        #expect(standard.keepRecentTokens(in: small) == 11_623)
+        let low = CompactionWindow(contextLength: 262_144, ceiling: 20_000)
+        #expect(standard.compactionPoint(in: low) == 20_000)
+        #expect(standard.keepRecentTokens(in: low) == 10_000)
     }
 }

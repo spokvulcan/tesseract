@@ -185,7 +185,7 @@ final class Agent {
     /// event-derived busy-flag gate. Cancellation propagates from the lease task.
     func forceCompact(
         contextManager: ContextManager,
-        contextWindow: Int,
+        window: CompactionWindow,
         summarize: @escaping @Sendable (String) async throws -> String
     ) async {
         guard !state.isBusy else { return }
@@ -200,7 +200,7 @@ final class Agent {
         do {
             let compacted = try await contextManager.compact(
                 messages: messages,
-                contextWindow: contextWindow,
+                window: window,
                 summarize: summarize
             )
             context.messages = compacted
