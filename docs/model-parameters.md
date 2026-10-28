@@ -241,11 +241,12 @@ between families and modes, so it gets its own column.
   prefix cache as usual.
 - LFM3-Audio is served as a text chat model; the voice pipeline does not use
   it ([research](research/2026-10-28-lfm3-audio-voice-pipeline.md)). As an
-  agent it is the weakest of the three: in a scratch-launch chat
-  (2026-10-28) it answered after valid tool calls, but its first call named
-  a skill as a tool and ended at `<|text_end|>`, an end-of-sequence token in
-  its `generation_config.json`, before `</tool_call>`, so the parser dropped
-  it. Its speech output samples with `audio_temperature` 1.0, `audio_top_k`
+  agent it is the weakest of the three: in scratch-launch chats (2026-10-28,
+  both packs, the 8-bit one downloaded through the Models page) it answered
+  after valid tool calls, but its first call named a skill as a tool and
+  ended at `<|text_end|>`, an end-of-sequence token in its
+  `generation_config.json`, before `</tool_call>`, so the parser dropped it.
+  Its speech output samples with `audio_temperature` 1.0, `audio_top_k`
   128 and `audio_repetition_penalty` 1.1 over 4,096 frames, at 24 kHz in
   80 ms codec frames. The MLX cards recommend the 8-bit pack; the 4-bit one
   loses some accuracy.
