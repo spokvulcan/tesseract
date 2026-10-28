@@ -571,12 +571,22 @@ final class PrefixCacheManager {
         lookupReturningNode(tokens: tokens, partitionKey: partitionKey).result
     }
 
+    /// The path a restore toward `restoreTarget` tokens may start from: a
+    /// snapshot of the whole target leaves nothing to prefill, so the search
+    /// stops one token short of it. The whole path without a target.
+    private nonisolated static func searchPath(_ tokens: [Int], restoreTarget: Int?) -> [Int] {
+        guard let restoreTarget else { return tokens }
+        return Array(tokens.prefix(max(0, restoreTarget - 1)))
+    }
+
     /// `lookup` plus the hit node itself, for callers inside this
     /// MainActor context that need the node identity — `resolve` pins it
     /// into the **Budget Floor** for the requesting completion
-    /// (ADR-0019). `nil` node on every miss.
+    /// (ADR-0019). `nil` node on every miss. With a `restoreTarget`, the
+    /// hit is the deepest snapshot short of it; the shared prefix is still
+    /// measured over the whole path.
     private func lookupReturningNode(
-        tokens: [Int], partitionKey: CachePartitionKey
+        tokens: [Int], partitionKey: CachePartitionKey, restoreTarget: Int? = nil
     ) -> (result: LookupResult, node: RadixTreeNode?) {
         guard let tree = store.tree(for: partitionKey) else {
             return (
@@ -599,7 +609,8 @@ final class PrefixCacheManager {
         // filtered out inside `findBestSnapshot`.
         guard
             let (node, _) = tree.findBestSnapshot(
-                tokens: tokens, includeSnapshotRefs: true
+                tokens: Self.searchPath(tokens, restoreTarget: restoreTarget),
+                includeSnapshotRefs: true
             )
         else {
             return (
@@ -814,7 +825,11 @@ final class PrefixCacheManager {
     /// Snapshot Resolution for a keyed turn's **Cache Claim**, then, in its
     /// own MainActor hop, the turn's checkpoint plan from its stable-prefix
     /// offset: the system checkpoint, the speculative branch point and the
-    /// alignment branch point for the hit.
+    /// alignment branch point for the hit. The hit stops short of the whole
+    /// prompt, whose last token the turn must prefill to decode: a repeated
+    /// prompt whose leaf covers all of it (a template whose generation prompt
+    /// the next turn's render continues, as LFM3's open `<think>` is)
+    /// restores the deepest snapshot before it instead of prefilling cold.
     nonisolated func resolve(
         tokens: [Int],
         promptTokenCount: Int,
@@ -826,7 +841,9 @@ final class PrefixCacheManager {
     ) async -> PlannedResolution {
         let resolved = await resolve(
             tokens: tokens, promptTokenCount: promptTokenCount, partitionKey: partitionKey,
-            modelFingerprint: modelFingerprint, diagnostics: diagnostics, for: claim)
+            modelFingerprint: modelFingerprint, diagnostics: diagnostics,
+            transientBoundary: nil, holder: claim.resolutionEntry(), interruption: nil,
+            restoreTarget: promptTokenCount)
         let checkpointPlan = await MainActor.run {
             planCheckpoints(
                 tokens: tokens, stablePrefixOffset: stablePrefixOffset,
@@ -879,7 +896,8 @@ final class PrefixCacheManager {
         diagnostics: PrefixCacheDiagnostics.Context,
         transientBoundary: HybridCacheSnapshot?,
         holder pinRequestID: UUID?,
-        interruption: (@Sendable () -> Bool)?
+        interruption: (@Sendable () -> Bool)?,
+        restoreTarget: Int? = nil
     ) async -> Resolved {
         // A failed hydration clears the faulted node (its committed ref or
         // chain-prefix point), which strictly shrinks the body-less hittable
@@ -891,7 +909,7 @@ final class PrefixCacheManager {
         while true {
             let initial = await MainActor.run {
                 var (result, node) = self.lookupReturningNode(
-                    tokens: tokens, partitionKey: partitionKey
+                    tokens: tokens, partitionKey: partitionKey, restoreTarget: restoreTarget
                 )
                 if let view = transientBoundary, view.isPrefixView,
                     view.tokenOffset <= tokens.count,
@@ -961,7 +979,7 @@ final class PrefixCacheManager {
                     hitID: ctx.snapshotRef.snapshotID,
                     tokens: tokens, promptTokenCount: promptTokenCount,
                     partitionKey: partitionKey, pinRequestID: pinRequestID,
-                    diagnostics: diagnostics
+                    diagnostics: diagnostics, restoreTarget: restoreTarget
                 ) {
                     return gated
                 }
@@ -979,7 +997,7 @@ final class PrefixCacheManager {
                     hitID: ctx.point.ownerSnapshotID,
                     tokens: tokens, promptTokenCount: promptTokenCount,
                     partitionKey: partitionKey, pinRequestID: pinRequestID,
-                    diagnostics: diagnostics
+                    diagnostics: diagnostics, restoreTarget: restoreTarget
                 ) {
                     return gated
                 }
@@ -1167,14 +1185,16 @@ final class PrefixCacheManager {
         promptTokenCount: Int,
         partitionKey: CachePartitionKey,
         pinRequestID: UUID?,
-        diagnostics: PrefixCacheDiagnostics.Context
+        diagnostics: PrefixCacheDiagnostics.Context,
+        restoreTarget: Int?
     ) async -> Resolved? {
         await MainActor.run { () -> Resolved? in
             guard let tree = self.store.tree(for: partitionKey) else { return nil }
             // Peek (no access bump) at the deepest resident body — the
             // recompute alternative the gate prices against.
             let alternative = tree.findBestSnapshot(
-                tokens: tokens, updateAccess: false, includeSnapshotRefs: false
+                tokens: Self.searchPath(tokens, restoreTarget: restoreTarget),
+                updateAccess: false, includeSnapshotRefs: false
             )
             let alternativeBody = alternative?.0.state.body
             let admits = EvictionPolicy.hydrationGateAdmits(

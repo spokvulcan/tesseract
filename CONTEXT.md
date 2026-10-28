@@ -174,7 +174,11 @@ Manager** as its single read-side entry, never a free-standing module reaching
 back across the manager's mutation seam. A keyed turn's resolution returns its
 checkpoint plan too, made in its own hop against the settled tree and aligned
 to the hit, so no caller plans before resolution or without its alignment
-(`PlannedResolution`, ADR-0087 decision 6). The lookup-then-hydrate *choosing* — the Hydration Gate outcome, the
+(`PlannedResolution`, ADR-0087 decision 6). Its hit stops short of the whole
+prompt, whose last token the turn prefills to decode: on a repeat of a prompt
+whose leaf covers all of it (LFM3's generation prompt ends in the `<think>` the
+next turn's render continues), the turn restores the deepest snapshot before
+the leaf instead of prefilling cold. The lookup-then-hydrate *choosing* — the Hydration Gate outcome, the
 promote-on-success vs typed-cleanup-on-failure fork, the gate-fallback shapes —
 now lives in a pure decision ladder (`SnapshotResolutionLadder`) the manager
 consults; ownership is unmoved, the manager still performs every effect (the
