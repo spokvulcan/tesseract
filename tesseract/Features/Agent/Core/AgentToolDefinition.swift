@@ -18,8 +18,26 @@ nonisolated final class CancellationToken: Sendable {
 /// Simple JSON Schema representation for tool parameter validation.
 nonisolated struct JSONSchema: Sendable {
     let type: String  // "object"
-    let properties: [String: PropertySchema]
+    /// The parameters in the order the tool declares them. The model reads
+    /// them in this order and tends to fill them in it, so the rendered tool
+    /// keeps it (``ChatTemplateTools``).
+    let properties: [(name: String, schema: PropertySchema)]
     let required: [String]
+
+    init(type: String, properties: KeyValuePairs<String, PropertySchema>, required: [String]) {
+        self.init(
+            type: type, orderedProperties: properties.map { (name: $0.key, schema: $0.value) },
+            required: required)
+    }
+
+    init(
+        type: String, orderedProperties: [(name: String, schema: PropertySchema)],
+        required: [String]
+    ) {
+        self.type = type
+        self.properties = orderedProperties
+        self.required = required
+    }
 }
 
 /// Schema for a single tool parameter.
@@ -71,7 +89,9 @@ nonisolated struct AgentToolDefinition: Sendable {
         ) async throws -> AgentToolResult
 
     /// Generates an OpenAI-compatible function tool spec matching the format
-    /// used by `AgentTool.toolSpec` and MLXLMCommon's `ToolSpec`.
+    /// used by `AgentTool.toolSpec` and MLXLMCommon's `ToolSpec`. The
+    /// parameters' declared order rides along under
+    /// ``ChatTemplateTools/propertyOrderKey``, which the render reads and drops.
     var toolSpec: [String: any Sendable] {
         var properties: [String: any Sendable] = [:]
         for (key, prop) in parameterSchema.properties {
@@ -88,6 +108,7 @@ nonisolated struct AgentToolDefinition: Sendable {
                     "required": parameterSchema.required,
                 ] as [String: any Sendable],
             ] as [String: any Sendable],
+            ChatTemplateTools.propertyOrderKey: parameterSchema.properties.map(\.name),
         ]
     }
 }

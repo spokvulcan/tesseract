@@ -532,6 +532,12 @@ Emitted Path fidelity replay. Live delivery emits on the naive decoder's token
 steps for recognized ByteLevel configurations and uses naive streaming otherwise;
 replay retains verified segment delivery and its window/fallback paths (ADR-0065).
 
+**Tool rendering**: `AppTokenizerLoader` hands every chat template the tools as
+`ChatTemplateTools` orders them: OpenAI builders' key order, a tool's
+parameters in their declared order (`JSONSchema.properties`), everything else
+sorted, so a tools block renders as Hugging Face transformers renders it
+(ADR-0098). `ToolPromptParityTests` holds it to transformers token for token.
+
 **Speculative decoding**: `Speculation` owns the drafters (the MTP head inside a
 Qwen3.5-family checkpoint, the DFlash2 draft beside Qwen3.8-27B): `LLMActor`'s
 load attaches them, the Model Session carries them, and each request asks for a

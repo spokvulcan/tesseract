@@ -77,7 +77,7 @@ struct MCPClientTests {
         // Schema decodes faithfully — required is load-bearing for loop validation.
         let schema = MCPSchemaDecoder.decode(tools[0].inputSchema)
         #expect(schema.required == ["text"])
-        #expect(schema.properties["text"]?.type == "string")
+        #expect(schema.properties.first { $0.name == "text" }?.schema.type == "string")
     }
 
     // MARK: - tools/call

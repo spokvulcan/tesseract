@@ -1,5 +1,5 @@
 {
-  "originHash" : "96c2b8467022717b29b7de88997fc7ae2dbe2cb567dcdac1f2b0ea6269462b81",
+  "originHash" : "b5d60241080cc8ac209e5b2d12efafbc5a9bf8ce51d9279188349e9fdb5a32a1",
   "pins" : [
     {
       "identity" : "eventsource",
@@ -122,7 +122,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/spokvulcan/swift-transformers",
       "state" : {
-        "revision" : "fe95f0ad9d13fdc8bf3b19848ae200e8550a875c"
+        "revision" : "c99afdf6866817284af2061054557fca885a4fda"
       }
     },
     {
