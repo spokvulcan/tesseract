@@ -81,9 +81,12 @@ nonisolated struct CompactionWindow: Sendable, Equatable {
 /// Tracks whether compaction should run and executes the summarize-and-trim
 /// algorithm when the context window is nearly full. Designed to be used via
 /// `makeTransformContext` which produces a closure compatible with `ContextTransformConfig`.
+///
+/// One manager serves every conversation (each agent chat and the Day
+/// Thread), so it keeps none of their state: a conversation that compacted
+/// before carries its summary as its leading `CompactionSummaryMessage`.
 actor ContextManager {
     let settings: CompactionSettings
-    private var lastSummary: String?
 
     init(settings: CompactionSettings) {
         self.settings = settings
@@ -104,7 +107,8 @@ actor ContextManager {
     /// compacted array with a `CompactionSummaryMessage` prepended.
     ///
     /// - Parameters:
-    ///   - messages: Current conversation messages.
+    ///   - messages: Current conversation messages, its earlier summary first
+    ///     if it compacted before: this compaction updates that summary.
     ///   - window: The room the conversation compacts in, which sets how
     ///     much of its tail stays verbatim.
     ///   - summarize: Async closure that sends a prompt to the LLM and returns the summary text.
@@ -130,10 +134,7 @@ actor ContextManager {
         // 3. Call LLM for summary
         let summary = try await summarize(prompt)
 
-        // 4. Store for incremental updates
-        lastSummary = summary
-
-        // 5. Build result
+        // 4. Build result
         let tokensBefore = TokenEstimator.estimateTotal(oldMessages)
         let summaryMessage = CompactionSummaryMessage(
             summary: summary,
@@ -195,17 +196,18 @@ actor ContextManager {
     // MARK: - Summarization Prompts
 
     /// Build the summarization prompt from messages being compacted.
-    /// Uses the update prompt when a previous summary exists.
+    /// Uses the update prompt when the conversation compacted before: it
+    /// starts with its previous summary. A conversation that never compacted
+    /// gets the first-time prompt, whatever another conversation compacted.
     ///
     /// When using the update prompt, `CompactionSummaryMessage` instances are
     /// filtered out of the formatted messages because the previous summary is
-    /// already injected separately via `lastSummary`. Without this filter, the
-    /// summary would appear twice, causing drift and bloat over successive
-    /// compactions.
+    /// already injected separately. Without this filter, the summary would
+    /// appear twice, causing drift and bloat over successive compactions.
     private func buildSummarizationPrompt(
         _ messages: [any AgentMessageProtocol]
     ) -> String {
-        if let previous = lastSummary {
+        if let previous = messages.first as? CompactionSummaryMessage {
             // Filter out prior compaction summaries — they're already represented
             // by `previous`. Only format the actual conversation messages.
             let nonSummary = messages.filter { !($0 is CompactionSummaryMessage) }
@@ -216,7 +218,7 @@ actor ContextManager {
                 Keep the same structure. Merge, don't duplicate.
 
                 Previous summary:
-                \(previous)
+                \(previous.summary)
 
                 New conversation:
                 \(formatted)
