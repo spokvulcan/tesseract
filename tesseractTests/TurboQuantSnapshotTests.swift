@@ -244,4 +244,95 @@ struct TurboQuantSnapshotTests {
         #expect(restored.offset == 200)
         #expect(Self.bytes(restored) == Self.bytes(live))
     }
+
+    /// The extension worth-it gate weighs a scheme's attention at full
+    /// precision (ADR-0083, amendment 2026-10-28), so a scheme leaf extends
+    /// its base where the same turn's full-precision leaf does. Here the
+    /// recurrent state is five times the compressed attention and the base
+    /// holds half the rows: weighed by its stored bytes the suffix is 92% of
+    /// the leaf, over the gate, and the full write would delete the base.
+    @Test(arguments: KVScheme.allCases)
+    func aSchemeLeafExtendsWhereAFullPrecisionLeafWould(_ scheme: KVScheme) throws {
+        let rows = 64
+        let attention = Self.plainLayer(rows: rows)
+        let compressedBytes = try #require(
+            HybridCacheSnapshot.capture(
+                cache: [attention], offset: rows, type: .leaf, storedForm: scheme)
+        ).memoryBytes
+        let recurrent = MambaCache()
+        recurrent.state = [
+            MLXArray.zeros([1, 3, 64]), MLXArray.zeros([1, 5 * compressedBytes / 4]),
+        ]
+        let fullPrecision = try #require(
+            HybridCacheSnapshot.capture(cache: [attention, recurrent], offset: rows, type: .leaf))
+        let stored = try #require(
+            HybridCacheSnapshot.capture(
+                cache: [attention, recurrent], offset: rows, type: .leaf, storedForm: scheme))
+        let base = SnapshotExtension(baseSnapshotID: "base", baseOffset: rows / 2)
+
+        #expect(SnapshotPayload.extract(fullPrecision, extending: base).extending == base)
+        #expect(SnapshotPayload.extract(stored, extending: base).extending == nil)
+        let payload = SnapshotPayload.extract(stored, extending: base, storedForm: scheme)
+        #expect(payload.extending == base)
+        #expect(payload.layers[0].suffixBaseOffset == rows / 2)
+    }
+
+    /// A scheme leaf's Leaf Extension Admission on SSD: its suffix segment
+    /// composes with the base's segment into the leaf, bitwise.
+    @Test(arguments: KVScheme.allCases)
+    func aSchemeLeafExtendsItsBaseOnSSD(_ scheme: KVScheme) async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("turbo-chain-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SSDSnapshotStore(
+            config: SSDPrefixCacheConfig(
+                enabled: true, rootURL: root, budgetBytes: 100_000_000,
+                maxPendingBytes: 100_000_000))
+        let fingerprint = String(repeating: "a", count: 64)
+        store.registerPartition(
+            PartitionMeta(
+                modelID: "m", modelFingerprint: fingerprint, kvBits: nil, kvGroupSize: 64,
+                createdAt: 1, schemaVersion: SnapshotManifestSchema.currentVersion,
+                kvScheme: scheme.rawValue),
+            digest: "abcd1234")
+        func enqueue(_ payload: SnapshotPayload, id: String, offset: Int) -> SnapshotRef? {
+            let descriptor = PersistedSnapshotDescriptor(
+                snapshotID: id, partitionDigest: "abcd1234", pathFromRoot: Array(1...offset),
+                tokenOffset: offset, checkpointType: "leaf", bytes: payload.totalBytes,
+                segmentBaseOffset: payload.extending?.baseOffset ?? 0, inheritedSegments: [],
+                createdAt: 1, lastAccessAt: 1,
+                fileRelativePath: PersistedSnapshotDescriptor.relativeFilePath(
+                    snapshotID: id, partitionDigest: "abcd1234"),
+                schemaVersion: SnapshotManifestSchema.currentVersion)
+            guard
+                case .accepted(let ref) = store.tryEnqueue(payload: payload, descriptor: descriptor)
+            else { return nil }
+            return ref
+        }
+
+        // Two turns of one conversation: the base turn's leaf, then eight
+        // decoded rows more.
+        let live = Self.turboLayer(keyBits: scheme.keyBits, rows: 120)
+        let baseLeaf = try #require(
+            HybridCacheSnapshot.capture(cache: [live], offset: 120, type: .leaf))
+        _ = try #require(enqueue(SnapshotPayload.extract(baseLeaf), id: "base", offset: 120))
+        await store.flushAsync()
+        for seed in UInt64(400)..<408 { Self.step(live, seed: seed) }
+        let leaf = try #require(
+            HybridCacheSnapshot.capture(cache: [live], offset: 128, type: .leaf))
+        let suffix = SnapshotPayload.extract(
+            leaf, extending: SnapshotExtension(baseSnapshotID: "base", baseOffset: 120),
+            storedForm: scheme)
+        #expect(suffix.extending?.baseOffset == 120)
+        let ref = try #require(enqueue(suffix, id: "leaf", offset: 128))
+        await store.flushAsync()
+
+        let loaded = try #require(
+            store.loadSync(snapshotRef: ref, expectedFingerprint: fingerprint))
+        let restored = try #require(try loaded.restore().first as? TurboQuantKVCache)
+        #expect(restored.isCompressed)
+        #expect(restored.offset == 128)
+        #expect(Self.bytes(restored) == Self.bytes(live))
+    }
 }
