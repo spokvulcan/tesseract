@@ -485,10 +485,13 @@ in-actor `nil` return (a retired pattern), degraded mode (unqualified).
 ### Vision capability and mode
 
 **Vision-Capable Model**:
-A model whose on-disk config declares image input (the Qwen3.5-family
-`vision_config`); text-only checkpoints do not. Fixed for a downloaded model —
-distinct from **Vision Mode**, which is whether that capability is currently
-loaded. Every **PARO Checkpoint** in the catalog declares image input.
+A model whose on-disk config declares image input in a family the app serves
+images for: the Qwen3.5 family or LFM3-VL, with a `vision_config`. Text-only
+checkpoints do not, an empty `vision_config` included (LFM3, LFM3-Audio). Fixed
+for a downloaded model — distinct from **Vision Mode**, which is whether that
+capability is currently loaded. Every **PARO Checkpoint** in the catalog
+declares image input. LFM3-VL has no image keying, so its image-bearing
+requests are **Unkeyed Completions**.
 _Avoid_: "vision model" (ambiguous with the loaded container), "multimodal" (there
 is no audio/video input path), "supports images" as a per-request flag, Text-Only
 Override (retired by ADR-0089: no catalog entry withholds the image input its
