@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-28 · **Scope:** LFM3-Audio-2B (the `LiquidAI/LFM3-Audio-2B-MLX-8bit` and `-4bit` packs) as the Mac's speech recognizer behind `SpeechRecognizer` and as its voice behind `SpeechSynthesizing`. Not the phone, and not a speech-to-speech Companion, which the 2026-10-27 LFM3 note covers.
 **Method:** Read the vendored fork at `c27b315`, the port (`08c1d2e`) plus the text-only fix (the three LFM3-Audio files, `LFM3AudioTests.swift`, `tools/generate_lfm3_fixtures.py`), the app's speech seams, model catalog, Model Residency and LLM Gate code, the speech ADRs and their `CONTEXT.md` terms, the 4-bit pack's card and configs as downloaded (`~/Library/Application Support/models/LiquidAI_LFM3-Audio-2B-MLX-4bit`), and the 2026-10-27 note (it sits in the main checkout: `docs/research/` matches the `research/` ignore rule). Nothing was built, run or measured. Speeds are the fork's or Liquid's. Every other number says it is a guess or an estimate.
-**Measured since:** [2026-10-28-lfm3-audio-measured.md](2026-10-28-lfm3-audio-measured.md) ran §6's measurements on public-domain clips. Accuracy came out a point behind Whisper, and a take released during a 27B prefill in the app's process waited 25–28 s (about 2 s in its own process). The voice is as fast as Qwen3-TTS, pending a blind listen.
+**Measured since:** [2026-10-28-lfm3-audio-measured.md](2026-10-28-lfm3-audio-measured.md) ran §6's measurements on public-domain clips and the owner's Capture Dump. Accuracy came out a point behind Whisper on read speech and level on the owner's takes up to 74 s, though a 113 s take lost 40%. A take released during a 27B prefill in the app's process waited 25–28 s (about 2 s in its own process). The voice is as fast as Qwen3-TTS; blind, the owner preferred Qwen3-TTS and keeps LFM3-Audio in play for its integration with the language model.
 
 ---
 
@@ -137,7 +137,7 @@
 
 ## 6. Slices
 
-**Before any app code: measure** (`CLAUDE.md`, smallest harness first), with a throwaway Swift tool on the fork. Stop if step 1 or 3 fails. Done on 2026-10-28 without the owner's takes, so step 1 still lacks its Capture Dump replay: [the measurements](2026-10-28-lfm3-audio-measured.md).
+**Before any app code: measure** (`CLAUDE.md`, smallest harness first), with a throwaway Swift tool on the fork. Stop if step 1 or 3 fails. Done on 2026-10-28, the Capture Dump replay included: [the measurements](2026-10-28-lfm3-audio-measured.md).
 
 1. Accuracy: LFM3 ASR on the latest 100 Capture Dump takes at 8 and 4 bits, scored as the 2026-10-03 note did (against Whisper's text and the Correction Pairs, technical words apart). Transcripts stay outside the repository.
 2. Latency: release-to-text and one preview decode, with the 27B idle and while it prefills a 1,024-token chunk, ABAB.
