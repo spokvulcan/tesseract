@@ -176,7 +176,7 @@ decided alone. On Qwen3.8-27B the 48 GatedDeltaNet layers hold
 153.9 MB of float32 state, and the attention adds 25,856 bytes a token under
 `turbo8v4` (bf16: 65,536). No `turbo8v4` leaf shorter than 662 tokens could
 extend, whatever its suffix, and a turn that added a third of its leaf needed
-1,051 (`turbo0v4`: 415 and 659; full precision: 261 and 415).
+1,051 (`turbo0v4`: 415 and 660; full precision: 261 and 415).
 
 The `turbo8v4` prefix-cache e2e made no extension in the whole run, where
 the full-precision run makes four. Its Step P3 (ADR-0090), the request after
@@ -207,7 +207,7 @@ boundaries and their whole-state copies on SSD as a full-precision one does,
 and its chains carry TurboQuant suffix segments where before they held one
 full segment. The full-precision runs pass this gate narrowly: Step P2's leaf
 extends at 89.94% of its full payload on the 27B and 89.40% on the 4B PARO,
-so a picture turn 17 tokens longer on the 27B would write full and P3 would
+so a picture turn 18 tokens longer on the 27B would write full and P3 would
 fall back to the system checkpoint again, now in both forms.
 
 `TurboQuantSnapshotTests` pins the rule: a scheme leaf whose stored bytes are
