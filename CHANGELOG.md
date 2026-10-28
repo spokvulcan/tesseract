@@ -1,5 +1,45 @@
 # Changelog
 
+## [1.20.0](https://github.com/spokvulcan/tesseract/compare/v1.19.0...v1.20.0) (2026-10-28)
+
+
+### Features
+
+* **deps:** pin mlx-swift-lm 595b243, LFM3-VL takes video ([#651](https://github.com/spokvulcan/tesseract/issues/651)) ([9245226](https://github.com/spokvulcan/tesseract/commit/92452268de8f22a85650ef8569bc5c99ff1beeee))
+* **models:** LFM3-1.7B, LFM3-VL-2B and LFM3-Audio-2B run as agent models ([#647](https://github.com/spokvulcan/tesseract/issues/647)) ([dce6522](https://github.com/spokvulcan/tesseract/commit/dce65223a4cdf856376282423d68482010a28ba0))
+* **voice:** Jarvis speaks the reply as it is written; short turns end sooner ([#645](https://github.com/spokvulcan/tesseract/issues/645)) ([33b0a8f](https://github.com/spokvulcan/tesseract/commit/33b0a8f185fa1ad3e5fe9fd662dccca120d14e9e))
+
+
+### Bug Fixes
+
+* **agent:** a compaction updates its own conversation's summary ([#652](https://github.com/spokvulcan/tesseract/issues/652)) ([d0e329a](https://github.com/spokvulcan/tesseract/commit/d0e329a52f14de4ff00c599bec006abcc94d9f01))
+* **agent:** compaction works in the selected model's window ([#649](https://github.com/spokvulcan/tesseract/issues/649)) ([53b32ef](https://github.com/spokvulcan/tesseract/commit/53b32ef7de1f483383ac207c889624e5426d391f))
+* **agent:** tool prompts render as transformers renders them ([#650](https://github.com/spokvulcan/tesseract/issues/650)) ([28efa12](https://github.com/spokvulcan/tesseract/commit/28efa12353fc693f7a07c7e44b03e34794cd7d5a))
+* **deps:** pin mlx-swift-lm 5b088d9, the DFlash2 bit-identity tests pass on CI's runner ([#646](https://github.com/spokvulcan/tesseract/issues/646)) ([7002c1f](https://github.com/spokvulcan/tesseract/commit/7002c1fd8e0a930db283e47a7b10a7facaaaf356))
+* **menubar:** VoiceOver reads the menu-bar clock; the unused System Prompt Inspector goes ([#641](https://github.com/spokvulcan/tesseract/issues/641)) ([0408946](https://github.com/spokvulcan/tesseract/commit/04089467557069bcd27626b95ec1200f60891f94))
+* **prefix-cache:** a KV Scheme leaf extends its base where full precision does ([#648](https://github.com/spokvulcan/tesseract/issues/648)) ([75f9196](https://github.com/spokvulcan/tesseract/commit/75f9196907f4c0fdd27fee0549415636b7a550af))
+
+
+### Code Refactoring
+
+* one home per rule — the day's one read model, one Decode Start, one Launch Mode, and nine more deepenings ([#638](https://github.com/spokvulcan/tesseract/issues/638)) ([6a58913](https://github.com/spokvulcan/tesseract/commit/6a58913731d4d7d406fc0abe842253e2ffb79738))
+
+
+### Tests
+
+* tests that park a pool thread take turns, and CI stops a hung run with its stacks ([#642](https://github.com/spokvulcan/tesseract/issues/642)) ([449d2be](https://github.com/spokvulcan/tesseract/commit/449d2be322fb49cd000bb2f371857fa1ab1aedef))
+
+
+### Continuous Integration
+
+* the Release builds replay unchanged compiles from the last run ([#643](https://github.com/spokvulcan/tesseract/issues/643)) ([2b35de0](https://github.com/spokvulcan/tesseract/commit/2b35de032ea5ad45b1d67e35b7a68bb78ba48972))
+
+
+### Miscellaneous Chores
+
+* **deps:** re-pin mlx-swift-lm onto upstream main 3d066d3 ([#644](https://github.com/spokvulcan/tesseract/issues/644)) ([0c43872](https://github.com/spokvulcan/tesseract/commit/0c43872fd16e14fdb66bcb1f89864df45752b85f))
+* **dev:** gate runs keep their own captures, the test-only scan reads the build's index, Swift formats on write ([#640](https://github.com/spokvulcan/tesseract/issues/640)) ([e81ae41](https://github.com/spokvulcan/tesseract/commit/e81ae41fb6d545ac25f02a616698b1607a217794))
+
 ## [1.19.0](https://github.com/spokvulcan/tesseract/compare/v1.18.0...v1.19.0) (2026-10-11)
 
 
