@@ -42,10 +42,11 @@ since on `perf/goal-2026-10-08`. The outgoing tips are tagged
 (the app's gitlink, on `perf/goal-2026-10-08`). The app pinned the new tip,
 `aeb4da1`, then `5b088d9`, two commits past it on branch
 `fix/vendor-test-runner-gpu` (fast-forward; `pin-upstream-mlx-swift`
-unchanged): the fixes for the two tests CI's runner failed (below). It now
-pins `c2613f7`, three commits past that (fast-forward again): LFM3, LFM3-VL
+unchanged): the fixes for the two tests CI's runner failed (below). It then
+pinned `c2613f7`, three commits past that (fast-forward again): LFM3, LFM3-VL
 and LFM3-Audio on branch `feat/lfm3-on-5b088d9`, and their DocC fixes, which
-ride `feat/lfm3-vl-video` under its video commit (below).
+ride `feat/lfm3-vl-video` under its video commit (below). It now pins that
+video commit, `595b243` (fast-forward again; below).
 
 What upstream brought: **our #625 merged** verbatim; #632 closed in favor of
 component-aware checkpoint loading (#679, #580: on-demand components, a
@@ -183,6 +184,7 @@ Carried on top of `3d066d3`, in order (old hash in brackets; the
 | `edba223` (new) | LFM3, LFM3-VL and LFM3-Audio | Not filed |
 | `07628d3` (new) | Text-only LFM3-VL and LFM3-Audio prompts decode | Not filed |
 | `c2613f7` (new) | LFM3 DocC links and parameter | Not filed |
+| `595b243` (new) | LFM3-VL video input | Not filed |
 
 ### CI's runner GPU and the two DFlash2 tests (2026-10-28)
 
@@ -219,9 +221,9 @@ Validation at `5b088d9`: serialized `MLXLMTests` on the M3 Max ran XCTest
 
 Branch `feat/lfm3-on-5b088d9`, two commits on `5b088d9` (fast-forward). They
 were written on `aeb4da1` as `08c1d2e` and `c27b315` and cherry-picked
-unchanged; they share no files with `299ff2e` and `5b088d9`. The pin is one
-commit further, `c2613f7`, on branch `feat/lfm3-vl-video` (the LFM3-VL video
-work, whose `595b243` sits on top).
+unchanged; they share no files with `299ff2e` and `5b088d9`. Tesseract #647
+pinned one commit further, `c2613f7`, on branch `feat/lfm3-vl-video` (the
+LFM3-VL video work, whose `595b243` sits on top).
 
 - `edba223` `feat(lfm3): add LFM3, LFM3-VL and LFM3-Audio`. LFM3-1.7B
   (`lfm3`: gated short convolutions, sliding-window and global attention),
@@ -246,6 +248,52 @@ work, whose `595b243` sits on top).
 
 Validation at `07628d3`: the 37 tests of `LFM3Tests`, `LFM3VLTests` and
 `LFM3AudioTests` pass on the M3 Max.
+
+### LFM3-VL video input (2026-10-28)
+
+`595b243` `feat(lfm3): add video input to LFM3-VL`, on `c2613f7`, ports the
+checkpoint's video processor (`video_processing_lfm3_vl.py` and
+`processing_lfm3_vl.py`, as mlx-vlm `230fc308` runs them). It samples 2 frames
+a second at `linspace` indices, at least 4 (or every frame of a shorter clip)
+and at most 768. It resizes every frame to the one size at which the whole
+clip fits its pixel budget, repeats the last frame to fill the last temporal
+pair, and labels each pair `<t seconds>` in the prompt. The settings come from
+`video_processor` in `processor_config.json`.
+
+- The frame count and rate come from the track's sample cursor, counted and
+  averaged as OpenCV does. Frames are requested at mid-frame presentation
+  times: with B-frames the first sample's media time is after zero, and the
+  edit list maps it back to 0.
+- `AVSampleCursor.stepInDecodeOrder(byCount:)` moves nowhere for a count above
+  `Int32.max`, so the port steps by `Int32.max`.
+- The reference nests the vision markers: the template's `<|vision_start|>`
+  and `<|vision_end|>` stay around the whole clip, outside each frame pair's
+  own `<t seconds><|vision_start|>…<|vision_end|>`. transformers 5.21 and
+  mlx-vlm both do this.
+- transformers 5.22 will default `cap_pixels_per_frame` to true (768 tokens a
+  frame). The checkpoint sets it false and mlx-vlm ignores it, so the port
+  keeps the uncapped budget: a short clip can cost ~12k tokens.
+- `splitPreparedInput` returns nil for any input with video, so a video prompt
+  always prefills cold.
+
+Parity with mlx-vlm in float32 on `LiquidAI/LFM3-VL-2B-MLX-4bit`, on a
+75-frame 640 × 360 H.264 clip with B-frames: the same frame count, rate,
+indices, grid and all 704 prompt ids; features 6.1e-6 and last logits 5.0e-6
+relative; 48 of 48 greedy tokens. Pixels differ by 0.0153 mean absolute (on
+−1…1), nearly all of it AVFoundation decoding H.264 about 1.5 levels brighter
+than FFmpeg. `tools/generate_lfm3_fixtures.py video` writes the fixture;
+`MLX_LFM3_VL_VIDEO_FIXTURE` and `MLX_LFM3_VL_VIDEO` run
+`localCheckpointVideoParity()`.
+
+Validation at `595b243`: `LFM3Tests`, `LFM3VLTests` and `LFM3AudioTests` pass
+(43 tests; their 4 opt-in checkpoint tests skip without a checkpoint), and
+both LFM3-VL checkpoint parity tests pass against the checkpoint. DocC passes
+for the five engine targets. With #647's app changes, the app builds in
+Release and `tesseractTests` passes (3,745 tests, 7 skipped). Serialized
+`MLXLMTests` ran with the same video commit on `aeb4da1`, before the move onto
+`5b088d9`: XCTest 874 (14 skipped) and Swift Testing 1,290 tests. Only
+`testSameInputStackingReleasesEachBlockBeforeTheNext` failed, and it fails the
+same way on the LFM3 port without the video commit.
 
 ## DFlash2 tree verification: a chain with leaf siblings (2026-10-08)
 
