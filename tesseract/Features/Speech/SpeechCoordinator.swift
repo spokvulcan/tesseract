@@ -64,6 +64,14 @@ final class SpeechCoordinator {
     private var isPaused = false
     private var speechCompletionCallback: (@MainActor @Sendable () -> Void)?
 
+    /// A streamed reply's text not yet handed to the engine (ADR-0097).
+    private var streamedText: [String] = []
+    /// `finishStreamedSpeech()` came: no more text will.
+    private var streamedTextComplete = false
+    /// Wakes the streamed reply's task when text or its end arrives; nil
+    /// while no streamed reply is open.
+    private var streamedTextArrived: AsyncStream<Void>.Continuation?
+
     init(
         textExtractor: any TextExtracting,
         engine: SpeechEnginePresenter,
@@ -106,16 +114,14 @@ final class SpeechCoordinator {
         }
     }
 
-    /// Speak text directly (for in-app usage). `showsOverlay: false` plays
-    /// audio-only — for callers that bring their own visual surface (the
-    /// Companion voice overlay, #328) and must not raise the TTS notch too.
+    /// Speak text directly (for in-app usage), with the TTS notch.
     /// `userInitiated`: the user asked for this speech (a Speak button), so a
     /// missing Voice Engine sends them to the Models page. `retake`: speak
     /// only the opening as a new Reference Take (see `tryAnotherTake`).
     /// `language`: the text's own (a `TTSLanguage` raw value), when the caller
     /// knows it; otherwise the setting's.
     func speakText(
-        _ text: String, showsOverlay: Bool = true,
+        _ text: String,
         userInitiated: Bool = false,
         retake: Bool = false,
         language: String? = nil,
@@ -134,9 +140,53 @@ final class SpeechCoordinator {
         activeTask = Task {
             guard await voiceEngineReady(userInitiated: userInitiated) else { return }
             await generateAndPlay(
-                text: text, showsOverlay: showsOverlay, userInitiated: userInitiated,
-                retake: retake, language: language)
+                text: text, userInitiated: userInitiated, retake: retake, language: language)
         }
+    }
+
+    /// Speak text that arrives in pieces — a reply as the model writes it,
+    /// for the voice session (ADR-0097). Audio only: the caller brings its
+    /// own visual surface. `text` starts the voice; `appendStreamedSpeech`
+    /// queues later pieces into the same playback stream, and the engine
+    /// takes everything queued as one utterance, so later pieces run longer.
+    /// `onSuccess` fires once `finishStreamedSpeech()` came and the audio
+    /// drained. While it waits for more text the state stays live.
+    func startStreamedSpeech(
+        _ text: String, onSuccess: (@MainActor @Sendable () -> Void)? = nil
+    ) {
+        guard !text.isEmpty else { return }
+
+        stop()
+        speechCompletionCallback = onSuccess
+        streamedText = [text]
+        let (arrivals, continuation) = AsyncStream<Void>.makeStream(
+            bufferingPolicy: .bufferingNewest(1))
+        streamedTextArrived = continuation
+        // Claimed synchronously, as `speakText` does: the voice session's
+        // watchdog must never read `.idle` while a reply is in flight.
+        state = .generating(progress: "")
+        activeTask = Task {
+            guard await voiceEngineReady(userInitiated: false) else {
+                // A cancelled request leaves the text to the newer one.
+                if !Task.isCancelled { endStreamedText() }
+                return
+            }
+            await streamAndPlay(arrivals)
+        }
+    }
+
+    /// Queue a later piece of the streamed reply behind what is speaking.
+    func appendStreamedSpeech(_ text: String) {
+        guard let streamedTextArrived, !text.isEmpty else { return }
+        streamedText.append(text)
+        streamedTextArrived.yield()
+    }
+
+    /// No more pieces: the streamed reply ends when its audio does.
+    func finishStreamedSpeech() {
+        guard let streamedTextArrived else { return }
+        streamedTextComplete = true
+        streamedTextArrived.yield()
     }
 
     /// "Try another take": render the settings voice again from the opening
@@ -188,6 +238,7 @@ final class SpeechCoordinator {
         speechCompletionCallback = nil
         activeTask?.cancel()
         activeTask = nil
+        endStreamedText()
         isPaused = false
         playback.stop()
         currentSegmentIndex = 0
@@ -337,12 +388,9 @@ final class SpeechCoordinator {
     }
 
     private func generateAndPlay(
-        text: String, showsOverlay: Bool = true, userInitiated: Bool, retake: Bool = false,
-        language: String? = nil
+        text: String, userInitiated: Bool, retake: Bool = false, language: String? = nil
     ) async {
-        // One resolution for the whole utterance: nil means audio-only, and
-        // every overlay touch below no-ops.
-        let overlay = showsOverlay ? notchOverlay : nil
+        let overlay = notchOverlay
         do {
             // Neither opening the session nor admitting the utterance ends at a
             // stop(), and either can spend seconds loading the voice model, so
@@ -352,11 +400,7 @@ final class SpeechCoordinator {
             try Task.checkCancellation()
             state = .generating(progress: "")
 
-            // A retake needs a fresh seed: the settings seed would render the
-            // same take again.
-            let options = SpeechOptions(
-                seed: retake ? .entropy : .fixed(UInt64(clamping: settings.ttsSeed)),
-                parameters: settings.ttsParameters)
+            let options = speechOptions(retake: retake)
             let utterance =
                 retake
                 ? try await session.retake(text, options: options)
@@ -428,24 +472,109 @@ final class SpeechCoordinator {
             // stop() cancelled this request and already tore playback and the
             // overlay down. A newer request may own the state, callback,
             // sink and overlay by now: resetting them here ended its reading.
-        } catch is CancellationError {
+        } catch {
+            await endFailedRequest(error, userInitiated: userInitiated)
+        }
+    }
+
+    /// The request's options: the settings seed, or a fresh one for a
+    /// retake (the settings seed would render the same take again).
+    private func speechOptions(retake: Bool = false) -> SpeechOptions {
+        SpeechOptions(
+            seed: retake ? .entropy : .fixed(UInt64(clamping: settings.ttsSeed)),
+            parameters: settings.ttsParameters)
+    }
+
+    /// A request that ended in an error rather than a `stop()`: nothing it
+    /// owns calls back, and the owner hears why.
+    private func endFailedRequest(_ error: any Error, userInitiated: Bool) async {
+        speechCompletionCallback = nil
+        if error is CancellationError {
             // Cancelled inside the engine, with no stop().
-            speechCompletionCallback = nil
             if state != .idle { state = .idle }
-        } catch SpeechEngineError.modelUnavailable(let detail) {
+            return
+        }
+        playback.stop()
+        notchOverlay?.dismiss()
+        if case SpeechEngineError.modelUnavailable(let detail) = error {
             // The catalog said downloaded, but the engine's disk check found
             // the checkpoint gone or partial.
             Log.speech.error("Voice Engine unavailable: \(detail)")
-            playback.stop()
-            notchOverlay?.dismiss()
             await presentVoiceEngineMissing(userInitiated: userInitiated)
-        } catch {
+        } else {
             Log.speech.error("Speech generation failed: \(error)")
-            speechCompletionCallback = nil
-            playback.stop()
-            notchOverlay?.dismiss()
             await presentTransientError(error.localizedDescription)
         }
+    }
+
+    /// The streamed reply's loop: each round takes all the text queued so far
+    /// as one utterance and plays it into one playback stream, then waits for
+    /// more text or the end. Like segments, a round waits for playback demand
+    /// before it renders, so the voice never runs far ahead of the listener.
+    private func streamAndPlay(_ arrivals: AsyncStream<Void>) async {
+        do {
+            let session = try await openOrReuseSession()
+            try Task.checkCancellation()
+            let options = speechOptions()
+            // The first round always has text: `startStreamedSpeech` queued it.
+            var streaming = false
+            var next = arrivals.makeAsyncIterator()
+            while true {
+                if streamedText.isEmpty {
+                    if streamedTextComplete { break }
+                    // A nil wake is `stop()`: the cancellation check throws.
+                    _ = await next.next()
+                    try Task.checkCancellation()
+                    continue
+                }
+                let text = streamedText.joined(separator: " ")
+                streamedText.removeAll()
+                let utterance = try await session.speak(text, options: options)
+                try Task.checkCancellation()
+                if !streaming {
+                    playback.startStreaming(sampleRate: utterance.sampleRate)
+                    playback.setPlaybackRate(Float(settings.ttsPlaybackRate))
+                    streaming = true
+                }
+                for try await event in utterance.events {
+                    try Task.checkCancellation()
+                    switch event {
+                    case .segment:
+                        state = .streaming
+                    case .audio(let chunk):
+                        playback.appendChunk(samples: chunk.samples)
+                    case .words:
+                        break
+                    case .segmentDone(let index):
+                        await rememberVoice(of: session)
+                        try Task.checkCancellation()
+                        if index + 1 < utterance.segmentCount {
+                            try await waitForPlaybackDemand()
+                        }
+                    case .finished:
+                        break
+                    }
+                }
+                try await waitForPlaybackDemand()
+            }
+            endStreamedText()
+            // onPlaybackFinished advances state to .idle and fires the
+            // completion callback once the audio drains.
+            playback.finishStreaming()
+        } catch  where Task.isCancelled {
+            // stop() cancelled this request and already tore it down.
+        } catch {
+            endStreamedText()
+            await endFailedRequest(error, userInitiated: false)
+        }
+    }
+
+    /// Closes the streamed reply's text: nothing more is taken.
+    private func endStreamedText() {
+        streamedTextArrived?.finish()
+        streamedTextArrived = nil
+        streamedText.removeAll()
+        streamedTextComplete = false
     }
 
     /// Segment Windows arrive as data (`startFrame` is ground truth): the

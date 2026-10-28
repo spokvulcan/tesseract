@@ -46,7 +46,8 @@ import Testing
 
     @Test func trailingSilenceEndsTheTurn() {
         var endpointer = VoiceEndpointer(config: .listening(trailingSilence: 1.8))
-        var (events, time) = feed(&endpointer, level: 0.5, from: 0, for: 1.0)
+        // A long turn: past the patience ramp, the Setting's silence applies.
+        var (events, time) = feed(&endpointer, level: 0.5, from: 0, for: 4.0)
         #expect(events == [.speechStarted])
 
         // Silence shorter than the trailing window — still his turn.
@@ -62,6 +63,39 @@ import Testing
         (events, _) = feed(&endpointer, level: 0.02, from: time, for: 2.0)
         #expect(events == [.endOfSpeech])
         #expect(!endpointer.isInSpeech)
+    }
+
+    /// ADR-0097: a short turn closes after a second of silence; the close
+    /// grows to the Setting's value as the turn keeps going.
+    @Test func aShortTurnClosesSoonerThanALongOne() {
+        var short = VoiceEndpointer(config: .listening(trailingSilence: 1.8))
+        var (events, time) = feed(&short, level: 0.5, from: 0, for: 1.0)
+        #expect(events == [.speechStarted])
+        // 0.8 s of silence: still the owner's turn.
+        (events, time) = feed(&short, level: 0.02, from: time, for: 0.75)
+        #expect(events.isEmpty)
+        // Closed by 1.25 s, well before the 1.8 s a long turn gets.
+        (events, _) = feed(&short, level: 0.02, from: time, for: 0.4)
+        #expect(events == [.endOfSpeech])
+
+        var long = VoiceEndpointer(config: .listening(trailingSilence: 1.8))
+        (events, time) = feed(&long, level: 0.5, from: 0, for: 4.0)
+        (events, _) = feed(&long, level: 0.02, from: time, for: 1.6)
+        #expect(events.isEmpty)
+        #expect(long.isInSpeech)
+    }
+
+    @Test func theCloseGrowsAcrossTheRamp() {
+        let config = VoiceEndpointer.Config.listening(trailingSilence: 1.8)
+        #expect(config.closingSilence(afterSpeaking: 0.5) == 1.0)
+        #expect(config.closingSilence(afterSpeaking: 1.5) == 1.0)
+        #expect(abs(config.closingSilence(afterSpeaking: 2.5) - 1.4) < 1e-9)
+        #expect(config.closingSilence(afterSpeaking: 3.5) == 1.8)
+        #expect(config.closingSilence(afterSpeaking: 20) == 1.8)
+        // A Setting under the short close is the close for every turn.
+        let quick = VoiceEndpointer.Config.listening(trailingSilence: 0.8)
+        #expect(quick.closingSilence(afterSpeaking: 0.5) == 0.8)
+        #expect(quick.closingSilence(afterSpeaking: 10) == 0.8)
     }
 
     @Test func quietLevelsBelowThresholdNeverTrigger() {

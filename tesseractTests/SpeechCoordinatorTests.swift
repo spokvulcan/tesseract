@@ -151,6 +151,58 @@ struct SpeechCoordinatorTests {
         harness.coordinator.stop()
     }
 
+    /// ADR-0097: a reply streamed in pieces plays as one stream, the pieces
+    /// queued while one renders go in together, and the completion waits for
+    /// the last piece and the drain.
+    @Test
+    func streamedSpeechQueuesPiecesIntoOneStreamAndCompletesAfterFinish() async throws {
+        let harness = await Harness()
+        let probe = CallbackProbe()
+
+        harness.coordinator.startStreamedSpeech("Sure.") { probe.fire() }
+        #expect(await waitUntil { harness.playback.appendedChunks.count == 3 })
+        // Waiting for more text, the reply stays live: the voice session's
+        // watchdog must not read it as over.
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(harness.coordinator.state.isActive)
+        #expect(harness.playback.finishStreamingCount == 0)
+
+        harness.coordinator.appendStreamedSpeech("You have two meetings.")
+        harness.coordinator.appendStreamedSpeech("The first is at three.")
+        harness.coordinator.finishStreamedSpeech()
+        #expect(await waitUntil { harness.playback.finishStreamingCount == 1 })
+
+        #expect(harness.playback.startStreamingCount == 1)
+        let texts = await harness.synthesizer.requests.map(\.text)
+        #expect(texts.first == "Sure.")
+        #expect(
+            texts.dropFirst().joined(separator: " ")
+                == "You have two meetings. The first is at three.")
+        #expect(probe.fireCount == 0)
+        harness.playback.firePlaybackFinished()
+        #expect(probe.fireCount == 1)
+        #expect(harness.coordinator.state == .idle)
+    }
+
+    @Test
+    func stopEndsAStreamedReplyAndNothingMoreIsTaken() async throws {
+        let harness = await Harness(script: .init(holdAfterChunks: 1))
+        let probe = CallbackProbe()
+
+        harness.coordinator.startStreamedSpeech("Sure.") { probe.fire() }
+        #expect(await waitUntil { !harness.playback.appendedChunks.isEmpty })
+        harness.coordinator.appendStreamedSpeech("Queued before the stop.")
+        harness.coordinator.stop()
+        #expect(harness.coordinator.state == .idle)
+
+        harness.coordinator.appendStreamedSpeech("After the stop.")
+        harness.coordinator.finishStreamedSpeech()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(harness.playback.finishStreamingCount == 0)
+        #expect(probe.fireCount == 0)
+        #expect(await harness.synthesizer.requests.map(\.text) == ["Sure."])
+    }
+
     @Test
     func stopCancelsGenerationAndResetsPresentation() async throws {
         let harness = await Harness(script: .init(holdAfterChunks: 1))
@@ -325,7 +377,7 @@ struct SpeechCoordinatorTests {
         let harness = await Harness(script: .init(holdAfterChunks: 1))
         harness.settings.ttsPlaybackRate = 1.25
 
-        harness.coordinator.speakText("Hello world.", showsOverlay: false)
+        harness.coordinator.startStreamedSpeech("Hello world.")
         #expect(await waitUntil { harness.playback.playbackRates == [1.25] })
         #expect(harness.playback.startedSampleRates == [24_000])
         harness.coordinator.stop()

@@ -21,6 +21,13 @@
 //  the mic level, the capture engine's dead-input flag and the speech
 //  engine's activity ride in on `.tick`. Effects carry no live reads.
 //
+//  The reply is spoken as it is written (ADR-0097): its text streams in, the
+//  **Reply Speech Buffer** (machine sub-state) cuts it into whole sentences,
+//  the first starts the voice and later ones queue behind it; the turn's end
+//  finishes the speech. A reply cut short while still being written is
+//  dropped, the rest of it and its end; an interrupt cancels its generation
+//  at once, and the owner's next turn cancels a run that is still writing.
+//
 
 import Foundation
 
@@ -79,9 +86,15 @@ nonisolated struct VoiceSessionMachine {
         /// line. Acts only while speech plays — the session's reply, or other
         /// speech holding the mic closed.
         case bargeIn(source: String)
-        /// ChatSession's reply hook; `nil`/empty is a silent (pure tool) turn.
+        /// A piece of the reply's visible text as the model writes it.
+        case replyText(String)
+        /// A text part of the reply closed (a tool call, or the message's
+        /// end, follows): what it held is complete.
+        case replyPartEnded
+        /// ChatSession's reply hook on `agentEnd`: the reply is complete.
+        /// `nil`/empty with nothing streamed is a silent (pure tool) turn.
         case replyArrived(String?)
-        /// The speak effect's success callback fired.
+        /// The reply's speech finished and its audio drained.
         case speechDone
         /// Feedback from `.openCapture`: the mic is live.
         case captureOpened
@@ -105,9 +118,13 @@ nonisolated struct VoiceSessionMachine {
         case overlayBeginSession
         case overlayEndSession
         case feedState(FeedState)
-        /// Settle the companion line, begin the spoken line, reveal it, and
-        /// show `.speaking` — the one intent behind four feed calls.
+        /// Show the reply's spoken line as far as it has been handed to the
+        /// voice, revealed, and `.speaking` — begun on the first piece,
+        /// extended by later ones.
         case presentSpokenReply(String)
+        /// The reply's line joins the transcript: whole, or as far as it was
+        /// spoken when it was cut short.
+        case settleCompanionLine(String)
         case settleOwnerLine(String)
         /// Start the capture; the performer answers with `.captureOpened` or
         /// `.captureUnavailable`.
@@ -117,8 +134,17 @@ nonisolated struct VoiceSessionMachine {
         /// Stop the capture and run ASR + proofread on the take; outcomes
         /// come back as `.turnTranscribed` / `.takeUnusable`.
         case finishTake
+        /// Start the reply's speech with its first piece. The performer
+        /// answers with `.speechDone` once `.finishSpeaking` came and the
+        /// audio drained.
         case speak(String)
+        /// Queue a later piece behind what is speaking.
+        case speakMore(String)
+        /// No more pieces: the speech ends when its audio does.
+        case finishSpeaking
         case stopSpeaking
+        /// Stop the agent's generation of the reply.
+        case cancelReply
         case send(String)
         case stageToComposer(String)
         /// A flight-recorder record; the performer stamps session and
@@ -151,6 +177,44 @@ nonisolated struct VoiceSessionMachine {
     /// Speech the session didn't start (the chat reading a reply aloud, a
     /// Companion line) is playing while it listens: the mic is held closed.
     private var heldForOtherSpeech = false
+    /// The session's hold on a reply that is still being written.
+    private enum ReplyStream {
+        /// None: a reply speaks whole, or nothing is speaking.
+        case closed
+        /// The reply speaks while it is still being written (always in
+        /// `.speaking`): more pieces may come, and its speech ends with the
+        /// turn.
+        case open
+        /// An open reply was cut short and its run is still writing: the
+        /// rest of its text, and its end, are dropped. The agent runs one
+        /// run at a time and every run, a cancelled one too, ends with
+        /// exactly one `agentEnd`, so the next reply end is this one's.
+        case dropping
+    }
+
+    private var replyStream = ReplyStream.closed
+    /// The reply's text not yet handed to the voice.
+    private var replyBuffer = ReplySpeechBuffer()
+    /// What the voice has been handed of the reply so far.
+    private var spokenReply = ""
+
+    /// Whether ChatSession's reply hook belongs to the session now: a turn
+    /// waits for its reply, a take transcribes beside one, the reply is
+    /// still being written, or a cut-short reply's end is still to come.
+    var wantsReply: Bool {
+        guard isActive else { return false }
+        return replyStream != .closed || phase == .awaitingReply || phase == .transcribing
+    }
+
+    /// The reply's text streams to the voice only while a turn waits for it
+    /// or it is already speaking.
+    private var takesReplyText: Bool {
+        switch replyStream {
+        case .open: true
+        case .closed: phase == .awaitingReply
+        case .dropping: false
+        }
+    }
 
     // MARK: - Constants
 
@@ -189,11 +253,24 @@ nonisolated struct VoiceSessionMachine {
         case .bargeIn(let source):
             guard phase == .speaking || heldForOtherSpeech else { return [] }
             return bargeIn(source: source, now: now)
+        case .replyText(let delta):
+            guard takesReplyText else { return [] }
+            replyBuffer.append(delta)
+            return speakReplyPiece(replyBuffer.takeSentences(), now: now)
+        case .replyPartEnded:
+            guard takesReplyText else { return [] }
+            return speakReplyPiece(replyBuffer.takeAll(), now: now)
         case .replyArrived(let text):
-            guard phase == .awaitingReply || phase == .transcribing else { return [] }
+            guard wantsReply else { return [] }
+            guard replyStream != .dropping else {
+                // The end of the reply that was cut short.
+                replyStream = .closed
+                return []
+            }
             return replyArrived(text, now: now)
         case .speechDone:
-            guard phase == .speaking else { return [] }
+            // An open reply's speech can't be done: it ends with the turn.
+            guard phase == .speaking, replyStream != .open else { return [] }
             return utteranceFinished(now: now)
         case .captureOpened:
             // A capture that opens after the session ended has no owner —
@@ -228,6 +305,7 @@ nonisolated struct VoiceSessionMachine {
         exchanges = 0
         deadCaptures = 0
         takeInFlight = false
+        resetReply()
         var effects: [Effect] = [
             .record(event: .voiceSessionEntered, snapshot: ["via": via]),
             .overlayBeginSession,
@@ -244,6 +322,9 @@ nonisolated struct VoiceSessionMachine {
         deafUntil = nil
         takeInFlight = false
         heldForOtherSpeech = false
+        // Leaving doesn't cancel a reply still being written: the chat keeps
+        // it. Its end, and anything after, are the chat's again.
+        resetReply()
         phase = .idle
         effects.append(
             .record(
@@ -255,15 +336,38 @@ nonisolated struct VoiceSessionMachine {
 
     // MARK: - The reply
 
+    /// The turn ended. A reply already speaking gets its last words and the
+    /// end of its speech; one that never reached a sentence end, or never
+    /// streamed, is spoken whole.
     private mutating func replyArrived(_ text: String?, now: TimeInterval) -> [Effect] {
-        guard let text, !text.isEmpty else {
+        var effects: [Effect]
+        if replyStream == .open {
+            replyStream = .closed
+            effects = extendSpokenReply(with: replyBuffer.takeAll())
+        } else if let whole = replyBuffer.takeAll() ?? text.flatMap({ $0.isEmpty ? nil : $0 }) {
+            effects = startSpeaking(whole, now: now)
+        } else {
             // A silent reply (pure tool turn) — reopen the mic and move on,
             // unless the owner's take is still transcribing: its outcome
             // decides what comes next.
             return takeInFlight ? [] : beginListening(now: now)
         }
-        // Half-duplex: the mic is closed before he speaks and stays closed
-        // until he stops, so nothing he says can come back as the owner's turn.
+        return effects + [.settleCompanionLine(spokenReply), .finishSpeaking]
+    }
+
+    /// Whole sentences of the reply as they are written: the first starts
+    /// the voice, later ones queue behind it.
+    private mutating func speakReplyPiece(_ piece: String?, now: TimeInterval) -> [Effect] {
+        guard let piece else { return [] }
+        if replyStream == .open { return extendSpokenReply(with: piece) }
+        replyStream = .open
+        return startSpeaking(piece, now: now)
+    }
+
+    /// Half-duplex: the mic is closed before the reply speaks and stays
+    /// closed until it stops, so nothing it says can come back as the
+    /// owner's turn.
+    private mutating func startSpeaking(_ text: String, now: TimeInterval) -> [Effect] {
         var effects: [Effect] = []
         if captureOpen {
             effects.append(.closeCapture)
@@ -273,16 +377,43 @@ nonisolated struct VoiceSessionMachine {
         speakingSince = now
         deafUntil = nil
         settledTicks = 0
+        spokenReply = text
         effects.append(.presentSpokenReply(text))
         effects.append(.speak(text))
-        effects.append(
-            .record(event: .voiceReplySpoken, snapshot: ["chars": String(text.count)]))
+        var snapshot = ["chars": String(text.count)]
+        if replyStream == .open { snapshot["streamed"] = "true" }
+        effects.append(.record(event: .voiceReplySpoken, snapshot: snapshot))
         return effects
+    }
+
+    private mutating func extendSpokenReply(with piece: String?) -> [Effect] {
+        guard let piece else { return [] }
+        spokenReply += " " + piece
+        return [.presentSpokenReply(spokenReply), .speakMore(piece)]
+    }
+
+    /// The voice stopped while the reply was still being written: its line
+    /// settles as far as it was spoken, and the rest of it, its end included,
+    /// is dropped. Its run may still be writing; the owner's next turn
+    /// cancels it before going out.
+    private mutating func abandonReply() -> [Effect] {
+        guard replyStream == .open else { return [] }
+        let spoken = spokenReply
+        resetReply()
+        replyStream = .dropping
+        return [.settleCompanionLine(spoken)]
+    }
+
+    private mutating func resetReply() {
+        replyStream = .closed
+        replyBuffer.reset()
+        spokenReply = ""
     }
 
     /// The owner interrupts — by a key or a click, never by voice: the mic is
     /// closed while anything speaks. The speech stops at once and the mic
-    /// opens for his turn; nothing resumes it.
+    /// opens for his turn; nothing resumes it. A reply still being written is
+    /// cancelled now: the owner wants the floor.
     private mutating func bargeIn(source: String, now: TimeInterval) -> [Effect] {
         var snapshot = ["source": source]
         if phase == .speaking {
@@ -290,8 +421,11 @@ nonisolated struct VoiceSessionMachine {
         } else {
             snapshot["speech"] = "other"
         }
-        return utteranceFinished(
+        let cutsAReplyShort = replyStream == .open
+        var effects = utteranceFinished(
             now: now, record: .record(event: .voiceBargeIn, snapshot: snapshot))
+        if cutsAReplyShort { effects.append(.cancelReply) }
+        return effects
     }
 
     /// However the speech ended — drained, interrupted, or caught by the
@@ -303,6 +437,7 @@ nonisolated struct VoiceSessionMachine {
     ) -> [Effect] {
         var effects: [Effect] = [.stopSpeaking]
         if let record { effects.append(record) }
+        effects += abandonReply()
         guard !takeInFlight else {
             phase = .transcribing
             effects.append(.feedState(.thinking))
@@ -460,6 +595,7 @@ nonisolated struct VoiceSessionMachine {
             // A reply that landed while this take transcribed: his words are
             // newer, so it stops before his turn goes out.
             effects.append(.stopSpeaking)
+            effects += abandonReply()
             phase = .transcribing
         }
         exchanges += 1
@@ -475,6 +611,9 @@ nonisolated struct VoiceSessionMachine {
         effects.append(.settleOwnerLine(trimmed))
         effects.append(.feedState(.thinking))
         phase = .awaitingReply
+        // A cut-short reply's run still writing would hold the gate: the
+        // owner's turn must not wait behind it.
+        if replyStream == .dropping { effects.append(.cancelReply) }
         effects.append(.send(trimmed))
         return effects
     }

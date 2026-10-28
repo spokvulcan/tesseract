@@ -86,6 +86,20 @@ struct VoiceSessionMachineHarness {
         ticks(15, level: 0.6)
         ticks(40, level: 0.02)
     }
+
+    /// A spoken turn sent, its take closed: the machine awaits the reply.
+    mutating func awaitReply(to turn: String = "hi") {
+        enterListening()
+        speakATurn()
+        send(.turnTranscribed(turn))
+    }
+
+    /// A turn sent and its reply being written (ADR-0097): "Sure." speaks,
+    /// "Anything else" waits for its sentence to end.
+    mutating func startStreamingReply() {
+        awaitReply()
+        send(.replyText("Sure. Anything else"))
+    }
 }
 
 extension [VoiceSessionMachine.Effect] {
@@ -237,6 +251,8 @@ extension [VoiceSessionMachine.Effect] {
                 .presentSpokenReply("hello there"),
                 .speak("hello there"),
                 .record(event: .voiceReplySpoken, snapshot: ["chars": "11"]),
+                .settleCompanionLine("hello there"),
+                .finishSpeaking,
             ])
         #expect(h.machine.phase == .speaking)
     }
@@ -296,6 +312,158 @@ extension [VoiceSessionMachine.Effect] {
         #expect(h.send(.takeUnusable(reason: "empty")).isEmpty)
         #expect(h.send(.turnTranscribed("   ")).isEmpty)
         #expect(h.machine.phase == .speaking)
+    }
+
+    // MARK: The reply as it is written (ADR-0097)
+
+    @Test func theFirstSentenceStartsTheVoiceBeforeTheTurnEnds() {
+        var h = VoiceSessionMachineHarness()
+        h.awaitReply()
+        // Half a sentence: nothing to say yet.
+        #expect(h.send(.replyText("You have two")).isEmpty)
+        #expect(h.machine.phase == .awaitingReply)
+        let first = h.send(.replyText(" meetings. The"))
+        #expect(
+            first == [
+                .presentSpokenReply("You have two meetings."),
+                .speak("You have two meetings."),
+                .record(
+                    event: .voiceReplySpoken, snapshot: ["chars": "22", "streamed": "true"]),
+            ])
+        #expect(h.machine.phase == .speaking)
+        // Later sentences queue behind it, and the line grows.
+        let more = h.send(.replyText(" first is at 3. "))
+        #expect(
+            more == [
+                .presentSpokenReply("You have two meetings. The first is at 3."),
+                .speakMore("The first is at 3."),
+            ])
+    }
+
+    @Test func theTurnsEndFinishesTheSpeechAndOnlyThenTheMicOpens() {
+        var h = VoiceSessionMachineHarness()
+        h.startStreamingReply()
+        // A reply still being written can't have finished speaking.
+        #expect(h.send(.speechDone).isEmpty)
+        #expect(h.ticks(40, speechActive: true).isEmpty)
+        let end = h.send(.replyArrived("Sure. Anything else"))
+        #expect(
+            end == [
+                .presentSpokenReply("Sure. Anything else"),
+                .speakMore("Anything else"),
+                .settleCompanionLine("Sure. Anything else"),
+                .finishSpeaking,
+            ])
+        #expect(h.machine.phase == .speaking)
+        let done = h.send(.speechDone)
+        #expect(done.contains(.openCapture))
+        #expect(h.machine.phase == .listening)
+    }
+
+    @Test func aTextPartThatClosesIsSpokenWhole() {
+        var h = VoiceSessionMachineHarness()
+        h.awaitReply(to: "am I free?")
+        // "Let me check" and a tool call: the part's end completes it.
+        #expect(h.send(.replyText("Let me check your calendar")).isEmpty)
+        #expect(h.send(.replyPartEnded).contains(.speak("Let me check your calendar")))
+        // After the tool runs, the next part continues the same speech.
+        #expect(
+            h.send(.replyText("You're free after 4. ")).contains(.speakMore("You're free after 4."))
+        )
+    }
+
+    @Test func aReplyShorterThanASentenceIsSpokenWholeAtTheEnd() {
+        var h = VoiceSessionMachineHarness()
+        h.awaitReply(to: "thanks")
+        #expect(h.send(.replyText("Anytime")).isEmpty)
+        let effects = h.send(.replyArrived("Anytime"))
+        #expect(
+            effects == [
+                .presentSpokenReply("Anytime"),
+                .speak("Anytime"),
+                .record(event: .voiceReplySpoken, snapshot: ["chars": "7"]),
+                .settleCompanionLine("Anytime"),
+                .finishSpeaking,
+            ])
+    }
+
+    @Test func replyTextOutsideAWaitingTurnIsIgnored() {
+        var h = VoiceSessionMachineHarness()
+        h.enterListening()
+        #expect(h.send(.replyText("Typed elsewhere. ")).isEmpty)
+        #expect(h.send(.replyPartEnded).isEmpty)
+        #expect(h.machine.phase == .listening)
+        #expect(!h.machine.wantsReply)
+    }
+
+    @Test func anInterruptWhileTheReplyIsWrittenCancelsItAndDropsItsRest() {
+        var h = VoiceSessionMachineHarness()
+        h.startStreamingReply()
+        let effects = h.send(.bargeIn(source: "key"))
+        #expect(effects.first == .stopSpeaking)
+        #expect(effects.contains(.settleCompanionLine("Sure.")))
+        #expect(effects.contains(.cancelReply))
+        #expect(effects.contains(.openCapture))
+        #expect(h.machine.phase == .listening)
+        // The rest of the cancelled reply is dropped, its end included…
+        #expect(h.send(.replyText(" more words. ")).isEmpty)
+        #expect(h.machine.wantsReply)
+        #expect(h.send(.replyArrived("Sure. Anything else")).isEmpty)
+        #expect(!h.machine.wantsReply)
+        // …and the next turn's reply speaks as usual.
+        h.speakATurn()
+        h.send(.turnTranscribed("next"))
+        #expect(h.send(.replyText("Okay. ")).contains(.speak("Okay.")))
+    }
+
+    @Test func aCutShortReplysEndAfterTheNextTurnIsStillDropped() {
+        var h = VoiceSessionMachineHarness()
+        h.startStreamingReply()
+        h.send(.bargeIn(source: "click"))
+        h.speakATurn()
+        h.send(.turnTranscribed("next"))
+        // One run at a time, each ending once: the old run's end comes first.
+        #expect(h.send(.replyArrived("Sure. Anything else")).isEmpty)
+        #expect(h.machine.phase == .awaitingReply)
+        #expect(h.send(.replyText("Okay. ")).contains(.speak("Okay.")))
+    }
+
+    @Test func aReplyTheVoiceLostIsCancelledOnlyByTheNextTurn() throws {
+        var h = VoiceSessionMachineHarness()
+        h.startStreamingReply()
+        // The watchdog finds the voice dead: the chat may finish the reply…
+        let effects = h.ticks(30, speechActive: false)
+        #expect(effects.contains(record: "voice.watchdog-exit"))
+        #expect(effects.contains(.settleCompanionLine("Sure.")))
+        #expect(!effects.contains(.cancelReply))
+        #expect(h.machine.phase == .listening)
+        // …until the owner's next turn, which doesn't wait behind it.
+        h.speakATurn()
+        let sent = h.send(.turnTranscribed("next"))
+        let cancel = try #require(sent.firstIndex(of: .cancelReply))
+        let send = try #require(sent.firstIndex(of: .send("next")))
+        #expect(cancel < send)
+        #expect(h.send(.replyArrived("Sure. Anything else")).isEmpty)
+        #expect(h.send(.replyText("Okay. ")).contains(.speak("Okay.")))
+    }
+
+    @Test func aTurnAfterTheCutShortReplyEndedCancelsNothing() {
+        var h = VoiceSessionMachineHarness()
+        h.startStreamingReply()
+        h.ticks(30, speechActive: false)
+        h.send(.replyArrived("Sure. Anything else"))
+        h.speakATurn()
+        #expect(!h.send(.turnTranscribed("next")).contains(.cancelReply))
+    }
+
+    @Test func leavingWhileTheReplyIsWrittenLeavesTheChatToFinishIt() {
+        var h = VoiceSessionMachineHarness()
+        h.startStreamingReply()
+        let effects = h.send(.exit(reason: "dismissed"))
+        #expect(effects.contains(.stopSpeaking))
+        #expect(!effects.contains(.cancelReply))
+        #expect(h.machine.phase == .idle)
+        #expect(!h.machine.wantsReply)
     }
 
     // MARK: Barge-in (a key or a click)

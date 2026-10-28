@@ -357,11 +357,14 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # Voice session + capture engine (quit the app first — its capture engine
 # starves test hosts). VoiceSessionMachineTests pins the half-duplex loop
 # (ADR-0082): the mic closed under the reply, barge-in by key or click, the
-# dead-capture recovery; CaptureEngineLifecycleTests pins the live-input
-# check's verdicts:
+# dead-capture recovery, and the reply spoken as it is written (ADR-0097),
+# whose sentences ReplySpeechBufferTests pins; VoiceEndpointerTests pins the
+# close that grows with the turn; CaptureEngineLifecycleTests pins the
+# live-input check's verdicts:
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
   -skipPackagePluginValidation \
   -only-testing:tesseractTests/VoiceSessionMachineTests \
+  -only-testing:tesseractTests/ReplySpeechBufferTests \
   -only-testing:tesseractTests/VoiceEndpointerTests \
   -only-testing:tesseractTests/VoiceCaptureSessionTests \
   -only-testing:tesseractTests/VoiceProcessingDuckPolicyTests \
