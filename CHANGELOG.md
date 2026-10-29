@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.21.0](https://github.com/spokvulcan/tesseract/compare/v1.20.0...v1.21.0) (2026-10-29)
+
+
+### Features
+
+* **voice:** LFM3 Voice, where one model hears you, answers with tools and speaks back ([#657](https://github.com/spokvulcan/tesseract/issues/657)) ([0a48309](https://github.com/spokvulcan/tesseract/commit/0a48309b03ce7ed8873e11341325d8962da58d47))
+
+
+### Bug Fixes
+
+* **prefix-cache:** the Leaf Extension gate counts the attention's tokens, so a short thread keeps its turn boundaries ([#653](https://github.com/spokvulcan/tesseract/issues/653)) ([259325f](https://github.com/spokvulcan/tesseract/commit/259325f6622c9132f2be093437131d9fee197d33))
+
+
+### Documentation
+
+* **research:** LFM3-Audio measured as the recognizer and the voice ([#655](https://github.com/spokvulcan/tesseract/issues/655)) ([7a6c757](https://github.com/spokvulcan/tesseract/commit/7a6c757cd199787e75262e0ba5820adcd5719d3d))
+* **research:** LFM3-Audio on the owner's own takes, and the blind listen ([#656](https://github.com/spokvulcan/tesseract/issues/656)) ([84be097](https://github.com/spokvulcan/tesseract/commit/84be0970dec368d2fb6bb1205de2883167db7912))
+
 ## [1.20.0](https://github.com/spokvulcan/tesseract/compare/v1.19.0...v1.20.0) (2026-10-28)
 
 
