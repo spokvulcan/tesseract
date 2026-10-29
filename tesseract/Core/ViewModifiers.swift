@@ -126,6 +126,7 @@ extension View {
             .environment(container.skillPills)
             .environment(container.agentVoiceInput)
             .environment(container.companionVoiceSession)
+            .environment(container.lfm3Voice)
             .environment(container.companionPresence)
             .environment(container.agentEngine)
             .environment(container.appshotController)

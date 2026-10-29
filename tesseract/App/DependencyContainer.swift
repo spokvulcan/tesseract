@@ -528,6 +528,18 @@ final class DependencyContainer: ObservableObject {
     /// chat session with it).
     private(set) var builtVoiceSession: CompanionVoiceSessionController?
 
+    // LFM3 Voice: a voice session in the chat where LFM3-Audio hears the
+    // owner, answers with the agent's tools and speaks the answer as it
+    // writes it. The loop and the overlay are the voice session's; the ear,
+    // the mind and the voice are one LFM3-Audio load of its own.
+    lazy var lfm3Voice: LFM3VoiceMode = {
+        let mode = makeLFM3Voice()
+        builtLFM3Voice = mode
+        return mode
+    }()
+    /// LFM3 Voice once something built it, for the hotkeys.
+    private(set) var builtLFM3Voice: LFM3VoiceMode?
+
     // Speech (TTS) — engine v2 (ADR-0038/0039): the engine actor lives in the
     // TesseractSpeech package behind its ports; the presenter mirrors
     // residency for views and Model Residency; the coordinator drives sessions.
@@ -680,9 +692,9 @@ final class DependencyContainer: ObservableObject {
             captureKeyUp: { [weak self] in self?.capturePanel.hotkeyUp() },
             captureKeyCancelled: { [weak self] in self?.capturePanel.hotkeyCancelled() },
             takeAppshot: { [weak self] in Task { await self?.appshotController.takeAppshot() } },
-            isVoiceSessionActive: { [weak self] in self?.builtVoiceSession?.isActive ?? false },
+            isVoiceSessionActive: { [weak self] in self?.liveVoiceSession != nil },
             interruptVoiceSession: { [weak self] in
-                self?.builtVoiceSession?.bargeIn(source: "key")
+                self?.liveVoiceSession?.bargeIn(source: "key")
             })
     }
 

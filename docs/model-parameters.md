@@ -239,8 +239,19 @@ between families and modes, so it gets its own column.
   Keying: a request with an image is an Unkeyed Completion (the whole prompt
   prefilled, no prefix-cache lookup or admission), a text request uses the
   prefix cache as usual.
-- LFM3-Audio is served as a text chat model; the voice pipeline does not use
-  it ([research](research/2026-10-28-lfm3-audio-voice-pipeline.md)). As an
+- LFM3-Audio is served as a text chat model; Jarvis's voice pipeline does not
+  use it ([research](research/2026-10-28-lfm3-audio-voice-pipeline.md)).
+  **LFM3 Voice** (`LFM3VoiceEngine`) uses its speech: ASR under `Perform ASR
+  in English.`, greedy, capped at 32 + 8 tokens per second of take, and
+  answers under "Respond with interleaved text and audio. Call a function
+  only when the request needs one of these tools; otherwise answer
+  directly." plus the tools. The card's own tool prompt ("Respond with
+  function calls, and interleaved text and audio.") makes the model call a
+  tool for every request, "hi" included. The first token may be only
+  `<tool_call>` or `<|mixed_start|>`, with −9.3 on `<tool_call>`'s logit. On
+  40 requests (2026-10-28) that routed all 20 tool requests to a tool and 18
+  of 20 others to a spoken answer. Text it writes without speech is read
+  aloud under `Perform TTS in American English using a female voice.` As an
   agent it is the weakest of the three: in scratch-launch chats (2026-10-28,
   both packs, the 8-bit one downloaded through the Models page) it answered
   after valid tool calls, but its first call named a skill as a tool and

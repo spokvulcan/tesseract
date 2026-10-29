@@ -2300,7 +2300,8 @@ and its switch, the **Learned Words**, the **Proofread Pass** and the dictation
 language, every one required, it hands each surface its own **Voice Capture
 Session**, so no surface can build a take that skips a stage (ADR-0096). It also
 answers whether a take is open anywhere — listening, transcribing, proofreading —
-which the **Models section** reads.
+which the **Models section** reads. **LFM3 Voice**'s session swaps in LFM3-Audio as
+the recognizer and keeps every other stage.
 _Avoid_: voice service, capture factory, push-to-talk registry, the list of voice
 inputs (the hand-kept list it replaced).
 
@@ -2483,6 +2484,17 @@ mic is closed while speech plays, and a 0.3 s deaf grace covers the room tail
 after it stops.
 _Avoid_: feedback loop (the mechanism, not the name), echo (the raw acoustic
 signal cancellation removes).
+
+**LFM3 Voice**:
+The chat's voice conversation while an LFM3-Audio checkpoint is the selected
+model: one model is the ear, the mind and the voice. It runs the **Voice
+Session**'s loop and overlay, but LFM3-Audio transcribes the take (through every
+**Voice Capture** stage), answers
+with a subset of the agent's tools (the day, the owner's memory, the web), and
+speaks the answer as it writes it, text and speech interleaved. Every turn lands
+in the chat as regular messages. It loads its own copy of the checkpoint for a
+session, beside the agent's.
+_Avoid_: voice chat, speech-to-speech mode, LFM3 session (unqualified).
 
 ### Text injection
 
