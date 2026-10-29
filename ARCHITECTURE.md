@@ -164,6 +164,7 @@ tesseract/
 │   │   ├── Presence/                  # Idle monitor, frontmost app, power
 │   │   ├── Trace/                     # Companion Trace (closed vocabulary, JSONL per day)
 │   │   └── Voice/ VoiceOverlay/       # Voice session (the voice rung)
+│   ├── LFM3Voice/                     # LFM3 Voice: LFM3-Audio hears, answers with tools and speaks, on the voice session's loop
 │   ├── Server/                        # Local OpenAI-compatible HTTP server
 │   │   ├── HTTPServer.swift           # HTTP/1.1 server
 │   │   ├── CompletionHandler.swift    # HTTP framing edge: LLM gate, validation, start

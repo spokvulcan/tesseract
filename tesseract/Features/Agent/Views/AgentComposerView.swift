@@ -28,6 +28,7 @@ struct AgentComposerView: View {
     @Environment(SkillClusterController.self) private var skillCluster
     @Environment(AgentVoiceInputController.self) private var voiceInput
     @Environment(CompanionVoiceSessionController.self) private var voiceSession
+    @Environment(LFM3VoiceMode.self) private var lfm3Voice
     @Environment(SpeechCoordinator.self) private var speechCoordinator
     @Environment(CompanionPresence.self) private var companionPresence
     @Environment(VisionAvailabilityController.self) private var visionAvailability
@@ -196,7 +197,9 @@ struct AgentComposerView: View {
 
                 ModelButtonView()
 
-                if settings.companionHeartbeatEnabled {
+                if offersLFM3Voice {
+                    lfm3VoiceButton
+                } else if settings.companionHeartbeatEnabled {
                     voiceSessionButton
                 }
 
@@ -461,28 +464,47 @@ struct AgentComposerView: View {
     /// where the mic auto-opens after each reply. Distinct from the
     /// hold-to-talk mic, which stages one utterance to the composer.
     private var voiceSessionButton: some View {
-        Button {
-            voiceSession.toggle()
-        } label: {
-            Image(
-                systemName: voiceSession.isActive
-                    ? "waveform.circle.fill" : "waveform.circle"
-            )
-            .font(actionIconFont)
-            .foregroundStyle(
-                voiceSession.isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary)
-            )
-            .symbolEffect(
-                .variableColor.iterative, options: .repeating,
-                isActive: voiceSession.isActive && !reduceMotion
-            )
-            .frame(width: actionIconFrame, height: actionIconFrame)
-            .contentShape(Rectangle())
+        voiceConversationButton(
+            isActive: voiceSession.isActive, toggle: voiceSession.toggle,
+            help: voiceSession.isActive
+                ? "End the voice conversation" : "Start a voice conversation")
+    }
+
+    // MARK: - LFM3 Voice Button
+
+    /// LFM3 Voice is the chat's voice conversation while LFM3-Audio is the
+    /// selected model, and stays reachable while a session runs.
+    private var offersLFM3Voice: Bool {
+        lfm3Voice.isActive || LFM3VoiceMode.hearsAndSpeaks(settings.selectedAgentModelID)
+    }
+
+    /// Enter/exit LFM3 Voice: LFM3-Audio hears the owner, answers, and speaks
+    /// the answer in its own voice as it writes it.
+    private var lfm3VoiceButton: some View {
+        voiceConversationButton(
+            isActive: lfm3Voice.isActive, toggle: lfm3Voice.toggle,
+            help: lfm3Voice.isActive
+                ? "End the LFM3-Audio voice conversation"
+                : "Talk with LFM3-Audio: it hears you, answers, and speaks in its own voice")
+    }
+
+    /// A voice conversation's toggle: its glyph waves while the session runs.
+    private func voiceConversationButton(
+        isActive: Bool, toggle: @escaping () -> Void, help: String
+    ) -> some View {
+        Button(action: toggle) {
+            Image(systemName: isActive ? "waveform.circle.fill" : "waveform.circle")
+                .font(actionIconFont)
+                .foregroundStyle(isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                .symbolEffect(
+                    .variableColor.iterative, options: .repeating,
+                    isActive: isActive && !reduceMotion
+                )
+                .frame(width: actionIconFrame, height: actionIconFrame)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(
-            voiceSession.isActive
-                ? "End the voice conversation" : "Start a voice conversation")
+        .help(help)
     }
 
     // MARK: - Mic Button

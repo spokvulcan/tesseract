@@ -475,43 +475,15 @@ private func executeToolCalls(
         // Check cancellation
         if signal?.isCancelled == true { break }
 
-        // Look up tool
-        guard let tool = tools.first(where: { $0.name == call.name }) else {
-            commit(
-                ToolResultMessage.skipped(
-                    toolCallId: call.id, toolName: call.name,
-                    reason: "Unknown tool: \(call.name)"
-                ))
-            continue
-        }
-
-        // Parse arguments
+        let tool: AgentToolDefinition
         let args: [String: JSONValue]
-        if call.argumentsJSON.isEmpty || call.argumentsJSON == "{}" {
-            args = [:]
-        } else if let parsed = ToolArgumentNormalizer.decode(call.argumentsJSON) {
-            args = parsed
-        } else {
-            commit(
-                ToolResultMessage.create(
-                    toolCallId: call.id, toolName: call.name,
-                    result: .error("Failed to parse tool arguments as JSON"),
-                    isError: true
-                ))
+        switch CheckedToolCall(call, tools: tools) {
+        case .refused(let result):
+            commit(result)
             continue
-        }
-
-        // Validate required parameters
-        let missingParams = tool.parameterSchema.required.filter { args[$0] == nil }
-        if !missingParams.isEmpty {
-            commit(
-                ToolResultMessage.create(
-                    toolCallId: call.id, toolName: call.name,
-                    result: .error(
-                        "Missing required parameters: \(missingParams.joined(separator: ", "))"),
-                    isError: true
-                ))
-            continue
+        case .ready(let checked, let arguments):
+            tool = checked
+            args = arguments
         }
 
         // Emit tool execution start
@@ -536,16 +508,8 @@ private func executeToolCalls(
                 ))
         }
 
-        // Execute
-        let toolResult: AgentToolResult
-        let isError: Bool
-        do {
-            toolResult = try await tool.execute(call.id, args, signal, onUpdate)
-            isError = false
-        } catch {
-            toolResult = .error("Tool execution failed: \(error.localizedDescription)")
-            isError = true
-        }
+        let (toolResult, isError) = await tool.run(
+            call, arguments: args, signal: signal, onUpdate: onUpdate)
 
         // Emit tool execution end
         emit(
@@ -590,6 +554,65 @@ private func executeToolCalls(
     }
 
     return (results, steeringMessages)
+}
+
+// MARK: - One tool call
+
+/// A tool call checked against the live tools: the tool and its arguments, or
+/// the result that stands in for a call that can't run. The agent loop and
+/// **LFM3 Voice**'s turns check calls the same way.
+enum CheckedToolCall {
+    case ready(AgentToolDefinition, arguments: [String: JSONValue])
+    case refused(ToolResultMessage)
+
+    /// An unknown tool, arguments that are not JSON, or a missing required
+    /// parameter refuses the call.
+    init(_ call: ToolCallInfo, tools: [AgentToolDefinition]) {
+        guard let tool = tools.first(where: { $0.name == call.name }) else {
+            self = .refused(
+                .skipped(
+                    toolCallId: call.id, toolName: call.name,
+                    reason: "Unknown tool: \(call.name)"))
+            return
+        }
+        let arguments: [String: JSONValue]
+        if call.argumentsJSON.isEmpty || call.argumentsJSON == "{}" {
+            arguments = [:]
+        } else if let parsed = ToolArgumentNormalizer.decode(call.argumentsJSON) {
+            arguments = parsed
+        } else {
+            self = .refused(
+                .create(
+                    toolCallId: call.id, toolName: call.name,
+                    result: .error("Failed to parse tool arguments as JSON"), isError: true))
+            return
+        }
+        let missing = tool.parameterSchema.required.filter { arguments[$0] == nil }
+        guard missing.isEmpty else {
+            self = .refused(
+                .create(
+                    toolCallId: call.id, toolName: call.name,
+                    result: .error(
+                        "Missing required parameters: \(missing.joined(separator: ", "))"),
+                    isError: true))
+            return
+        }
+        self = .ready(tool, arguments: arguments)
+    }
+}
+
+extension AgentToolDefinition {
+    /// Runs the tool for `call`: its result, or the failure that stands in for it.
+    func run(
+        _ call: ToolCallInfo, arguments: [String: JSONValue], signal: CancellationToken?,
+        onUpdate: ToolProgressCallback?
+    ) async -> (result: AgentToolResult, isError: Bool) {
+        do {
+            return (try await execute(call.id, arguments, signal, onUpdate), false)
+        } catch {
+            return (.error("Tool execution failed: \(error.localizedDescription)"), true)
+        }
+    }
 }
 
 // MARK: - Helpers

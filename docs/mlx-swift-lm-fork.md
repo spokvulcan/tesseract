@@ -45,8 +45,10 @@ since on `perf/goal-2026-10-08`. The outgoing tips are tagged
 unchanged): the fixes for the two tests CI's runner failed (below). It then
 pinned `c2613f7`, three commits past that (fast-forward again): LFM3, LFM3-VL
 and LFM3-Audio on branch `feat/lfm3-on-5b088d9`, and their DocC fixes, which
-ride `feat/lfm3-vl-video` under its video commit (below). It now pins that
-video commit, `595b243` (fast-forward again; below).
+ride `feat/lfm3-vl-video` under its video commit (below). It then pinned that
+video commit, `595b243` (fast-forward again; below), and now pins `9da55fa`,
+one commit further on branch `feat/lfm3-audio-components`: the LFM3-Audio
+generator takes generation components (below).
 
 What upstream brought: **our #625 merged** verbatim; #632 closed in favor of
 component-aware checkpoint loading (#679, #580: on-demand components, a
@@ -185,6 +187,7 @@ Carried on top of `3d066d3`, in order (old hash in brackets; the
 | `07628d3` (new) | Text-only LFM3-VL and LFM3-Audio prompts decode | Not filed |
 | `c2613f7` (new) | LFM3 DocC links and parameter | Not filed |
 | `595b243` (new) | LFM3-VL video input | Not filed |
+| `9da55fa` (new) | LFM3-Audio generator takes generation components | Not filed |
 
 ### CI's runner GPU and the two DFlash2 tests (2026-10-28)
 
@@ -294,6 +297,20 @@ Release and `tesseractTests` passes (3,745 tests, 7 skipped). Serialized
 `5b088d9`: XCTest 874 (14 skipped) and Swift Testing 1,290 tests. Only
 `testSameInputStackingReleasesEachBlockBeforeTheNext` failed, and it fails the
 same way on the LFM3 port without the video commit.
+
+### LFM3-Audio generation components (2026-10-29)
+
+`9da55fa` `feat(lfm3): let LFM3AudioGenerator take generation components`, on
+`595b243`. The generator built its logit processor from `GenerateParameters`
+alone. It now takes `GenerationComponents`, as `TokenIterator` does: it
+validates the parameters against them and runs their processor after the
+penalty processor, on the text tokens only (the depth decoder samples the
+speech frames). Tesseract's LFM3 Voice uses it to open an answer with
+`<tool_call>` or `<|mixed_start|>` only, with the call weighted down.
+
+Validation at `9da55fa`: the 17 `LFM3AudioTests` pass on the M3 Max, the two
+new ones driving a processor that leaves a single token at the first step, and
+DocC passes for the five engine targets.
 
 ## DFlash2 tree verification: a chain with leaf siblings (2026-10-08)
 

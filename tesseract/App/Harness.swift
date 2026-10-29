@@ -91,6 +91,12 @@ nonisolated struct Harness: Sendable {
             try await PrefixCacheE2ERunner(runner: BenchmarkRunner()).run()
         },
         Harness(
+            flag: "--lfm3-voice-e2e", label: "LFM3 Voice E2E",
+            logSubdirectory: "lfm3-voice-e2e"
+        ) {
+            try await LFM3VoiceE2ERunner(runner: BenchmarkRunner()).run()
+        },
+        Harness(
             flag: "--benchmark", label: "Benchmark", logSubdirectory: nil,
             failureExitCode: 0
         ) {

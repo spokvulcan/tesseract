@@ -54,6 +54,18 @@ final class VoiceCapture {
 
     /// A surface's own session, with every stage.
     func makeSession() -> VoiceCaptureSession {
+        makeSession(stages)
+    }
+
+    /// A session whose takes `recognizer` hears, every other stage the same:
+    /// **LFM3 Voice** hears with LFM3-Audio.
+    func makeSession(recognizer: any Transcribing) -> VoiceCaptureSession {
+        var stages = stages
+        stages.recognizer = recognizer
+        return makeSession(stages)
+    }
+
+    private func makeSession(_ stages: Stages) -> VoiceCaptureSession {
         let session = VoiceCaptureSession(stages: stages)
         sessions.removeAll { $0.session == nil }
         sessions.append(WeakSession(session: session))
@@ -80,7 +92,7 @@ final class VoiceCapture {
 @MainActor
 private struct Stages {
     let microphone: any AudioCapturing
-    let recognizer: any Transcribing
+    var recognizer: any Transcribing
     let captureDump: any CaptureDumpStoring
     let isCaptureDumpEnabled: @MainActor () -> Bool
     let learnedWords: any LearnedWordApplying

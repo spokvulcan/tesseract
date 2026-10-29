@@ -494,6 +494,7 @@ usage() {
     echo "              --scratch: on scratch data, never the owner's (ADR-0073)"
     echo "  dev-profile Build + kill + run with profiling (QWEN3TTS_PROFILE=1)"
     echo "  prefix-cache-e2e         Build + run Task 1.8 HybridPrefixCacheE2E (loaded-model cache verification)"
+    echo "  lfm3-voice-e2e           Build + run LFM3 Voice's spoken turns on the real LFM3-Audio"
     echo "  hybrid-cache-correctness Build + run Task 2.2 logit-equivalence harness (mid-prefill restore bitwise check)"
     echo "  prefill-step-benchmark   Build + run Task 3.2 prefill-step-size benchmark sweep"
     echo "  paroquant-vlm-smoke      Build + run VLM load smoke for PARO models (PR #164 C5 gate)"
@@ -516,6 +517,7 @@ case "${1:-}" in
     dev-release) shift; cmd_dev_release "$@" ;;
     dev-profile) cmd_dev_profile ;;
     prefix-cache-e2e)         shift; _run_loaded_model_check --prefix-cache-e2e "$@" ;;
+    lfm3-voice-e2e)           shift; _run_loaded_model_check --lfm3-voice-e2e "$@" ;;
     hybrid-cache-correctness) shift; _run_loaded_model_check --hybrid-cache-correctness "$@" ;;
     prefill-step-benchmark)   shift; _run_loaded_model_check --prefill-step-benchmark "$@" ;;
     paroquant-vlm-smoke)      shift; _run_loaded_model_check --paroquant-vlm-smoke "$@" ;;

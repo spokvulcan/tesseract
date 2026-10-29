@@ -1058,6 +1058,12 @@ scripts/dev.sh prefix-cache-e2e          # PrefixCacheE2ERunner — TTFT/output 
 scripts/dev.sh hybrid-cache-correctness  # HybridCacheCorrectnessRunner — bitwise logit + state equivalence
 ```
 
+`scripts/dev.sh lfm3-voice-e2e` (`LFM3VoiceE2ERunner`) runs LFM3 Voice's turns
+on the real LFM3-Audio (default: the 8-bit pack): six requests spoken by the
+model's own voice and heard back, a tool request routed to its tool and a chat
+request answered directly, every answer spoken. Run it after a change to
+`Features/LFM3Voice` or the fork's LFM3-Audio generator.
+
 Both exit non-zero on any failed check. Run before releases and after any change
 to `LLMActor`, `ServerCompletion`, `PrefixCacheManager`, `HybridCacheSnapshot`,
 or `StablePrefixDetector`. Every loaded-model command forwards extra arguments
